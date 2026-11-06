@@ -28,20 +28,20 @@ governs, marked "Decided".
 
 ### Tasks
 
-1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (ST-13 and BG-15's baselines taken 2026-11-06, ST-13 also live on `dev:test` profiles; BG-15's live run is [7211](7211-tmux-mail-inject-live-evidence.md)).
+1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, and the change-tracking and diff-scan benchmarks; open because what is left cannot be measured on an isolated macOS profile: `gh-spawn` per hour needs a real PR and `gh` login, a cold-cache launch needs root, WEB-3's per-transition RPC count needs a fake-model native turn on base that was not built, and the per-item counts of tasks 2 and 10, and BG-1, BG-2 and BG-8 with a tab open in a container, need a busier profile than an idle fixture; see the table in task 1).
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: done 2026-11-05, with what is left in to-dos (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9's rest measured 2026-11-05 and not built, thresholds in [6760](6760-agent-mail-store-split-thresholds.md); the prompt-queue reads a steer made were 5100, done 2026-11-05; live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1). E12 (WEB-2's third fix, WEB-6 and WEB-14) was checked back on 2026-11-05 and its batch file deleted: all three were built, and its two-tab Profiler run found no difference in commits; see the [closing check of E12](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e12-renderer-store).
-4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 measured in E10 on a `dev:test` profile (2026-11-06, a real Claude bridge streaming against a loopback model, no billed turn) and with a fake bridge, and not built: on the real stack the bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read; the figures and decisions are [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md), and the outcome is the [closing check of E10](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e10-conditional-reads-and-deltas)).
-5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; TX-1 measured in E10: on a `dev:test` profile every streaming answer was a delta for one viewer and for each of two, and with a fake bridge the ring disabled gave 46 of 47 snapshots, 1.86–6.63 MB per viewer in 10 s; see [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1; TX-8, TX-15 and TX-18 done 2026-11-05 in E9, with fixture figures and live evidence in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md); TX-3, TX-7, TX-9, TX-11 to TX-14 and TX-16 done 2026-11-05 in E11, focused tests only, see the [closing check of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e11-projection-hashing); TX-17 profiled and closed without a change, and E11's savings measured with a provider fake, 2026-11-05 in [6260](../transcripts-and-observation/6260-projection-hashing-measurements.md), figures in the [measurement of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#measurement-of-e11-to-do-6260)).
+4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open, waiting on the maintainer's choice of push or long-poll (decided 2026-11-01 to choose only if the numbers still justify it; the numbers are in task 4 and nothing else is left to build) (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 measured in E10 on a `dev:test` profile (2026-11-06, a real Claude bridge streaming against a loopback model, no billed turn) and with a fake bridge, and not built: on the real stack the bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read; the figures and decisions are [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md), and the outcome is the [closing check of E10](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e10-conditional-reads-and-deltas)).
+5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: done 2026-11-06, every item done or measured, live evidence left in 5340 and 6680 (TX-1 and TX-2 done 2026-11-04, focused tests only; TX-1 measured in E10: on a `dev:test` profile every streaming answer was a delta for one viewer and for each of two, and with a fake bridge the ring disabled gave 46 of 47 snapshots, 1.86–6.63 MB per viewer in 10 s; see [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1; TX-8, TX-15 and TX-18 done 2026-11-05 in E9, with fixture figures and live evidence in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md); TX-3, TX-7, TX-9, TX-11 to TX-14 and TX-16 done 2026-11-05 in E11, focused tests only, see the [closing check of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e11-projection-hashing); TX-17 profiled and closed without a change, and E11's savings measured with a provider fake, 2026-11-05 in [6260](../transcripts-and-observation/6260-projection-hashing-measurements.md), figures in the [measurement of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#measurement-of-e11-to-do-6260)).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: done (BR-1 and BR-3 done, tests for BR-1 added 2026-11-05 by E20; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings done 2026-11-05).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: done (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-17 done 2026-11-04 on Linux, a proved ignored `node_modules` taking no watches (4,672 to 170 on `watch-nm-4k`) and on macOS its events dropped on arrival; what is left of ST-16 and ST-17 is [5060](5060-worktree-watch-leftovers.md), which also has the outcome of every task in batch E7; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-20 done 2026-11-05, a second hourly retention pass over 400 snapshots of 2,000 files from 565 ms to 87 ms and a put during a sweep from about 400 ms to 1–2 ms, live sizing in [5361](5361-retention-pass-on-a-large-real-store.md); ST-19 done 2026-11-05, `activeTurns()` seeks the lifecycle index, and the ledger retention that decides what becomes of the rows is built, live sizing in [5821](5821-ledger-retention-live-evidence.md); ST-21 done 2026-11-05 by batch E-0580, its leftovers in [5800](5800-file-read-streaming-leftovers.md); ST-13 done 2026-11-06, the snapshot check's free-page release moved to a child process, its stall from 140 ms p50 (up to 2.4 s) to 6–7 ms on a 512 MiB database, and the deletion scrub and pre-migration copy left in-process in [7210](7210-storage-work-left-on-the-event-loop.md)).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: done (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 done 2026-11-06, a mail delivery to an idle tmux tab from 9 keyed reads to 7 with the fresh liveness probe kept, live evidence in [7211](7211-tmux-mail-inject-live-evidence.md)).
-9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
-10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: done (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 done 2026-11-06, a mail delivery to an idle tmux tab from 9 keyed reads to 7 with the fresh liveness probe kept, and seen live the same day on a real claude-tmux tab with a loopback fake model, 27 storage reads per delivery to 25, task 1).
+9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live numbers not measurable on an isolated profile, which has no PR and no `gh` login; see task 1).
+10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; an idle `dev:test` profile shows no difference on 2026-11-06, because it has none of the items these skip; live counts need 0048's busy profile, see task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: done (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md); GW-15 done 2026-11-05, a revalidation by date alone is [6160](6160-static-if-modified-since-compression.md); GW-10 declined 2026-11-05 on first-load numbers, with the rewriter unchanged).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
-14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision, now [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md)).
+14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open, waiting on the maintainer's decision on DK-10 in [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md) (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision, now [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md)).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; its follow-ups done 2026-11-05).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
@@ -51,7 +51,7 @@ governs, marked "Decided".
 
 **Context.** Decided 2026-11-01: hybrid. Small fixes whose mechanism is plain ship without waiting; structural tasks (4, 5's TX-1 and TX-2, 12, 13, 15 and the co-process half of 8) need a baseline first, except that the maintainer chose to do the container work in tasks 8 and 15 now.
 
-**Investigation.** The instruments exist (the report's "Measuring before changing"): `get_recurring_work_diagnostics` and the `recurringWork` metrics block (storage-read bytes, docker-exec, gh-spawn per job kind), the gateway metrics, the change-tracking capture benchmark, a React Profiler run and launch-to-ready timing. None was run in this round. Only the old code is available for "before" now by checking out `0bd214ee`.
+**Investigation.** The instruments exist (the report's "Measuring before changing"): `get_recurring_work_diagnostics` and the `recurringWork` metrics block (storage-read bytes, docker-exec, gh-spawn per job kind), the gateway metrics, the change-tracking capture benchmark, a React Profiler run and launch-to-ready timing. None was run in this round. Only the old code is available for "before" now by checking out `0bd214ee`. Run on macOS on 2026-11-06, below; what could not be run there, and why, is the last table of "Before and after on macOS".
 
 **Decisions.**
 
@@ -79,7 +79,172 @@ Taken with the changes of tasks 7 (ST-13) and 8 (BG-15), as decided above: the s
 | Base, dropped table | 0.3 / 10.7 / 41.7 ms | 0 / 0 | 65,696 → 0 | 270 MB |
 | Branch, dropped table | 0.7 / 14.3 / 33.1 ms | 0 / 0 | 65,696 → 0 | 0.8 MB |
 
-Before the checks the same probe saw at most 12–30 ms on every profile. With the free pages at the end of the file (a dropped table) the old in-process release cost the loop little, since it had nothing to move, but left the file at 270 MB until a later checkpoint; the child's per-step checkpoint returned the space at once. With interleaved free pages the old release held the backend for up to 686 ms; the child kept every request under 38 ms. The backend's own sampler, too coarse for these stalls, counted at most one more tick 100 ms or more late across each check window on either side. An earlier pair without the gateway probe (dropped table) agreed: free pages to 0, file 270 MB → 0.8 MB on the branch, unchanged on base. BG-15 has no live baseline: a claude-tmux tab needs a signed-in Claude CLI and a delivered message starts a turn, which this round could not do ([7211](7211-tmux-mail-inject-live-evidence.md)).
+Before the checks the same probe saw at most 12–30 ms on every profile. With the free pages at the end of the file (a dropped table) the old in-process release cost the loop little, since it had nothing to move, but left the file at 270 MB until a later checkpoint; the child's per-step checkpoint returned the space at once. With interleaved free pages the old release held the backend for up to 686 ms; the child kept every request under 38 ms. The backend's own sampler, too coarse for these stalls, counted at most one more tick 100 ms or more late across each check window on either side. An earlier pair without the gateway probe (dropped table) agreed: free pages to 0, file 270 MB → 0.8 MB on the branch, unchanged on base. BG-15 had no live baseline then: a claude-tmux tab needs a signed-in Claude CLI and a delivered message starts a turn, which that round could not do. It was taken later the same day with a loopback fake model; see the next section.
+
+#### Before and after on macOS (2026-11-06)
+
+Measured 2026-11-06 on the macOS build host (Mac17,16, 18 cores, 64 GiB,
+macOS 27.2, Docker Desktop 29.9.2). The host is shared with other agents'
+builds: its load average was 9–45 during these runs, so timings are noisy and
+counts are the firmer evidence. **Base** is `0bd214ee`, the commit this to-do
+was analysed against, before the first batch; **after** is `main` at
+`ee2cc8423`, with every task here landed up to that day. Each side ran from
+its own detached worktree under `output/benchmarks/` (installed with
+`bun install --frozen-lockfile`, removed afterwards). Every profile was an
+isolated, credential-free `dev:test` profile with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, stopped and reset after its run. No
+provider was called: the only model was a loopback fake, and only BG-15 used
+one. How to repeat each measurement is in
+[the testing guide](../../development/testing-guide.md#before-and-after-across-commits).
+
+**Idle recurring work, local fixture.** `scripts/recurring-live-ab.ts
+--checkout <worktree> --label base|after --fixture-environments local
+--agent-platforms codex`, merged with `scripts/recurring-live-ab-compare.ts`.
+Per run: start the profile, settle 60 s, sample `recurringWork` and the
+backend and Electron processes every 30 s for 6 minutes. Two runs per side,
+alternating base and after. The Electron window was visible on both sides,
+because base's launcher has no `--headless` (`--window launcher-default` on
+base, `--window visible` on after). Base's backend was given one line, the
+`ORKESTRATOR_HOST_REACHABILITY_CHECK` entry in its agent-test environment
+allowlist, so that its boot probe made no Docker networks. The edit-to-detection
+probes did not run on either side (the scratch worktrees had no built CLI).
+The rates that differ by more than run-to-run noise, plus the busiest kinds:
+
+| Per minute, idle (2 runs a side) | Base `0bd214ee` | After `ee2cc8423` |
+| --- | --- | --- |
+| `diff-scan`: starts / git processes | 0.5 / 4 | 0.5 / 3 |
+| `mail-presence`: starts / store revision checks (`storage-stat`) | 30 / 30 | 30 / 60 |
+| `mail-injection`: starts / store revision checks | 30 / 62 | 30 / 62 |
+| `native-activity-sweep`: starts / storage reads | 30 / 30 | 30 / 30 |
+| `claude-state-reconcile`: starts / storage reads | 30 / 30 | 30 / 30 |
+| `tab-cleanup`: tmux / other processes / output bytes | 0 / 0 / 0 | 1 / 0.5–1 / 50–93 KB |
+| `system-usage-sample`: processes | 9.2 | 8.8–9.3 |
+| Backend CPU, ms | 183–248 | 168–253 |
+| Backend RSS, median MiB | 175–184 | 252–263 |
+| Electron (whole tree) CPU, ms | 515–605 | 478–708 |
+
+All 20 kinds started at the same rate on both sides, and no kind that reads
+storage fetched any bytes from the database (their `bytes` stayed 0). The
+other kinds' `bytes` are command output: `diff-scan` 158 bytes a minute on
+base and 61 on after, and after's tab cleanup read 50–93 KB a minute of
+command output that base's did not. So an idle profile
+with one local environment and no tabs, mail, queues or PRs costs the same
+on both commits apart from the rows above. That is expected: what tasks 2,
+3, 8, 9 and 10 removed is per-item work (keyed reads of large stores, per
+mailbox, per tab, per PR, per working session), and a fresh fixture has
+almost none of those items. A keyed read of a store that does not exist yet
+is not even counted (see BG-15 below). The `diff-scan` drop is ST-14 and
+ST-15's warm scan (below). The extra presence check, the tab-cleanup spawns
+and the higher backend RSS on after were not traced here.
+
+**Idle recurring work, container fixture.** The same with `--fixture-environments local,container`
+(each profile also builds its own image tag, from Docker's cache), one run
+per side, with no other profile of this work running:
+
+| Per minute, idle, one local and one container environment | Base `0bd214ee` | After `ee2cc8423` |
+| --- | --- | --- |
+| `diff-scan`: starts / git processes / `docker exec` | 1.5 / 4 / 1 | 1.5 / 3 / 1 |
+| `tmux-poll`: starts / `docker exec` / storage reads | 2 / 2 / 2 | 2 / 2 / 2 |
+| `tab-cleanup`: `docker exec` / tmux / other processes / storage reads | 0 / 0 / 0 / 5 | 5 / 1 / 1 / 7 |
+| `mail-presence`: store revision checks | 30 | 60 |
+| Backend CPU, ms / RSS median, MiB | 203 / 274 | 205 / 281 |
+
+The container polls the report named (BG-1, BG-2, BG-8) cost the same here,
+2 `docker exec` a minute for `tmux-poll` and 1 for the container diff scan;
+task 8 measured their saving per open tmux tab, and this idle profile had no
+tab open. After's
+`tab-cleanup` makes 5 `docker exec` a minute that base's did not; that is
+new work on an idle container environment and is
+[7530](../containers-and-environments/7530-idle-tab-cleanup-execs.md).
+
+**BG-15, a real claude-tmux tab on a loopback fake model.** Base here is
+`c1724ab74` (the commit BG-15 was measured against) and after is this branch
+(`main` at `ee2cc8423` plus the fix); both carry the isolation fix in Assumptions and decisions, cherry-picked on
+base. `scripts/tmux-mail-inject-live.ts` on a fresh profile per pass
+(`--fixture --fixture-environments local --no-agent-credentials
+--agent-platforms claude --headless`): the real Claude CLI in tmux, pointed
+by the profile's own isolated Claude directory at
+`e2e/agent-testing/fake-anthropic-model.ts`. Mail injection on, one queued
+prompt and one draft to create the queue and draft stores, 30 s idle, then 5
+messages one at a time. Two alternating pairs:
+
+| Per delivery, **fake model** | Base `c1724ab74` | After |
+| --- | --- | --- |
+| `mail-injection` storage reads in the delivery window | 27–28 | 25–26 |
+| Beyond the idle pass's 1.07 reads, per pass in the window | 23.8 (23.7–24.8) | 21.8 (21.8–22.8) |
+| Sent to typed | 508–522 ms | 507–522 ms |
+| Model calls per message | 1 | 1 |
+| Mail sent while a draft was saved | held, then typed once the draft was cleared | the same |
+
+Two fewer reads per delivery, as the fake-tab bench found (9 → 7), with the
+fresh liveness probe and the draft hold unchanged; mail was typed once into a
+live idle session every time. Base's window held 27 reads in 7 of 10
+deliveries and after's 25 in 8 of 10, with 3–4 drain passes per window on
+base and 3 on after. A third after pass, whose base partner lost its priming
+prompt, read 25 in every window. Draft-held mail was typed 16.0–16.8 s
+(base) and 15.8–17.0 s (after) after it was sent, once the draft was
+cleared, with one model call.
+
+Two earlier passes per side without the priming step read 19–20 per window on
+both sides: a keyed read of a store that was never written returns before it
+is counted (`readStoreRow` in `storage-database.ts`), and a fresh profile has
+no prompt-queue or compose-draft store, so the reads BG-15 removed could not
+show. A tab's user creates both stores the first time they queue a prompt or
+type a draft. Not exercised live: the `queue` hold, which needs the tab busy
+while a prompt waits; the drainer's focused tests cover it. One base pass lost
+the priming prompt it queued the moment the tab first reported idle; the
+script now waits 10 s first, and every later pass primed. The cause was not
+established. To-do 7211, which asked for this check, is folded in here.
+
+**Change tracking on macOS (ST-1 to ST-4).** Task 7's capture figures were
+Linux only. The base commit's own `scripts/benchmark-change-tracking.ts`, run
+on both trees (the current script needs exports base lacks), with one
+addition on both sides: the current script's 2.5 s fixture settle before the
+first capture, without which a tree with ST-3's stat-stamp settle window
+cannot reuse a stamp. `--sizes=1000,10000 --runs=7`, three interleaved rounds
+per side:
+
+| Capture, one file changed, p50 | Base `0bd214ee` | After `ee2cc8423` |
+| --- | --- | --- |
+| Warm, 10,000 files | 1,842 / 2,141 / 2,822 ms | 1,130 / 1,315 / 1,539 ms |
+| Warm, 1,000 files | 171 / 211 / 256 ms | 142 / 167 / 191 ms |
+| Cold, 10,000 files | 3,989 / 5,263 / 5,774 ms | 4,021 / 4,675 / 5,849 ms |
+
+The warm capture over 10,000 files takes about 40% less time on macOS (means
+2,268 and 1,328 ms; on Linux 681–797 to 211–319 ms, measured 2026-11-04 with
+that change's own script). The 1,000-file and cold
+captures overlap between sides on this loaded host. Two earlier rounds
+without the settle disagreed with each other (10,000 files warm: base 1,960
+and 1,572 ms, after 1,164 and 1,801 ms), which is why the settle was added.
+
+**Local diff scan on macOS (ST-14, ST-15).** `scripts/benchmark-local-diff-scan.ts
+--runs=20 --core=<each worktree's apps/backend/src/core>`, workload `scan-1k`,
+two interleaved rounds per side:
+
+| Warm scan, `scan-1k` | Base `0bd214ee` | After `ee2cc8423` |
+| --- | --- | --- |
+| git processes per scan | 6 (2 `diff`, 3 `rev-parse`, 1 `status`) | 4 (1 each of `config`, `diff`, `rev-parse`, `status`) |
+| Untracked files read per scan | 200 of 200 | 0 of 200 |
+| p50, commit base / tracking base | 60–62 / 56–57 ms | 70 / 54 ms |
+
+The counts match Linux (there the base, `a8bdce444`, spawned 7). The time did
+not improve on macOS: against a commit base after was about 9 ms slower at
+p50 on this host.
+
+**What else the report asked for, and where it stands.**
+
+| Measurement | Items | Status |
+| --- | --- | --- |
+| `storage-read` bytes for `mail-presence` and `activity` | ST-7 | Measured idle above: no bytes fetched on either side and the same read counts. A difference needs stores with rows, which is [0048](../transcripts-and-observation/0048-recurring-work-qualification.md)'s busy profile. |
+| `docker-exec` with an idle tmux tab | BG-1, BG-2, BG-8 | Idle container environment measured above: the same 2 `tmux-poll` and 1 diff-scan `docker exec` a minute on both sides, with no tab open. With a claude-tmux tab open in the container, which needs a fake Claude installed in the container (`e2e/agent-testing/container-fake-claude-install.ts`), not run; BG-1, BG-2 and BG-8's per-tab counts stand from task 8 (`tmux-exec-count.ts`). |
+| `gh-spawn` per hour | BG-6, BG-13 (task 9) | Not measurable on an isolated profile: the fixture has no GitHub remote or PR, and the profile's `gh` configuration is isolated by design. It needs a real PR and a `gh` login, whose requests go to GitHub on the user's account. |
+| Live counts for BG-3, BG-9, BG-11, BG-12 (task 10) | | Not exercised by an idle fixture (no stopped environment with a mailbox, working native session, build pipeline or container Claude login); the unit counts in task 10 stand, and the live run belongs to 0048's busy profile. |
+| React Profiler, two tabs idle and streaming | WEB-2, WEB-5, WEB-7 | Answered 2026-11-05 by E12 (see Needs verification); production React not measured. |
+| Backend RPCs per environment activity transition | WEB-3 | Not run. It needs a browser client on the gateway, whose `/invoke` calls the gateway counts per command (the Electron window's IPC is not counted there), and a working-to-idle transition with no credentials. On base the only safe source of one is a native tab on a loopback model, because a claude-tmux tab there would use the host's Claude home (the isolation fix postdates it). Measurable on macOS; not built this round. |
+| Launch to ready, warm and cold page cache | DK-3 (task 13) | Warm measured 2026-11-03 (task 13). Cold not possible here: dropping the page cache on macOS needs `sudo purge`, and this session has no root. |
+| `docker history` and `du` in the image | DK-7 to DK-9 (task 14) | Measured 2026-11-02 on linux/amd64 (task 14); not repeated on macOS. |
+| Gateway SSE and WebSocket bytes | GW-2, GW-6, GW-7 | Owned by [0052](../transcripts-and-observation/0052-remote-client-bandwidth.md). |
+| Snapshot rate and bytes per send | TX-1, TX-2 (task 5) | TX-1 measured live in E10 ([6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md)); TX-2 with a provider fake in E9, live bytes per send in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md) task 1. |
 
 ### 2. Storage keyed reads and writes
 
@@ -539,6 +704,8 @@ Done 2026-11-05 (GW-3, efficiency report 0120): bearer and cross-origin web clie
 **Problem.** Lagging or second viewers get full snapshots, prompt sends read up to 16 MiB, and several fingerprints re-serialise whole structures.
 
 **Context.** The report's TX items in `native-agent-transcript-projection.ts`, `native-agent-service.ts` and `http-bridge-provider.ts`. #1506 (history paging) changed the projection after the report.
+
+Closed 2026-11-06: every item is done (TX-17 closed without a change after profiling), and the two that task 1 gated are measured: TX-1 live on a `dev:test` profile in E10, TX-2 with a provider fake in E9. The live evidence still wanted is tracked where it was found: bytes per prompt send and per turn check in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md), and Codex, Pi, a lagging viewer and windows near the 512 KiB bound in [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1.
 
 **Investigation.** Confirmed 2026-11-01: the transcript view cache holds one entry per key, so a delta is built only from the newest view (TX-1). The projection-sync path already keeps bounded revisions (`state.revisions`), which is the model for the fix. Re-checked 2026-11-04 against `96ee1eb3e`: TX-2 still applied after #1506, because `interactiveSnapshot` read `legacy()` with no limit and `refreshProjectionOnce` passed none, so it was fixed rather than recorded as no longer applying. Not re-checked since #1506: TX-3, TX-7, TX-8, TX-9 and TX-11 to TX-18. Re-checked 2026-11-05 against `39c26627f` in E11: TX-3, TX-7, TX-9, TX-11 to TX-14, TX-16 and TX-17 all still held; all but TX-17 are now done (see the [closing check of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e11-projection-hashing)).
 
@@ -1029,7 +1196,7 @@ Done 2026-11-06, BG-15 (branch `storage-mail-maintenance-3b173b35c92e-r1`, again
 | `claude_tmux_status`: fresh / recent allowed | 1 / 1 | 1 / 1 |
 | Wall time, p50 / p95 | 0.15–0.16 / 0.35–0.55 ms | 0.14–0.16 / 0.34–0.45 ms |
 
-So the saving is two keyed reads per delivered message, as the analysis expected; the time is within noise. Tests: `prompt-queue-drainer.test.ts` (read counts with and without the presence, one fresh probe either way; a deletion or a queued prompt arriving after the gate still holds the mail) and `agent-mail-service-presence.test.ts` (the presence reaches the dispatch, and none is passed when the drainer has no gate). A delivery to a real claude-tmux tab is [7211](7211-tmux-mail-inject-live-evidence.md).
+So the saving is two keyed reads per delivered message, as the analysis expected; the time is within noise. Tests: `prompt-queue-drainer.test.ts` (read counts with and without the presence, one fresh probe either way; a deletion or a queued prompt arriving after the gate still holds the mail) and `agent-mail-service-presence.test.ts` (the presence reaches the dispatch, and none is passed when the drainer has no gate). A delivery to a real claude-tmux tab, with a loopback fake model, is in task 1 (2026-11-06).
 
 **Investigation.** BG-15 is done (above). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
@@ -2454,7 +2621,7 @@ browser and real-stack suites were not run.
 ## Needs verification
 
 - Task 12 on a packaged `file://` window: the Electron spec uses the dev renderer, so the packaged Content Security Policy and origin are unexercised on the new transport (read from code: `connect-src` allows `http:`, and main rewrites `Origin`). Tracked in [4501](4501-local-window-transport-default.md).
-- Before-and-after numbers for every landed item (task 1).
+- Before-and-after numbers for every landed item (task 1): taken on macOS on 2026-11-06; what an isolated macOS profile could not measure, and why, is the last table of task 1's "Before and after on macOS". Linux was not re-run for them.
 - A React Profiler run with two visible agent tabs, idle and streaming, for
   WEB-2: answered 2026-11-05 by E12's closing check
   ([efficiency outcome report](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e12-renderer-store)). In Chromium with
@@ -2463,10 +2630,12 @@ browser and real-stack suites were not run.
   subscribed to its cache entries (5.2 to 5.8 ms mean per commit). Production
   React was not measured.
 - The compression default under real remote load: tracked in 0052 task 2.
-- Task 7: `lstatSync` and warm-capture numbers come from this Linux host only;
-  macOS was not measured. ST-16's scan rate comes from a fake watcher and clock;
+- Task 7: `lstatSync` numbers come from the Linux host only. Warm capture and
+  the local diff scan were also measured on macOS on 2026-11-06 (task 1): the
+  warm 10,000-file capture about 40% faster, the diff scan's git processes
+  and untracked reads down as on Linux, its time not. ST-16's scan rate comes from a fake watcher and clock;
   a real install was not measured. ST-14 and ST-15's numbers are from `scan-1k` on
-  this host; macOS, where each spawn costs more, and a real container were not
+  the Linux host and, since 2026-11-06, macOS; a real container was not
   measured. The container script's changes ran against real Git through `bash`,
   not in a container. ST-18's open-view path is proved at the backend and by the
   renderer's existing `reset` test, not in a live browser session.
@@ -2477,7 +2646,7 @@ browser and real-stack suites were not run.
 - WEB-19 timings in Chromium: answered 2026-11-05 by [E22's closing check](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e22-chat-rendering). With React's development build and a `<Profiler>` around a rich `MessageMarkdown`, the median per update at 30 KB was 27.1 ms for a full render and 5.5 ms for the live path (5 KB: 4.8 and 1.3 ms). Production React in Chromium was not measured.
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
 - GW-16 past loopback Chromium: the input-results subprotocol through the Tailscale Serve route, a command-node relay in a browser, WebKit and a mobile WebView. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
-- Task 7, ST-13: measured on macOS only, on a synthetic 512 MiB database and on `dev:test` profiles seeded with 256 MiB of free pages; a real store with free pages left by deletions (sizes in [5101](5101-store-size-and-write-rate-live.md)) and Linux were not run. Task 8, BG-15: a real claude-tmux tab is [7211](7211-tmux-mail-inject-live-evidence.md).
+- Task 7, ST-13: measured on macOS only, on a synthetic 512 MiB database and on `dev:test` profiles seeded with 256 MiB of free pages; a real store with free pages left by deletions (sizes in [5101](5101-store-size-and-write-rate-live.md)) and Linux were not run. Task 8, BG-15: seen live on 2026-11-06 on a real claude-tmux tab with a loopback fake model, on macOS (task 1); no real model, and the `queue` hold not exercised live.
 
 ## Related
 
@@ -2628,3 +2797,61 @@ Before, the post-probe re-read covered only the queue and the draft. `mailInject
 ### Task 1: how the live ST-13 baseline gets work to do (2026-11-06)
 
 A fresh `dev:test` profile's database has almost no free pages, so its upkeep would have nothing to release and both sides would measure the same. The profile was stopped and 256 MiB of free pages were written into its own database before the second start, in two layouts, because where the free pages sit decides what a release costs: at the end of the file it only truncates, between live pages it moves them. The interleaved layout is the one deletions leave behind and the one that showed the difference. The backend's 500 ms event-loop sampler cannot resolve stalls of tens to hundreds of milliseconds, so the gateway's login page was probed every 20 ms; it is served by the backend's event loop and needs no token, so no credential was read or printed.
+
+### Task 1: one before-and-after pair for everything landed (2026-11-06)
+
+The decision above recommends measuring `0bd214ee` against the branch that
+landed each change. Those branches are merged, so the macOS pass compared
+`0bd214ee` with `main` at `ee2cc8423`, which holds all of them: one pair that
+shows what the whole set changed for each measurement. Items whose own task
+already has a pair (ST-13, BG-15, WEB-1, DK-3, DK-7 to DK-9) keep it; BG-15's
+live pair used its own base, `c1724ab74`, because the change under test was
+BG-15 alone. The cost is that a difference in the composite pair cannot be
+pinned on one item without the code, which is why each row names the items
+it bears on.
+
+### Task 1: what the base checkout was given (2026-11-06)
+
+Two additions to the scratch worktrees, neither committed: base's agent-test
+environment allowlist got the `ORKESTRATOR_HOST_REACHABILITY_CHECK` entry
+`main` has since 2026-11-01, so its boot probe made no Docker networks (the
+ticket required the switch), and the base benchmark script got the current
+script's 2.5 s fixture settle on both trees. The first is a test switch; the
+second is benchmark setup, the same on both sides.
+BG-15's base got the claude-tmux isolation fix below, without which the check
+would have read the host's `~/.claude`.
+
+### Task 1: a visible window on both sides (2026-11-06)
+
+Base's launcher predates `--headless`, so its Electron window is always shown.
+A hidden window's renderer polls less, so after ran with `--no-headless` too
+(`--window visible`) rather than comparing a visible base with a hidden after.
+
+### Task 1: it stays open (2026-11-06)
+
+The ticket asked for every item measurable on macOS. What is left needs
+access an isolated profile does not have (a real PR and `gh` login, root for a
+cold page cache), a fake-model native turn on the base commit (WEB-3), or a
+busy profile with stores, mailboxes, sessions and
+pipelines in use, which 0048 already plans. Closing task 1 would drop those
+from view, so it stays open with them listed in its last table.
+
+### Task 5: closed on measurements, not live evidence (2026-11-06)
+
+The ticket asked to close task 5 if its items were all done or measured.
+They are: every TX item is built or (TX-17) closed after profiling, and the
+two gated on a baseline are measured, TX-1 live and TX-2 with a fake. The
+live figures still wanted are already open in 5340 and 6680, so closing task
+5 loses nothing.
+
+### Task 1: a claude-tmux tab in an agent-test profile used the host's Claude home (2026-11-06)
+
+Found while unblocking BG-15: a local claude-tmux session runs on the host's
+shared tmux server and, with no added Claude account, exported no
+`CLAUDE_CONFIG_DIR`, so the CLI read the tmux server's environment (on this
+host, `~/.claude`) while the backend looked for its transcript in the
+profile's isolated directory. `tmuxLocalClaudeConfigDirectory` now returns
+the backend's own `CLAUDE_CONFIG_DIR` in an agent-test profile with no added
+account; production is unchanged (covered in
+`backend-runtime-wiring.test.ts`). To-do 7211, which asked for this live
+check, was folded into task 1 and deleted.

@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { CornerDownLeft, Loader2, Square, TerminalSquare } from "lucide-react";
 import { toast } from "sonner";
 
-import { HumanPromptActions, humanPromptHeadline } from "@/components/chat/HumanPromptActions";
+import {
+  HumanPromptActions,
+  humanPromptHeadline,
+  HumanPromptIcon,
+} from "@/components/chat/HumanPromptActions";
 import { Button } from "@/components/ui/button";
 import { cancelUserCommand, writeUserCommandInput } from "@/lib/backend";
 import { cn } from "@/lib/utils";
@@ -113,10 +117,14 @@ export function UserCommandCard({ command }: { command: UserCommandRecord }) {
       {command.prompt && running ? (
         <div
           role="status"
-          className="border-t border-amber-500/30 bg-amber-500/10 px-3 py-2"
+          className="border-t border-border bg-panel-surface/95 py-2 pr-3 pl-3.5 shadow-[inset_2px_0_0_var(--color-primary)]"
           data-human-prompt-kind={command.prompt.kind}
         >
-          <div className="mb-1.5 text-xs font-medium text-amber-200">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <HumanPromptIcon
+              prompt={command.prompt}
+              className="h-3.5 w-3.5 shrink-0 text-primary"
+            />
             {humanPromptHeadline(command.prompt)}
           </div>
           <HumanPromptActions prompt={command.prompt} onEnter={() => void send("")} />

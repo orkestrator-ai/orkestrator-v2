@@ -41,3 +41,32 @@ test("the image keeps its pinned Claude CLI on its pin, as the host does", () =>
     expect(env.get(name), name).toBe(value);
   }
 });
+
+test("every ~/.claude.json the entrypoint writes records the auto-mode answer", () => {
+  // The file is rebuilt on every start, so a flag Claude Code wrote itself is
+  // lost; without this one terminal Claude asks "Make auto mode your default
+  // permission mode?" in every new Claude CLI tab after each start.
+  const filter = entrypoint.match(
+    /jq --argjson keep "\$CLAUDE_JSON_ALLOWED_KEYS" \\\n\s*'([\s\S]*?)' \\\n/,
+  )?.[1];
+  expect(filter, "the entrypoint filters the staged host ~/.claude.json").toBeDefined();
+  const assignments = filter!.match(/^\s*\.[A-Za-z]+ = true \|$/gm)?.map((line) => line.trim());
+  expect(assignments).toContain(".hasSeenAutoDefaultNudge = true |");
+  expect(assignments).toContain(".bypassPermissionsModeAccepted = true |");
+
+  // The fallback after a failed filter, and the config written with no host file.
+  const written = [
+    ...entrypoint.matchAll(/cat > "\$HOME\/\.claude\.json" << '(\w+)'\n([\s\S]*?)\n\1\n/g),
+  ].map((match) => JSON.parse(match[2]!) as Record<string, unknown>);
+  expect(written).toHaveLength(2);
+  for (const config of written) {
+    expect(config.hasSeenAutoDefaultNudge).toBe(true);
+    expect(config.bypassPermissionsModeAccepted).toBe(true);
+  }
+});
+
+test("the staged host ~/.claude.json keeps the auto-mode answer through the entrypoint's allowlist", () => {
+  const keys = entrypoint.match(/^CLAUDE_JSON_ALLOWED_KEYS='(\[[^']*\])'$/m)?.[1];
+  expect(keys, "the entrypoint names its ~/.claude.json allowlist").toBeDefined();
+  expect(JSON.parse(keys!) as string[]).toContain("hasSeenAutoDefaultNudge");
+});

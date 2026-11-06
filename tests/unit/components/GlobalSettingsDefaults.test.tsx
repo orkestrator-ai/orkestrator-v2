@@ -430,7 +430,13 @@ describe("GlobalSettings defaults section", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          notificationSounds: { agentStopped: false, prMerged: true, coordinatorReport: false },
+          notificationSounds: {
+            agentStopped: false,
+            prMerged: true,
+            coordinatorReport: false,
+            agentQuestion: false,
+            questionDesktopNotification: true,
+          },
         },
       },
     }));
@@ -449,6 +455,8 @@ describe("GlobalSettings defaults section", () => {
       agentStopped: false,
       prMerged: true,
       coordinatorReport: false,
+      agentQuestion: false,
+      questionDesktopNotification: true,
     });
   });
 

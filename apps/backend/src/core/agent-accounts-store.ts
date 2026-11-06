@@ -1,5 +1,7 @@
 import {
   AUTO_SWITCH_REASONS,
+  parseAgentAccountAutoSwitchLastKept,
+  type AgentAccountAutoSwitchLastKept,
   type AgentAccountAutoSwitchLastSwitch,
   type AutoSwitchReason,
 } from "@orkestrator/protocol/agent-account-auto-switch";
@@ -42,6 +44,8 @@ export interface StoredAgentAccountAutoSwitch {
   /** Accounts with no email whose own tick is on; they cannot be matched elsewhere. */
   includedAccountIds?: string[];
   lastSwitch?: AgentAccountAutoSwitchLastSwitch;
+  /** A limit stop that found nowhere to go. Cleared when the active account changes. */
+  lastKept?: AgentAccountAutoSwitchLastKept;
 }
 
 export interface AgentAccountStore {
@@ -119,6 +123,8 @@ function parseAutoSwitch(value: unknown): AgentAccountStore["autoSwitch"] {
         reason: last?.reason as AutoSwitchReason,
       };
     }
+    const kept = parseAgentAccountAutoSwitchLastKept(entry.lastKept);
+    if (kept) state.lastKept = kept;
     if (Object.keys(state).length) parsed[platform] = state;
   }
   return Object.keys(parsed).length ? parsed : undefined;

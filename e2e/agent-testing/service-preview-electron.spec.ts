@@ -27,7 +27,8 @@
  * second backend (a disposable standalone backend) with connection switches
  * and window close releasing on the backend that issued each attachment; and
  * a real retention pass clearing a removed service's partition, whose
- * directory the next start removes.
+ * directory the next start removes. Also: the toolbar at a 519 px pane, and
+ * another client's pane-layout save reaching the open window (task 10).
  */
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./electron-fixtures";
@@ -439,9 +440,10 @@ async function showTabs(activeTabId: string, tabs: LayoutTab[], tabSet: string):
       root: { kind: "leaf", id: "service-ui-pane", activeTabId, tabs },
     },
   });
-  // An open renderer keeps the tab set it already hydrated rather than this
-  // external save (docs/todo/previews-and-annotations/0042-service-preview-rollout.md, code item 9), so a
-  // different set needs a fresh renderer.
+  // A different set gets a fresh renderer, so each case starts from its own
+  // hydration. The reload predates the live check of code item 9
+  // (docs/todo/previews-and-annotations/0042-service-preview-rollout.md): the
+  // cross-client layout case shows another client's save does reach an open window.
   const reload = tabSet !== uiTabSet;
   uiTabSet = tabSet;
   if (reload) {
@@ -1907,6 +1909,131 @@ test("the narrowest window keeps the picker, service dialog and diagnostics usab
   }
 });
 
+/** The pane width of an 800×600 window at 100 % zoom, below the toolbar's 672 px one-row break. */
+const NARROW_PANE_WIDTH = 519;
+
+/** The shown browser toolbar's boxes, in CSS pixels, or null while none is laid out. */
+function toolbarLayout() {
+  return s().window.evaluate(() => {
+    const input = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[aria-label="Browser address"]'),
+    ).find((candidate) => candidate.checkVisibility({ visibilityProperty: true }));
+    const form = input?.closest("form");
+    const toolbar = form?.parentElement;
+    const pane = toolbar?.closest('[class*="@container/browser"]');
+    const actions = form?.nextElementSibling;
+    if (!input || !form || !toolbar || !pane || !actions) return null;
+    const box = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    };
+    const style = getComputedStyle(toolbar);
+    return {
+      pane: box(pane).width,
+      toolbar: box(toolbar),
+      content:
+        box(toolbar).width -
+        Number.parseFloat(style.paddingLeft) -
+        Number.parseFloat(style.paddingRight),
+      form: box(form),
+      input: box(input),
+      actions: box(actions),
+    };
+  });
+}
+
+test("at a 519 px pane the address takes its own full-width row in service and URL tabs", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(120_000);
+  const page = s().window;
+  const urlTab = "toolbar-url-tab";
+  if (!s().origins.a) {
+    await attachService("a", "origin-probe-a", false);
+    await preview("destroy", "origin-probe-a");
+  }
+  await showTabs(
+    UI_TABS.a,
+    [
+      {
+        id: UI_TABS.a,
+        type: "browser",
+        browserData: { url: formatPreviewServiceUri(serviceTarget("a")) },
+      },
+      {
+        id: urlTab,
+        type: "browser",
+        browserData: { url: `http://localhost:${fixtureOf("a").port}/` },
+      },
+    ],
+    "toolbar",
+  );
+  uiTabOrder = ["a"];
+  const host = await s().app.browserWindow(page);
+  const original = await host.evaluate((window) => window.getSize());
+  const paneWidth = async () => (await toolbarLayout())?.pane ?? 0;
+  try {
+    await expect(uiTab("a")).toBeVisible({ timeout: 30_000 });
+    await uiStore("setZoomLevel", 100);
+    await host.evaluate((window) => {
+      const [width, height] = window.getMinimumSize();
+      window.setSize(width!, height!);
+    });
+    await expect.poll(paneWidth, { timeout: 20_000 }).toBeGreaterThan(0);
+    // At 100 % zoom one DIP is one CSS pixel, so widening the window by the
+    // shortfall lands the pane on 519 px whatever the sidebar takes.
+    const shortfall = Math.round(NARROW_PANE_WIDTH - (await paneWidth()));
+    record(testInfo, "toolbar-window-adjust", JSON.stringify({ shortfall }));
+    expect(
+      shortfall,
+      "the minimum window already gives a pane wider than 519 px",
+    ).toBeGreaterThanOrEqual(0);
+    if (shortfall > 0) {
+      await host.evaluate((window, shortfall) => {
+        const [width, height] = window.getSize();
+        window.setSize(width! + shortfall, height!);
+      }, shortfall);
+    }
+    await expect.poll(paneWidth, { timeout: 20_000 }).toBeCloseTo(NARROW_PANE_WIDTH, 0);
+
+    // Code item 11: below 672 px the address leaves the button row. Before
+    // that change its input got 92 px of a one-row toolbar at this width.
+    for (const [kind, tab] of [
+      ["service", uiTab("a")],
+      ["url", page.getByRole("tab", { name: /^Browser 2$/ }).first()],
+    ] as const) {
+      await tab.click();
+      // Only the selected tab's toolbar is shown, so the one measured is its.
+      await expect(tab).toHaveAttribute("aria-selected", "true");
+      await expect
+        .poll(paneWidth, { timeout: 20_000, message: `${kind}: no toolbar at the narrow pane` })
+        .toBeCloseTo(NARROW_PANE_WIDTH, 0);
+      const layout = (await toolbarLayout())!;
+      record(testInfo, `toolbar-519-${kind}`, JSON.stringify(layout));
+      await mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });
+      await page.screenshot({
+        path: path.join(repositoryRoot, `output/visual-previews/toolbar-519-${kind}.png`),
+        clip: layout.toolbar,
+      });
+      // Two rows: the buttons first, then the address across the whole toolbar.
+      expect(layout.form.y, kind).toBeGreaterThanOrEqual(
+        layout.actions.y + layout.actions.height - 0.5,
+      );
+      expect(Math.abs(layout.form.width - layout.content), kind).toBeLessThanOrEqual(1);
+      // The route chip and Go share the row; their width follows label text
+      // and fonts, so the input is held to a share of the row, not a pixel
+      // count (365 to 370 px of 503 on macOS, 2026-11-06).
+      expect(layout.input.width / layout.form.width, kind).toBeGreaterThanOrEqual(2 / 3);
+      expect(layout.input.x + layout.input.width, kind).toBeLessThanOrEqual(
+        layout.form.x + layout.form.width + 0.5,
+      );
+    }
+  } finally {
+    await host.evaluate((window, size) => window.setSize(size[0]!, size[1]!), original);
+    await uiStore("selectProject", null).catch(() => undefined);
+    await preview("destroy", urlTab).catch(() => undefined);
+  }
+});
+
 /** A Vite application from the checked-in fixture, in its own temporary directory. */
 async function startViteApp(upgradeLog: string): Promise<ViteApp> {
   const fixtureRoot = path.join(repositoryRoot, "test-fixtures", "preview-vite");
@@ -1959,6 +2086,108 @@ function viteState() {
     `({ text: document.querySelector("#app")?.textContent ?? null, updates: document.body?.dataset.hmrUpdates ?? null, kept: window.__viteKept ?? null })`,
   ).catch((error: Error) => ({ text: error.message, updates: null, kept: null }));
 }
+
+/** A client of the main window's own backend over its gateway, as a browser or the CLI reaches it. */
+async function localGatewayClient(): Promise<BackendHttpClient> {
+  const authFile = path.join(s().profile.dataDir, "gateway-auth.json");
+  const token = (JSON.parse(await readFile(authFile, "utf8")) as { token: string }).token;
+  return new BackendHttpClient(`http://127.0.0.1:${s().profile.gatewayPort}`, token);
+}
+
+/** The pane layout revision the main window's renderer last adopted for the environment. */
+function rendererLayoutRevision(): Promise<number | null> {
+  return s().window.evaluate(async (environmentId) => {
+    const modulePath = "/src/stores/paneLayoutStore.ts";
+    const { usePaneLayoutStore } = await import(modulePath);
+    return usePaneLayoutStore.getState().environments.get(environmentId)?.backendRevision ?? null;
+  }, s().environmentId);
+}
+
+test("another client's layout save reaches the open window, also while its environment is not shown", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(120_000);
+  const page = s().window;
+  const other = await localGatewayClient();
+  const nextTab = "service-ui-tab-b-next";
+  const serviceTab = (name: Name, routePath = "/"): LayoutTab => ({
+    id: name === "b" && routePath !== "/" ? nextTab : UI_TABS[name],
+    type: "browser",
+    browserData: { url: formatPreviewServiceUri(serviceTarget(name, routePath)) },
+  });
+  const saveFromOther = async (activeTabId: string, tabs: LayoutTab[]): Promise<number> => {
+    const current = await other.invoke<{ revision: number }>("get_pane_layout", {
+      environmentId: s().environmentId,
+    });
+    const saved = await other.invoke<{ revision: number }>("save_pane_layout", {
+      environmentId: s().environmentId,
+      expectedRevision: current.revision,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "service-ui-pane",
+        root: { kind: "leaf", id: "service-ui-pane", activeTabId, tabs },
+      },
+    });
+    expect(saved.revision).toBe(current.revision + 1);
+    return saved.revision;
+  };
+  const expectNoWriteBack = async (revision: number): Promise<number> => {
+    // Allow the renderer's persistence chain to drain, then compare with the
+    // exact save response. A follow-up read must never become the baseline.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const settled = await other.invoke<{ revision: number }>("get_pane_layout", {
+      environmentId: s().environmentId,
+    });
+    expect(settled.revision).toBe(revision);
+    return settled.revision;
+  };
+  const tabNamed = (name: string) => page.getByRole("tab", { name, exact: true });
+
+  await showServiceTabs("a");
+  try {
+    await expect(tabNamed("svc-a 1")).toBeVisible({ timeout: 30_000 });
+    await expect(tabNamed("svc-b 2")).toBeVisible();
+    // Set in this renderer only: still there afterwards means no reload delivered the change.
+    await page.evaluate(() => {
+      (globalThis as Record<string, unknown>).__crossClientProbe = true;
+    });
+    const unreloaded = () =>
+      page.evaluate(() => (globalThis as Record<string, unknown>).__crossClientProbe === true);
+
+    // Shown: a third tab another client adds appears in the strip.
+    const added = await saveFromOther(UI_TABS.a, [
+      serviceTab("a"),
+      serviceTab("b"),
+      serviceTab("b", "/app/next"),
+    ]);
+    await expect(tabNamed("svc-b 3")).toBeVisible({ timeout: 30_000 });
+    await expect.poll(rendererLayoutRevision, { timeout: 30_000 }).toBe(added);
+    await expectNoWriteBack(added);
+
+    // Not shown: the window adopts a reorder that drops that tab while no
+    // environment is selected, and shows it when the environment comes back.
+    await uiStore("selectProject", null);
+    await expect(tabNamed("svc-a 1")).toHaveCount(0, { timeout: 30_000 });
+    const reordered = await saveFromOther(UI_TABS.b, [serviceTab("b"), serviceTab("a")]);
+    await expect.poll(rendererLayoutRevision, { timeout: 30_000 }).toBe(reordered);
+    await expectNoWriteBack(reordered);
+    await uiStore("selectProjectAndEnvironment", s().projectId, s().environmentId);
+    await closeStartupDialogs();
+    await expect(tabNamed("svc-b 1")).toBeVisible({ timeout: 30_000 });
+    await expect(tabNamed("svc-a 2")).toBeVisible();
+    await expect(tabNamed("svc-b 3")).toHaveCount(0);
+    expect(await unreloaded()).toBe(true);
+
+    const settled = await expectNoWriteBack(reordered);
+    record(testInfo, "cross-client-layout", JSON.stringify({ added, reordered, settled }));
+  } finally {
+    // The renderer now holds the other client's tab set.
+    uiTabSet = "cross-client";
+    uiTabOrder = ["b", "a"];
+    await uiStore("selectProject", null).catch(() => undefined);
+    await preview("destroy", nextTab).catch(() => undefined);
+  }
+});
 
 test("a Vite app keeps HMR updates made while its tab is hidden, unmounted or reloaded", async () => {
   const testInfo = test.info();
@@ -2183,13 +2412,15 @@ test("a legacy URL tab keeps a link and Back through routine re-attaches", async
     const staleAttach = (url: string, basis: number | undefined, back: boolean) =>
       hostRect(LEGACY_TAB).then((bounds) =>
         page.evaluate(
-          async ({ tabId, url, bounds, basis, back }) => {
+          async ({ tabId, environmentId, url, bounds, basis, back }) => {
             const api = (globalThis as any).orkestrator.browserPreview;
-            const reattach = { tabId, url, bounds, visible: true };
+            // Keep the renderer's identity: omitting it replaces the view and
+            // discards the history this stale-URL race is meant to exercise.
+            const reattach = { tabId, environmentId, url, bounds, visible: true };
             if (typeof basis === "number") Object.assign(reattach, { navigationBasis: basis });
             await Promise.all([back ? api.goBack(tabId) : null, api.attach(reattach)]);
           },
-          { tabId: LEGACY_TAB, url, bounds, basis, back },
+          { tabId: LEGACY_TAB, environmentId: s().environmentId, url, bounds, basis, back },
         ),
       );
     const appliedBasis = async () =>

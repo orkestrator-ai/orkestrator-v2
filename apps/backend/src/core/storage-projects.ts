@@ -22,7 +22,10 @@ import {
 } from "@orkestrator/protocol/project-arrangement";
 import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
 import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-stats";
-import { isEnvironmentAttentionReason } from "@orkestrator/protocol/environment-attention";
+import {
+  isEnvironmentAttentionReason,
+  isInputNeededAttentionReason,
+} from "@orkestrator/protocol/environment-attention";
 import { isEnvironmentDeletionStep } from "@orkestrator/protocol/node-summaries";
 import type { AgentActivityCompletionOutcome, EnvironmentUnreadReason } from "./models.js";
 import {
@@ -343,6 +346,20 @@ function normalizeStoredEnvironment(environment: Environment): void {
   for (const key of LEGACY_ENVIRONMENT_AGENT_KEYS) {
     delete (environment as unknown as Record<string, unknown>)[key];
   }
+}
+
+/**
+ * Whether lighting the badge with `reasonAfter` is an attention edge: the badge
+ * was dark, or it was lit for work that needs no answer and an agent now needs
+ * the user's input. A question while a question is already shown stays quiet.
+ */
+function raisesAttention(
+  unreadBefore: boolean,
+  reasonBefore: EnvironmentUnreadReason | undefined,
+  reasonAfter: EnvironmentUnreadReason | undefined,
+): boolean {
+  if (!unreadBefore) return true;
+  return isInputNeededAttentionReason(reasonAfter) && !isInputNeededAttentionReason(reasonBefore);
 }
 
 /** A project still owns environments; removal would orphan them. */
@@ -1765,6 +1782,7 @@ export class ProjectsRepository {
         ).toISOString();
       }
       const unreadBefore = environment.hasUnreadWork === true;
+      const reasonBefore = environment.unreadReason;
       if (failedEnd) {
         environment.hasUnreadWork = true;
         environment.unreadReason = "agent_failed";
@@ -1788,7 +1806,10 @@ export class ProjectsRepository {
       if (agentActivityStructureFingerprint(environment) !== structureBefore) {
         this.context.changes.announce("environment", environmentId, environment.projectId);
       }
-      if (!unreadBefore && environment.hasUnreadWork === true) {
+      if (
+        environment.hasUnreadWork === true &&
+        raisesAttention(unreadBefore, reasonBefore, environment.unreadReason)
+      ) {
         this.notifyAttention(environment);
       }
       return environment;
@@ -1952,12 +1973,15 @@ export class ProjectsRepository {
           : acceptedTime,
       ).toISOString();
       const unreadBefore = environment.hasUnreadWork === true;
-      const unreadFailure = unreadBefore && environment.unreadReason === "agent_failed";
+      const reasonBefore = environment.unreadReason;
+      const unreadFailure = unreadBefore && reasonBefore === "agent_failed";
       environment.hasUnreadWork = true;
       if (reason !== "agent_finished" || !unreadFailure) environment.unreadReason = reason;
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
-      if (!unreadBefore) this.notifyAttention(environment);
+      if (raisesAttention(unreadBefore, reasonBefore, environment.unreadReason)) {
+        this.notifyAttention(environment);
+      }
       return environment;
     });
   }
@@ -2011,19 +2035,21 @@ export class ProjectsRepository {
           : occurredTime;
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
       const unreadBefore = environment.hasUnreadWork === true;
+      const reasonBefore = environment.unreadReason;
       environment.hasUnreadWork = true;
       environment.unreadReason = reason;
       this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
-      if (!unreadBefore) this.notifyAttention(environment);
+      if (raisesAttention(unreadBefore, reasonBefore, reason)) this.notifyAttention(environment);
       return { environment, recorded: true };
     });
   }
 
   /**
    * Raises the attention event for an environment whose unread badge this
-   * backend just lit (an edge, never a re-light of a badge already shown).
-   * Only agent and terminal reasons count; a client marking it unread does not.
+   * backend just lit (an edge, never a re-light of a badge already shown, except
+   * the escalation {@link raisesAttention} describes). Only agent and terminal
+   * reasons count; a client marking it unread does not.
    */
   private notifyAttention(environment: Environment): void {
     const reason = environment.unreadReason;

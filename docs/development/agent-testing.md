@@ -1311,6 +1311,33 @@ stays pinned to the tail and snaps back. Measurements land as annotations in
 `results.json`. Override models and trail lengths with the variables named in
 the spec's header.
 
+### Live fork and rewind on loopback models
+
+`e2e/agent-testing/session-history-live.spec.ts` qualifies fork, message
+rewind, Pi branch switching and reload on the profile's real Codex app-server
+and real Pi SDK, against a scripted loopback model
+(`session-history-loopback-model.ts`): no login and no billed turn. It points
+the profile's own Codex home and Pi `models.json` at the loopback and restores
+both afterwards. Each step's check is the transcript plus the markers the
+model's next call carried, which is the vendor's view of the conversation.
+Opt in with `ORKESTRATOR_AGENT_TEST_LIVE_SESSION_HISTORY=1`;
+`ORKESTRATOR_AGENT_TEST_SESSION_HISTORY_PLATFORMS` (`codex`, `pi`) narrows it.
+Start the profile with a made-up Codex key in a throwaway `CODEX_HOME`, so no
+real login is copied in:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off CODEX_HOME=<throwaway dir with a made-up auth.json> \
+  mise run dev:test --profile history-qa --fixture --headless \
+  --credential-source codex --agent-platforms codex,pi
+ORKESTRATOR_AGENT_TEST_PROFILE=history-qa ORKESTRATOR_AGENT_TEST_LIVE_SESSION_HISTORY=1 \
+  mise run test:logged -- --name session-history-live -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts session-history-live.spec.ts --workers=1
+```
+
+A bridge change needs a profile restart first (the spec runs the bridges'
+`dist`). The 2026-11-06 record is in
+[0006](../todo/agent-engines/0006-session-titles-and-history.md#qualification-2026-11-06-loopback-models).
+
 ### Live client outage
 
 `e2e/agent-testing/client-outage.spec.ts` qualifies reconnect and freshness under

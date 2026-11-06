@@ -68,6 +68,7 @@ mock.module("../src/core/pty", () => ({ spawnPty }));
 
 const {
   CONTAINER_FILE_TREE_LISTER,
+  CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
   buildContainerSafeBase64Reader,
   buildFileSubtree,
@@ -81,6 +82,8 @@ const { getWorktreeBaseDir } = await import("../src/core/commands-environment");
 const { BackendRuntime } = await import("../src/core/backend-runtime");
 
 const tempDirs: string[] = [];
+/** Stands in for the `docker exec` that ends a closed terminal's in-container shell. */
+const closeContainerShell = mock(async (_shell: unknown, _signal: AbortSignal) => undefined);
 const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
 /** Terminal history every context writes; removed once the file's runtimes have settled. */
 const historyDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-commands-io-history-"));
@@ -106,7 +109,10 @@ function createContext(
       getDataDir: () => historyDataDir,
     },
   } as unknown as CommandContext;
-  context.runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
+  context.runtime = new BackendRuntime({
+    emit: (event, payload) => context.emit(event, payload),
+    terminals: { closeContainerShell },
+  });
   runtimes.push(context.runtime);
   return context;
 }
@@ -174,6 +180,7 @@ afterEach(async () => {
   } finally {
     spawnedPtys.length = 0;
     spawnPty.mockClear();
+    closeContainerShell.mockClear();
   }
 });
 
@@ -198,24 +205,37 @@ describe("backend command I/O coverage", () => {
     )) as string;
 
     expect(sessionId).toStartWith("container-1:");
+    // The shell is marked with a fresh token so closing the tab can end it in
+    // the container too; Docker keeps an exec running after its client dies.
+    const shell = context.runtime.terminals.containerShell(sessionId);
+    expect(shell).toEqual({
+      containerId: "container-1",
+      user: "node",
+      token: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
     expect(spawnPty).toHaveBeenCalledWith(
       "docker",
       [
         "exec",
         "-it",
+        "--env",
+        `ORKESTRATOR_TERMINAL_SESSION=${shell!.token}`,
         "--user",
         "node",
         "container-1",
         "bash",
         "-lc",
-        [
-          "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
-          "orkestrator_source_runtime_env 2>/dev/null || true",
-          "exec zsh -l",
-        ].join("\n"),
+        CONTAINER_INTERACTIVE_SHELL_COMMAND,
       ],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
+    expect(CONTAINER_INTERACTIVE_SHELL_COMMAND).toStartWith(
+      [
+        "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
+        "orkestrator_source_runtime_env 2>/dev/null || true",
+      ].join("\n"),
+    );
+    expect(CONTAINER_INTERACTIVE_SHELL_COMMAND).toEndWith("\nexec zsh -l");
     expect(commands.get("list_terminal_sessions")?.({}, context)).toEqual([
       ...sessionsBeforeAttach,
       sessionId,
@@ -239,6 +259,11 @@ describe("backend command I/O coverage", () => {
 
     commands.get("detach_terminal")?.({ sessionId }, context);
     expect(spawnedPtys[0]?.kill).toHaveBeenCalledTimes(1);
+    // The in-container close is dispatched off the command's own path.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closeContainerShell).toHaveBeenCalledTimes(1);
+    expect(closeContainerShell.mock.calls[0]?.[0]).toEqual(shell);
+    expect(context.runtime.terminals.containerShell(sessionId)).toBeUndefined();
     expect(commands.get("list_terminal_sessions")?.({}, context)).toEqual(sessionsBeforeAttach);
 
     expect(() => commands.get("terminal_write")?.({ sessionId: 1, data: "x" }, context)).toThrow(

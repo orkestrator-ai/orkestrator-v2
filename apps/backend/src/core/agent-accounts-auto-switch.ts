@@ -13,10 +13,12 @@ import {
   MAX_USAGE_LIMIT_RESENDS,
   confirmedLimitResetsAt,
   decideAutoSwitch,
+  explainNoRoom,
   limitConfirmedUsedUp,
   nextFiveHourRefresh,
   rankAutoSwitchAccounts,
   usageLimitReading,
+  type AgentAccountAutoSwitchLastKept,
   type AgentAccountAutoSwitchSettings,
   type AutoSwitchAccount,
   type AutoSwitchReason,
@@ -72,6 +74,12 @@ const MAX_TRACKED_STOPS = 256;
  */
 export const LOGIN_RENEWAL_RETRY_MS = 30 * 60_000;
 export const LOGIN_RENEWAL_MAX_RETRY_MS = 6 * 60 * 60_000;
+/**
+ * A limit stop renews an idle account's sign-in whatever the backoff says, so the
+ * choice of where to go rests on fresh readings. Several turns stop together, so
+ * one account is still renewed at most this often.
+ */
+export const URGENT_LOGIN_RENEWAL_SPACING_MS = 2 * 60_000;
 
 export interface AutoSwitchNotice {
   platform: AgentAccountPlatform;
@@ -106,9 +114,12 @@ export interface UsageLimitStopSession {
 export type LimitedAccountMove =
   { moved: true; to: string } | { moved: false; reason: CoordinatorAccountKeptReason };
 
+/** Backend-only fence for decisions that outlive a manual selection or settings change. */
+export type AutoSwitchSnapshot = AgentAccountsSnapshot & { selectionRevision?: number };
+
 export interface AgentAccountAutoSwitcherDeps {
   settings(): Promise<AgentAccountAutoSwitchSettings>;
-  snapshot(): Promise<AgentAccountsSnapshot>;
+  snapshot(): Promise<AutoSwitchSnapshot>;
   readUsage(
     platform: AgentAccountPlatform,
     accountId: string,
@@ -133,6 +144,12 @@ export interface AgentAccountAutoSwitcherDeps {
   /** Whether other turns are keeping this environment's bridge from being replaced. */
   bridgeBusy(environmentId: string, platform: AgentAccountPlatform): Promise<boolean>;
   notify(notice: AutoSwitchNotice): Promise<void> | void;
+  /** A limit stopped work and no account had room: record why, for Settings to show. */
+  noteKept?(
+    platform: AgentAccountPlatform,
+    kept: AgentAccountAutoSwitchLastKept,
+    expected: AutoSwitchSnapshot,
+  ): Promise<void> | void;
   /** Called once per stopped turn, whatever happens to it next. */
   onLimitStop?(report: UsageLimitStopReport): Promise<void> | void;
   now?(): number;
@@ -185,8 +202,10 @@ export class AgentAccountAutoSwitcher {
   >();
   /** Stopped turns already reported, so a turn that waits is reported once. */
   private readonly reportedStops = new Set<string>();
-  /** When each account's sign-in may next be renewed, and the failures in a row. */
-  private readonly renewals = new Map<string, { next: number; failures: number }>();
+  /** When a probe last read each account freshly, keyed `<platform>:<id>`. */
+  private readonly probed = new Map<string, number>();
+  /** When each account's sign-in was last asked for, may next be, and the failures in a row. */
+  private readonly renewals = new Map<string, { at: number; next: number; failures: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   /** Per provider, the check due when an account's 5-hour limit resets. */
   private readonly fiveHourWakes = new Map<AgentAccountPlatform, ReturnType<typeof setTimeout>>();
@@ -253,7 +272,7 @@ export class AgentAccountAutoSwitcher {
     await this.serialized(platform, async () => {
       const state = await this.automaticState(platform);
       if (!state) return;
-      const accounts = await this.readings(platform, state, new Set(), false);
+      const accounts = await this.readings(platform, state, new Set(), "cached");
       const decision = decideAutoSwitch(accounts, state.activeId);
       const moved =
         decision.action === "switch" &&
@@ -429,9 +448,13 @@ export class AgentAccountAutoSwitcher {
           .filter((account) => account.platform === platform && isLimited(account))
           .map((account) => account.id),
       );
-      const accounts = await this.readings(platform, { snapshot, activeId }, limited, false);
-      const best = rankAutoSwitchAccounts(accounts, activeId)[0];
-      if (!best) return { moved: false, reason: "no-account-with-headroom" };
+      const accounts = await this.readings(platform, { snapshot, activeId }, limited, "probe");
+      const best = rankAutoSwitchAccounts(accounts, activeId, "after-refusal")[0];
+      if (!best) {
+        const from = limited.has(activeId) ? activeId : (limited.values().next().value ?? activeId);
+        await this.noteKept(platform, from, accounts, snapshot, limited);
+        return { moved: false, reason: "no-account-with-headroom" };
+      }
       const to = label(snapshot, platform, best.account.id);
       if (best.account.id === activeId) return { moved: true, to };
       const moved = await this.moveTo(platform, snapshot, activeId, {
@@ -484,9 +507,13 @@ export class AgentAccountAutoSwitcher {
         : "stop";
     }
 
-    const accounts = await this.readings(platform, state, new Set([ranOn]), false);
-    const best = rankAutoSwitchAccounts(accounts, state.activeId)[0];
-    if (!best) return "stop";
+    const stopped = new Set([ranOn]);
+    const accounts = await this.readings(platform, state, stopped, "probe");
+    const best = rankAutoSwitchAccounts(accounts, state.activeId, "after-refusal")[0];
+    if (!best) {
+      await this.noteKept(platform, ranOn, accounts, state.snapshot, stopped);
+      return "stop";
+    }
     if (best.account.id !== state.activeId) {
       const moved = await this.moveTo(platform, state.snapshot, state.activeId, {
         accountId: best.account.id,
@@ -515,6 +542,30 @@ export class AgentAccountAutoSwitcher {
       waiting.confirmedUntil ??= waiting.bridgeSince + USAGE_LIMIT_BRIDGE_WAIT_MS;
     }
     return this.now() - waiting.bridgeSince < USAGE_LIMIT_BRIDGE_WAIT_MS ? "wait" : "stop";
+  }
+
+  /** Record why the machine stayed. What the turn does next never depends on it. */
+  private async noteKept(
+    platform: AgentAccountPlatform,
+    fromAccountId: string,
+    accounts: readonly AutoSwitchAccount[],
+    expected: AutoSwitchSnapshot,
+    stoppedIds: ReadonlySet<string>,
+  ): Promise<void> {
+    if (!this.deps.noteKept) return;
+    try {
+      await this.deps.noteKept(
+        platform,
+        {
+          fromAccountId,
+          at: new Date(this.now()).toISOString(),
+          blocked: explainNoRoom(accounts, expected.active[platform], "after-refusal", stoppedIds),
+        },
+        expected,
+      );
+    } catch {
+      log.warn("kept-note.failed", { platform });
+    }
   }
 
   private waitFor(requestId: string, limitMs: number): UsageLimitStopVerdict {
@@ -610,13 +661,24 @@ export class AgentAccountAutoSwitcher {
     return { snapshot, activeId: snapshot.active[platform] };
   }
 
-  /** Renew one account's sign-in, at most once per backoff window. */
-  private async renewLogin(platform: AgentAccountPlatform, accountId: string): Promise<boolean> {
+  /**
+   * Renew one account's sign-in, at most once per backoff window. An urgent
+   * renewal, for a limit stop, waits only out the short spacing.
+   */
+  private async renewLogin(
+    platform: AgentAccountPlatform,
+    accountId: string,
+    urgent = false,
+  ): Promise<boolean> {
     const renew = this.deps.renewLogin;
     if (!renew) return false;
     const key = `${platform}:${accountId}`;
     const previous = this.renewals.get(key);
-    if (previous && this.now() < previous.next) return false;
+    const due = urgent
+      ? (previous?.at ?? -Infinity) + URGENT_LOGIN_RENEWAL_SPACING_MS
+      : previous?.next;
+    if (due !== undefined && this.now() < due) return false;
+    const at = this.now();
     let renewed = false;
     try {
       renewed = await renew(platform, accountId);
@@ -629,22 +691,39 @@ export class AgentAccountAutoSwitcher {
       LOGIN_RENEWAL_MAX_RETRY_MS,
     );
     if (!this.renewals.has(key) && this.renewals.size >= MAX_TRACKED_STOPS) this.renewals.clear();
-    this.renewals.set(key, { next: this.now() + wait, failures });
+    this.renewals.set(key, { at, next: this.now() + wait, failures });
     return renewed;
   }
 
+  /**
+   * Every account's reading. `cached` serves a recent reading and renews only an
+   * account it could otherwise never rank. `probe` is for a limit stop, where the
+   * choice should rest on how things are now: it reads every account afresh and
+   * renews the sign-in of each login no entry could read freshly. Every fresh read
+   * is saved as that account's last known usage, which Settings shows too.
+   */
   private async readings(
     platform: AgentAccountPlatform,
     state: NonNullable<Awaited<ReturnType<AgentAccountAutoSwitcher["automaticState"]>>>,
     confirmedOut: ReadonlySet<string>,
-    force: boolean,
+    mode: "cached" | "probe",
   ): Promise<AutoSwitchAccount[]> {
     const includedIds = state.snapshot.autoSwitch?.[platform]?.includedAccountIds ?? [];
-    const read = (accountId: string, forced: boolean): Promise<UsageLimitReading> =>
-      this.deps.readUsage(platform, accountId, { force: forced }).then(
+    // Several turns stop together: one probe's fresh readings serve the rest.
+    const probedRecently = (accountId: string) =>
+      this.now() - (this.probed.get(`${platform}:${accountId}`) ?? -Infinity) <
+      CONFIRMATION_REUSE_MS;
+    const read = async (accountId: string, forced: boolean): Promise<UsageLimitReading> => {
+      const reading = await this.deps.readUsage(platform, accountId, { force: forced }).then(
         (snapshot) => usageLimitReading(platform, snapshot, this.now()),
         (): UsageLimitReading => ({ freshness: "none", wouldPay: false }),
       );
+      if (forced && reading.freshness === "fresh") {
+        if (this.probed.size >= MAX_TRACKED_STOPS) this.probed.clear();
+        this.probed.set(`${platform}:${accountId}`, this.now());
+      }
+      return reading;
+    };
     return Promise.all(
       state.snapshot.accounts
         .filter((account) => account.platform === platform)
@@ -654,11 +733,12 @@ export class AgentAccountAutoSwitcher {
           if (confirmedOut.has(account.id)) {
             reading = { freshness: "fresh", usedPercent: 100, wouldPay: false };
           } else if (account.signedIn && (included || account.id === state.activeId)) {
-            reading = await read(account.id, force);
+            reading = await read(account.id, mode === "probe" && !probedRecently(account.id));
             // A reading with no reset to go on ranks after every account that has
             // one, so without a fresh one this account would never be chosen and
             // never be read again.
             if (
+              mode === "cached" &&
               reading.freshness !== "fresh" &&
               reading.resetsAt === undefined &&
               (await this.renewLogin(platform, account.id))
@@ -668,6 +748,44 @@ export class AgentAccountAutoSwitcher {
           }
           return { account, included, reading };
         }),
+    ).then((entries) => (mode === "probe" ? this.renewUnread(platform, entries, read) : entries));
+  }
+
+  /**
+   * For each login no entry could read freshly, an urgent renewal and a forced
+   * read, entry by entry until one succeeds. Twins share one allowance, so one
+   * fresh reading is enough.
+   */
+  private async renewUnread(
+    platform: AgentAccountPlatform,
+    entries: AutoSwitchAccount[],
+    read: (accountId: string, forced: boolean) => Promise<UsageLimitReading>,
+  ): Promise<AutoSwitchAccount[]> {
+    const loginOf = (entry: AutoSwitchAccount) =>
+      entry.account.identity?.email?.trim().toLowerCase() || `id:${entry.account.id}`;
+    const freshLogins = new Set(
+      entries.filter(({ reading }) => reading.freshness === "fresh").map(loginOf),
     );
+    const unread = new Map<string, AutoSwitchAccount[]>();
+    for (const entry of entries) {
+      const key = loginOf(entry);
+      if (!entry.included || !entry.account.signedIn || freshLogins.has(key)) continue;
+      unread.set(key, [...(unread.get(key) ?? []), entry]);
+    }
+    const renewed = new Map<AutoSwitchAccount, UsageLimitReading>();
+    await Promise.all(
+      Array.from(unread.values(), async (twins) => {
+        for (const entry of twins) {
+          if (!(await this.renewLogin(platform, entry.account.id, true))) continue;
+          const reading = await read(entry.account.id, true);
+          renewed.set(entry, reading);
+          if (reading.freshness === "fresh") return;
+        }
+      }),
+    );
+    return entries.map((entry) => {
+      const reading = renewed.get(entry);
+      return reading ? { ...entry, reading } : entry;
+    });
   }
 }

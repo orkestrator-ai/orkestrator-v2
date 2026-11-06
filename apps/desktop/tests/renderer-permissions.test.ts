@@ -35,9 +35,9 @@ function install(trusted = RENDERER) {
 const mainFrame = { isMainFrame: true, requestingUrl: `${RENDERER}?realm=workspace` };
 
 describe("renderer permission policy", () => {
-  test("grants the renderer's own document a clipboard write and fullscreen", () => {
+  test("grants the renderer's own document a clipboard write, fullscreen and notifications", () => {
     const policy = install();
-    for (const permission of ["clipboard-sanitized-write", "fullscreen"]) {
+    for (const permission of ["clipboard-sanitized-write", "fullscreen", "notifications"]) {
       expect(policy.request(permission, mainFrame)).toBe(true);
       expect(policy.check(permission, mainFrame)).toBe(true);
     }
@@ -48,7 +48,6 @@ describe("renderer permission policy", () => {
     for (const permission of [
       "media",
       "geolocation",
-      "notifications",
       "clipboard-read",
       "openExternal",
       "display-capture",
@@ -59,19 +58,21 @@ describe("renderer permission policy", () => {
     }
   });
 
-  test("refuses a subframe, another document, and an unknown requester", () => {
-    const policy = install();
-    const permission = "clipboard-sanitized-write";
-    expect(policy.request(permission, { ...mainFrame, isMainFrame: false })).toBe(false);
-    expect(
-      policy.request(permission, { isMainFrame: true, requestingUrl: "file:///etc/other.html" }),
-    ).toBe(false);
-    expect(
-      policy.request(permission, { isMainFrame: true, requestingUrl: "https://example.com/" }),
-    ).toBe(false);
-    expect(policy.request(permission, { isMainFrame: true })).toBe(false);
-    expect(policy.check(permission, { isMainFrame: true })).toBe(false);
-  });
+  test.each(["clipboard-sanitized-write", "notifications"])(
+    "refuses %s to a subframe, another document, and an unknown requester",
+    (permission) => {
+      const policy = install();
+      expect(policy.request(permission, { ...mainFrame, isMainFrame: false })).toBe(false);
+      expect(
+        policy.request(permission, { isMainFrame: true, requestingUrl: "file:///etc/other.html" }),
+      ).toBe(false);
+      expect(
+        policy.request(permission, { isMainFrame: true, requestingUrl: "https://example.com/" }),
+      ).toBe(false);
+      expect(policy.request(permission, { isMainFrame: true })).toBe(false);
+      expect(policy.check(permission, { isMainFrame: true })).toBe(false);
+    },
+  );
 
   test("trusts the dev server's origin in development", () => {
     const policy = install("http://127.0.0.1:1420");

@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "browser-gateway.spec.ts",
+    "pipeline-delete.spec.ts",
     "environment-delete-retry.spec.ts",
     "headless-profile.spec.ts",
     "pull-request-pane.spec.ts",
@@ -47,6 +48,7 @@ export default defineConfig({
     "changes-remote-freshness.spec.ts",
     "container-bridge-logs.spec.ts",
     "container-root-terminal.spec.ts",
+    "container-terminal-close.spec.ts",
     "container-approval-stop.spec.ts",
     "container-claude-terminal-signal.spec.ts",
     "container-fake-engines.spec.ts",
@@ -74,6 +76,7 @@ export default defineConfig({
     "mcp-ui-matrix.spec.ts",
     "rich-transcripts-live.spec.ts",
     "idle-observation-live.spec.ts",
+    "session-history-live.spec.ts",
     "client-outage.spec.ts",
   ],
   fullyParallel: false,

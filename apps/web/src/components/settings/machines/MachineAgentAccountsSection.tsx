@@ -52,6 +52,8 @@ import {
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
   HOST_SIGN_IN_PLATFORMS,
+  agentAccountLoginOf,
+  groupAgentAccountLogins,
   type AgentAccountPlatform,
   type AgentAccountSummary,
   type HostSignInPlatform,
@@ -141,16 +143,19 @@ function AccountCell({
       </span>
     );
   }
-  const accounts = snapshot.accounts.filter((account) => account.platform === platform);
-  const active = accounts.find((account) => account.id === snapshot.active[platform]);
+  const logins = groupAgentAccountLogins(
+    snapshot.accounts.filter((account) => account.platform === platform),
+  );
+  // One option per login; the active entry may be a twin the option stands for.
+  const active = agentAccountLoginOf(logins, snapshot.active[platform])?.account;
   const preferred = preferredStatus(machine, platform, preferredEmail);
   const autoSwitch = snapshot.autoSwitch?.[platform];
   return (
     <div className={cn("flex items-center gap-1.5", !wide && "flex-wrap")}>
       <Select
-        value={snapshot.active[platform]}
+        value={active?.id ?? snapshot.active[platform]}
         onValueChange={(accountId) => {
-          if (accountId !== snapshot.active[platform]) onChoose(accountId);
+          if (accountId !== (active?.id ?? snapshot.active[platform])) onChoose(accountId);
         }}
         disabled={busy}
       >
@@ -161,7 +166,7 @@ function AccountCell({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {accounts.map((account) => (
+          {logins.map(({ account }) => (
             <SelectItem key={account.id} value={account.id}>
               {accountOptionLabel(account)}
             </SelectItem>

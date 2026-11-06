@@ -705,6 +705,7 @@ function failTurn(
  * execute against a run that no longer exists.
  */
 function settleTurn(state: SessionState, session: AgentSession): void {
+  state.pendingHistoryPromptId = undefined;
   denyAllApprovals(state, "The turn ended before this tool call was approved.");
   if (state.pendingSteerDeliveries.length > 0) {
     // Pi retains an undrained steer in the Agent queue after abort/end. It

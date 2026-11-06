@@ -44,7 +44,9 @@ import {
  *
  * Enabled by default, like the gateway's own metrics: the cost is a few map
  * updates per attempt at cadences of a second or slower. Set
- * `ORKESTRATOR_RECURRING_METRICS=0` to disable (the rollback switch).
+ * `ORKESTRATOR_RECURRING_METRICS=0` to disable it: a permanent diagnostic kill
+ * switch for the recorder itself, not a scheduling rollback (todo 0048,
+ * decision 2).
  */
 
 const BUCKET_COUNT = RECURRING_DURATION_BUCKETS_MS.length + 1;

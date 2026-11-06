@@ -11,6 +11,7 @@ the credential-delivery items against branch
 `todo-0018-container-isolation-e228f2a04b8e` (2026-10-25); tasks 3 and 9
 against `main` at `931e5541` (2026-10-31); task 1 against `main` at
 `e6c3da899` (2026-11-06); task 2 against `main` at `c1724ab74`
+(2026-11-06); task 5's fake-login probe against `main` at `ee2cc8423`
 (2026-11-06).
 
 ### Tasks
@@ -19,7 +20,7 @@ against `main` at `931e5541` (2026-10-31); task 1 against `main` at
 2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: done 2026-11-06 (tamper, gateway restart and default-loopback checks passed 2026-11-04; the rootless daemon restart passed 2026-11-06 on a disposable daemon from [4730](4730-disposable-docker-daemon-for-live-suites.md); `live-restore` on and other RootlessKit drivers are [7390](7390-rootless-restart-remaining-settings.md)).
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
 4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
-5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: open.
+5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: partly done (the credential-free fake-login probe passed on Claude Code 2.1.314 on 2026-11-06, see the result under task 5; the live run stays open because it needs a spare Claude account).
 6. **Container-made Claude MCP login survival**: a live `claude /mcp` sign-in inside a container survives a keeper push and a restart. Status: open.
 7. **Grok renewal pickup and past-expiry sign-out**: live Grok checks for items 5 and 7 and the past-expiry property. Status: blocked (on a fresh host Grok login).
 8. **OpenCode and Pi past expiry and sign-out**: live OAuth checks for OpenCode and Pi, including item 7's sign-out removal. Status: blocked (on a fresh host OpenCode or Pi OAuth login).
@@ -301,6 +302,73 @@ cap keeps its firewall until it is rebuilt. This came ahead of task 2; see
 
 **Investigation.** `refreshHostClaudeLogin` (`apps/backend/src/core/claude-host-login-refresh.ts:35`) is unchanged since `c17f1c8d` (2026-10-22). The keeper polls every five minutes and refreshes inside a five-minute lead (`apps/backend/src/core/container-claude-login-keeper.ts:43`-`:48`, `TOKEN_REPLACEMENT_LEAD_MS` at `apps/backend/src/core/agent-accounts-active.ts:178`), so this file's "last four minutes" is a looser test window than the code's. The pins have moved since the check: `CLAUDE_CLI_VERSION=2.1.314` (`docker/Dockerfile:193`, as of 2026-10-31), and the Agent SDK is 0.3.314. `docs/development/upgrade-agents.md:636` says the trigger "is still as checked against 2.1.296", so the required re-check after the upgrade was not done.
 
+Result of the fake-login probe, 2026-11-06 (the first half; the decision
+below). Claude Code 2.1.314, from this checkout's development image
+(`orkestrator-v2:dev-9d09d1a49df5`, built from `ee2cc8423`), on beelink's
+Docker Engine (Linux amd64). One throwaway container
+(`ork-q0018t5-…-claude-probe`, `--network none`, the image's `node` user,
+entrypoint bypassed with `sleep`), removed afterwards. No real login was
+used and `~/.claude` was not read or touched: each case wrote a fake
+`.credentials.json` (fake `sk-ant-…` strings) into its own temporary
+`CLAUDE_CONFIG_DIR` and ran the exact command `refreshHostClaudeLogin`
+runs (`-p ok --model orkestrator-login-refresh --setting-sources ""
+--strict-mcp-config --tools "" --no-session-persistence`, with
+`DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1` and an otherwise empty
+environment) plus `--debug-file`. `HTTPS_PROXY` pointed at a logger inside
+the container that recorded each `CONNECT` target and refused it, so
+nothing left the container and the hosts the CLI tried were observed
+directly. The token endpoint in 2.1.314 is
+`https://platform.claude.com/v1/oauth/token`.
+
+| Case | Login | API | Token host contacted | Exit | Credential file |
+| --- | --- | --- | --- | --- | --- |
+| A | refreshable, 2 min left | unreachable | yes, first request, before any API request | timeout (124 at 90 s) | unchanged |
+| B | refreshable, 2 h left | unreachable | no | timeout (124 at 90 s) | unchanged |
+| C | access-only (no `refreshToken` key), 2 min left | unreachable | no | timeout (124 at 90 s) | unchanged |
+| D | access-only, expired 1 h ago | unreachable | no | timeout (124 at 90 s) | unchanged |
+| E | refreshable, expired 1 h ago | unreachable | yes, first request | timeout (124 at 90 s) | unchanged |
+| F | refreshable, 2 min left | fake, 404 `not_found_error` | yes, before the first `POST /v1/messages` | 1, in 1.0 s | unchanged |
+| G | refreshable, 2 h left | fake, 404 | no | 1, in 1.0 s | unchanged |
+| H | refreshable, 2 h left | fake, 401 | yes, after the 401 | 1, in 2.6 s | unchanged |
+| I | access-only, 2 h left | fake, 401 | no | 1, in 2.5 s | unchanged |
+
+Cases F to I set `ANTHROPIC_BASE_URL` to a fake Messages API in the
+container that answered every request with one fixed error (404 for an
+unknown model, as the real API answers one, or 401), with `NO_PROXY` for it;
+the CLI still used the OAuth login, and the debug log recorded "OAuth
+refresh failed (expected): proxy refused the connection" wherever the token
+host was contacted.
+
+What this shows on 2.1.314:
+
+- The trigger still works, and the refresh is proactive: with the API
+  unreachable no 401 was possible, yet a refreshable login inside its last
+  five minutes contacted the token host first (A, F), and one with two hours
+  left did not (B, G). On 2.1.296 the fake token drew a 401, so this was only
+  read from the source then.
+- A 401 still forces a refresh of a refreshable login (H), as on 2.1.296.
+- An access-only login never refreshes, before or after expiry, and with a
+  401 (C, D, I); the file was never rewritten in any case.
+- With the API answering, the run exits 1 within about a second, the exit
+  `refreshHostClaudeLogin` treats as expected.
+- Changed since 2.1.296: the CLI no longer refuses the unknown model by
+  itself. It warns ("doesn't recognize the model … assumes a context window
+  of 200k tokens") and sends the request; the API's 404 is what ends it.
+  The model name is not one the API serves, so no inference runs, but this
+  now rests on the API's answer, not the CLI's. With the API unreachable the
+  CLI keeps retrying past 90 s, beyond the refresher's 60 s budget, so an
+  offline host reports `Host Claude refresh timeout`. That is not a defect:
+  the refresh is attempted in the first few milliseconds, and the keeper
+  reads the login again after any refresh failure
+  (`container-claude-login-keeper.ts`), so a refresh that was saved before
+  the timeout is still picked up.
+
+Not shown by a fake login: that a real, unexpired token is refreshed and
+saved (a new `expiresAt`), that the renewal reaches a running container, and
+that the user's own `claude` stays signed in. That is the live half, still
+open: it needs a spare Claude account, because the only alternative spends
+the user's own refresh token.
+
 **Decisions.**
 
 - **Where to run it?**
@@ -310,7 +378,7 @@ cap keeps its firewall until it is rebuilt. This came ahead of task 2; see
   - **The user's own host login.**
     - Pros: no extra account.
     - Cons: a failure signs the user out of every Claude client on the host.
-- **Re-check the trigger against the current pin (2.1.314) first?**
+- **Re-check the trigger against the current pin (2.1.314) first?** Done 2026-11-06 (the result above).
   - **Yes, repeat the fake-login container probe on the current pin before the live run (recommended).**
     - Pros: cheap, no credentials, and the upgrade guide already demands it.
     - Cons: a fake token still cannot prove a proactive refresh of a real unexpired token.
@@ -584,7 +652,11 @@ and renewal delivery with real, fresh provider logins.
     from running), `--strict-mcp-config`, `--tools ""` and
     `--no-session-persistence`. The fake access token drew a 401, which also
     forces a refresh, so whether a real, unexpired token is refreshed
-    proactively there is from the source, not observed.
+    proactively there is from the source, not observed. Re-checked on
+    2.1.314 on 2026-11-06 with no network (task 5's result): a fake login in
+    its last five minutes contacted the token host before any API request,
+    with no 401 involved, and the unknown model is now sent to the API
+    rather than refused by the CLI.
   - Cost: a container's own `claude /login` no longer survives a restart while
     Claude credentials are allowed, because its refresh token is stripped too
     (as for Codex and Grok). Revoking the environment's Claude credentials
@@ -820,7 +892,9 @@ and renewal delivery with real, fresh provider logins.
   in afterwards), that the renewal reaches the container, and that the
   running container CLI uses it without a restart. Also confirm a run with
   more than five minutes left changes nothing. Re-check the trigger after
-  each Claude Code upgrade.
+  each Claude Code upgrade. The trigger was last re-checked with a fake
+  login on Claude Code 2.1.314 on 2026-11-06 (task 5's result); the live run
+  is still open and needs a spare Claude account.
 - Claude access-only run on 2026-10-21. Host Claude Code 2.1.304 (Keychain
   login); container image `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0`
   (Claude Code 2.1.296) on Docker Desktop 29.8.2 (aarch64), with this
@@ -1006,6 +1080,19 @@ and renewal delivery with real, fresh provider logins.
   in-container firewall keep the documented behaviour until they are rebuilt.
 
 ## Assumptions and decisions
+
+### Task 5: the trigger probe ran with no network and a logging proxy
+
+Chosen on 2026-11-06: run the fake-login probe in a `--network none`
+container with `HTTPS_PROXY` pointed at a local `CONNECT` logger, and a
+fake Messages API for the exit-code cases, rather than in a full-network
+container as on 2.1.296. Pros: no fake token reaches Anthropic; the hosts
+the CLI tries are observed directly instead of inferred from a debug log;
+with no 401 possible, the near-expiry case separates a proactive refresh
+from a 401-forced one, which the 2.1.296 run could not. Cons: the real
+API's answer to the unknown model is simulated (a 404 `not_found_error`);
+the CLI's own request to it was observed, but not the real response. The
+spare-account live run (the first decision) stays open.
 
 ### Task 2: the rootless restart ran on an existing review image
 

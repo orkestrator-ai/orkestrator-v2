@@ -69,6 +69,7 @@ import {
 import {
   CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
+  CONTAINER_TERMINAL_SESSION_ENV,
   containerTerminalUserArgs,
   asString,
   asRecord,
@@ -141,6 +142,31 @@ import {
   stripInheritedAgentCredentials,
 } from "./agent-accounts-active.js";
 import { applyActiveAgentAccountsForContainerTerminal } from "./agent-accounts-containers.js";
+import { newContainerTerminalToken } from "./container-terminal-shell.js";
+
+/**
+ * Starts a container terminal's `docker exec -it` shell, marked with a fresh
+ * token so that closing the PTY can end the shell in the container as well
+ * (`container-terminal-shell.ts`). An already running PTY is left as it is.
+ */
+function spawnContainerTerminal(
+  id: string,
+  config: { containerId: string; cols: number; rows: number; user?: string },
+  context: CommandContext,
+  hooks?: { onData?: (data: string) => void; onExit?: () => void },
+): void {
+  if (context.runtime.terminals.hasProcess(id)) return;
+  const token = newContainerTerminalToken();
+  const dockerArgs = ["exec", "-it", "--env", `${CONTAINER_TERMINAL_SESSION_ENV}=${token}`];
+  dockerArgs.push(...containerTerminalUserArgs(config.user));
+  dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
+  spawnTerminalProcess(id, "docker", dockerArgs, config, context, hooks);
+  context.runtime.terminals.recordContainerShell(id, {
+    containerId: config.containerId,
+    ...(config.user ? { user: config.user } : {}),
+    token,
+  });
+}
 
 /**
  * The registered local environment whose worktree `worktreePath` names.
@@ -480,10 +506,7 @@ export function registerTerminalCommands(
       cols: config.cols,
       rows: config.rows,
     });
-    const dockerArgs = ["exec", "-it"];
-    dockerArgs.push(...containerTerminalUserArgs(config.user));
-    dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
-    spawnTerminalProcess(id, "docker", dockerArgs, config, context);
+    spawnContainerTerminal(id, config, context);
     return id;
   });
   register("start_terminal_session", async ({ sessionId }, context) => {
@@ -520,17 +543,7 @@ export function registerTerminalCommands(
       throw new Error("Container terminal session is no longer available");
     }
     await runtime.terminals.history.resume(id);
-    const dockerArgs = ["exec", "-it"];
-    dockerArgs.push(...containerTerminalUserArgs(config.user));
-    dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
-    spawnTerminalProcess(
-      id,
-      "docker",
-      dockerArgs,
-      config,
-      context,
-      runtime.terminals.activityHooks(id, context),
-    );
+    spawnContainerTerminal(id, config, context, runtime.terminals.activityHooks(id, context));
   });
   // `delivered` is additive: HTTP callers ignore the result, while the terminal
   // WebSocket gateway needs it to avoid acknowledging input that never reached a

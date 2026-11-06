@@ -198,6 +198,8 @@ describe("StorageService config migration", () => {
         agentStopped: true,
         prMerged: true,
         coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
       });
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
@@ -231,6 +233,8 @@ describe("StorageService config migration", () => {
         agentStopped: false,
         prMerged: true,
         coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
       });
 
       await Promise.all([globalWrite, soundWrite]);
@@ -240,6 +244,8 @@ describe("StorageService config migration", () => {
         agentStopped: false,
         prMerged: true,
         coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
       });
 
       const malformedWholeGlobal = await storage.updateGlobalConfig({
@@ -250,6 +256,8 @@ describe("StorageService config migration", () => {
         agentStopped: true,
         prMerged: true,
         coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
       });
 
       const malformed = await storage.updateNotificationSoundSettings({
@@ -260,6 +268,8 @@ describe("StorageService config migration", () => {
         agentStopped: true,
         prMerged: true,
         coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
       });
       expect(malformed.global.terminalAppearance?.fontSize).toBe(19);
     } finally {

@@ -1170,15 +1170,22 @@ Claude AskUserQuestion option previews are requested as Markdown
 block on the question card (`AgentInteractionOption.preview`, bounded per
 option and per request). Codex questions reach the card because interactive
 threads turn on `default_mode_request_user_input`; pipeline threads keep
-Codex's Default-mode refusal. Codex 0.164.0 sends such a question with
-`isBlocking: false`, yet its core waits for the answer with no timeout of its
-own: the flag only lets a client auto-resolve it (Codex's TUI sends an empty
-answer after two minutes). The bridge therefore publishes every parked
-question as blocking, so the session shows as waiting, and keeps the wire flag
-for the deadline: a Default-mode question gets the bounded, pausable deadline,
-whose expiry cancels with the same empty answer. The backend also reads a
-question from an older bridge that still says `false` as blocking
-(`mapCodexInteraction`).
+Codex's Default-mode refusal. Codex 0.164.0 and 0.166.0 send such a question
+with `isBlocking: false` and no `autoResolutionMs`, yet the core waits for the
+answer with no timeout of its own: the flag only lets a client auto-resolve it
+(Codex's TUI sends an empty answer after two minutes). The bridge therefore
+publishes every parked question as blocking, so the session shows as waiting,
+and keeps the wire flag for the deadline: a Default-mode question gets the
+bounded, pausable deadline, whose expiry cancels with the same empty answer.
+That deadline is Orkestrator's own `AGENT_INTERACTION_DEFAULT_TIMEOUT_MS`
+(5 minutes from `requestedAt`), and a pause moves it to the 24-hour hold
+ceiling. On 2026-11-06 a paused question outlived it by 10.5 minutes against
+the real 0.166.0 app-server and was still answered, while an unpaused control
+expired at five minutes (`live-request-user-input.test.ts`,
+`RUN_LIVE_CODEX_QUESTION_DEADLINES=1`). The default suite covers the same
+scenario on a manual clock against the bridge's fake app-server
+(`fake-question-deadline.test.ts`). The backend also reads a question from an
+older bridge that still says `false` as blocking (`mapCodexInteraction`).
 
 ## Cursor Agent
 

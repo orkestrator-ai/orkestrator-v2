@@ -1652,6 +1652,11 @@ send an empty answer. Neither elapsed window can be shortened by an environment
 variable. The longer watchdog allows Bun to buffer output from the long test.
 This uses a loopback model and fake key; the browser qualification
 below additionally covers real-model behavior, card controls and reload.
+Recorded passes: Codex 0.164.0 on macOS arm64 (2026-10-27, 652.8 s) and Codex
+0.166.0 on Linux x64 (2026-11-06, 631.0 s, binary from
+`mise run download:codex` passed as `CODEX_PROTOCOL_BINARY`). The default
+suite's `fake-question-deadline.test.ts` covers the same held and expired
+cases in under a second, on a manual clock against the fake app-server.
 
 The launch-policy renderer regression is also exercised against a running
 container in `native-draft-attachments.spec.ts`. On a disposable Docker fixture

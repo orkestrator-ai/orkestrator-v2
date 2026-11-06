@@ -236,7 +236,9 @@ backend. It stays readable and writable while Local is stopped or crashed.
 - Background attempts are non-interactive: SSH runs with `BatchMode=yes` and
   never prompts.
 - Retryable failures are rescheduled while the machine is still wanted, with
-  delays of 1, 2, 5, 10, 30 and then 60 s (`DEFAULT_RECONNECT_DELAYS_MS`).
+  delays of 1, 2, 5, 10, 30 and then 60 s (`DEFAULT_RECONNECT_DELAYS_MS`),
+  each drawn from the upper half of its rung so desktops that lost the same
+  machine together do not retry it in lock-step.
   Credential, trust and compatibility failures are not retried.
 - Timeouts: 10 s per connection check, 3 s for `probe`, 3 s for the local
   hello.

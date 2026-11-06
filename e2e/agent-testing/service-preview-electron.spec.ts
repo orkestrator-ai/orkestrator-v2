@@ -2087,6 +2087,108 @@ function viteState() {
   ).catch((error: Error) => ({ text: error.message, updates: null, kept: null }));
 }
 
+/** A client of the main window's own backend over its gateway, as a browser or the CLI reaches it. */
+async function localGatewayClient(): Promise<BackendHttpClient> {
+  const authFile = path.join(s().profile.dataDir, "gateway-auth.json");
+  const token = (JSON.parse(await readFile(authFile, "utf8")) as { token: string }).token;
+  return new BackendHttpClient(`http://127.0.0.1:${s().profile.gatewayPort}`, token);
+}
+
+/** The pane layout revision the main window's renderer last adopted for the environment. */
+function rendererLayoutRevision(): Promise<number | null> {
+  return s().window.evaluate(async (environmentId) => {
+    const modulePath = "/src/stores/paneLayoutStore.ts";
+    const { usePaneLayoutStore } = await import(modulePath);
+    return usePaneLayoutStore.getState().environments.get(environmentId)?.backendRevision ?? null;
+  }, s().environmentId);
+}
+
+test("another client's layout save reaches the open window, also while its environment is not shown", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(120_000);
+  const page = s().window;
+  const other = await localGatewayClient();
+  const nextTab = "service-ui-tab-b-next";
+  const serviceTab = (name: Name, routePath = "/"): LayoutTab => ({
+    id: name === "b" && routePath !== "/" ? nextTab : UI_TABS[name],
+    type: "browser",
+    browserData: { url: formatPreviewServiceUri(serviceTarget(name, routePath)) },
+  });
+  const saveFromOther = async (activeTabId: string, tabs: LayoutTab[]): Promise<number> => {
+    const current = await other.invoke<{ revision: number }>("get_pane_layout", {
+      environmentId: s().environmentId,
+    });
+    const saved = await other.invoke<{ revision: number }>("save_pane_layout", {
+      environmentId: s().environmentId,
+      expectedRevision: current.revision,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "service-ui-pane",
+        root: { kind: "leaf", id: "service-ui-pane", activeTabId, tabs },
+      },
+    });
+    expect(saved.revision).toBe(current.revision + 1);
+    return saved.revision;
+  };
+  const expectNoWriteBack = async (revision: number): Promise<number> => {
+    // Allow the renderer's persistence chain to drain, then compare with the
+    // exact save response. A follow-up read must never become the baseline.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const settled = await other.invoke<{ revision: number }>("get_pane_layout", {
+      environmentId: s().environmentId,
+    });
+    expect(settled.revision).toBe(revision);
+    return settled.revision;
+  };
+  const tabNamed = (name: string) => page.getByRole("tab", { name, exact: true });
+
+  await showServiceTabs("a");
+  try {
+    await expect(tabNamed("svc-a 1")).toBeVisible({ timeout: 30_000 });
+    await expect(tabNamed("svc-b 2")).toBeVisible();
+    // Set in this renderer only: still there afterwards means no reload delivered the change.
+    await page.evaluate(() => {
+      (globalThis as Record<string, unknown>).__crossClientProbe = true;
+    });
+    const unreloaded = () =>
+      page.evaluate(() => (globalThis as Record<string, unknown>).__crossClientProbe === true);
+
+    // Shown: a third tab another client adds appears in the strip.
+    const added = await saveFromOther(UI_TABS.a, [
+      serviceTab("a"),
+      serviceTab("b"),
+      serviceTab("b", "/app/next"),
+    ]);
+    await expect(tabNamed("svc-b 3")).toBeVisible({ timeout: 30_000 });
+    await expect.poll(rendererLayoutRevision, { timeout: 30_000 }).toBe(added);
+    await expectNoWriteBack(added);
+
+    // Not shown: the window adopts a reorder that drops that tab while no
+    // environment is selected, and shows it when the environment comes back.
+    await uiStore("selectProject", null);
+    await expect(tabNamed("svc-a 1")).toHaveCount(0, { timeout: 30_000 });
+    const reordered = await saveFromOther(UI_TABS.b, [serviceTab("b"), serviceTab("a")]);
+    await expect.poll(rendererLayoutRevision, { timeout: 30_000 }).toBe(reordered);
+    await expectNoWriteBack(reordered);
+    await uiStore("selectProjectAndEnvironment", s().projectId, s().environmentId);
+    await closeStartupDialogs();
+    await expect(tabNamed("svc-b 1")).toBeVisible({ timeout: 30_000 });
+    await expect(tabNamed("svc-a 2")).toBeVisible();
+    await expect(tabNamed("svc-b 3")).toHaveCount(0);
+    expect(await unreloaded()).toBe(true);
+
+    const settled = await expectNoWriteBack(reordered);
+    record(testInfo, "cross-client-layout", JSON.stringify({ added, reordered, settled }));
+  } finally {
+    // The renderer now holds the other client's tab set.
+    uiTabSet = "cross-client";
+    uiTabOrder = ["b", "a"];
+    await uiStore("selectProject", null).catch(() => undefined);
+    await preview("destroy", nextTab).catch(() => undefined);
+  }
+});
+
 test("a Vite app keeps HMR updates made while its tab is hidden, unmounted or reloaded", async () => {
   const testInfo = test.info();
   testInfo.setTimeout(240_000);
@@ -2310,13 +2412,15 @@ test("a legacy URL tab keeps a link and Back through routine re-attaches", async
     const staleAttach = (url: string, basis: number | undefined, back: boolean) =>
       hostRect(LEGACY_TAB).then((bounds) =>
         page.evaluate(
-          async ({ tabId, url, bounds, basis, back }) => {
+          async ({ tabId, environmentId, url, bounds, basis, back }) => {
             const api = (globalThis as any).orkestrator.browserPreview;
-            const reattach = { tabId, url, bounds, visible: true };
+            // Keep the renderer's identity: omitting it replaces the view and
+            // discards the history this stale-URL race is meant to exercise.
+            const reattach = { tabId, environmentId, url, bounds, visible: true };
             if (typeof basis === "number") Object.assign(reattach, { navigationBasis: basis });
             await Promise.all([back ? api.goBack(tabId) : null, api.attach(reattach)]);
           },
-          { tabId: LEGACY_TAB, url, bounds, basis, back },
+          { tabId: LEGACY_TAB, environmentId: s().environmentId, url, bounds, basis, back },
         ),
       );
     const appliedBasis = async () =>
@@ -2422,108 +2526,6 @@ test("a stored 127.0.0.1 URL tab migrates to its service and stays migrated afte
   } finally {
     await uiStore("selectProject", null).catch(() => undefined);
     await preview("destroy", tabId).catch(() => undefined);
-  }
-});
-
-/** A client of the main window's own backend over its gateway, as a browser or the CLI reaches it. */
-async function localGatewayClient(): Promise<BackendHttpClient> {
-  const authFile = path.join(s().profile.dataDir, "gateway-auth.json");
-  const token = (JSON.parse(await readFile(authFile, "utf8")) as { token: string }).token;
-  return new BackendHttpClient(`http://127.0.0.1:${s().profile.gatewayPort}`, token);
-}
-
-/** The pane layout revision the main window's renderer last adopted for the environment. */
-function rendererLayoutRevision(): Promise<number | null> {
-  return s().window.evaluate(async (environmentId) => {
-    const modulePath = "/src/stores/paneLayoutStore.ts";
-    const { usePaneLayoutStore } = await import(modulePath);
-    return usePaneLayoutStore.getState().environments.get(environmentId)?.backendRevision ?? null;
-  }, s().environmentId);
-}
-
-test("another client's layout save reaches the open window, also while its environment is not shown", async () => {
-  const testInfo = test.info();
-  testInfo.setTimeout(120_000);
-  const page = s().window;
-  const other = await localGatewayClient();
-  const nextTab = "service-ui-tab-b-next";
-  const serviceTab = (name: Name, routePath = "/"): LayoutTab => ({
-    id: name === "b" && routePath !== "/" ? nextTab : UI_TABS[name],
-    type: "browser",
-    browserData: { url: formatPreviewServiceUri(serviceTarget(name, routePath)) },
-  });
-  const saveFromOther = async (activeTabId: string, tabs: LayoutTab[]): Promise<number> => {
-    const current = await other.invoke<{ revision: number }>("get_pane_layout", {
-      environmentId: s().environmentId,
-    });
-    await other.invoke("save_pane_layout", {
-      environmentId: s().environmentId,
-      expectedRevision: current.revision,
-      layout: {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "service-ui-pane",
-        root: { kind: "leaf", id: "service-ui-pane", activeTabId, tabs },
-      },
-    });
-    const saved = await other.invoke<{ revision: number }>("get_pane_layout", {
-      environmentId: s().environmentId,
-    });
-    expect(saved.revision).toBeGreaterThan(current.revision);
-    return saved.revision;
-  };
-  const tabNamed = (name: string) => page.getByRole("tab", { name, exact: true });
-
-  await showServiceTabs("a");
-  try {
-    await expect(tabNamed("svc-a 1")).toBeVisible({ timeout: 30_000 });
-    await expect(tabNamed("svc-b 2")).toBeVisible();
-    // Set in this renderer only: still there afterwards means no reload delivered the change.
-    await page.evaluate(() => {
-      (globalThis as Record<string, unknown>).__crossClientProbe = true;
-    });
-    const unreloaded = () =>
-      page.evaluate(() => (globalThis as Record<string, unknown>).__crossClientProbe === true);
-
-    // Shown: a third tab another client adds appears in the strip.
-    const added = await saveFromOther(UI_TABS.a, [
-      serviceTab("a"),
-      serviceTab("b"),
-      serviceTab("b", "/app/next"),
-    ]);
-    await expect(tabNamed("svc-b 3")).toBeVisible({ timeout: 30_000 });
-    await expect.poll(rendererLayoutRevision, { timeout: 30_000 }).toBe(added);
-
-    // Not shown: the window adopts a reorder that drops that tab while no
-    // environment is selected, and shows it when the environment comes back.
-    await uiStore("selectProject", null);
-    await expect(tabNamed("svc-a 1")).toHaveCount(0, { timeout: 30_000 });
-    const reordered = await saveFromOther(UI_TABS.b, [serviceTab("b"), serviceTab("a")]);
-    await expect.poll(rendererLayoutRevision, { timeout: 30_000 }).toBe(reordered);
-    await uiStore("selectProjectAndEnvironment", s().projectId, s().environmentId);
-    await closeStartupDialogs();
-    await expect(tabNamed("svc-b 1")).toBeVisible({ timeout: 30_000 });
-    await expect(tabNamed("svc-a 2")).toBeVisible();
-    await expect(tabNamed("svc-b 3")).toHaveCount(0);
-    expect(await unreloaded()).toBe(true);
-
-    // Adopting another client's layout writes nothing back.
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    const settled = await other.invoke<{ revision: number }>("get_pane_layout", {
-      environmentId: s().environmentId,
-    });
-    record(
-      testInfo,
-      "cross-client-layout",
-      JSON.stringify({ added, reordered, settled: settled.revision }),
-    );
-    expect(settled.revision).toBe(reordered);
-  } finally {
-    // The renderer now holds the other client's tab set.
-    uiTabSet = "cross-client";
-    uiTabOrder = ["b", "a"];
-    await uiStore("selectProject", null).catch(() => undefined);
-    await preview("destroy", nextTab).catch(() => undefined);
   }
 });
 

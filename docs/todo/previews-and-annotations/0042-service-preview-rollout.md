@@ -1769,6 +1769,59 @@ name:
   process from these runs was left. Evidence:
   `output/agent-testing/svc0042-task10*`.
 
+2026-11-06, task 10 review repairs after `ae2e5f305`:
+
+- The cross-client case now uses the exact `save_pane_layout` response revision,
+  with no later read substituting for it. It checks that revision after shown
+  adoption, after hidden adoption before reselecting, and after returning to the
+  environment. The first assertion runs before the next remote save, so a
+  renderer echo cannot be absorbed into that save's initial revision read.
+- Moved the case beside the narrow-toolbar case, before the legacy Back case,
+  so the known serial failure cannot prevent it from running.
+- Fixed the recorded legacy Back failure as well: its synthetic re-attach now
+  carries the renderer's environment identity. Omitting it replaced the view
+  and discarded its history. All original navigation assertions remain;
+  [7061](7061-legacy-url-tab-back-fails-headless.md) records the diagnosis.
+- Targeted Electron command, through `test:logged`, run ID
+  `svc0042-review-fixed`: `bunx playwright test --config
+  e2e/agent-testing/playwright.electron.config.ts
+  e2e/agent-testing/service-preview-electron.spec.ts --grep "another client's
+  layout save|keeps a link and Back through routine"`: **2 passed**, 29.5 s.
+- Mutation evidence: temporarily injected an identical save through the
+  renderer's invoke after remote adoption and before the settled read. The
+  shown probe (`ORKESTRATOR_REVIEW_ECHO_PROBE=1`, run ID
+  `svc0042-review-echo-shown`) failed the exact revision check, expected 2,
+  received 3; the hidden probe (`=2`, `svc0042-review-echo-hidden`) failed the
+  same check, expected 3, received 4. Both used the same focused Playwright
+  command with `--grep "another client's layout save"`. The injected code was
+  removed before the full suite. Logged failure evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1ldPE9/preview-echo-shown.log.gz`
+  and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.zvwhoc/preview-echo-hidden.log.gz`.
+- Focused static checks passed: `bun check -p e2e/tsconfig.json` (through
+  `test:logged`), `bunx oxlint e2e/agent-testing/service-preview-electron.spec.ts`,
+  and `bun fmt --check e2e/agent-testing/service-preview-electron.spec.ts`.
+  Passing preparation-wide lint and typecheck were retained without repetition.
+- Exact recorded command rerun (through `test:logged --name review-electron`),
+  `mise run test:agent:electron`, run ID `svc0042-review-electron`: **61 passed,
+  4 failed, 5 skipped, 5 not run**, exit 1, 594.2 s. The complete changed
+  service-preview spec passed **24/24**; cross-client ran before legacy Back,
+  adopted revisions 29 and 30 and settled at 30. The legacy Back case kept
+  the expected five `/` traces and passed the ordered stale Back/link checks.
+- Remaining validation limits: gateway transport still closed its first window;
+  terminal Resume still missed Vim's empty-editor ruler; workspace realm still
+  sampled only two x positions. Preparation's `failureTriage` marks all three
+  `undetermined` (`not-import-traceable`, with `known-flaky` context for the
+  latter two). They drive untouched specs and no production code changes in
+  this branch explain them; they remain for the verifier, not excused as
+  pre-existing. A new failure in the untouched seeded-preview spec's
+  `beforeAll` reported `No two adjacent free loopback ports` and left its next
+  five cases not run; its cause is also unqualified here.
+- Rerun artifacts: `output/agent-testing/svc0042-review-electron/electron/results.json`
+  and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.FmCip9/review-electron.log.gz`.
+  The original review package and its output artifacts were not changed.
+  The rerun JSON has no errors outside test cases. No live service-preview
+  worker or temporary service-preview profile root remained after cleanup.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -2299,6 +2352,16 @@ Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
   logic, and a real multi-node setup needs the hardware task 1 waits on.
   Cons: the 30-minute registry read path is not seen end to end; task 1's
   session can still pick it up.
+
+### D28. Task 10: keep each save's exact revision as the assertion baseline
+
+Chose the revision returned by the remote save and independent no-write-back
+checks after both adoptions. This catches echoes even before the next save can
+read them. The previous follow-up-read baseline was convenient but could accept
+an echoed revision; keeping it would leave the review's false-negative window.
+Moving this case before the legacy Back case preserves its serial-suite signal
+without skipping any case. The mutation probes above demonstrate that each
+adoption now rejects a renderer write-back.
 
 ## Needs verification
 

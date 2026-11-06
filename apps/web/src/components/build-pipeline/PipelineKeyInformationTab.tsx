@@ -63,8 +63,8 @@ const TILE_TONE: Record<SummaryTile["tone"], string> = {
  *
  * The tab keeps only the pipeline id; the brief is read from the pipeline
  * record in the store, so every backend update re-renders it in place. Its
- * notes view is the Notes step on a full pane: the same brief, with what
- * needs a look under the summary.
+ * notes view is the Notes step on a full pane: the same brief, led by what
+ * needs a look.
  */
 export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabData }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
@@ -176,9 +176,7 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
         <KeyInformationDocument
           keyInformation={pipeline.keyInformation}
           scrollRef={scrollRef}
-          afterSummary={
-            notes ? <PipelineNeedsALook followUps={pipelineFollowUps(pipeline)} /> : undefined
-          }
+          lead={notes ? <PipelineNeedsALook followUps={pipelineFollowUps(pipeline)} /> : undefined}
         />
       </div>
     </div>
@@ -187,24 +185,21 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
 
 /**
  * The whole brief, or a note that nothing is recorded yet. Also read by the
- * Notes step, which places `afterSummary` under the summary; a brief with no
- * summary shows it ahead of its sections.
+ * Notes step, which places `lead` at the top, ahead of the brief.
  */
 export function KeyInformationDocument({
   keyInformation: info,
   scrollRef,
-  afterSummary,
+  lead,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
   scrollRef: RefObject<HTMLDivElement | null>;
-  afterSummary?: ReactNode;
+  lead?: ReactNode;
 }) {
   if (!info || !hasKeyInformation(info)) {
     return (
       <>
-        {afterSummary ? (
-          <div className="mx-auto w-full max-w-7xl px-4 pt-4 @3xl:px-8">{afterSummary}</div>
-        ) : null}
+        {lead ? <div className="mx-auto w-full max-w-7xl px-4 pt-4 @3xl:px-8">{lead}</div> : null}
         <div className="mx-auto flex max-w-md flex-col items-center gap-2 px-6 py-16 text-center">
           <FileText aria-hidden className="size-8 text-muted-foreground/60" />
           <p className="text-sm text-foreground">Nothing has been recorded yet</p>
@@ -216,17 +211,17 @@ export function KeyInformationDocument({
       </>
     );
   }
-  return <KeyInformationContents info={info} scrollRef={scrollRef} afterSummary={afterSummary} />;
+  return <KeyInformationContents info={info} scrollRef={scrollRef} lead={lead} />;
 }
 
 function KeyInformationContents({
   info,
   scrollRef,
-  afterSummary,
+  lead,
 }: {
   info: BuildPipelineKeyInformation;
   scrollRef: RefObject<HTMLDivElement | null>;
-  afterSummary?: ReactNode;
+  lead?: ReactNode;
 }) {
   const navRef = useRef<HTMLUListElement>(null);
   const tests = countTests(info.tests);
@@ -421,6 +416,7 @@ function KeyInformationContents({
         </ul>
       </nav>
       <div className="flex min-w-0 flex-1 flex-col gap-8">
+        {lead}
         {tiles.length > 0 ? (
           <div
             aria-label="At a glance"
@@ -447,7 +443,6 @@ function KeyInformationContents({
             ))}
           </div>
         ) : null}
-        {info.summary ? null : afterSummary}
         {sections.map((section, index) => {
           if (paired.has(section.key)) {
             if (index !== firstPairedIndex) return null;
@@ -474,7 +469,6 @@ function KeyInformationContents({
               <TabSection id={sectionId(section.key)} title={section.title} meta={section.meta}>
                 {section.body}
               </TabSection>
-              {section.key === "summary" ? afterSummary : null}
             </Fragment>
           );
         })}

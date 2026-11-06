@@ -1163,12 +1163,16 @@ test("Notes shows follow-ups and the full brief after reload", async ({ page }) 
     await expect(node(page, "PR")).toHaveAttribute("aria-selected", "false");
     const notes = page.getByTestId("pipeline-notes");
     const followUps = notes.getByRole("region", { name: "Needs a look" });
+    const header = followUps.getByRole("button", { name: /^Needs a look/ });
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await header.click();
+    await expect(header).toHaveAttribute("aria-expanded", "true");
     await expect(followUps).toContainText("Works on a real phone");
     await expect(followUps).toContainText("Needs a device.");
     await expect(followUps).toContainText("Rich text formatting");
     await expect(followUps).toContainText("mise run test:browser");
-    await expect(notes.getByRole("region").nth(0)).toHaveAttribute("aria-label", "Summary");
-    await expect(notes.getByRole("region").nth(1)).toHaveAttribute("aria-label", "Needs a look");
+    await expect(notes.getByRole("region").nth(0)).toHaveAttribute("aria-label", "Needs a look");
+    await expect(notes.getByRole("region").nth(1)).toHaveAttribute("aria-label", "Summary");
     for (const title of [
       "Objective",
       "Context",

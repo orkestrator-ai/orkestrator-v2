@@ -16,6 +16,17 @@ const recorded = new Set<RealmBootStep>();
 const sinceDocumentStart = () =>
   globalThis.performance ? globalThis.performance.now() : Number.NaN;
 
+const bootClock = { startedAt: 0 };
+
+/** The startup entry point defines the origin for the first committed render. */
+export function beginRealmBoot(): void {
+  bootClock.startedAt = sinceDocumentStart();
+}
+
+export function recordRealmFirstRender(): void {
+  recordRealmBootStep("first-render", sinceDocumentStart() - bootClock.startedAt);
+}
+
 /**
  * Report one step of a workspace realm's boot to the desktop, once per realm
  * document.

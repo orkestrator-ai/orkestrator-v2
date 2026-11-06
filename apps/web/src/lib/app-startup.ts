@@ -1,6 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { hydrateAgentModelCatalogCache } from "./agent-model-catalog-cache";
-import { recordRealmBootStep } from "./realm-boot-timing";
+import { beginRealmBoot, recordRealmBootStep } from "./realm-boot-timing";
 
 const log = createLogger("web.startup");
 
@@ -48,6 +48,7 @@ export async function startApp({
   timer = browserTimer,
   now = monotonicNow,
 }: StartAppOptions): Promise<void> {
+  beginRealmBoot();
   let cacheTimeout: unknown;
   const readStarted = now();
   // The read stays live after the timeout and may still fill the stores; the
@@ -71,7 +72,9 @@ export async function startApp({
       .then(seed)
       .then(
         () => {
-          recordRealmBootStep("catalogue-seed", now() - seedStarted, { outcome: "ok" });
+          // A resolved cache RPC does not prove provider seeding succeeded: the
+          // backend deliberately absorbs individual provider failures.
+          recordRealmBootStep("catalogue-seed", now() - seedStarted);
         },
         (error: unknown) => {
           log.warn("model-catalogue.seed-failed", { error: formatLogError(error) });

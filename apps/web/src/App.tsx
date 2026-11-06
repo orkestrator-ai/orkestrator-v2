@@ -31,7 +31,7 @@ import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { startBuildPipelineCompletionNotes } from "@/lib/build-pipeline-completion-notes";
 import { hydrateBootMultiReviewWorkflows, hydrateBootPromptQueues } from "@/lib/boot-hydration";
-import { recordRealmBootStep } from "@/lib/realm-boot-timing";
+import { recordRealmFirstRender } from "@/lib/realm-boot-timing";
 import {
   hydrateBuildPipelinesForProject,
   migrateLegacyBuildPipelines,
@@ -291,7 +291,7 @@ function ConnectedApp() {
   const [workspaceRealm] = useState(isWorkspaceRealm);
   // A realm reports its first committed render to the desktop's log; a no-op elsewhere.
   useEffect(() => {
-    recordRealmBootStep("first-render", globalThis.performance?.now() ?? 0);
+    recordRealmFirstRender();
   }, []);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);

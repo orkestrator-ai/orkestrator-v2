@@ -95,3 +95,8 @@ export class RequestLimiter {
 
 /** The renderer's one bound for hydration reads (see `HYDRATION_MAX_IN_FLIGHT`). */
 export const hydrationRequests = new RequestLimiter(HYDRATION_MAX_IN_FLIGHT);
+
+/** Admit at most two Docker-reconciling reads to the shared six-slot pool.
+ * Waiting here consumes no shared slot, leaving capacity for persisted reads.
+ */
+export const environmentRequests = new RequestLimiter(2);

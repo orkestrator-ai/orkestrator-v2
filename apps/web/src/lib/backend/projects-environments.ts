@@ -1,5 +1,5 @@
 import { invoke } from "@/lib/native/backend";
-import { hydrationRequests } from "@/lib/hydration-request-limiter";
+import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
 import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
 import type {
@@ -185,7 +185,9 @@ export async function arrangeProjectsByIntent(
 
 /** Bounded with the other hydration reads (`hydration-request-limiter.ts`). */
 export async function getEnvironments(projectId: string): Promise<Environment[]> {
-  return hydrationRequests.run(() => invoke<Environment[]>("get_environments", { projectId }));
+  return environmentRequests.run(() =>
+    hydrationRequests.run(() => invoke<Environment[]>("get_environments", { projectId })),
+  );
 }
 
 /**

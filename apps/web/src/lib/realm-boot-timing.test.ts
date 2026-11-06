@@ -54,3 +54,27 @@ describe("recordRealmBootStep", () => {
     expect(post).not.toHaveBeenCalled();
   });
 });
+
+test("first render duration starts at the startup entry point rather than document navigation", async () => {
+  const { spyOn } = await import("bun:test");
+  const { beginRealmBoot, recordRealmFirstRender } = await import("./realm-boot-timing");
+  const post = mock((_message: unknown) => {});
+  asDesktopRealm(post);
+  const clock = spyOn(globalThis.performance, "now");
+  try {
+    clock.mockReturnValue(5_000);
+    beginRealmBoot();
+    clock.mockReturnValue(5_125);
+    recordRealmFirstRender();
+    recordRealmFirstRender();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith({
+      type: "bootTiming",
+      step: "first-render",
+      durationMs: 125,
+      sinceStartMs: 5_125,
+    });
+  } finally {
+    clock.mockRestore();
+  }
+});

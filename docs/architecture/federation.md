@@ -468,7 +468,10 @@ opens of omarchy-hp from mbp3 were slow, warm opens fast):
   reads are in flight per renderer document, so per realm
   (`HYDRATION_MAX_IN_FLIGHT`, `hydration-request-limiter.ts`): `get_environments`,
   `get_environment_snapshots`, `list_build_pipelines`, `list_prompt_queues`,
-  `list_multi_review_workflows` and `list_environment_hydration`. The boot
+  `list_multi_review_workflows` and `list_environment_hydration`. Docker-reconciling
+  `get_environments` reads have a two-request admission limit inside that same
+  six-slot bound; waiting environment loads consume no shared slot, so a slow
+  Docker snapshot cannot starve persisted snapshot, pipeline or queue reads. The boot
   restore of prompt queues and Multi Review workflows (`App.tsx` through
   `boot-hydration.ts`) collects the environments requested in one task and
   reads them with one `list_environment_hydration` call per 100
@@ -488,6 +491,14 @@ opens of omarchy-hp from mbp3 were slow, warm opens fast):
 | `workspace.opened` | main process (`node-workspaces.ts`) | The `open_node_workspace` call, which issues the node's client grant; `directRoutes` counts the routes to probe. |
 | `workspace.route-probed` | main process | One direct (or loopback) route probe: `route`, `attempt`, and an `outcome` from a fixed list (`hello`, `other-node`, `legacy`, `unreachable`, `timeout`, `authentication-required`, …). Never the origin. |
 | `realm.boot-step` | the realm, relayed | `step` is `catalogue-read`, `first-render`, `first-environments`, `fan-out-complete` (with `requests`, the hydration reads the document sent) or `catalogue-seed`, each with an `outcome` where it has one. `sinceStartMs` is from the realm document's start, `sinceOpenMs` from the window asking for the realm. |
+
+`first-render.durationMs` starts at the `startApp` entry point; `sinceStartMs`
+continues to measure time since document navigation. Fan-out completion waits
+for all initial environment attempts, including rejected reads, independently
+of the sidebar's successful-load readiness, and reports a failed outcome if any
+initial attempt failed. A resolved catalogue seed RPC reports duration only:
+the backend absorbs provider download failures, so RPC success cannot establish
+that seeding succeeded. A rejected seed RPC reports `failed`.
 
 Renderer logger lines do not reach the saved log, so the realm sends each step
 once as a `bootTiming` message over its window channel

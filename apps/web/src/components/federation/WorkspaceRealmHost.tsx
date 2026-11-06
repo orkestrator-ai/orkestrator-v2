@@ -75,7 +75,13 @@ export function WorkspaceRealmHost() {
     allEnvironments,
     bootTiming.load,
   );
-  useRealmFanOutTiming(environmentsReady, bootTiming.clock);
+  useRealmFanOutTiming(
+    projectsLoaded &&
+      !projectsLoading &&
+      projects.every((project) => bootTiming.settled.has(project.id)),
+    bootTiming.clock,
+    Array.from(bootTiming.settled.values()).some((succeeded) => !succeeded),
+  );
 
   // What the window asked for last, numbered so the same request twice counts twice.
   const [request, setRequest] = useState<(RealmSelectRequest & { seq: number }) | null>(() => {

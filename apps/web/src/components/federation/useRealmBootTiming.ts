@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { hydrationRequests, type RequestLimiter } from "@/lib/hydration-request-limiter";
 import { recordRealmBootStep } from "@/lib/realm-boot-timing";
 
@@ -35,14 +35,18 @@ export type RealmBootClock = { current: number | null };
 export function useTimedEnvironmentLoad<T>(load: (projectId: string) => Promise<T>): {
   load: (projectId: string) => Promise<T>;
   clock: RealmBootClock;
+  settled: ReadonlyMap<string, boolean>;
 } {
   const clock = useRef<number | null>(null);
+  const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(new Map());
   const timedLoad = useCallback(
     async (projectId: string) => {
       const started = monotonicNow();
       clock.current ??= started;
+      let succeeded = false;
       try {
         const result = await load(projectId);
+        succeeded = true;
         recordRealmBootStep("first-environments", monotonicNow() - started, { outcome: "ok" });
         return result;
       } catch (error) {
@@ -50,11 +54,16 @@ export function useTimedEnvironmentLoad<T>(load: (projectId: string) => Promise<
           outcome: "failed",
         });
         throw error;
+      } finally {
+        const outcome = succeeded;
+        setSettled((previous) =>
+          previous.has(projectId) ? previous : new Map(previous).set(projectId, outcome),
+        );
       }
     },
     [load],
   );
-  return { load: timedLoad, clock };
+  return { load: timedLoad, clock, settled };
 }
 
 /**
@@ -62,16 +71,21 @@ export function useTimedEnvironmentLoad<T>(load: (projectId: string) => Promise<
  * hydration reads to go quiet and reports `fan-out-complete` with how many
  * hydration requests the document sent. Reported once per realm document.
  */
-export function useRealmFanOutTiming(environmentsReady: boolean, clock: RealmBootClock): void {
+export function useRealmFanOutTiming(
+  environmentsSettled: boolean,
+  clock: RealmBootClock,
+  failed = false,
+): void {
   const reported = useRef(false);
   useEffect(() => {
-    if (!environmentsReady || reported.current) return;
+    if (!environmentsSettled || reported.current) return;
     reported.current = true;
     const startedAt = clock.current ?? monotonicNow();
     void waitForHydrationQuiet().then(() => {
       recordRealmBootStep("fan-out-complete", monotonicNow() - startedAt, {
         requests: hydrationRequests.started,
+        outcome: failed ? "failed" : "ok",
       });
     });
-  }, [clock, environmentsReady]);
+  }, [clock, environmentsSettled, failed]);
 }

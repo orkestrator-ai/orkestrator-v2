@@ -52,7 +52,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: done
     (2026-11-06): 0620 and the 0622 baseline-count race were fixed on
     2026-11-01 (D9 to D11). The 0622 window-close symptom was reproduced under
-    CPU load and fixed (D22, D23); both flakes are resolved.
+    CPU load and fixed (D22, D23); both flakes are resolved. The owning specs'
+    launcher now recovers a startup that lost its modules to
+    `ERR_NETWORK_CHANGED`, which failed them at review validation (D24).
 12. **Partition disk use on a long-lived profile**: the "Needs verification"
     item. Status: partly done (`disk:report` measures it; no long-lived data).
 
@@ -456,6 +458,21 @@ hooks always call back (D22). With the fix the same load passed 10 of 10, and
 both flakes are resolved (D23). The audit of main's other webRequest listeners
 is
 [7060](../cross-cutting/7060-electron-webrequest-listeners-always-answer.md).
+
+**Review validation repair (2026-11-06).** The review's `mise run
+test:agent:electron` lost both service-preview specs in `beforeAll`, before any
+test body: Chromium aborted the window's Vite modules with
+`net::ERR_NETWORK_CHANGED` and the window stopped at "Orkestrator couldn’t
+connect" (case
+[2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md),
+other builds' Docker work; the spec's own reachability probe was already off).
+The launcher now reloads such a window, at most three times, only for that
+failure (D24, `9ef37bfd1`). Afterwards, headless without a private network
+namespace: the two owning tests 10 of 10 each, the owner without the
+[7061](7061-legacy-url-tab-back-fails-headless.md) case 21 of 21, the seeded
+spec 6 of 6, and 10 separate cold launches 10 of 10. The other Electron specs'
+first-title waits are
+[7062](../cross-cutting/7062-electron-specs-recover-network-changed-startup.md).
 
 ### 12. Partition disk use on a long-lived profile
 
@@ -1857,6 +1874,33 @@ as below.
   Docker resources were created. The probe, the slow-close hook and the run
   scripts were never committed.
 
+2026-11-06, review validation repair (task 11, D24), branch
+`preview-flakes-1bb27c3be3fd-r1` at `9ef37bfd1`. Same host and versions, one
+worker, headless (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), **without** a private network
+namespace, other builds running (load average 10 to 35), 01:58 to 02:05 UTC.
+Commands were `mise run test:logged -- --name <name> -- bunx playwright test
+--config e2e/agent-testing/playwright.electron.config.ts <spec> --workers=1
+--retries=0` with the options below; counts are from each run's
+`results.json`.
+
+- Keyboard picker test (0620), `--repeat-each=10`: 10 passed.
+- Multi-backend test (0622), `--repeat-each=10`: 10 passed.
+- Complete owner with `--grep-invert` for the 7061 case: 21 passed.
+- `service-preview-seeded-electron.spec.ts`: 6 passed.
+- `the tunnel is advertised and a service loads through its credentialed
+  loopback ingress`, the case the review lost, in 10 separate invocations
+  (10 cold launches): 10 passed.
+- No run printed `[startup-recovery]`, so no startup needed a reload in this
+  window. `e2e/agent-testing/electron-startup-recovery.test.ts` passed 12
+  tests; `bun check -p e2e/agent-testing/tsconfig.json`, `oxlint` and
+  `bun fmt` on the changed files passed.
+- Not run: forced network churn (it would abort other builds' loads on this
+  host; 7062 task 2), and a full `mise run test:agent:electron`.
+- Cleanup: each spec removed its temporary profile root; no Electron,
+  backend or Vite process of these runs is left. No Docker resources were
+  created.
+
 ## Open questions
 
 - How long is the support window for the legacy route and the pre-preview
@@ -2132,6 +2176,21 @@ Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
   and the step has told the two apart since 2026-10-21 (it now also records
   `releasedAfterMs` and prints main's uncaught exceptions on failure). (b)
   waits on hardware no run in this to-do has had.
+- **D24. How the service-preview specs survive a startup that lost its
+  modules.** Options: (a) reload the window, at most three times, only when
+  the startup screen failed and that load's console holds both a failed module
+  import and `net::ERR_NETWORK_CHANGED`; (b) route the window's loopback
+  modules through `route.fetch()`, as the browser suite does; (c) run the specs
+  only in a private network namespace. Chose (a). Pros: every request still
+  goes through Chromium and main's webRequest hooks, where 0622's cause was;
+  any other startup failure still fails; a packaged build loads from `file:`,
+  so it cannot hide a user-facing failure; unit tested
+  (`electron-startup-recovery.test.ts`). Cons: a reload adds seconds to a
+  start; a burst of churn longer than three reloads still fails; no live run
+  has shown a reload yet (none was hit after the change). (b) bypasses main's
+  request hooks for exactly the loads that raced in 0622. (c) cannot reach
+  Docker or the network, and `mise run test:agent:electron` does not run that
+  way.
 
 ## Needs verification
 

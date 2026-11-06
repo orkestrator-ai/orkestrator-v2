@@ -190,3 +190,16 @@ Durations are not reference figures.
   [to-do 6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)
   task 1, which saw the same exception when a window closed while starting.
 
+
+## Review validation, 2026-11-06: lost at startup, not a recurrence
+
+The review's `mise run test:agent:electron` (head `f67ef0666`) never reached
+this test: the spec's `beforeAll` window stopped at "Orkestrator couldn’t
+connect" after Chromium aborted its Vite modules with
+`net::ERR_NETWORK_CHANGED`
+([2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)).
+The launcher now reloads a window only for that startup failure (`9ef37bfd1`,
+to-do 0042 D24). Afterwards, headless and without a private network namespace,
+this test passed 10 of 10 (`--repeat-each=10`) and the owner without the
+[7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)
+case 21 of 21.

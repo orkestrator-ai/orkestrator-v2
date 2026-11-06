@@ -69,6 +69,14 @@ export function allowlistForNetworkPolicy(
  * container boots without `ALLOWED_DOMAINS`) is generated from it by
  * `scripts/generate-default-allowed-domains.ts`. A stored user list is never
  * widened to match it.
+ *
+ * It carries no telemetry hosts. `sentry.io`, `statsig.anthropic.com` and
+ * `statsig.com` came from Anthropic's reference dev-container firewall and
+ * were removed (to-do 6100): with them refused, every CLI the image ships
+ * finished its turns against a fake provider, and none even looked them up
+ * (`apps/backend/tests/container-live-telemetry-hosts.test.ts`). Sentry
+ * accepts events for whatever project a request names, so an entry for it is
+ * a channel out of the container and nothing more.
  */
 export const DEFAULT_ALLOWED_DOMAINS: readonly string[] = Object.freeze([
   "github.com",
@@ -80,9 +88,6 @@ export const DEFAULT_ALLOWED_DOMAINS: readonly string[] = Object.freeze([
   "mise-versions.jdx.dev",
   "aube.jdx.dev",
   "api.anthropic.com",
-  "sentry.io",
-  "statsig.anthropic.com",
-  "statsig.com",
   "marketplace.visualstudio.com",
   "vscode.blob.core.windows.net",
   "update.code.visualstudio.com",

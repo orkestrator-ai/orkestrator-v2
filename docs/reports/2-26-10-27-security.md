@@ -650,9 +650,13 @@ without decrypting anything, and fails closed when its daemon dies; an older
 image's gateway keeps address-only enforcement until it is rebuilt. The
 network settings and the README state that an allowed service still accepts
 whatever it is sent, and what the checks cannot see (an encrypted
-ClientHello, domain fronting, UDP and other protocols). The default allowlist
-still carries the telemetry hosts until a check without them is run
-([todo 6100](../todo/containers-and-environments/6100-default-allowlist-telemetry-hosts.md)).
+ClientHello, domain fronting, UDP and other protocols). On 2026-11-06 the
+default allowlist dropped the telemetry hosts (`sentry.io`,
+`statsig.anthropic.com`, `statsig.com`) after Claude Code, Codex, OpenCode
+and Pi finished fake-provider turns without them (to-do 6100;
+[qualification](../development/container-qualification.md#agent-clis-without-telemetry-hosts-on-rootful-linux-engine-2026-11-06));
+Grok, Cursor and the release note are
+[todo 7420](../todo/containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md).
 
 - **IP-based allowlist.** Domains are resolved into an ipset, with no SNI or Host check (`docker/firewall-domains.sh`). Default hosts on shared fronts (Google front-ends, Azure Blob, Cloudflare-fronted npm/OpenAI) let traffic reach other tenants on the same edge IPs.
 - **Allowed APIs accept attacker credentials.** Examples: `sentry.io` with an attacker DSN, `api.anthropic.com` or `openrouter.ai` with an attacker key, GitHub gists. `init-firewall.sh:21-22` acknowledges this.

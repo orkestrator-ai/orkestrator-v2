@@ -365,17 +365,113 @@ export function agentInteractionSourceLine(source: AgentInteractionSource): stri
 }
 
 /**
+ * What an MCP server says about the tool a request is for, in MCP's own tool
+ * annotation vocabulary (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+ * `openWorldHint`). Each member is present only when the server declared it.
+ *
+ * The server declares these itself and nothing verifies them, so they are
+ * presentation only: they never make a request rule-eligible, never answer
+ * one, and never change how it is answered.
+ */
+export interface AgentInteractionToolHints {
+  readOnly?: boolean;
+  destructive?: boolean;
+  idempotent?: boolean;
+  openWorld?: boolean;
+}
+
+const TOOL_HINT_KEYS = ["readOnly", "destructive", "idempotent", "openWorld"] as const;
+const TOOL_HINT_KEY_SET = new Set<string>(TOOL_HINT_KEYS);
+/** MCP's annotation member for each hint. */
+const MCP_TOOL_ANNOTATION_KEYS: Readonly<Record<(typeof TOOL_HINT_KEYS)[number], string>> =
+  Object.freeze({
+    readOnly: "readOnlyHint",
+    destructive: "destructiveHint",
+    idempotent: "idempotentHint",
+    openWorld: "openWorldHint",
+  });
+
+function toolHintsFrom(
+  value: unknown,
+  keyFor: (key: (typeof TOOL_HINT_KEYS)[number]) => string,
+): AgentInteractionToolHints | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const hints: AgentInteractionToolHints = {};
+  for (const key of TOOL_HINT_KEYS) {
+    const declared = source[keyFor(key)];
+    if (typeof declared === "boolean") hints[key] = declared;
+  }
+  return Object.keys(hints).length > 0 ? hints : undefined;
+}
+
+/**
+ * Tool hints from an MCP `ToolAnnotations` object as a server sent it, or
+ * `undefined` when it declares none. A member that is not a boolean is
+ * dropped, never guessed; MCP's defaults are not filled in.
+ */
+export function agentInteractionToolHintsFromMcpAnnotations(
+  annotations: unknown,
+): AgentInteractionToolHints | undefined {
+  return toolHintsFrom(annotations, (key) => MCP_TOOL_ANNOTATION_KEYS[key]);
+}
+
+/**
+ * Tool hints a bridge forwarded in the shared shape, keeping only boolean
+ * members; `undefined` when none survive. Malformed input is absent, never an
+ * error: hints are optional context for the card.
+ */
+export function parseAgentInteractionToolHints(
+  value: unknown,
+): AgentInteractionToolHints | undefined {
+  return toolHintsFrom(value, (key) => key);
+}
+
+/**
+ * The one tag a card shows for a tool's hints: `read-only` or `destructive`,
+ * or `undefined` when the server declared neither. MCP reads `destructiveHint`
+ * only when `readOnlyHint` is false, so a server claiming both gets no tag
+ * rather than the reassuring one.
+ */
+export function agentInteractionToolHintTag(
+  hints: AgentInteractionToolHints | undefined,
+): "read-only" | "destructive" | undefined {
+  if (!hints) return undefined;
+  if (hints.readOnly === true) return hints.destructive === true ? undefined : "read-only";
+  return hints.destructive === true ? "destructive" : undefined;
+}
+
+/** Text a card shows on a request a person must answer themselves. */
+export const AGENT_INTERACTION_HUMAN_REQUIRED_TEXT =
+  "You need to answer this yourself: a saved rule can't approve it.";
+
+function toolHintLine(hints: AgentInteractionToolHints): string | undefined {
+  const tag = agentInteractionToolHintTag(hints);
+  return tag ? `The MCP server describes this tool as ${tag}.` : undefined;
+}
+
+/**
  * A request's body for consumers that show it as text only (the public CLI,
- * workflow summaries): the source line, when there is one, then the body.
+ * workflow summaries): the source line, the tool hint and the human-required
+ * line when there are any, then the body.
  */
 export function agentInteractionTextBody(request: {
   presentation: { body?: string };
   source?: AgentInteractionSource;
+  toolHints?: AgentInteractionToolHints;
+  humanRequired?: true;
 }): string | undefined {
-  const body = request.presentation.body;
-  if (!request.source) return body;
-  const line = agentInteractionSourceLine(request.source);
-  return body ? `${line}\n${body}` : line;
+  const lines = [
+    ...(request.source ? [agentInteractionSourceLine(request.source)] : []),
+    ...(request.toolHints ? [toolHintLine(request.toolHints)].filter(isDefined) : []),
+    ...(request.humanRequired === true ? [AGENT_INTERACTION_HUMAN_REQUIRED_TEXT] : []),
+    ...(request.presentation.body ? [request.presentation.body] : []),
+  ];
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
 
 export interface AgentInteractionRequest {
@@ -398,6 +494,16 @@ export interface AgentInteractionRequest {
   hold?: AgentInteractionHold;
   /** Who asked, when the provider reports it. */
   source?: AgentInteractionSource;
+  /**
+   * Set when the provider says only a person may answer this request (Claude's
+   * `suppressAlwaysAllowRule` or `matchedAskRule`, Codex's `humanCommand`).
+   * Such a request is never answered by, or offered as, an Orkestrator rule
+   * and offers no session-wide approval. `ruleEligible` on the bridge payload
+   * stays the enforcement gate; this is what lets the card say why.
+   */
+  humanRequired?: true;
+  /** What the serving MCP server declares about the tool; presentation only. */
+  toolHints?: AgentInteractionToolHints;
   /**
    * Whether the turn is waiting on this request.
    *
@@ -677,6 +783,8 @@ const REQUEST_KEYS = new Set([
   "expiresAt",
   "hold",
   "source",
+  "humanRequired",
+  "toolHints",
 ]);
 const SOURCE_KEYS = new Set(["kind", "name", "scope"]);
 const SOURCE_KINDS = new Set<string>(AGENT_INTERACTION_SOURCE_KINDS);
@@ -947,6 +1055,15 @@ function isSource(value: unknown): value is AgentInteractionSource {
   );
 }
 
+function isToolHints(value: unknown): value is AgentInteractionToolHints {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length > 0 &&
+    hasOnlyKeys(value, TOOL_HINT_KEY_SET) &&
+    Object.values(value).every((hint) => typeof hint === "boolean")
+  );
+}
+
 export function isAgentInteractionRequest(value: unknown): value is AgentInteractionRequest {
   if (!isRecord(value) || !hasOnlyKeys(value, REQUEST_KEYS)) return false;
   if (
@@ -964,6 +1081,8 @@ export function isAgentInteractionRequest(value: unknown): value is AgentInterac
     !isNonNegativeInteger(value.revision) ||
     (value.blocking !== undefined && typeof value.blocking !== "boolean") ||
     (value.source !== undefined && !isSource(value.source)) ||
+    (value.humanRequired !== undefined && value.humanRequired !== true) ||
+    (value.toolHints !== undefined && !isToolHints(value.toolHints)) ||
     !isEpochMilliseconds(value.createdAt) ||
     !isEpochMilliseconds(value.updatedAt) ||
     value.updatedAt < value.createdAt ||

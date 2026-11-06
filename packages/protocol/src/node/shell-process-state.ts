@@ -45,7 +45,7 @@ type BunRuntime = {
   spawnSync(
     argv: string[],
     options: typeof PROCESS_INSPECTION_OPTIONS,
-  ): { stdout: { toString(): string }; success: boolean };
+  ): { stdout: { toString(): string }; success: boolean; exitCode: number | null };
 };
 
 /** `Bun`, read per call. Undefined under Node, Electron's main process included. */

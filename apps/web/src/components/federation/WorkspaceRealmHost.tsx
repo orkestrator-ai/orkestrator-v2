@@ -3,6 +3,10 @@ import { useBugReportStore } from "@/stores/bugReportStore";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import { useSidebarHydration } from "@/components/sidebar/useSidebarHydration";
+import {
+  useRealmFanOutTiming,
+  useTimedEnvironmentLoad,
+} from "@/components/federation/useRealmBootTiming";
 import { useDockerAvailabilityReady } from "@/contexts/DockerAvailabilityContext";
 import { useEnvironments } from "@/hooks";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
@@ -63,12 +67,15 @@ export function WorkspaceRealmHost() {
     (projectId: string) => loadEnvironments(projectId, { throwOnError: true }),
     [loadEnvironments],
   );
+  // The realm's boot steps for the desktop's log (`realm-boot-timing.ts`).
+  const bootTiming = useTimedEnvironmentLoad(loadAuthoritativeEnvironments);
   const environmentsReady = useSidebarHydration(
     projects,
     projectsLoaded && !projectsLoading,
     allEnvironments,
-    loadAuthoritativeEnvironments,
+    bootTiming.load,
   );
+  useRealmFanOutTiming(environmentsReady, bootTiming.clock);
 
   // What the window asked for last, numbered so the same request twice counts twice.
   const [request, setRequest] = useState<(RealmSelectRequest & { seq: number }) | null>(() => {

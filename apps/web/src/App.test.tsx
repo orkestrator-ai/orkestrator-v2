@@ -384,6 +384,11 @@ mock.module("@/lib/backend", () => ({
   listBuildPipelines: mockListBuildPipelines,
   listMultiReviewWorkflows: mockListMultiReviewWorkflows,
   listPromptQueues: mockListPromptQueues,
+  // As an older backend answers: the boot batcher falls back to the
+  // per-environment reads above, which these tests assert on.
+  listEnvironmentHydration: async () => {
+    throw new Error("Unknown command: list_environment_hydration");
+  },
   savePaneLayout: mockSavePaneLayout,
   applyPaneLayoutIntent: mockApplyPaneLayoutIntent,
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,

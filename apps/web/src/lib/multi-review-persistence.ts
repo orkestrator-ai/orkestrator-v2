@@ -35,7 +35,20 @@ export async function hydrateMultiReviewWorkflow(
 export async function hydrateMultiReviewWorkflowsForEnvironment(
   environmentId: string,
 ): Promise<MultiReviewWorkflow[]> {
-  const entries = await backend.listMultiReviewWorkflows(environmentId);
+  return applyMultiReviewWorkflowsForEnvironment(
+    environmentId,
+    await backend.listMultiReviewWorkflows(environmentId),
+  );
+}
+
+/**
+ * Install one environment's listed workflows, however they were read: the
+ * list is authoritative, so workflows of that environment it omits are removed.
+ */
+export function applyMultiReviewWorkflowsForEnvironment(
+  environmentId: string,
+  entries: ReadonlyArray<PersistedWorkflowRecord<unknown>>,
+): MultiReviewWorkflow[] {
   const workflows = entries.flatMap((entry) => {
     const workflow = snapshot(entry);
     return workflow ? [workflow] : [];

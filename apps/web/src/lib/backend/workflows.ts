@@ -1,4 +1,10 @@
 import { invoke } from "@/lib/native/backend";
+import { hydrationRequests } from "@/lib/hydration-request-limiter";
+import {
+  LIST_ENVIRONMENT_HYDRATION_COMMAND,
+  isEnvironmentHydrationBatch,
+  type EnvironmentHydrationBatch,
+} from "@orkestrator/protocol/environment-hydration";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { terminalWriteWasDelivered } from "@/lib/backend/shared";
 import type {
@@ -335,9 +341,11 @@ export async function getMultiReviewWorkflow<T = unknown>(
 export async function listMultiReviewWorkflows<T = unknown>(
   environmentId: string,
 ): Promise<Array<PersistedWorkflowRecord<T>>> {
-  return invoke<Array<PersistedWorkflowRecord<T>>>("list_multi_review_workflows", {
-    environmentId,
-  });
+  return hydrationRequests.run(() =>
+    invoke<Array<PersistedWorkflowRecord<T>>>("list_multi_review_workflows", {
+      environmentId,
+    }),
+  );
 }
 
 /**
@@ -1375,17 +1383,21 @@ export async function getBuildPipelineControl<T = unknown>(
 export async function listBuildPipelines<T = unknown>(
   projectId: string,
 ): Promise<Array<PersistedBuildPipeline<T>>> {
-  return invoke<Array<PersistedBuildPipeline<T>>>("list_build_pipelines", { projectId });
+  return hydrationRequests.run(() =>
+    invoke<Array<PersistedBuildPipeline<T>>>("list_build_pipelines", { projectId }),
+  );
 }
 
 export async function listBuildPipelinesConditional<T = unknown>(
   projectId: string,
   knownRevisions: Record<string, number>,
 ): Promise<{ ids: string[]; records: Array<PersistedBuildPipeline<T>> }> {
-  const response = await invoke<unknown>("list_build_pipelines", {
-    projectId,
-    knownRevisions,
-  });
+  const response = await hydrationRequests.run(() =>
+    invoke<unknown>("list_build_pipelines", {
+      projectId,
+      knownRevisions,
+    }),
+  );
   // Older backends ignore knownRevisions and return the complete record array.
   if (Array.isArray(response)) {
     if (!response.every((entry) => isRecord(entry) && typeof entry.id === "string")) {
@@ -1451,7 +1463,30 @@ export async function getPromptQueue<T = unknown>(
 export async function listPromptQueues<T = unknown>(
   environmentId: string,
 ): Promise<Array<PersistedPromptQueue<T>>> {
-  return invoke<Array<PersistedPromptQueue<T>>>("list_prompt_queues", { environmentId });
+  return hydrationRequests.run(() =>
+    invoke<Array<PersistedPromptQueue<T>>>("list_prompt_queues", { environmentId }),
+  );
+}
+
+/**
+ * Prompt queues and Multi Review workflows for up to
+ * `MAX_ENVIRONMENT_HYDRATION_IDS` environments in one bounded request. A
+ * backend before this command rejects it as unknown; callers fall back to the
+ * per-environment reads (`boot-hydration.ts`).
+ */
+export async function listEnvironmentHydration(
+  environmentIds: string[],
+): Promise<EnvironmentHydrationBatch<PersistedPromptQueue, PersistedWorkflowRecord<unknown>>> {
+  const response = await hydrationRequests.run(() =>
+    invoke<unknown>(LIST_ENVIRONMENT_HYDRATION_COMMAND, { environmentIds }),
+  );
+  if (!isEnvironmentHydrationBatch(response)) {
+    throw new Error(`Invalid ${LIST_ENVIRONMENT_HYDRATION_COMMAND} response`);
+  }
+  return response as EnvironmentHydrationBatch<
+    PersistedPromptQueue,
+    PersistedWorkflowRecord<unknown>
+  >;
 }
 
 export async function enqueuePromptQueueMessage<T>(

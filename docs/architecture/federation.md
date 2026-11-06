@@ -445,6 +445,58 @@ other machines run in their own realms. The trade-off: a panel costs a
 renderer process (desktop) or a frame, and some desktop-only features are not
 wired into panel views (see Known limitations).
 
+### Realm boot
+
+A window keeps a few realms open; reopening an evicted one boots it again from
+scratch. Three things keep that boot short and measurable (2026-11-06; cold
+opens of omarchy-hp from mbp3 were slow, warm opens fast):
+
+- **Render does not wait on the catalogue seed.** `startApp`
+  (`apps/web/src/lib/app-startup.ts`) reads the stored host model catalogues
+  with `get_agent_model_catalog_cache` `{ seed: false }` (the cache as stored:
+  no download, no Pi probe), bounded at 2 s, then renders. The seed (`seed:
+  true`, which can start a bridge and CLI per enabled platform with no cached
+  list) runs after the render, once that read has settled, and updates the
+  model stores when it answers. An older backend treats `seed: false` as an
+  omitted `seed`.
+- **A failing seed is not retried every boot.** A failed or empty host
+  catalogue download cools down for 15 minutes
+  (`HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS`, `host-catalog-seeds.ts`; it was
+  30 s). An empty catalogue counts as a failure. A completed sign-in clears it
+  (`resetCooldown`), and Settings' Refresh downloads without consulting it.
+- **The hydration fan-out is bounded and batched.** At most six hydration
+  reads are in flight per renderer document, so per realm
+  (`HYDRATION_MAX_IN_FLIGHT`, `hydration-request-limiter.ts`): `get_environments`,
+  `get_environment_snapshots`, `list_build_pipelines`, `list_prompt_queues`,
+  `list_multi_review_workflows` and `list_environment_hydration`. The boot
+  restore of prompt queues and Multi Review workflows (`App.tsx` through
+  `boot-hydration.ts`) collects the environments requested in one task and
+  reads them with one `list_environment_hydration` call per 100
+  environments, instead of two requests per environment; each environment and
+  list still fails on its own. Against an older backend the batcher falls back
+  to the per-environment reads after one "unknown command". A 10-project,
+  120-environment boot restores with 10 requests instead of 240
+  (`boot-hydration.test.ts`). The manifest resync's own per-environment reads
+  (`store-resource-sync.ts`) are bounded but not batched.
+
+**Boot timing in the saved log.** Each realm boot writes content-free
+`[workspaces]` lines to the desktop's log (the Electron main process's, see
+[logging.md](logging.md)), each with `nodeId`, `nodeName` and `durationMs`:
+
+| Event | Written by | Step |
+| --- | --- | --- |
+| `workspace.opened` | main process (`node-workspaces.ts`) | The `open_node_workspace` call, which issues the node's client grant; `directRoutes` counts the routes to probe. |
+| `workspace.route-probed` | main process | One direct (or loopback) route probe: `route`, `attempt`, and an `outcome` from a fixed list (`hello`, `other-node`, `legacy`, `unreachable`, `timeout`, `authentication-required`, …). Never the origin. |
+| `realm.boot-step` | the realm, relayed | `step` is `catalogue-read`, `first-render`, `first-environments`, `fan-out-complete` (with `requests`, the hydration reads the document sent) or `catalogue-seed`, each with an `outcome` where it has one. `sinceStartMs` is from the realm document's start, `sinceOpenMs` from the window asking for the realm. |
+
+Renderer logger lines do not reach the saved log, so the realm sends each step
+once as a `bootTiming` message over its window channel
+(`apps/web/src/lib/realm-boot-timing.ts`). The main process re-parses it
+against the fixed shape (`@orkestrator/protocol/realm-boot-timing`), adds the
+node from its own binding for that realm, writes it and does not forward it to
+the window. A browser or iOS frame has no such channel; there the steps are
+debug lines in the console only.
+
 ## Sidebar presentation
 
 When federation is enabled and at least one other machine is saved,

@@ -231,7 +231,11 @@ interface Window {
     };
     /** Electron only, in a workspace realm: messages to and from its window. */
     workspaceRealm?: {
-      post(message: import("@/lib/federation/workspace-realm").RealmToShellMessage): void;
+      post(
+        message:
+          | import("@/lib/federation/workspace-realm").RealmToShellMessage
+          | import("@orkestrator/protocol/realm-boot-timing").RealmBootTimingMessage,
+      ): void;
       onMessage(callback: (message: unknown) => void): () => void;
     };
     process: {

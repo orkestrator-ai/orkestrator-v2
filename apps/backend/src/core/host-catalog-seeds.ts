@@ -4,11 +4,21 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 const log = createLogger("models");
 
 /**
- * How long a failed seed suppresses the next one. A signed-out host fails every
- * time, and each attempt spawns a whole bridge, so a picker that asks on every
- * focus must not turn that into a respawn loop. A completed sign-in clears it.
+ * How long a failed seed suppresses the next one: 15 minutes.
+ *
+ * A signed-out host, or a platform whose CLI answers with an empty list (Grok
+ * on a host where it is enabled but unusable), fails every time, and each
+ * attempt spawns a whole bridge and its CLI. Every realm boot asks for a seed
+ * in the background, and a window reopens an evicted realm whenever the user
+ * goes back to that node, so a 30-second cooldown let almost every cold open
+ * pay for a doomed download (2026-11-06: every `download.deferred` line for
+ * Grok sat at a realm open). Fifteen minutes caps a broken platform at four
+ * attempts an hour while still retrying on its own within one working
+ * session. Nothing waits on it: the realm renders from the cached catalogues
+ * first. A completed sign-in clears it (`resetCooldown`), and Settings'
+ * Refresh downloads directly without consulting it.
  */
-export const HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS = 30_000;
+export const HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS = 15 * 60_000;
 
 /** One seed attempt's reads and writes, against the storage of the backend that asked. */
 export type HostCatalogSeedAttempt = {

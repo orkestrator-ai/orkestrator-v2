@@ -1,6 +1,12 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
-import { asString, asNumber } from "./commands-helpers.js";
+import {
+  LIST_ENVIRONMENT_HYDRATION_COMMAND,
+  MAX_ENVIRONMENT_HYDRATION_IDS,
+  type EnvironmentHydrationBatch,
+  type EnvironmentHydrationPart,
+} from "@orkestrator/protocol/environment-hydration";
+import { asString, asNumber, stripWorkflowRendererSecrets } from "./commands-helpers.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { isFrozenPromptQueueMessage } from "./storage-prompts.js";
 import { resetAgentMailBudget } from "./commands-registry-mail.js";
@@ -23,6 +29,30 @@ export function registerPromptCommands(
       storage.listPromptQueues(asString(args.environmentId, "environmentId")),
     ),
   );
+  // A renderer's boot restore for many environments in one request; see
+  // `@orkestrator/protocol/environment-hydration`. Each list is the same read
+  // `list_prompt_queues` and `list_multi_review_workflows` serve, and each
+  // environment's lists fail on their own.
+  register(LIST_ENVIRONMENT_HYDRATION_COMMAND, async (args, { storage }) => {
+    const environmentIds = environmentHydrationIds(args.environmentIds);
+    const part = async <T>(load: () => Promise<T[]>): Promise<EnvironmentHydrationPart<T>> => {
+      try {
+        return { status: "ok", records: await load() };
+      } catch {
+        return { status: "failed" };
+      }
+    };
+    const environments = await Promise.all(
+      environmentIds.map(async (environmentId) => ({
+        environmentId,
+        promptQueues: await part(() => storage.listPromptQueues(environmentId)),
+        multiReviewWorkflows: await part(async () =>
+          (await storage.listMultiReviewWorkflows(environmentId)).map(stripWorkflowRendererSecrets),
+        ),
+      })),
+    );
+    return { environments } satisfies EnvironmentHydrationBatch;
+  });
   register(
     "enqueue_prompt_queue_message",
     async ({ queueKey, environmentId, message }, { storage, nativeAgents }) => {
@@ -199,4 +229,21 @@ export function registerPromptCommands(
       referencedHandoffIds as string[],
     );
   });
+}
+
+function environmentHydrationIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("environmentIds must be a non-empty array");
+  }
+  if (value.length > MAX_ENVIRONMENT_HYDRATION_IDS) {
+    throw new Error(`environmentIds accepts at most ${MAX_ENVIRONMENT_HYDRATION_IDS} ids`);
+  }
+  const ids = new Set<string>();
+  for (const id of value) {
+    if (typeof id !== "string" || id.trim().length === 0 || id.length > 256) {
+      throw new Error("environmentIds must hold environment ids");
+    }
+    ids.add(id);
+  }
+  return Array.from(ids);
 }

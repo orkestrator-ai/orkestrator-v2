@@ -595,14 +595,17 @@ export function registerProjectCommands(
   });
   register("get_agent_model_catalog_cache", async (args, context) => {
     assertOnlyKeys(args, ["seed"], "arguments");
-    // Only the application's own startup asks for this: it waits here in the
-    // background (the renderer bounds its wait and keeps the promise live) so a
-    // first launch downloads every enabled platform's list. Other readers, such
-    // as the control surface, must get the cache as it stands.
+    // `seed: true` is asked only by the application's own startup, in the
+    // background after the first render, so a first launch downloads every
+    // enabled platform's list. `seed: false` is startup's read before that
+    // render: the cache exactly as stored, with no download and no Pi probe,
+    // so nothing can hold the first paint on a bridge. An omitted `seed` (the
+    // control surface, the pickers) keeps the Pi first-use probe below.
     if (args.seed === true) {
       await seedEnabledHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
     }
     let cache = await context.storage.getAgentModelCatalogCache();
+    if (args.seed === false) return cache;
     if (!cache.pi?.models.length) {
       const config = await context.storage.loadConfig();
       if (config.global.enabledAgentPlatforms?.includes("pi")) {

@@ -79,6 +79,63 @@ describe("seedHostModelCatalogIfMissing", () => {
     expect(refresh).toHaveBeenCalledTimes(3);
   });
 
+  test("cools down well beyond a realm reopen, so a failing seed is not retried every boot", async () => {
+    expect(HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS).toBeGreaterThanOrEqual(10 * 60_000);
+    const { context } = fakeContext();
+    const refresh = mock(async () => {
+      throw new Error("not signed in");
+    });
+    let now = 1_000;
+    const clock = () => now;
+    for (const agent of ["claude", "codex"] as const) {
+      await seedHostModelCatalogIfMissing(context, agent, refresh as never, { now: clock });
+    }
+    expect(refresh).toHaveBeenCalledTimes(2); // claude and codex, once each
+    // Realm boots a minute apart, as reopening an evicted realm does.
+    for (let boot = 0; boot < 5; boot += 1) {
+      now += 60_000;
+      for (const agent of ["claude", "codex"] as const) {
+        await seedHostModelCatalogIfMissing(context, agent, refresh as never, { now: clock });
+      }
+    }
+    expect(refresh).toHaveBeenCalledTimes(2);
+    // Past the cooldown the next boot tries again.
+    now += HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS;
+    await seedHostModelCatalogIfMissing(context, "codex", refresh as never, { now: clock });
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  test("counts an empty catalogue as a failure: nothing cached, and it cools down", async () => {
+    const { context, cacheAgentModelCatalog } = fakeContext({}, ["grok"]);
+    const refresh = mock(async () => ({ agent: "grok" as const, models: [] }));
+    let now = 5_000;
+    const clock = () => now;
+    expect(
+      await seedHostModelCatalogIfMissing(context, "grok", refresh as never, { now: clock }),
+    ).toBe(false);
+    expect(cacheAgentModelCatalog).not.toHaveBeenCalled();
+    now += 60_000;
+    expect(
+      await seedHostModelCatalogIfMissing(context, "grok", refresh as never, { now: clock }),
+    ).toBe(false);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // A sign-in clears the cooldown.
+    resetHostModelCatalogSeedCooldown(context, "grok");
+    await seedHostModelCatalogIfMissing(context, "grok", refresh as never, { now: clock });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  test("a failing platform does not stop the next platform from seeding", async () => {
+    const { context, cacheAgentModelCatalog } = fakeContext({}, ["grok", "claude"]);
+    const refresh = mock(async (_context: unknown, agent: string) => {
+      if (agent === "grok") return { agent: "grok" as const, models: [] };
+      return { agent: "claude" as const, models: [claudeModel] };
+    });
+    await seedEnabledHostModelCatalogs(context, refresh as never);
+    expect(cacheAgentModelCatalog).toHaveBeenCalledTimes(1);
+    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("claude", [claudeModel]);
+  });
+
   test("reports a durable-cache read failure without rejecting", async () => {
     const { context } = fakeContext();
     context.storage.getAgentModelCatalogCache = mock(async () => {

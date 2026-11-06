@@ -690,6 +690,46 @@ describe("native agent model catalogue command", () => {
     );
   });
 
+  test("a startup read without seed answers the stored cache while a seed is still running", async () => {
+    let finishSeed!: () => void;
+    const seedReleased = new Promise<void>((resolve) => {
+      finishSeed = resolve;
+    });
+    const refresh = mock(async () => {
+      await seedReleased;
+      throw new Error("grok returned an empty model catalogue");
+    });
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...config.global,
+          enabledAgentPlatforms: ["grok", "pi"],
+        });
+        await storage.cacheAgentModelCatalog("codex", [
+          { id: "gpt-5.4", name: "GPT-5.4", reasoningEfforts: [], defaultReasoningEffort: null },
+        ] as never);
+        const piProbe = mock(async () => []);
+        commands.set("ensure_host_pi_model_catalog", piProbe);
+
+        const seeding = invoke("get_agent_model_catalog_cache", { seed: true });
+        await Promise.resolve();
+        const cached = (await invoke("get_agent_model_catalog_cache", { seed: false })) as {
+          codex?: { models: { id: string }[] };
+        };
+        // Another platform's cached catalogue loads while the seed is pending,
+        // and the read starts no Pi probe of its own.
+        expect(cached.codex?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
+        expect(piProbe).not.toHaveBeenCalled();
+
+        finishSeed();
+        await seeding;
+        expect(refresh).toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
   test("starts a requested bridge once when its durable catalogue is missing", async () => {
     await withCommands(async (invoke, storage, _dataDir, commands) => {
       const awaitReady = mock(async () => ({

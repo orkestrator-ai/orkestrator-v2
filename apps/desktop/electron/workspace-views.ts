@@ -183,6 +183,8 @@ type ViewEntry = WorkspaceViewRecord & {
   /** Bounds in the parent's CSS pixels, as last placed. */
   cssBounds: WorkspaceViewBounds | null;
   visible: boolean;
+  /** `performance.now()` when `open` was asked, before the scope was bound. */
+  openedAt: number;
 };
 
 export class WorkspaceViews {
@@ -205,6 +207,7 @@ export class WorkspaceViews {
     if (owned.length + pendingCount >= this.maxViews) {
       throw new Error("Too many machines are open in this window. Close one and try again.");
     }
+    const openedAt = performance.now();
     const viewId = randomUUID();
     const scope = `realm:${viewId}`;
     const pending = { parentId: parent.webContents.id, cancelled: false };
@@ -246,6 +249,7 @@ export class WorkspaceViews {
       parent,
       cssBounds: null,
       visible: false,
+      openedAt,
     };
     this.views.set(viewId, entry);
     try {
@@ -364,6 +368,12 @@ export class WorkspaceViews {
 
   viewForWebContents(webContentsId: number): WorkspaceViewRecord | null {
     return this.entryForWebContents(webContentsId);
+  }
+
+  /** How long ago a realm's open was asked, for its boot timing lines. */
+  msSinceOpened(realmWebContentsId: number): number | null {
+    const entry = this.entryForWebContents(realmWebContentsId);
+    return entry ? Math.round(performance.now() - entry.openedAt) : null;
   }
 
   private entryForWebContents(webContentsId: number): ViewEntry | null {

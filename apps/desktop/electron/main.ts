@@ -68,6 +68,7 @@ import {
 } from "./remote-gateway-request-auth.js";
 import { createWindowRequestAuthorization } from "./window-request-authorization.js";
 import { RealmContexts, refreshWorkspaceRealm } from "./realm-contexts.js";
+import { isRealmBootTimingMessage, logRealmBootTiming } from "./realm-boot-timing-log.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
@@ -1441,6 +1442,18 @@ function registerIpc(): void {
       views().close(mainWindowContext(event).contents.id, viewId),
     postFromWorkspaceRealm: (event, message) => {
       if (!event.sender) throw new Error("Only a workspace realm can message its window.");
+      // Boot timing is for the saved log, not for the window.
+      if (isRealmBootTimingMessage(message)) {
+        const record = views().viewForWebContents(event.sender.id);
+        const target = record ? realmBindings.get(record.scope)?.target : null;
+        if (!record || !target) throw new Error("Only a workspace realm can report its boot.");
+        logRealmBootTiming(message, {
+          nodeId: target.nodeId,
+          nodeName: target.nodeName,
+          sinceOpenMs: views().msSinceOpened(event.sender.id),
+        });
+        return;
+      }
       views().post(event.sender.id, message);
     },
     portalInvoke: (event, command, args) =>

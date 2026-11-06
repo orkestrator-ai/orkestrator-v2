@@ -9,6 +9,7 @@ import {
   directLoadOutcome,
   expect,
   isModuleLoad,
+  moduleStatusFailure,
   test,
   type Page,
   type Request as PageRequest,
@@ -591,8 +592,10 @@ test.describe(() => {
         if (isModuleLoad(request)) failures.push(request.failure()?.errorText ?? "failed");
       };
       const onResponse = (response: PageResponse) => {
-        if (isModuleLoad(response.request()) && response.status() !== 200)
-          failures.push(`HTTP ${response.status()}`);
+        const failure = isModuleLoad(response.request())
+          ? moduleStatusFailure(response.status())
+          : undefined;
+        if (failure) failures.push(failure);
       };
       page.on("requestfailed", onFailed);
       page.on("response", onResponse);

@@ -11,6 +11,7 @@ import {
   directLoadOutcome,
   fetchModulesOutsideChromium,
   isModuleLoad,
+  moduleStatusFailure,
 } from "./browser-test";
 
 const directory = import.meta.dirname;
@@ -146,6 +147,13 @@ describe("the browser suite's shared test", () => {
     expect(directLoadOutcome([NETWORK_CHANGED], true)).toBe("network-changed");
     expect(directLoadOutcome([NETWORK_CHANGED, "HTTP 502"], false)).toBe("failed");
     expect(directLoadOutcome(["net::ERR_CONNECTION_RESET"], true)).toBe("failed");
+  });
+
+  test("a direct load counts a revalidated module as loaded and any other status as failed", () => {
+    expect(moduleStatusFailure(200)).toBeUndefined();
+    expect(moduleStatusFailure(304)).toBeUndefined();
+    for (const status of [204, 404, 500, 502])
+      expect(moduleStatusFailure(status)).toBe(`HTTP ${status}`);
   });
 
   test("every context a browser-suite spec creates also fetches its modules itself", () => {

@@ -34,6 +34,15 @@ export const test = base.extend<{ modulesThroughChromium: boolean }>({
 export const NETWORK_CHANGED = "net::ERR_NETWORK_CHANGED";
 
 /**
+ * What was wrong with a module load Chromium answered, if anything. Chromium
+ * keeps its own HTTP cache on its own network path, so a reload revalidates
+ * and a 304 is as good as a 200.
+ */
+export function moduleStatusFailure(status: number): string | undefined {
+  return status === 200 || status === 304 ? undefined : `HTTP ${status}`;
+}
+
+/**
  * How one page load went for a case that loads its modules through Chromium.
  * `failures` holds what went wrong with each module load (Chromium's error
  * text, or the HTTP status a load answered with). A load that lost modules

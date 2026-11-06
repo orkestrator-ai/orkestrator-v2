@@ -65,3 +65,18 @@ passed (exit 0, 6.2 seconds; passing counts not retained). Evidence:
 The sole original merge conflict was the federated environment action hook;
 this owner was not conflicted or manually edited. Root cause remains unconfirmed;
 no implementation or assertion was changed. The aggregate remains non-green.
+
+## Agent-mail ownership repair validation — 2026-11-05
+
+- Aggregate: `mise run test:logged -- --name address-findings-default-tests -- mise run test`
+  at `54f06a272`, exit 1 after 332.0 s. Workspace/root/bridges/protocol
+  reservations: 6/1/2/1 slots; backend used four parallel workers and desktop two.
+- The readiness probe exited 143 instead of 0 (1043.05 ms). Backend reported 16,326 passed, 126 skipped, one failed across 1,087 files.
+- Unchanged complete owner: `mise run test:logged -- --name gateway-result-channels-rerun -- bun test --cwd apps/backend ./src/gateway-result-channels.test.ts --parallel=1 --only-failures` passed (exit 0, 2.4 s).
+  Passing counts were not retained by the logged runner.
+- Evidence: `/tmp/orkestrator-test-run.XXv3u7/address-findings-default-tests.log.gz`
+  and `/tmp/orkestrator-test-run.QiwA36/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Neither this owner nor its exercised implementation appears in
+  `git diff --name-only origin/main...HEAD`. Known open flake recurrence;
+  the cause remains unconfirmed. No implementation, assertion or timeout changed.
+  The repaired ownership guard passed; the aggregate remains non-green.

@@ -11,7 +11,7 @@ simply asks again. Work item and decisions:
 Orkestrator never writes a rule into a provider's own files
 (`~/.codex/rules/*.rules`, Claude's `settings.json`, Grok's settings): app-server
 has no rules API, and Codex's docs mark its rules format experimental
-([0160](../todo/agent-engines/0160-codex-saved-rules-list-and-revoke.md)).
+(0160).
 Those files are only listed, read-only, in Settings → Permissions. Codex 0.166.0
 keeps a saved command as `prefix_rule(...)` and a saved host as
 `network_rule(...)`, both in `rules/default.rules`. It reads them when a thread

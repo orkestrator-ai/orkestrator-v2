@@ -5,7 +5,7 @@
 - **Owner:** `apps/backend/src/core/nodes/node-coordination.test.ts`
 
 On 2026-10-31, while validating
-[0940](../../../todo/cross-cutting/0940-failed-turn-reads-as-completed.md) task 3,
+0940 task 3,
 `mise run test` failed `a command node's deliverNow on this leaf > node
 coordinator requests stay pending while held, until injection` in 182.66 ms. Line
 348 expected the message's placement to be `injected` straight after

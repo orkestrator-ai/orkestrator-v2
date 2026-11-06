@@ -107,8 +107,14 @@ async function openApprovalTab(page: Page, environmentName: string): Promise<voi
     .first();
   const dialog = page.getByRole("alertdialog");
   // Startup notices can open before or a moment after the sidebar paints.
+  // A page that has painted nothing after 45 s lost a module load (Chromium
+  // aborts them when the host's network changes, which Docker does whenever
+  // another profile starts); reload it, twice at most.
   let quietSince = Date.now();
-  for (const deadline = Date.now() + 90_000; Date.now() < deadline;) {
+  let paintedOnce = false;
+  let reloads = 0;
+  let loadedAt = Date.now();
+  for (const deadline = Date.now() + 180_000; Date.now() < deadline;) {
     for (const label of STARTUP_NOTICES) {
       const button = page.getByRole("button", { name: label, exact: true });
       if (await button.isVisible().catch(() => false))
@@ -123,6 +129,12 @@ async function openApprovalTab(page: Page, environmentName: string): Promise<voi
       .first()
       .isVisible()
       .catch(() => false);
+    paintedOnce ||= painted || blocked;
+    if (!paintedOnce && reloads < 2 && Date.now() - loadedAt > 45_000) {
+      reloads += 1;
+      await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+      loadedAt = Date.now();
+    }
     if (blocked || !painted) quietSince = Date.now();
     else if (Date.now() - quietSince >= 2_000) break;
     await page.waitForTimeout(200);

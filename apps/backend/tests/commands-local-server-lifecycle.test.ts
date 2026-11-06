@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -46,7 +47,7 @@ setDefaultTimeout(30000);
 let terminated = false;
 test("owned fake child teardown", () => {
   const { localServers } = createRuntime();
-  localServers.adoptProcess("codex:env-cleanup-budget", createFakeChild(91004));
+  localServers.adoptProcess("codex:env-cleanup-budget", createFakeChild(${fakePid(91004)}));
   localServerHooks.terminateProcessTree = async () => {
     await Bun.sleep(1500);
     terminated = true;
@@ -79,7 +80,7 @@ afterAll(() => expect(terminated).toBe(true));
   );
 
   test("retired fixture runtimes keep fake-child cleanup on their original hooks", () => {
-    const child = createFakeChild(91003);
+    const child = createFakeChild(fakePid(91003));
     const { localServers } = createRuntime();
     localServers.adoptProcess("codex:env-retired", child);
     const originalTermination = mock(async () => true);
@@ -112,9 +113,24 @@ afterAll(() => expect(terminated).toBe(true));
     };
   });
 
+  test("the default termination refuses a child the fixture did not spawn", async () => {
+    const child = createFakeChild(fakePid(91005));
+    const { localServers } = createRuntime();
+    localServers.adoptProcess("codex:env-unspawned", child);
+    try {
+      await expect(localServers.terminate("codex:env-unspawned", child)).rejects.toThrow(
+        `command-fixtures refused to terminate pid ${fakePid(91005)}`,
+      );
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(localServers.process("codex:env-unspawned")).toBe(child);
+    } finally {
+      localServers.releaseOwnership("codex:env-unspawned", child);
+    }
+  });
+
   test("waits for every shutdown attempt, reports failures, and supports retry", async () => {
-    const failedChild = createFakeChild(91001);
-    const successfulChild = createFakeChild(91002);
+    const failedChild = createFakeChild(fakePid(91001));
+    const successfulChild = createFakeChild(fakePid(91002));
     const { localServers } = createRuntime();
     localServers.adoptProcess("codex:env-failure", failedChild);
     localServers.adoptProcess("claude:env-success", successfulChild);
@@ -125,7 +141,7 @@ afterAll(() => expect(terminated).toBe(true));
     };
 
     await expect(shutdownLocalServers()).rejects.toThrow("Failed to shut down all local servers");
-    expect(attempted.sort()).toEqual([91001, 91002]);
+    expect(attempted.sort()).toEqual([fakePid(91001), fakePid(91002)]);
     expect(localServers.process("codex:env-failure")).toBe(failedChild);
     expect(localServers.process("claude:env-success")).toBeUndefined();
 

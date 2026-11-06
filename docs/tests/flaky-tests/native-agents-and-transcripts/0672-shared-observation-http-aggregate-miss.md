@@ -22,3 +22,7 @@
 - **Isolated command:** `mise run test:logged -- --name observations-isolated -- bun test --cwd apps/backend ./src/core/native-agent-service-reconciliation.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 3.3 s).
 - **Evidence:** aggregate output retained separately under `output/agent-testing/e23-address-findings/`; original temporary artifacts were `orkestrator-test-run.dJqqUH/review-default-tests.log.gz` and `orkestrator-test-run.tcoHaB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Conclusion:** recurrence of the existing aggregate-only fixture miss. Root cause remains unconfirmed; no assertion or product code changed.
+
+### Investigation — 2026-11-06
+
+- `mise run test:logged -- --name n0672-repro -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-reconciliation.test.ts -t "observation never starts a bridge" --rerun-each=200` passed 200 times. The provider caches are per service instance, and `--parallel` isolates files, so neither a module-global cache nor another file's `mock.module()` explains zero requests. The remaining candidate is a pooled keep-alive connection to an earlier test's `Bun.serve` that bound the same ephemeral port. A stale pooled socket would fail the activity read before it reached the new server, which matches zero recorded paths, a logged reconciliation error and a 12-28 ms duration. Unconfirmed: the error text was not retained. Status stays open.

@@ -1,7 +1,7 @@
 # Evidence body rename has not happened at the aggregate assertion
 
 - **ID:** 9836
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-06
 - **Test:** `EvidenceBodyStore.put > syncs the file before the rename, then the directories, before resolving`
 - **File:** `apps/backend/src/core/change-tracking/evidence-body-store.test.ts`
@@ -14,3 +14,10 @@
 - **Hypothesis:** the aggregate assertion ran before the asynchronous rename completed. The different observation under isolation establishes intermittency, not a root cause. This owner and its implementation were unchanged; no deadline or assertion was weakened.
 
 This is a different assertion from case 6550 (ingestion has not called put).
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the test gave `put` a fixed 20 ms (`settled`) to reach its gated directory sync. `put` first runs `mkdir`, `writeFile`, the file sync and `rename` on the thread pool; on a loaded host those took longer than 20 ms, so the assertion ran before the rename. Nothing in the store was wrong.
+- **Fix (test only):** `recordingSync` now exposes `directoryEntered`, released when the first directory sync starts (necessarily after the rename), and the ingestion test's `put` spy releases `putEntered` when called. Each test awaits that event (raced against the operation settling, so an early failure still reports) before the existing `settled` check. The assertions are unchanged. The ingestion test's `finally` now releases the gate and awaits the pull before restoring the spy, so a failed assertion no longer leaves a pull running into harness cleanup (the source of the follow-on `Cannot use a closed database`). The same latent race in `adopting a body whose directory sync is under way waits for it` was fixed the same way: if `first` had not yet renamed, `reuse` found no body and resolved early.
+- **Reproduced:** yes. Temporarily adding a 40 ms delay to the recording file sync and to the `put` spy entry (simulating slow thread-pool I/O on a loaded host) failed all three tests: line 112 `existsSync(target)` false, line 260 `adopted` settled, line 341 `putIds.length` 0. With the fix and the same delays: `bun test --cwd apps/backend src/core/change-tracking/evidence-body-store.test.ts --rerun-each=3` passed.
+- **Verification:** delays removed; `mise run test:logged -- --name evb-stress -- bun test --cwd apps/backend src/core/change-tracking/evidence-body-store.test.ts src/core/change-tracking/object-store-write-path.test.ts --rerun-each=20 --parallel=2` PASS (74.0 s, exit 0).

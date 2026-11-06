@@ -1,0 +1,157 @@
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { parseSync, Visitor, type VisitorObject } from "oxc-parser";
+import type { AnyNode } from "./ast";
+import {
+  GUARD_IDS,
+  type GuardId,
+  type NodeHandlers,
+  type ScannedFile,
+  type SourceGuard,
+} from "./guard";
+import { releasedPortRebind } from "./released-port-rebind";
+import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion";
+import { smallFakePid } from "./small-fake-pid";
+import { subprocessWithoutBudget } from "./subprocess-without-budget";
+
+export const SOURCE_GUARDS: readonly SourceGuard[] = [
+  sleepBeforeNegativeAssertion,
+  releasedPortRebind,
+  subprocessWithoutBudget,
+  smallFakePid,
+];
+
+export const SCANNED_ROOTS = ["tests", "apps", "bridges", "packages", "scripts", "e2e"] as const;
+
+/**
+ * Dependencies and generated copies are not repository test sources, and
+ * installed dependencies must not determine the scan cost.
+ */
+const EXCLUDED_DIRECTORIES: ReadonlySet<string> = new Set(["node_modules", "dist", ".git"]);
+
+/** The guards' own fixture snippets, which offend on purpose. */
+const EXCLUDED_PATHS: ReadonlySet<string> = new Set(["tests/source-guards/fixtures"]);
+
+const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const BUN_TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
+const SUPPORT_NAME = /test-harness|test-support|fixture/i;
+const SUPPORT_DIRECTORY = /(?:^|\/)(?:tests|testing|__tests__)\//;
+
+/** Test files plus the modules that support them. */
+export function isTestSource(relativePath: string): boolean {
+  const name = path.posix.basename(relativePath);
+  if (!SCRIPT_FILE.test(name) || name.endsWith(".d.ts")) return false;
+  return TEST_FILE.test(name) || SUPPORT_NAME.test(name) || SUPPORT_DIRECTORY.test(relativePath);
+}
+
+export interface Finding {
+  guard: GuardId;
+  file: string;
+  line: number;
+}
+
+export type Findings = Record<GuardId, Record<string, Finding[]>>;
+
+export function emptyFindings(): Findings {
+  return Object.fromEntries(GUARD_IDS.map((id) => [id, {}])) as Findings;
+}
+
+function lineAt(source: string, offset: number): number {
+  let line = 1;
+  for (let index = source.indexOf("\n"); index !== -1 && index < offset;) {
+    line += 1;
+    index = source.indexOf("\n", index + 1);
+  }
+  return line;
+}
+
+/** One handler per node type, calling each guard that registered one. */
+function mergeHandlers(all: readonly NodeHandlers[]): NodeHandlers {
+  const merged: NodeHandlers = {};
+  for (const handlers of all) {
+    for (const [type, handler] of Object.entries(handlers)) {
+      const previous = merged[type];
+      merged[type] = previous
+        ? (node) => {
+            previous(node);
+            handler(node);
+          }
+        : handler;
+    }
+  }
+  return merged;
+}
+
+/** Runs every applicable guard over one file, parsing it at most once. */
+export function scanSource(
+  file: ScannedFile,
+  guards: readonly SourceGuard[] = SOURCE_GUARDS,
+): Finding[] {
+  const candidates = guards.filter(
+    (guard) => guard.appliesTo(file) && guard.mayOffend(file.source),
+  );
+  if (candidates.length === 0) return [];
+  // The guards read no type annotations; the JS-shaped AST is about a quarter
+  // cheaper to deserialize, and deserializing is most of the scan's cost.
+  const { program, errors } = parseSync(file.path, file.source, {
+    preserveParens: false,
+    astType: "js",
+  });
+  // A file that does not parse must not pass by yielding a partial tree.
+  if (errors.length > 0) throw new Error(`${file.path}: ${errors[0]!.message}`);
+  const root = program as unknown as AnyNode;
+  const visitors = candidates.map((guard) => guard.visit(root, file));
+  new Visitor(mergeHandlers(visitors.map((visitor) => visitor.handlers)) as VisitorObject).visit(
+    program,
+  );
+  const findings: Finding[] = [];
+  candidates.forEach((guard, index) => {
+    for (const offset of visitors[index]!.finish())
+      findings.push({ guard: guard.id, file: file.path, line: lineAt(file.source, offset) });
+  });
+  return findings;
+}
+
+/** Every test source under the scanned roots, repository-relative and sorted. */
+export function listTestSources(root: string): string[] {
+  const files: string[] = [];
+  const visit = (relativeDirectory: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(path.join(root, relativeDirectory), { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const relative = `${relativeDirectory}/${entry.name}`;
+      // Dirent reports a symlink as a symlink, so directory symlinks are never followed.
+      if (entry.isDirectory()) {
+        if (!EXCLUDED_DIRECTORIES.has(entry.name) && !EXCLUDED_PATHS.has(relative)) visit(relative);
+      } else if (entry.isFile() && isTestSource(relative)) {
+        files.push(relative);
+      }
+    }
+  };
+  for (const sourceRoot of SCANNED_ROOTS) visit(sourceRoot);
+  return files.sort();
+}
+
+/** Walks the repository's test sources once and runs every guard over them. */
+export function scanRepository(
+  root: string,
+  guards: readonly SourceGuard[] = SOURCE_GUARDS,
+): Findings {
+  const findings = emptyFindings();
+  for (const relative of listTestSources(root)) {
+    const file: ScannedFile = {
+      path: relative,
+      source: readFileSync(path.join(root, relative), "utf8"),
+      isBunTest: BUN_TEST_FILE.test(relative),
+    };
+    for (const finding of scanSource(file, guards))
+      (findings[finding.guard][finding.file] ??= []).push(finding);
+  }
+  return findings;
+}

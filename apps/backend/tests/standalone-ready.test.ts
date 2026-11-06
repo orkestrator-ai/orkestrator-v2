@@ -1,9 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout.js";
 import { waitForStandaloneBackendReady } from "./standalone-ready";
 
 const encoder = new TextEncoder();
+
+/**
+ * A kill grace no other timer in these tests uses, so the SIGKILL escalation
+ * can be held and released by hand. On the real clock its order against the
+ * stderr diagnostic sleep depended on how busy the host was (0491, 4045).
+ */
+const HELD_KILL_GRACE_MS = 987_653;
 
 const hangingStream = (): ReadableStream<Uint8Array> =>
   new ReadableStream({
@@ -55,20 +63,30 @@ describe("waitForStandaloneBackendReady", () => {
         signals.push(signal);
       },
     };
-    const startedAt = performance.now();
-    await expect(
-      waitForStandaloneBackendReady(child, {
-        readyTimeoutMs: 50,
-        killGraceMs: 30,
-        stderrDiagnosticTimeoutMs: 20,
-      }),
-    ).rejects.toThrow(
-      "Timed out waiting for standalone backend after 50ms: <stderr not drained in time>",
-    );
-    const elapsedMs = performance.now() - startedAt;
-    expect(elapsedMs).toBeGreaterThanOrEqual(50);
-    expect(elapsedMs).toBeLessThan(200);
-    expect(signals[0]).toBe("SIGTERM");
+    const escalation = installControlledTimeout(HELD_KILL_GRACE_MS, { label: "kill grace" });
+    try {
+      const startedAt = performance.now();
+      await expect(
+        waitForStandaloneBackendReady(child, {
+          readyTimeoutMs: 50,
+          killGraceMs: HELD_KILL_GRACE_MS,
+          stderrDiagnosticTimeoutMs: 20,
+        }),
+      ).rejects.toThrow(
+        "Timed out waiting for standalone backend after 50ms: <stderr not drained in time>",
+      );
+      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(50);
+      // Stdout never closes and the child never exits, so settling at all shows
+      // the wait did not depend on them. With the escalation still held, it
+      // also did not wait out the kill grace; a wall-clock ceiling here only
+      // measured how busy the host was.
+      expect(signals).toEqual(["SIGTERM"]);
+      expect(escalation.pendingCount()).toBe(1);
+      expect(escalation.advance()).toBe(1);
+      expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      escalation.restore();
+    }
   });
 
   test("escalates SIGTERM to SIGKILL after the grace period", async () => {
@@ -80,16 +98,24 @@ describe("waitForStandaloneBackendReady", () => {
         signals.push(signal);
       },
     };
-    await expect(
-      waitForStandaloneBackendReady(child, {
-        readyTimeoutMs: 40,
-        killGraceMs: 30,
-        stderrDiagnosticTimeoutMs: 10,
-      }),
-    ).rejects.toThrow(/Timed out waiting for standalone backend after 40ms/);
-    expect(signals).toEqual(["SIGTERM"]);
-    await Bun.sleep(50);
-    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    const escalation = installControlledTimeout(HELD_KILL_GRACE_MS, { label: "kill grace" });
+    try {
+      await expect(
+        waitForStandaloneBackendReady(child, {
+          readyTimeoutMs: 40,
+          killGraceMs: HELD_KILL_GRACE_MS,
+          stderrDiagnosticTimeoutMs: 10,
+        }),
+      ).rejects.toThrow(/Timed out waiting for standalone backend after 40ms/);
+      expect(signals).toEqual(["SIGTERM"]);
+      // The rejection leaves the escalation armed rather than clearing it.
+      expect(escalation.pendingCount()).toBe(1);
+      expect(escalation.advance()).toBe(1);
+      expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+      escalation.assertDrained();
+    } finally {
+      escalation.restore();
+    }
   });
 
   test("swallows the abandoned stdout read so it cannot become an unhandled rejection", async () => {

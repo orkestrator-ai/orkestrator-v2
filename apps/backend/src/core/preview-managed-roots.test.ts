@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+
 import { LocalServerRuntime } from "./local-server-runtime.js";
 import type { PtyProcess } from "./pty.js";
 import { TerminalRuntime } from "./terminal-runtime.js";
@@ -10,6 +12,7 @@ import { TerminalRuntime } from "./terminal-runtime.js";
  * environment": local terminal shells and local agent bridges.
  */
 describe("managed process roots", () => {
+  // Fake pids above pid_max: these runtimes hold the real termination defaults.
   test("local terminal shells are roots; container terminals are not", () => {
     const terminals = new TerminalRuntime();
     const pty = (pid: number) => ({ pid }) as unknown as PtyProcess;
@@ -19,7 +22,7 @@ describe("managed process roots", () => {
       cols: 80,
       rows: 24,
     });
-    terminals.registerProcess("env-a:1", pty(4100));
+    terminals.registerProcess("env-a:1", pty(fakePid(4100)));
     terminals.rememberSession("env-b:1", {
       kind: "container",
       containerId: "c",
@@ -27,7 +30,7 @@ describe("managed process roots", () => {
       cols: 80,
       rows: 24,
     });
-    terminals.registerProcess("env-b:1", pty(4200));
+    terminals.registerProcess("env-b:1", pty(fakePid(4200)));
     // A session whose shell has not started yet has no process.
     terminals.rememberSession("env-a:2", {
       kind: "local",
@@ -35,21 +38,21 @@ describe("managed process roots", () => {
       cols: 80,
       rows: 24,
     });
-    expect(terminals.localProcessRoots()).toEqual([{ environmentId: "env-a", pid: 4100 }]);
+    expect(terminals.localProcessRoots()).toEqual([{ environmentId: "env-a", pid: fakePid(4100) }]);
   });
 
   test("live local agent bridges are roots for their environment", () => {
     const servers = new LocalServerRuntime();
     const child = (pid: number | undefined, exitCode: number | null = null) =>
       ({ pid, exitCode }) as unknown as ChildProcessWithoutNullStreams;
-    servers.adoptProcess("claude:env-a", child(5100), { workingDirectory: "/w/a" });
-    servers.adoptProcess("codex:env-b", child(5200), { workingDirectory: "/w/b" });
-    servers.adoptProcess("codex:env-c", child(5300, 0), { workingDirectory: "/w/c" });
-    servers.adoptProcess("probe-without-kind", child(5400));
+    servers.adoptProcess("claude:env-a", child(fakePid(5100)), { workingDirectory: "/w/a" });
+    servers.adoptProcess("codex:env-b", child(fakePid(5200)), { workingDirectory: "/w/b" });
+    servers.adoptProcess("codex:env-c", child(fakePid(5300), 0), { workingDirectory: "/w/c" });
+    servers.adoptProcess("probe-without-kind", child(fakePid(5400)));
     servers.adoptProcess("opencode:env-d", child(undefined));
     expect(servers.localProcessRoots()).toEqual([
-      { environmentId: "env-a", pid: 5100 },
-      { environmentId: "env-b", pid: 5200 },
+      { environmentId: "env-a", pid: fakePid(5100) },
+      { environmentId: "env-b", pid: fakePid(5200) },
     ]);
   });
 });

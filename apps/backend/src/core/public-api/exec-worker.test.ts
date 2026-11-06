@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
@@ -20,7 +21,7 @@ test.each([
   const timers = new Map<object, { due: number; callback: () => void }>();
   const signals: Array<[number, string]> = [];
   const child = Object.assign(new EventEmitter(), {
-    pid: 123,
+    pid: fakePid(123),
     stdout: new EventEmitter(),
     stderr: new EventEmitter(),
     stdin: Object.assign(new EventEmitter(), { end: () => {} }),

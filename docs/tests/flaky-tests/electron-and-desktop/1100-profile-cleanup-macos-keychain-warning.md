@@ -1,7 +1,7 @@
 # Profile cleanup tests expect no Keychain warning on macOS
 
 - **ID:** 1100
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Tests:** `pruneProfiles > the age rule applies only when asked for` and
   `pruneProfiles > unregisters worktrees the profile made in an outside repository`
@@ -44,3 +44,15 @@ explicitly.
 The owner of todo 0023 should pass `platform` (or `keychainRoots: roots`) in
 these two tests, or match the outcome with `toMatchObject`. Not changed from
 the 0211 branch, which does not own this code.
+
+### Resolution — 2026-11-06
+
+**Stale: fixed by `beb1ec4c8`** (#1365, 2026-10-28), after this case was
+recorded. That commit applied the fix proposed above: both tests now pass
+`keychainRoots: roots` to `pruneProfiles`, so on macOS the profile counts as
+inside the Keychain-owning development root and no `keychainWarning` is added
+(`the age rule applies only when asked for` and `unregisters worktrees the
+profile made in an outside repository`). No later observation of the two
+failures is recorded.
+
+**Verification.** Linux only: `NODE_ENV=test mise run test:logged -- --name pc-rerun -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/profile-cleanup.test.ts`: PASS. Not re-run on macOS, the only platform where it failed.

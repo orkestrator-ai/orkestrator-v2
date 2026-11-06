@@ -578,7 +578,13 @@ function FrameRealm({ nodeId, shown }: { nodeId: string; shown: boolean }) {
     };
   }, [attempt, nodeId, restart]);
 
-  useEffect(() => {
+  // A layout effect, so the listener names the workspace the committed frame
+  // was given. `useRealmRequests` swaps its sender in a layout effect too; with
+  // a passive listener, a late "ready" from the replaced document, arriving
+  // between a grant replacement's commit and the passive flush, still matched
+  // the old workspace and marked the new document ready, posting state to it
+  // before it had loaded (case 1531).
+  useLayoutEffect(() => {
     if (!workspaceId) return;
     const listener = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;

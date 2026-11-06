@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import type { ConditionalResourceSnapshot } from "@orkestrator/protocol/resource-events";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -224,8 +225,8 @@ describe("Electron backend command registry", () => {
   });
 
   test("does not let a stale child release replacement ownership", () => {
-    const stale = createFakeChild(93001);
-    const replacement = createFakeChild(93002);
+    const stale = createFakeChild(fakePid(93001));
+    const replacement = createFakeChild(fakePid(93002));
     const { localServers } = createRuntime();
     localServers.adoptProcess("codex:env-owner", replacement);
 

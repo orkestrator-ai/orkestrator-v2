@@ -1,7 +1,7 @@
 # Multi-environment UI perf: Chromium launch hook times out in the aggregate run
 
 - **ID:** 2882
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-02
 - **Test:** `in-page deadlines > (unnamed)`, the `beforeAll` hook in
   `tests/unit/multi-environment-ui-perf.integration.test.ts` that calls
@@ -42,3 +42,12 @@ pass, 1 fail, 860.9 s) with the host at load average 83–96. Artifact:
 `orkestrator-test-run.z5S1lI`. `bun test
 ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1` passed
 the unchanged file twice alone (5.4 s and 5.6 s).
+
+### Resolution — 2026-11-06
+
+Same failure and fix as [2711](2711-ui-perf-chromium-startup-timeout.md#resolution--2026-11-06):
+the unnamed hook that kept timing out at five seconds after the 60 s
+`beforeAll` budget landed is the `afterAll` that closes Chromium, which had no
+budget of its own. It now has a 60 s budget. Verified with
+`mise run test:logged -- --name web-ui-perf-afterall -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --rerun-each=5`
+(exit 0).

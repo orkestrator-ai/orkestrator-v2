@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   lstatSync,
   mkdirSync,
@@ -11,11 +11,20 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allowedDomainsRevision } from "../../apps/backend/src/core/container-network";
-import { fixtureScript, read, statusFile, writeStub } from "./firewall-test-support";
+import {
+  fixtureScript,
+  read,
+  SHELL_FIXTURE_TEST_TIMEOUT_MS,
+  statusFile,
+  writeStub,
+} from "./firewall-test-support";
 import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
 
 // Expiry stamps go through GNU `date -d`.
 const NO_GNU_DATE = missingGnuTools("date");
+
+// Every refresh case runs the real update script; see SHELL_FIXTURE_TEST_TIMEOUT_MS.
+setDefaultTimeout(SHELL_FIXTURE_TEST_TIMEOUT_MS);
 
 // A stateful ipset: one file per set, "entry timeout" per line.
 const IPSET = `

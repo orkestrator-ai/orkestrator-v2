@@ -29,14 +29,36 @@ files.
 
 ## How to use
 
-1. Pick the group that owns the failing test's feature or file. When unsure,
+1. Before a flake sweep, and periodically otherwise, run the stale report and
+   close the cases that are already fixed first:
+   `mise run flaky:stale` (`--days N`, default 21; `--group <folder>`). It
+   lists `open` cases whose newest date is older than N days, with their
+   owning test files, whether those still exist, the commits that changed them
+   after the last observation, and any commit the case cites that `HEAD`
+   already contains. It never edits the registry; a case is closed only by a
+   change that records why (see Recording a case).
+2. Pick the group that owns the failing test's feature or file. When unsure,
    search every group index at once:
    `rg '<test name or owning file>' docs/tests/flaky-tests/*/0000-index.md`.
-2. Read the **Status** column before opening anything else.
-3. Open the linked case file only for a matching row. Prefer `open` rows;
+3. Read the **Status** column before opening anything else.
+4. Open the linked case file only for a matching row. Prefer `open` rows;
    open `resolved` rows only when checking recurrence; open
    `environmental` rows only when the host matches the note.
-4. If no row matches, the failure is not a known flake until the isolated
+5. Before recording a failure against a matching row, run the recurrence check
+   with the base commit of the run that failed:
+   `mise run flaky:recurrence -- <case-id> --base "$(git merge-base HEAD origin/main)" --registry-ref origin/main`
+   (after `git fetch`; use the configured base branch in place of `main`).
+   `--registry-ref` reads the case as committed on that branch, so a branch
+   cut before a resolution still sees it. The check is read-only and prints
+   one verdict:
+   - **open**: record the failure as a recurrence.
+   - **resolved, and the base contains its fix**: a real recurrence. Reopen
+     the case (status `open` in the case file and the group table) and record
+     it.
+   - **resolved, but the base predates fix `<hash>`**: not a recurrence.
+     Rebase and rerun; if you note the failure at all, note it as "base
+     predates fix `<hash>`" and do not count it as a recurrence.
+6. If no row matches, the failure is not a known flake until the isolated
    rerun passes. Then add a new numbered case file to the owning group's
    folder and append its row to the end of that folder's table.
 
@@ -65,3 +87,25 @@ files.
   and index and linking it here.
 - Link to a case in another group with a relative path such as
   `../web-ui/0382-component-browser-parallel-load.md`.
+- Every observation (the first failure and each recurrence) records the date,
+  the command and worker configuration, and the observing branch's **base
+  commit**: `git merge-base HEAD origin/main`, or the merge base with the
+  configured base branch. Run the recurrence check first (How to use, step 5);
+  a failure on a base that predates the case's fix is written as "base
+  predates fix `<hash>`" and is not a recurrence.
+- A change that fixes a flake flips its case to `resolved` in the same change,
+  in both the case file and the group table, and adds a dated
+  `## Resolution (YYYY-MM-DD)` section with:
+  - **Root cause:** what raced or starved, in the code.
+  - **Fix:** what changed and where.
+  - **Reproduced:** `yes — <how>` (the injected delay, held port or
+    contention command that made the recorded failure happen before the fix,
+    and that it passes under the same condition after), or
+    `no — <why>`. A fix proven only by a passing stress run, or by a raised
+    timeout, is weaker evidence and says so here.
+  - **Stress:** the exact command and its result, for example
+    `mise run test:logged -- --name <name> -- bun scripts/test-under-contention.ts -- bun test <file> --rerun-each=20`
+    passed 20 of 20.
+
+  Keeping the status flip in the fix's own change is what lets the
+  recurrence check find the fix commit on the base branch.

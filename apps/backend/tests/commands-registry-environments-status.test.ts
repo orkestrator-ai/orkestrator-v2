@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -1001,11 +1002,11 @@ exit 0
       containerId: null,
       worktreePath,
       localCodexPort: 40201,
-      codexBridgePid: 95001,
+      codexBridgePid: fakePid(95001),
     });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
-    const child = createFakeChild(95001);
+    const child = createFakeChild(fakePid(95001));
     context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
     let stopRecorded = false;
     const requested = mock(async (environmentId: string, agent?: string) => {
@@ -1047,7 +1048,10 @@ exit 0
     });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
-    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95002));
+    context.runtime.localServers.adoptProcess(
+      `codex:${environment.id}`,
+      createFakeChild(fakePid(95002)),
+    );
     localServerHooks.terminateProcessTree = async () => false;
 
     // The failure is surfaced...

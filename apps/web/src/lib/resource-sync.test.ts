@@ -74,6 +74,32 @@ const COALESCED = 80;
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
 
+/**
+ * Starts the sync and waits for its attach-time resync, which runs in a
+ * zero-delay task once both listeners have attached. A fixed `tick(10)` raced
+ * that task: when the worker was descheduled between arming the 10 ms timer and
+ * running the listen microtasks, the zero-delay task fell due after the tick,
+ * so the attach-time resync landed after the test had cleared or begun
+ * counting resyncs (case 0781).
+ */
+async function startAfterAttachResync(): Promise<() => void> {
+  let attachResyncRan = false;
+  const stopObserving = onResourceResync(() => {
+    attachResyncRan = true;
+  });
+  const stop = startResourceSync();
+  const deadline = Date.now() + 10_000;
+  try {
+    while (!attachResyncRan) {
+      if (Date.now() > deadline) throw new Error("the attach-time resync never ran");
+      await tick(1);
+    }
+  } finally {
+    stopObserving();
+  }
+  return stop;
+}
+
 function change(overrides: Partial<ResourceChange> = {}): ResourceChange {
   return { resource: "environment", id: "env-1", revision: 1, ...overrides };
 }
@@ -499,8 +525,7 @@ describe("startResourceSync", () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
 
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
 
     expect(resync).toHaveBeenCalledTimes(1);
   });
@@ -542,8 +567,7 @@ describe("startResourceSync", () => {
   test("deduplicates the initial connection signal and resyncs on reconnect", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     resync.mockClear();
 
     const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
@@ -559,8 +583,7 @@ describe("startResourceSync", () => {
     resetReadCoordinatorForTests(() => ({ ...coordinator, notifyReconnected }));
     try {
       getReadCoordinator();
-      startResourceSync();
-      await tick(10);
+      await startAfterAttachResync();
       const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
       // Inside the attach-time window: covered by the boot resync.
       connected?.handler({ payload: undefined });
@@ -575,8 +598,7 @@ describe("startResourceSync", () => {
   test("requests a resync when a global revision gap is observed", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     resync.mockClear();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
@@ -589,8 +611,7 @@ describe("startResourceSync", () => {
   test("accepts a contiguous retained replay without a broad resync", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     resync.mockClear();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
@@ -603,8 +624,7 @@ describe("startResourceSync", () => {
   test("broadly resyncs on a fresh or unrecoverable transport signal after replayed changes", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     resync.mockClear();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
@@ -627,8 +647,7 @@ describe("startResourceSync", () => {
   test("resyncs on a late first announcement this closure never saw at boot", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     resync.mockClear();
 
     // The desktop supervisor raises the connection signal while the backend
@@ -650,8 +669,7 @@ describe("startResourceSync", () => {
   test("still dedupes an announcement that lands inside the attach window", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     // The attach-time resync has already run; a boot announcement arriving
     // beside it must not refetch everything a second time.
     expect(resync).toHaveBeenCalledTimes(1);
@@ -664,8 +682,7 @@ describe("startResourceSync", () => {
   test("keeps detecting revision gaps across a replayed reconnect", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     resync.mockClear();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
@@ -681,8 +698,7 @@ describe("startResourceSync", () => {
   test("accepts any revision on the first change after an announced reconnect", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
     const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
@@ -720,8 +736,7 @@ describe("startResourceSync", () => {
   test("requests a resync when the backend sequence resets", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     resync.mockClear();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
@@ -743,8 +758,7 @@ describe("startResourceSync", () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);
 
-    const stop = startResourceSync();
-    await tick(10);
+    const stop = await startAfterAttachResync();
     resync.mockClear();
     intervalCallback?.();
 
@@ -767,8 +781,7 @@ describe("ephemeral view safety checks", () => {
     const unsubscribe = onViewSafetyCheck((reason) => checks.push(`pr:${reason}`));
     onViewSafetyCheck((reason) => checks.push(`diff:${reason}`));
 
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
     // Attachment and connection are covered by each view's own reconnect path.
     expect(checks).toEqual([]);
     intervalCallback?.();
@@ -786,8 +799,7 @@ describe("ephemeral view safety checks", () => {
       throw new Error("broken view");
     });
     onViewSafetyCheck((reason) => checks.push(reason));
-    startResourceSync();
-    await tick(10);
+    await startAfterAttachResync();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
     resource?.handler({ payload: change({ revision: 1 }) });

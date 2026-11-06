@@ -1,7 +1,7 @@
 # Mermaid boundary diagrams exceed the render deadline under host load
 
 - **ID:** 0841
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `mermaid rendering > enforces source bytes, edges and SVG limits at and over the boundary`
 - **File:** `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts:126`
@@ -48,3 +48,8 @@ Five concurrent Chromium renders compete with other worktrees' browser suites
 for CPU, and the fixed 5,000 ms parse/layout deadline has no margin for that.
 Re-run the complete owner on a quiet host before treating a recurrence as a
 regression.
+
+### Resolution — 2026-11-06
+
+- **Stale:** fixed by `a80a3c4d1` (2026-10-25 20:00 UTC, `test: stabilize aggregate validation and Mermaid boundaries (#1278)`). That commit removed the wall-clock upper bound from the watchdog test (`elapsed < RENDER_DEADLINE_MS + 4_000`). The test now proves the external deadline by the `render_timeout` result, the lower bound, a verified worker exit, and the browser and worker processes being gone. Separately, the boundary test now renders its size-limit and edge-limit diagrams through a runner with a 30 s render budget, so the 250-edge diagram no longer races the 5 s production deadline. Every recorded observation predates that commit and measured the removed bound (`< 5000` / `< 9000`) or the old boundary budget.
+- **Verification:** `mise run test:logged -- --name n0512-mermaid -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --rerun-each=2` passed 28 tests with 0 failures, at a load average of about 24. No change in this round.

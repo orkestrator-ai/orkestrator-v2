@@ -1,7 +1,7 @@
 # Coordinator dirty-submodule discarding switch times out in the aggregate
 
 - **ID:** 0945
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `project coordinator > a dirty submodule needs enhanced confirmation before a discarding switch`
 - **File:** `apps/backend/src/core/coordinator-service.test.ts`
@@ -61,3 +61,18 @@ formatting, lint and typechecking. The run does not establish that every
 aggregate failure is pre-existing. Browser, Electron, Docker and iOS scenario
 suites were outside this backend-only follow-up's scope; production-scale
 maintenance timing and packaged/cross-platform copy behavior remain unmeasured.
+
+
+### Resolution — 2026-11-06
+
+- **Stale; fixed by `60c2bf07d` (#1378, merged 2026-10-28 11:43 UTC).** Every
+  recorded failure of this owner was Bun's five-second default (5.1 to 5.8 s)
+  on Git-heavy cases that take about 2 s on an idle host. That commit set
+  `setDefaultTimeout(30_000)` in `coordinator-service.test.ts` before its hooks
+  register. Separately, `beb1ec4c8` (#1365) moved this real-Git owner to the slow
+  tier, so it no longer runs in the default `mise run test` aggregate where these
+  were observed. The last recorded recurrence is dated 2026-10-27 or 2026-10-28,
+  and none has been recorded since. No change was needed.
+- **Verification:** `mise run test:logged -- --name coord-coordinator-service -- bun --cwd=apps/backend test ./src/core/coordinator-service.test.ts`:
+  pass (13.3 s).
+

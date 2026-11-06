@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,7 +52,7 @@ test("restart impact counts working and waiting agents and unfinished pipelines"
 
 test("restart impact counts container terminals apart from host terminals", async () => {
   const runtime = new BackendRuntime({ emit: () => undefined });
-  const pty = { pid: 0 } as unknown as PtyProcess;
+  const pty = { pid: fakePid(0) } as unknown as PtyProcess;
   runtime.terminals.rememberSession("local-1", {
     kind: "local",
     environmentId: "env-local",

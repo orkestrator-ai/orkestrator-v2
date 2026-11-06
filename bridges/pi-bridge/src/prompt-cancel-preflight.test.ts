@@ -327,9 +327,19 @@ describe("concurrent cancels for one claim", () => {
     const state = seed(pi.session);
     try {
       expect((await post(`/session/${state.id}/prompt`, { prompt: "runs" })).status).toBe(202);
+      // Both requests must reach the run's cancel handle while the abort is
+      // still held. The first abort starting says nothing about the second
+      // request, which a loaded host can deliver after the run went idle; it
+      // then finds nothing to cancel (1002).
+      const cancelTurn = state.cancelTurn!;
+      let cancelCalls = 0;
+      state.cancelTurn = (reason) => {
+        cancelCalls++;
+        return cancelTurn(reason);
+      };
       const first = post(`/session/${state.id}/cancel`);
       const second = post(`/session/${state.id}/abort`);
-      await waitFor(() => pi.counts.aborts >= 1);
+      await waitFor(() => pi.counts.aborts >= 1 && cancelCalls === 2);
       abortGate.resolve();
       const responses = await Promise.all([first, second]);
       expect(responses.map((response) => response.status)).toEqual([200, 200]);

@@ -78,7 +78,11 @@ import {
   settleSessionPreferenceWritesForTesting,
   updateSessionPreferences,
 } from "./session-preferences.js";
-export { readSessionPreferences, updateSessionPreferences };
+export {
+  readSessionPreferences,
+  settleSessionPreferenceWritesForTesting,
+  updateSessionPreferences,
+};
 
 /**
  * Replace a temporary Claude home's `.claude` with a file, so every later

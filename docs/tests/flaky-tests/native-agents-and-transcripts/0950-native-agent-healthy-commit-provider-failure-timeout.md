@@ -11,3 +11,7 @@
 - **Unchanged owner rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-base.test.ts --parallel=1` passed (67 pass, 0 fail).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.pHWGe9` (the run's failure artifacts).
 - **Hypothesis:** host load stretched the test past Bun's five-second default. Unproven; no implementation, assertion, timeout or skip changed.
+
+### Investigation — 2026-11-06
+
+- The case takes about 90 ms (30 reruns in 2.7 s, including setup). A 5 s timeout is a 50x stretch, not ordinary contention, and two unrelated backend files timed out the same way in the same run (0951, 0621). A host-wide stall, such as a blocked event loop or disk, fits better than anything in this test. Not reproducible; status stays open.

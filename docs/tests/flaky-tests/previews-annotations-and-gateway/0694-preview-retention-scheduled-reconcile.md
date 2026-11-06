@@ -1,7 +1,7 @@
 # Preview retention scheduled reconcile count varies under aggregate load
 
 - **ID:** 0694
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-23
 - **Test:** `PreviewPartitionRetention > a scheduled reconcile stops once its transport closes`
 - **Owning file:** `apps/desktop/tests/preview-partition-retention.test.ts:454`
@@ -43,3 +43,22 @@ mise run test:logged -- --name desktop-review-failures-isolated -- bun test --cw
 - Evidence: `/tmp/orkestrator-test-run.b2h5jF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and adjacent `summary.json`.
 - Complete unchanged owner: `mise run test:logged -- --name fixes-preview-retention-isolated -- bun test --cwd apps/desktop ./tests/preview-partition-retention.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0, in 0.4 seconds.
 - This repeats open case 0694. No desktop implementation, assertion, deadline or skip changed on this branch; root cause remains unconfirmed. The aggregate also had the terminal reconnect failure recorded in case 5105. Backend passed all 15,312 tests, and the root, bridge and protocol-lockfile groups passed.
+
+### Resolution — 2026-11-06
+
+**Root cause.** A fixed `Bun.sleep(40)` with an expectation of at least two
+runs of a 5 ms schedule. Each run is serialized behind the previous one and
+lists partitions before it calls `listServices`, so a loaded host fits fewer
+runs into the 40 ms than the nominal eight, sometimes only one.
+
+**Reproduced.** A temporary copy of the unchanged test with the wait cut to
+8 ms failed 20 of 20 with the recorded `runs >= 2` failure; the shorter wait
+models the time a stalled worker actually gets.
+
+**Fix.** `apps/desktop/tests/preview-partition-retention.test.ts` polls (5 ms
+steps, 3 s bound) until the recurring run has listed twice, then closes the
+transport and keeps the negative check that no further run happens. There is
+no await between the count and the close, and every run re-checks `closed`
+before listing, so the negative check stays exact.
+
+**Verification.** `NODE_ENV=test mise run test:logged -- --name ppr-fix-rerun -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/preview-partition-retention.test.ts --rerun-each=20`: PASS.

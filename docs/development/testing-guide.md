@@ -404,6 +404,13 @@ says whether one is armed, and `restore()` reports any it drops. The
 - Do not swap a sleep for an async query that waits the same wall time, and
   never change a production debounce or retry constant to make a test cheaper.
 
+The `sleep-before-negative-assertion` source guard
+(`tests/unit/source-guards.test.ts`) refuses a new fixed sleep followed by a
+negative or exact-count assertion, and its siblings refuse released ports,
+real subprocesses without a time budget and small fake pids. Existing offenders
+sit in a baseline that only shrinks; see
+[linting.md](linting.md#source-guards).
+
 ### Agent CLIs on `PATH`
 
 Default and slow-tier tests must not reach the network or a provider login. A
@@ -745,6 +752,14 @@ port, or other shared fixture. Use `--parallel=2` for a small independent set.
 The aggregate runner owns larger worker allocations; do not copy its maximum
 into every command running alongside it.
 
+A test that needs a port binds port 0 in the component under test and reads the
+bound port back, or keeps its own probe server bound until the port's owner
+takes over. Binding port 0, closing the server and handing the number on lets
+another process take the port first; where a component cannot bind port 0
+itself, retry on `EADDRINUSE` with `retryOnAddressInUse`
+(`@orkestrator/protocol/testing/ports`). The `released-port-rebind` source
+guard refuses new instances ([linting.md](linting.md#source-guards)).
+
 `--parallel` isolates test files. A test that passes only after a sibling file
 has installed a mock or global is not self-contained and should be fixed. Do not
 reach for `--no-isolate` to preserve that accidental dependency.
@@ -1073,6 +1088,11 @@ run by hand:
   spawn time. Signal a process group (`kill(-pid)`) only when you started that
   child detached, so it leads its own group. Otherwise the group is the
   caller's.
+- Give a fake child process a pid no live process can have: `fakePid(n)` from
+  `@orkestrator/protocol/testing/fake-pids`, above any `pid_max`. Code under
+  test that signals the child's process group would otherwise reach a real
+  group on the host. The `small-fake-pid` source guard refuses new small ones
+  ([linting.md](linting.md#source-guards)).
 - Never select processes by name, pattern, or port. This rules out `pkill`,
   `killall`, `fuser -k`, `kill $(lsof -t -i :PORT)`, and `ps | grep` loops on
   the host. Production listens on fixed ports such as the remote gateway and
@@ -1540,9 +1560,16 @@ group's own `0000-index.md` table tracks its cases. Search the group indexes
 first; open only the matching case file.
 Record the exact test and file, original command and worker configuration,
 failure message and duration, suite counts, isolated rerun command and result,
-observation date, and an evidence-backed hypothesis. Do not skip, loosen, or
-delete a test to hide an intermittent failure. When fixed, retain the case-file
-history and mark the index row resolved with stress or parallel verification.
+observation date, the observing branch's base commit
+(`git merge-base HEAD origin/main`), and an evidence-backed hypothesis. Run
+`mise run flaky:recurrence -- <case-id> --base <that commit> --registry-ref origin/main`
+before calling a failure a recurrence: a base that predates the case's fix is
+not one. Before a flake sweep, run `mise run flaky:stale` and close the cases
+that are already fixed first. Do not skip, loosen, or delete a test to hide an
+intermittent failure. When fixed, retain the case-file history and mark the
+case resolved in the same change, with the Resolution section the registry's
+[Recording a case](../tests/flaky-tests/0000-index.md#recording-a-case) rules
+describe.
 
 Aggregate runs remove ambient bridge debug flags before spawning their groups:
 `ORKESTRATOR_BRIDGE_DEBUG`, `CLAUDE_BRIDGE_DEBUG`, `CODEX_BRIDGE_DEBUG`,
@@ -1550,6 +1577,52 @@ Aggregate runs remove ambient bridge debug flags before spawning their groups:
 a development profile's diagnostics from changing authoritative test inputs.
 If a focused reproduction needs one of those flags, set it explicitly on that
 focused command and record it with the result.
+
+### Reproduce before fixing
+
+A fix for a flake is only as good as the evidence that it addresses the
+failure that was recorded. A stress run that passes says little when the
+unchanged code would have passed it too. Work in this order:
+
+1. **Make it fail on demand.** Recreate the condition the hypothesis names,
+   against the unchanged code, until the recorded failure appears:
+   - a race between two events: inject a delay (a temporary `await Bun.sleep`
+     or a deferred promise) on the side that has to lose;
+   - a port or resource collision: hold the port or resource from another
+     process or a test fixture while the test runs;
+   - a deadline that only load breaks: starve the test of CPU with the
+     contention runner. On Linux it pins K busy loops (default 6) and the
+     command to one core (default the last), leaving the rest of the host
+     alone, and stops only the burners it started:
+
+     ```bash
+     mise run test:logged -- --name repro -- \
+       bun scripts/test-under-contention.ts --burners 6 -- \
+       bun test path/to/owner.test.ts --rerun-each=5
+     ```
+
+     `mise run test:contention -- [--core N] [--burners K] [--duration S] -- <command>`
+     is the same runner. It propagates the command's exit status and prints
+     one summary line (core, burners, elapsed, exit). Without `taskset`
+     (macOS) the burners run unpinned and it says the condition is weaker.
+2. **Show the fix passes under the same condition.** Rerun the same
+   reproduction (the same delay, held port or contention command) with the fix
+   in place.
+3. **Stress it.** Run the owner repeatedly with `--rerun-each=N`, under
+   contention when load was the trigger. `--rerun-each` reruns the file's tests
+   in one process, so a file that is not rerun-safe (module-level state, a
+   fixture created once, a server bound at import) can fail for that reason
+   alone. For such a file, loop fresh processes instead:
+
+   ```bash
+   mise run test:logged -- --name stress -- bash -c \
+     'for i in $(seq 20); do bun test path/to/owner.test.ts || exit 1; done'
+   ```
+
+Record the result in the case's Resolution section as
+`Reproduced: yes — <how>` or `Reproduced: no — <why>`, with the stress command
+and its result. A fix that only raises a timeout without a reproduction is
+weaker evidence; say so rather than presenting it as proven.
 
 ## Verification by change type
 

@@ -4181,7 +4181,10 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.drop(screen.getByRole("dialog"), {
       dataTransfer: attachmentDataTransfer(promptFiles),
     });
-    expect(await screen.findByText("prompt-2.bin")).toBeTruthy();
+    // Reading 21 MiB of attachments took 1.8 s alone at a load average of 20,
+    // past Testing Library's one-second default (case 2396); bound it like the
+    // size check below.
+    expect(await screen.findByText("prompt-2.bin", undefined, { timeout: 10_000 })).toBeTruthy();
 
     chooseFeature({ name: "Bound shared bytes" });
     HTMLCanvasElement.prototype.toDataURL = (() =>

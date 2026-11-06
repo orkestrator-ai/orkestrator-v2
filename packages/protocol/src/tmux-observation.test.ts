@@ -314,16 +314,22 @@ describe("tmux observations", () => {
   });
 
   test("bounds hostile padded rows and unterminated terminal controls", () => {
-    const startedAt = performance.now();
-    const observation = parseTmuxAgentObservation(
-      `a${" ".repeat(4_000)}b\n\u001b]${"x".repeat(20_000)}`,
-      1,
-      "2026-08-04T12:00:00.000Z",
-    );
+    const hostile = `a${" ".repeat(4_000)}b\n\u001b]${"x".repeat(20_000)}`;
+    // The bound is on the parser's own work: CPU time, not wall time, so a
+    // worker descheduled by a loaded host does not count, and the fastest of a
+    // few runs, so one GC pause does not either. Backtracking over the hostile
+    // row would make every run slow.
+    let fastestMs = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 5; run += 1) {
+      const before = process.cpuUsage();
+      const observation = parseTmuxAgentObservation(hostile, 1, "2026-08-04T12:00:00.000Z");
+      const used = process.cpuUsage(before);
+      fastestMs = Math.min(fastestMs, (used.user + used.system) / 1_000);
 
-    expect(observation.usage).toEqual([]);
-    expect(observation.prompt).toBeNull();
-    expect(performance.now() - startedAt).toBeLessThan(100);
+      expect(observation.usage).toEqual([]);
+      expect(observation.prompt).toBeNull();
+    }
+    expect(fastestMs).toBeLessThan(100);
   });
 
   test("returns null for empty or hint-free snapshots", () => {

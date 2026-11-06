@@ -279,14 +279,17 @@ describe("PreviewExternalForward", () => {
 
   for (const address of ["127.0.0.1", "::1", "0.0.0.0", "::"]) {
     test(`a local server on ${address} keeps its traffic and port`, async () => {
-      const port = await freePort();
       const decoyHits = mock(() => undefined);
       const decoy = createServer((_request, response) => {
         decoyHits();
         response.end("decoy");
       });
       decoys.push(decoy);
-      await new Promise<void>((resolve) => decoy.listen(port, address, resolve));
+      // Let the decoy take its own port on its own address. Probing a port on
+      // 127.0.0.1 and binding it here afterwards left a gap another worker's
+      // listener could fill (case 1654), and the probe never checked `::`.
+      await new Promise<void>((resolve) => decoy.listen(0, address, resolve));
+      const port = (decoy.address() as AddressInfo).port;
 
       const created = forward(upstream(port));
       const bound = await created.listen();
@@ -309,8 +312,10 @@ describe("PreviewExternalForward", () => {
       const created = forward(upstream(preferred));
       const port = await created.listen();
       expect(port).not.toBe(preferred);
-      const response = await fetch(`http://localhost:${port}/`);
-      expect(await response.text()).toBe("upstream");
+      // Node's client rather than the global `fetch`: under the root DOM
+      // preload that global is happy-dom's, which can send a CORS preflight
+      // the forward rightly refuses (case 3570).
+      expect((await get(`http://localhost:${port}/`)).body).toBe("upstream");
     }
   });
 

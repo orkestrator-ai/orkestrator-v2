@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { fstatSync, readdirSync } from "node:fs";
 import * as captureFs from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -317,6 +317,9 @@ describe("runCommand git environment", () => {
         // Git invokes a local SSH transport which exercises OpenSSH's passphrase
         // reader under a real controlling PTY, without a network or credentials.
         // The helper owns and reaps its PTY child even if a regression prompts.
+        // It stops as soon as ssh-keygen exits (EIO) or prompts, so its deadline
+        // only bounds a hang. A two-second deadline cut a slow ssh-keygen off
+        // before it reached askpass on a loaded host (flake case 0200).
         await writeFile(
           transport,
           `import errno, os, pty, select, signal, sys, time
@@ -324,7 +327,7 @@ pid, fd = pty.fork()
 if pid == 0:
     os.execlp("ssh-keygen", "ssh-keygen", "-y", "-f", sys.argv[1])
 output = b""
-deadline = time.monotonic() + 2
+deadline = time.monotonic() + 15
 try:
     while time.monotonic() < deadline:
         if not select.select([fd], [], [], 0.05)[0]:
@@ -360,7 +363,8 @@ sys.exit(1)
             "ssh://example.invalid/repository",
           ],
           {
-            timeoutMs: 4_000,
+            // Above the helper's own deadline, so a hang reports as the helper's.
+            timeoutMs: 20_000,
             env: { PATH: process.env.PATH, SSH_ASKPASS: askpass, GIT_SSH_VARIANT: "ssh" },
           },
         ).catch((error: unknown) => error);
@@ -372,6 +376,7 @@ sys.exit(1)
         await rm(tempDir, { recursive: true, force: true });
       }
     },
+    30_000,
   );
 
   posixOnly("keeps an explicit GIT_TERMINAL_PROMPT", async () => {
@@ -471,14 +476,27 @@ describe("runCommand capture", () => {
     const original = process.env.TMPDIR;
     const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
     process.env.TMPDIR = directory;
-    // An earlier test file in this worker can leave descriptors waiting on
-    // collection; closing mid-test, they would hide a leak or fail a clean run.
-    const openDescriptors = () => {
+    // Compare descriptors by the file they refer to, not by count. An earlier
+    // test file in this worker can leave descriptors (unclosed SQLite stores,
+    // for one) that close while this test runs: a count then fell from 113 to
+    // 12 (flake cases 5062, 6190). A descriptor this test leaves open refers to
+    // a file that was not open before it started, even when it reuses a number
+    // another descriptor freed, so it is still caught.
+    const openFiles = () => {
       Bun.gc(true);
-      return readdirSync("/dev/fd").length;
+      const files = new Map<number, string>();
+      for (const entry of readdirSync("/dev/fd")) {
+        try {
+          const stat = fstatSync(Number(entry));
+          files.set(Number(entry), `${stat.dev}:${stat.ino}`);
+        } catch {
+          // The listing's own descriptor, closed once the listing returns.
+        }
+      }
+      return files;
     };
     try {
-      const before = openDescriptors();
+      const before = new Set(openFiles().values());
       const listed = await runCommand("sh", ["-c", 'ls -A "$1"; echo done', "sh", directory]);
       expect(listed.stdout).toBe("done\n");
       for (let index = 0; index < 8; index += 1) {
@@ -486,7 +504,8 @@ describe("runCommand capture", () => {
         await runCommand("orkestrator-nonexistent-shell-test-command").catch(() => undefined);
         await runCommand("sh", ["-c", "sleep 5"], { timeoutMs: 20 }).catch(() => undefined);
       }
-      expect(openDescriptors()).toBe(before);
+      const opened = [...openFiles()].filter(([, file]) => !before.has(file)).map(([fd]) => fd);
+      expect(opened).toEqual([]);
       expect(readdirSync(directory)).toEqual([]);
     } finally {
       if (original === undefined) delete process.env.TMPDIR;

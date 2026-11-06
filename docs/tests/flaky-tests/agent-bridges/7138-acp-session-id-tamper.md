@@ -18,19 +18,30 @@ is that the replacement occasionally changes unused encoding bits without
 changing decoded bytes; this has not been reproduced or confirmed.
 Do not weaken the assertion or change session admission without a reproduction.
 
-## Root cause and fix (2026-11-06)
+### Resolution — 2026-11-06
 
-Confirmed: the hypothesis above. The signature is a base64url SHA-256 digest
-(32 bytes, 43 characters), so its last character carries two spare bits and
-`A`, `B`, `C` and `D` decode to the same bytes. When the issued token ended in
-`B`, `C` or `D`, the test's replacement `A` was the same signature, and
-`parseExternalSessionToken` accepted it: about 3 runs in 64. The same failure
-was seen on `main` CI for the `acp-fixture` variant of this test (run
-42222311479, job 127907099873, 221.55 ms).
+**Root cause (product).** The hypothesis above is correct. The signature is a
+32-byte HMAC, so its base64url form is 43 characters and the last character
+carries four data bits and two unused ones. `Buffer.from(…, "base64url")`
+ignores the unused bits, so four characters (`A`–`D`, `E`–`H`, …) decode to the
+same bytes. `parseExternalSessionToken` compared only the decoded bytes. The
+test replaces the last character with `A` (or `B` when it is `A`), so whenever
+the random per-process signing key produced a signature ending in `A`–`D`
+(one run in sixteen per provider variant) the edited token still verified and
+the resume answered 201. Any token therefore had four accepted spellings.
 
-The parser already required the canonical spelling of the encoded session ID
-but not of the signature. It now requires both, so the bridge accepts only the
-token it issued. The assertion is unchanged. The new
-`bridges/acp-bridge/src/acp-external-session-token.test.ts` replaces the
-signature's last character with each of the other 63 characters and expects
-every one to be refused; it fails without the fix and passes with it.
+**Fix.** `bridges/acp-bridge/src/acp-context.ts`: after the constant-time
+comparison, `parseExternalSessionToken` also requires the signature to be the
+canonical encoding of the digest (`supplied.toString("base64url") === signature`),
+matching the canonical check the encoded session id already had. New
+deterministic unit test `bridges/acp-bridge/src/acp-external-session-token.test.ts`
+checks a round trip and asserts all other 63 spellings of the last signature
+character are refused. Main CI also observed the original failure for the
+`acp-fixture` variant (run 42222311479, job 127907099873, 221.55 ms).
+
+**Verification.**
+
+- Reproduced before the fix: with the canonical check removed, the new unit
+  test failed (`mise run test:logged -- --name br-7138-prefix -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-external-session-token.test.ts`, exit 1).
+- With the fix: the same command with `--rerun-each=50` passed (exit 0).
+- Owner: `mise run test:logged -- --name br-7138-context -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-context.test.ts --rerun-each=3` passed (exit 0).

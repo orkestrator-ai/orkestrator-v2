@@ -1,7 +1,7 @@
 # Incremental Markdown streaming timeout during aggregate validation
 
 - **ID:** 6194
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `a live streaming render matches a full render at every update`
 - **File:** `apps/web/src/components/chat/MessageMarkdown.incremental.test.tsx`
@@ -31,3 +31,24 @@ output was deleted by the logged runner, so individual rerun counts were not
 retained. This establishes intermittence, not its cause. No assertion, timeout
 or implementation was changed to hide the failure; the broad check remains
 non-green.
+
+### Resolution — 2026-11-06
+
+**Root cause.** The case is synchronous, CPU-bound work with nothing to wait
+for: about a hundred streamed prefixes, each rendered three times (live,
+non-live and a fresh uncached reference), roughly 300 complete Markdown passes.
+Timed alone through a JUnit report it took 2.93 s (load average about 5);
+instrumented, the live, non-live, fresh and comparison phases took 0.84, 0.90,
+1.59 and 0.23 s. Bun's five-second default left too little headroom once the
+aggregate slowed the host by about 2x, which matches the 5029 and 5859 ms
+failures. No race or hidden wait was found.
+
+**Fix.** `apps/web/src/components/chat/MessageMarkdown.incremental.test.tsx`:
+the case carries an explicit `STREAMING_EQUIVALENCE_BUDGET_MS` (30 s), with a
+comment giving the work it does. No assertion, step size or prefix changed.
+
+**Verification.** `env -u NODE_ENV mise exec -- bun --cwd=apps/web test src/components/chat/MessageMarkdown.incremental.test.tsx`
+passed (4 pass), and so did the combined
+`mise run test:logged -- --name web-ui-flake-fixes-combined -- bun --cwd=apps/web test <ten owners> --parallel=3`
+run (exit 0). The timeout was not reproduced under load; the fix rests on the
+measured cost.

@@ -18,3 +18,11 @@
 - **Disposition:** open.
 - **Evidence:** single observation. The case runs under Bun's default five seconds, and the whole file takes 12 s alone. The last change to the owner (bae046ddf, #1211) predates the observation.
 - **Next step:** if it recurs, give the case an explicit budget or split it; otherwise reclassify it as environmental at the next sweep.
+
+## Investigation — 2026-11-06
+
+Not fixed, still open. A JUnit-timed run of the unchanged owner alone took
+0.23 s for this case. Its sibling,
+`a coordinator's copy request is approved from the copy dialog with the user's choices`,
+took 3.11 s against the same five-second default (load average about 20), so
+that sibling is the likelier next timeout. No race was found in this case.

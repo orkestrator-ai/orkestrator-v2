@@ -1,7 +1,7 @@
 # Resume dialog archived restore timeout under load
 
 - **ID:** 1653
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-01
 - **Test:** `NativeResumeSessionDialog > keeps archived history restorable after reopening with %s live rows`, both parameterized cases.
 - **File:** `apps/web/src/components/chat/NativeResumeSessionDialog.test.tsx:298`.
@@ -86,3 +86,10 @@ output was deleted by the logged runner, so individual rerun counts were not
 retained. This establishes intermittence, not its cause. No assertion, timeout
 or implementation was changed to hide the failure; the broad check remains
 non-green.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the cost of the test itself. Both cases render more than 512 rows four times (open, archive, reopen, show archived). Each render takes about 1 s of happy-dom work on a loaded host. Timed per phase at load averages of 20-27, the cases took 3.4-5.8 s in total against Bun's 5 s default, and each Testing Library query costs about 100 ms over the 8,700-node list. There is no race: the work is CPU-bound and nothing could be awaited instead.
+- **Reproduced:** yes. The unchanged case failed alone at 5,269 ms at a host load average of 30.
+- **Fix:** in `NativeResumeSessionDialog.test.tsx` the two parameterized cases get a 60 s test budget (`LARGE_LIST_TEST_TIMEOUT_MS`), and their large-list `findBy*` and `waitFor` calls get 20 s. Row counts and assertions are unchanged. The 512/513 boundary still comes from the backend cap.
+- **Verification:** `mise run test:logged -- --name n1653-stress -- bun --cwd=apps/web test src/components/chat/NativeResumeSessionDialog.test.tsx --rerun-each=6` passed 282 tests with 0 failures, at a load average of about 20-30.

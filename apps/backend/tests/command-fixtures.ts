@@ -1,6 +1,11 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
-import { execFile, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  ChildProcess,
+  execFile,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 
 import { createHash, randomUUID } from "node:crypto";
 
@@ -24,6 +29,8 @@ import {
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
+
+import { FAKE_PID_BASE, fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import {
   isPersistedReviewPackage,
@@ -86,16 +93,39 @@ export async function createCommandFixtures() {
     for (const runtime of runtimes.splice(0)) runtime.shutdown();
   };
   /**
+   * Real children this fixture's runtimes launched. Production Orkestrator runs
+   * on this host as the same user, and `terminateProcessTree` signals `-pid`
+   * and every descendant of `pid`: handed a fake child whose pid happens to be
+   * live, it would kill a real process group. The default termination below
+   * acts only on children recorded here.
+   */
+  const spawnedChildren = new WeakSet<object>();
+  /**
+   * The real `terminateProcessTree`, for children this fixture spawned only.
+   * Anything else (a fake child adopted by a test) is refused, so a test that
+   * adopts one must substitute its own `localServerHooks.terminateProcessTree`.
+   */
+  const terminateSpawnedProcessTree: typeof terminateProcessTree = async (child, options) => {
+    if (!spawnedChildren.has(child)) {
+      throw new Error(
+        `command-fixtures refused to terminate pid ${String(child.pid)}: no runtime of this ` +
+          "fixture spawned it. A test that adopts a fake child must set " +
+          "localServerHooks.terminateProcessTree.",
+      );
+    }
+    return terminateProcessTree(child, options);
+  };
+  /**
    * Process launch and teardown for every runtime this fixture builds. A test
-   * swaps one in for its own duration; teardown restores the real ones.
+   * swaps one in for its own duration; teardown restores the defaults.
    */
   const localServerHooks: {
     spawn: typeof spawnCommand;
     terminateProcessTree: typeof terminateProcessTree;
-  } = { spawn: spawnCommand, terminateProcessTree };
+  } = { spawn: spawnCommand, terminateProcessTree: terminateSpawnedProcessTree };
   const resetLocalServerHooks = () => {
     localServerHooks.spawn = spawnCommand;
-    localServerHooks.terminateProcessTree = terminateProcessTree;
+    localServerHooks.terminateProcessTree = terminateSpawnedProcessTree;
   };
   const retireLocalServerHooks: Array<() => void> = [];
   const runtimeOptions = (
@@ -108,13 +138,19 @@ export async function createCommandFixtures() {
     retireLocalServerHooks.push(() => {
       hooks = { ...localServerHooks };
     });
+    const { spawn: spawnOverride, ...localServerOverrides } = options.localServers ?? {};
     return {
       ...options,
       emit,
       localServers: {
-        spawn: (...args) => hooks.spawn(...args),
+        spawn: (...args) => {
+          const child = (spawnOverride ?? hooks.spawn)(...args);
+          // Only a genuine child of this process is ever eligible for real termination.
+          if (child instanceof ChildProcess) spawnedChildren.add(child);
+          return child;
+        },
         terminateProcessTree: (...args) => hooks.terminateProcessTree(...args),
-        ...options.localServers,
+        ...localServerOverrides,
       },
       // As in the backend (`index.ts`), so a merged PR's cleanup runs as in production.
       prMonitor: {
@@ -150,7 +186,7 @@ export async function createCommandFixtures() {
       emitExit: (event = { exitCode: 0 }) => exitCallbacks.forEach((callback) => callback(event)),
     };
     const ptyProcess = {
-      pid: ptyProcesses.length + 1,
+      pid: fakePid(ptyProcesses.length + 1),
       cols: Number(options.cols ?? 80),
       rows: Number(options.rows ?? 24),
       process: command,
@@ -1453,7 +1489,15 @@ exec '${realGit}' "$@"
     }
   }
 
+  /**
+   * A child that never exits. `pid` must come from `fakePid(...)`: a plausible
+   * pid could name a live process on this host if the child ever reached real
+   * termination.
+   */
   function createFakeChild(pid: number): ChildProcessWithoutNullStreams {
+    if (pid < FAKE_PID_BASE) {
+      throw new RangeError(`createFakeChild needs a fakePid(...) pid, got ${pid}`);
+    }
     return {
       pid,
       exitCode: null,

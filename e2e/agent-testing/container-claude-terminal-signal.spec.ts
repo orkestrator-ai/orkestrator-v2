@@ -98,8 +98,6 @@ function docker(args: string[], input?: string): string {
 const FAKE_API_PORT = 47_123;
 const FAKE_API_SCRIPT = "/tmp/orkestrator-qa-fake-claude-api.ts";
 const SETTINGS_BACKUP = "/tmp/orkestrator-qa-claude-settings.json";
-// `[c]` keeps pkill from matching the shell that runs it.
-const STOP_FAKE_API = "pkill -f '[o]rkestrator-qa-fake-claude-api' || true";
 
 /**
  * Starts the fake Messages API in the container and points the image's
@@ -110,8 +108,14 @@ async function installFakeClaudeApi(containerId: string): Promise<() => void> {
   const asNode = (script: string, input?: string) =>
     docker(["exec", "-i", "--user", "node", containerId, "sh", "-c", script], input);
   const undo = () => {
+    // pkill runs on its own: a shell whose command line names the script would
+    // match the pattern and kill itself. `ap[i]` cannot match pkill's own line.
+    // Exit 1 (nothing matched) is fine.
+    spawnSync("docker", ["exec", containerId, "pkill", "-f", "orkestrator-qa-fake-claude-ap[i]"], {
+      timeout: 15_000,
+    });
     asNode(
-      `${STOP_FAKE_API}; if [ -f ${SETTINGS_BACKUP} ]; then cat ${SETTINGS_BACKUP} > "$HOME/.claude/settings.json" && rm -f ${SETTINGS_BACKUP}; fi; rm -f ${FAKE_API_SCRIPT}`,
+      `if [ -f ${SETTINGS_BACKUP} ]; then cat ${SETTINGS_BACKUP} > "$HOME/.claude/settings.json" && rm -f ${SETTINGS_BACKUP}; fi; rm -f ${FAKE_API_SCRIPT}`,
     );
   };
   try {

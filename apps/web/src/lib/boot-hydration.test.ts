@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { renderHook } from "@testing-library/react";
 import {
   MAX_ENVIRONMENT_HYDRATION_IDS,
@@ -142,7 +143,7 @@ describe("EnvironmentHydrationBatcher", () => {
 
   test("falls back to the per-environment reads once an older backend refuses the command", async () => {
     const listBatch = mock(async (_ids: string[]): Promise<Batch> => {
-      throw new Error("Unknown command: list_environment_hydration");
+      throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
     });
     const { instance, scheduler, listPromptQueues, listMultiReviewWorkflows } = batcher({
       listBatch,
@@ -163,7 +164,7 @@ describe("EnvironmentHydrationBatcher", () => {
   test("in fallback one environment's failed read does not block the others", async () => {
     const { instance, scheduler } = batcher({
       listBatch: async () => {
-        throw new Error("Unknown command: list_environment_hydration");
+        throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
       },
       listPromptQueues: async (id) => {
         if (id === "broken") throw new Error("queue unavailable");

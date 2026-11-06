@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { hydrationRequests, type RequestLimiter } from "@/lib/hydration-request-limiter";
+import { hydrationActivity } from "@/lib/hydration-activity";
 import { recordRealmBootStep } from "@/lib/realm-boot-timing";
 
 const nextTask = () => new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
@@ -17,10 +18,19 @@ export async function waitForHydrationQuiet(
 ): Promise<void> {
   for (;;) {
     await limiter.whenIdle();
+    await hydrationActivity.whenIdle();
     const started = limiter.started;
+    const tasksStarted = hydrationActivity.started;
     await wait();
     await wait();
-    if (limiter.started === started && limiter.inFlight === 0 && limiter.queued === 0) return;
+    if (
+      limiter.started === started &&
+      limiter.inFlight === 0 &&
+      limiter.queued === 0 &&
+      hydrationActivity.started === tasksStarted &&
+      hydrationActivity.pending === 0
+    )
+      return;
   }
 }
 
@@ -84,7 +94,7 @@ export function useRealmFanOutTiming(
     void waitForHydrationQuiet().then(() => {
       recordRealmBootStep("fan-out-complete", monotonicNow() - startedAt, {
         requests: hydrationRequests.started,
-        outcome: failed ? "failed" : "ok",
+        outcome: failed || hydrationActivity.failed ? "failed" : "ok",
       });
     });
   }, [clock, environmentsSettled, failed]);

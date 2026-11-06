@@ -135,3 +135,24 @@ branch changed. For diagnosis only,
 `mise run test:logged -- --name cap-diag -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/change-tracking/measurement-file-cap.test.ts ./src/core/change-tracking/restore-preflight.test.ts --parallel=1 --timeout=30000 --only-failures`
 passed in 18.9 s. No isolated pass at the default deadline, so this stays
 unresolved; no assertion, deadline or skip changed.
+
+
+## Cold realm boot review recurrence — 2026-11-06
+
+Recorded preparation at `54ab6d570` ran
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+Recovered workspace diagnostics show the real-cap restore case timed out at 5557.84 ms, followed by a closed-database error after test cleanup.
+The aggregate uses the repository scheduler (workspace group six slots;
+bridge group two package slots with one Bun worker per bridge).
+
+The complete unchanged owning file passed alone (exit 0, 3.9 s):
+
+```sh
+mise run test:logged -- --name address-measurement-recorded-owner -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures
+```
+
+Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-f3469fba-5332-4a76-a6d8-5a4f873cf90f/validation-04.stderr.txt`
+and `orkestrator-test-run.gIhwSP` compressed group logs below the host temporary
+directory. The isolated pass establishes intermittence, not a cause or a fix.
+The case remains open; no implementation, assertion, deadline or skip changed.

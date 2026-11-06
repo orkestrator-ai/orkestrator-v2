@@ -1,6 +1,7 @@
 import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
 import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import * as backend from "@/lib/backend";
+import { hydrationActivity } from "@/lib/hydration-activity";
 import {
   BUILD_PIPELINE_VERSION,
   isBuildPipeline,
@@ -431,7 +432,14 @@ async function hydrateBuildPipelineOnce(
 }
 
 /** Replaces the project projection with backend snapshots. */
-export async function hydrateBuildPipelinesForProject(
+export function hydrateBuildPipelinesForProject(
+  projectId: string,
+  list?: PipelineListLoader,
+): Promise<BuildPipeline[]> {
+  return hydrationActivity.track(() => restoreBuildPipelinesForProject(projectId, list));
+}
+
+async function restoreBuildPipelinesForProject(
   projectId: string,
   list?: PipelineListLoader,
 ): Promise<BuildPipeline[]> {

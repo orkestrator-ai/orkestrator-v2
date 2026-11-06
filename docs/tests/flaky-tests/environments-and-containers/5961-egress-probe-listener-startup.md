@@ -30,3 +30,24 @@ The complete unchanged owning file passed alone with
 setup diff only resets renderer request limiters; it does not change the Python
 listener. This establishes intermittence, not the startup cause. The case stays
 open; no assertion, skip or timeout changed.
+
+
+## Cold realm boot review recurrence — 2026-11-06
+
+Recorded preparation at `54ab6d570` ran
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+The fixed-response listener again returned zero ports (2290.13 ms); the same owner also timed out in both failed-container cleanup cases (5002.79/5002.85 ms).
+The aggregate uses the repository scheduler (workspace group six slots;
+bridge group two package slots with one Bun worker per bridge).
+
+The complete unchanged owning file passed alone (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name address-egress-recorded-owner -- bun test ./tests/unit/egress-gateway-qualification.test.ts --parallel=1 --only-failures
+```
+
+Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-f3469fba-5332-4a76-a6d8-5a4f873cf90f/validation-04.stderr.txt`
+and `orkestrator-test-run.gIhwSP` compressed group logs below the host temporary
+directory. The isolated pass establishes intermittence, not a cause or a fix.
+The case remains open; no implementation, assertion, deadline or skip changed.

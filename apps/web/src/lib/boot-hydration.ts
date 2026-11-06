@@ -10,7 +10,8 @@ import {
   applyPromptQueuesForEnvironment,
   type PromptQueueSource,
 } from "@/lib/prompt-queue-persistence";
-import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { hydrationActivity } from "@/lib/hydration-activity";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { PersistedPromptQueue, PersistedWorkflowRecord } from "@/types";
 
@@ -111,7 +112,7 @@ export class EnvironmentHydrationBatcher {
       try {
         response = await this.dependencies.listBatch(ids);
       } catch (error) {
-        if (!isUnknownBackendCommand(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)) {
+        if (!isUnknownCommandError(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)) {
           for (const id of ids) rejectAll(batch.get(id)!, error);
           return;
         }
@@ -195,11 +196,13 @@ export async function hydrateBootPromptQueues(
   sources: ReadonlyArray<PromptQueueSource>,
   batcher: EnvironmentHydrationBatcher = environmentHydration,
 ): Promise<void> {
-  applyPromptQueuesForEnvironment(
-    environmentId,
-    await batcher.promptQueues(environmentId),
-    sources,
-  );
+  return hydrationActivity.track(async () => {
+    applyPromptQueuesForEnvironment(
+      environmentId,
+      await batcher.promptQueues(environmentId),
+      sources,
+    );
+  });
 }
 
 /**
@@ -211,8 +214,10 @@ export async function hydrateBootMultiReviewWorkflows(
   environmentId: string,
   batcher: EnvironmentHydrationBatcher = environmentHydration,
 ): Promise<MultiReviewWorkflow[]> {
-  return applyMultiReviewWorkflowsForEnvironment(
-    environmentId,
-    await batcher.multiReviewWorkflows(environmentId),
+  return hydrationActivity.track(async () =>
+    applyMultiReviewWorkflowsForEnvironment(
+      environmentId,
+      await batcher.multiReviewWorkflows(environmentId),
+    ),
   );
 }

@@ -394,3 +394,77 @@ test("logs the grant and every route probe with its node, outcome and duration, 
     logs.restore();
   }
 });
+
+for (const outcome of ["hello", "other-node", "legacy"] as const) {
+  test(`logs the loopback ${outcome} outcome without grant or origin data`, async () => {
+    const { captureLogs } = await import("@orkestrator/protocol/testing/log-capture");
+    const logs = captureLogs();
+    const calls: string[] = [];
+    let clock = 0;
+    try {
+      const opening = openNodeWorkspace({
+        nodeId: "bk_c",
+        commandNodeName: "B",
+        now: () => (clock += 25),
+        invoke: async (command) => {
+          calls.push(command);
+          return {
+            workspaceId: "w",
+            nodeId: "bk_c",
+            nodeName: "Leaf",
+            grant: { token: "grant-secret", expiresAt: Date.now() + 60_000 },
+            directOrigins: [],
+            loopbackOrigin: "http://127.0.0.1:45002",
+            relayBase: "/__orkestrator/nodes/bk_c",
+          };
+        },
+        fetchImpl: (async (input: string | URL | Request) => {
+          const url = String(input instanceof Request ? input.url : input);
+          if (outcome === "legacy")
+            return url.endsWith("/status")
+              ? Response.json({ ok: true })
+              : new Response("{}", { status: 404 });
+          return Response.json({
+            schemaVersion: 1,
+            installationId: outcome === "hello" ? "bk_c" : "bk_other",
+            generation: "test",
+            appVersion: "1.0.0",
+            clientApi: { minVersion: 1, maxVersion: 1 },
+            capabilities: {},
+            endpointRole: "client",
+            profile: {
+              revision: 1,
+              displayName: "Leaf",
+              colorToken: "teal",
+              updatedAt: "2026-11-06T00:00:00.000Z",
+            },
+          });
+        }) as typeof fetch,
+      });
+      if (outcome === "hello") {
+        const opened = await opening;
+        expect(opened.baseUrl).toBe("http://127.0.0.1:45002");
+        expect(opened.params.path).toBe("relay");
+      } else {
+        await expect(opening).rejects.toThrow("cannot be reached");
+        expect(calls).toContain("close_node_workspace");
+      }
+      const probes = logs.records().filter((record) => record.event === "workspace.route-probed");
+      expect(probes.map(({ fields }) => fields)).toEqual([
+        {
+          nodeId: "bk_c",
+          nodeName: "Leaf",
+          route: "loopback",
+          attempt: 1,
+          outcome,
+          durationMs: 25,
+        },
+      ]);
+      const text = JSON.stringify(logs.records());
+      expect(text).not.toContain("grant-secret");
+      expect(text).not.toContain("127.0.0.1");
+    } finally {
+      logs.restore();
+    }
+  });
+}

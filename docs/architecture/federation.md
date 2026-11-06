@@ -492,6 +492,13 @@ opens of omarchy-hp from mbp3 were slow, warm opens fast):
 | `workspace.route-probed` | main process | One direct (or loopback) route probe: `route`, `attempt`, and an `outcome` from a fixed list (`hello`, `other-node`, `legacy`, `unreachable`, `timeout`, `authentication-required`, …). Never the origin. |
 | `realm.boot-step` | the realm, relayed | `step` is `catalogue-read`, `first-render`, `first-environments`, `fan-out-complete` (with `requests`, the hydration reads the document sent) or `catalogue-seed`, each with an `outcome` where it has one. `sinceStartMs` is from the realm document's start, `sinceOpenMs` from the window asking for the realm. |
 
+`fan-out-complete` waits for initial environment attempts, hydration requests
+and projection installation to settle. Its outcome includes rejected prompt
+queue, Multi Review, pipeline and snapshot restores, even when a batch RPC
+succeeds but one requested list fails. An older backend's unknown batch command
+is handled by per-environment fallback; successful fallback restores do not
+count as hydration failures. Tracking retains only counts and a failure flag.
+
 `first-render.durationMs` starts at the `startApp` entry point; `sinceStartMs`
 continues to measure time since document navigation. Fan-out completion waits
 for all initial environment attempts, including rejected reads, independently

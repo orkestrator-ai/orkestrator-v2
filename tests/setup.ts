@@ -86,7 +86,9 @@ import {
   environmentRequests,
   hydrationRequests,
 } from "../apps/web/src/lib/hydration-request-limiter";
+import { hydrationActivity } from "../apps/web/src/lib/hydration-activity";
 beforeEach(() => {
+  hydrationActivity.resetForTests();
   hydrationRequests.resetForTests();
   environmentRequests.resetForTests();
 });

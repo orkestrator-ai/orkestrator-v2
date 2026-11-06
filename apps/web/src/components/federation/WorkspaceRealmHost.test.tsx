@@ -605,3 +605,91 @@ test("remote worker selection activates its delegated tab after delayed realm la
     usePaneLayoutStore.setState(original, true);
   }
 });
+
+for (const scenario of ["empty", "success", "partial failure"] as const) {
+  test(`realm fan-out completion waits for every project attempt (${scenario})`, async () => {
+    const { resetRealmBootTimingForTests } = await import("@/lib/realm-boot-timing");
+    resetRealmBootTimingForTests();
+    const post = mock((_message: unknown) => {});
+    window.orkestrator = {
+      ...originalNative,
+      workspaceRealm: { post, onMessage: () => () => {} },
+    } as typeof window.orkestrator;
+    happyDOM.setURL("http://localhost/?realm=workspace");
+    let finishFirst!: () => void;
+    let finishSecond!: () => void;
+    const second = { ...project, id: "second" };
+    const projects = scenario === "empty" ? [] : [project, second];
+    nativeInvoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "get_projects") return projects;
+      if (command === "get_environments")
+        return new Promise<Environment[]>((resolve, reject) => {
+          const finish = () =>
+            scenario === "partial failure" && args?.projectId === project.id
+              ? reject(new Error("environment unavailable"))
+              : resolve([]);
+          if (args?.projectId === project.id) finishFirst = finish;
+          else finishSecond = finish;
+        });
+      if (command === "get_environment_snapshots") return [];
+      return undefined;
+    });
+    const reports = () =>
+      post.mock.calls
+        .map(([message]) => message as { step?: string; outcome?: string })
+        .filter((message) => message.step === "fan-out-complete");
+    const tree = render(<WorkspaceRealmHost />);
+    try {
+      await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+      if (scenario !== "empty") {
+        await waitFor(() => expect(finishSecond).toBeDefined());
+        expect(reports()).toEqual([]);
+        await act(async () => finishFirst());
+        expect(reports()).toEqual([]);
+        await act(async () => finishSecond());
+      }
+      await waitFor(() => expect(reports()).toHaveLength(1));
+      expect(reports()[0]?.outcome).toBe(scenario === "partial failure" ? "failed" : "ok");
+      tree.rerender(<WorkspaceRealmHost />);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(reports()).toHaveLength(1);
+    } finally {
+      tree.unmount();
+      resetRealmBootTimingForTests();
+    }
+  });
+}
+
+test("a failed project list cannot log successful completion; a successful retry completes once", async () => {
+  const { resetRealmBootTimingForTests } = await import("@/lib/realm-boot-timing");
+  const { loadProjectsFromBackend } = await import("@/hooks/useProjects");
+  resetRealmBootTimingForTests();
+  const post = mock((_message: unknown) => {});
+  window.orkestrator = {
+    ...originalNative,
+    workspaceRealm: { post, onMessage: () => () => {} },
+  } as typeof window.orkestrator;
+  happyDOM.setURL("http://localhost/?realm=workspace");
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "get_projects") throw new Error("project list unavailable");
+    return [];
+  });
+  const reports = () =>
+    post.mock.calls
+      .map(([m]) => m as { step?: string })
+      .filter((m) => m.step === "fan-out-complete");
+  const tree = render(<WorkspaceRealmHost />);
+  try {
+    await waitFor(() => expect(useProjectStore.getState().error).toBe("project list unavailable"));
+    expect(reports()).toEqual([]);
+    nativeInvoke.mockImplementation(async () => []);
+    await act(async () => loadProjectsFromBackend());
+    await waitFor(() => expect(reports()).toHaveLength(1));
+    tree.rerender(<WorkspaceRealmHost />);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(reports()).toHaveLength(1);
+  } finally {
+    tree.unmount();
+    resetRealmBootTimingForTests();
+  }
+});

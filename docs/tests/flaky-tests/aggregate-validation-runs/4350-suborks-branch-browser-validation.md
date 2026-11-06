@@ -68,3 +68,16 @@ with or without the branch, on this host, at this load.
 Whether the five deterministic owners also fail on an unloaded host, and why.
 They were not rerun on `main` (the pipeline forbids it), and the load was not
 controlled.
+
+## Transcript restoration review recurrence — 2026-11-06
+
+`ORKESTRATOR_E2E_PORT=14827 mise run test:logged -- --name browser -- mise run test:browser`
+again reported `CodexSubagentCards.spec.ts:185` in the desktop project: the
+`Agent Ada (explorer)` trigger was missing after the cold restart. The browser
+aggregate had 1,510 passes, 135 skips and nine failures in 1,403.5 s. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.hIh8H2/browser.log.gz`.
+
+The complete unchanged owner passed alone, exit 0, in 27.6 s:
+`ORKESTRATOR_E2E_PORT=14841 mise run test:logged -- --name repair-CodexSubagentCards-alone -- bunx playwright test --config e2e/playwright.config.ts --output output/playwright/repair-CodexSubagentCards-alone e2e/CodexSubagentCards.spec.ts`.
+Both viewports ran with the config's default worker allocation. No assertion,
+timeout or skip changed. This records intermittence, not a confirmed cause.

@@ -47,3 +47,13 @@ browser suite was also running. Evidence is
 passed the complete unchanged owner with exit 0 in 9.0 s. Passing output was
 removed by the logged runner; no isolated counts are inferred. No assertion,
 deadline, skip or implementation changed. Cause unestablished.
+
+## Transcript restoration review — 2026-11-06
+
+The default reruns repeated the same case at 5,005.77 ms and 5,002.11 ms.
+Evidence is in `orkestrator-test-run.PCIx5Q` and `orkestrator-test-run.IKjOmZ`
+workspace logs under the host temporary directory (compressed on finalization).
+`mise run test:logged -- --name repair-local-scan-alone -- bun test --cwd apps/backend ./src/core/commands-files-local-scan.test.ts --parallel=1 --only-failures`
+passed the entire unchanged owner, exit 0, in 8.3 s. Passing output was deleted;
+no counts are inferred. The cause remains unestablished. No assertion, deadline,
+skip or implementation changed.

@@ -104,6 +104,16 @@ same watcher with the plan off, which is what every worktree ran.
 
 This worktree has 11,904 directories, of which 311 are outside `node_modules`.
 
+A Linux host's own file system gives the same answer. On beelink (kernel 7.1.8,
+x86_64, btrfs on `/home`), five interleaved rounds gave the following. Watches
+held: 4,672 before and 170 after. Callbacks during the install: 4,595–4,622
+before and 2 after, both from the sentinel. Hints during the install: 1 before,
+0 after. Start to qualified: 43–48 ms before, 27–28 ms after. The call itself:
+18–23 ms before, 2–3 ms after. A local environment in a live `dev:test` backend
+on the same disk showed edits, new files and files in new directories in under
+0.6 s, and an install into its ignored `node_modules` started no scan
+([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md), task 4).
+
 macOS was run on arktech-mini, where `fseventsd` was using 100–138% of a core with
 about 11 GB resident after seven days, and the first event took 3 to 35 s to arrive. Its
 callback counts are not usable: before was 54 and 6, after was 6 and 12. What holds

@@ -5,11 +5,23 @@ import path from "node:path";
 import { startWorktreeWatcher, type WorktreeWatcher } from "./worktree-watcher.js";
 import { worktreeWatchPlanIo } from "./worktree-watch-plan.js";
 
-// Opt in ONLY in a disposable Linux VM with a dedicated user and a small
-// fs.inotify.max_user_watches quota. Never lower that host-wide sysctl on a
-// shared host (including Docker Desktop's VM) to enable this test.
+// Opt in ONLY with a small, private inotify quota: a disposable Linux VM with a
+// dedicated user and a small fs.inotify.max_user_watches, or a private user
+// namespace with a small user.max_inotify_watches (Linux 5.11+), which leaves
+// the host's setting alone. Never lower the host-wide sysctl on a shared host
+// (including Docker Desktop's VM) to enable this test.
 const enabled = process.env.ORKESTRATOR_TEST_INOTIFY_EXHAUSTION === "1";
 const MAX_WATCHES = 128;
+
+/** The smaller of the host-wide quota and this user namespace's own, if any. */
+async function inotifyQuota(): Promise<number> {
+  const limits = await Promise.all(
+    ["/proc/sys/fs/inotify/max_user_watches", "/proc/sys/user/max_inotify_watches"].map((file) =>
+      fs.readFile(file, "utf8").then(Number, () => Number.POSITIVE_INFINITY),
+    ),
+  );
+  return Math.min(...limits);
+}
 
 async function until(ready: () => boolean) {
   const deadline = Date.now() + 5_000;
@@ -20,7 +32,7 @@ async function until(ready: () => boolean) {
 test.skipIf(!enabled || process.platform !== "linux")(
   "real inotify exhaustion during split attachment closes coverage and permits recovery",
   async () => {
-    const quota = Number(await fs.readFile("/proc/sys/fs/inotify/max_user_watches", "utf8"));
+    const quota = await inotifyQuota();
     // Refuse instead of attempting an unbounded allocation on a normal host.
     expect(quota).toBeGreaterThanOrEqual(16);
     expect(quota).toBeLessThanOrEqual(MAX_WATCHES);
@@ -77,8 +89,10 @@ test.skipIf(!enabled || process.platform !== "linux")(
       watcher.close();
       for (const handle of fillers.splice(0)) handle.close();
 
-      // Releasing the quota lets an ordinary watcher qualify and deliver a
-      // single source write again, with no injected event or startWatch fake.
+      // Releasing the quota lets an ordinary watcher qualify and name a source
+      // write again, with no injected event or startWatch fake. Each new watch
+      // opens a burst reporting unknown paths (the attachment gap), and a write
+      // landing in it is folded into that hint, so write until one is named.
       const seen = new Set<string>();
       watcher = startWorktreeWatcher({
         worktreePath: worktree,
@@ -89,8 +103,13 @@ test.skipIf(!enabled || process.platform !== "linux")(
         onError: (error) => errors.push(error),
       });
       await until(() => watcher?.qualified === true);
-      await fs.writeFile(path.join(worktree, "src/recovered.txt"), "recovered\n");
-      await until(() => seen.has("src/recovered.txt"));
+      const named = () => [...seen].some((name) => name.startsWith("src/recovered-"));
+      const deadline = Date.now() + 5_000;
+      for (let attempt = 0; !named() && Date.now() < deadline; attempt += 1) {
+        await fs.writeFile(path.join(worktree, `src/recovered-${attempt}.txt`), "recovered\n");
+        await Bun.sleep(100);
+      }
+      expect(named()).toBe(true);
       expect(errors).toHaveLength(1);
     } finally {
       watcher?.close();

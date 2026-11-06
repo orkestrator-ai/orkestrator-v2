@@ -2,15 +2,15 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `e198fd4a7`. These are what was left when batch E7 of the efficiency report (parts 0420, 0440, 0450, 0460 and 0570) was finished and its report file deleted. It is still in history: `git ls-tree e198fd4a7 docs/reports/efficiency-logging-database/` lists it as the file for batch E7, and `git show` reads it from that commit.
+Analysed 2026-11-06 against `main` at `c1724ab74`. Tasks 4 and 5 were closed on that date; the rest stands as first analysed on 2026-11-04 against `e198fd4a7`. These are what was left when batch E7 of the efficiency report (parts 0420, 0440, 0450, 0460 and 0570) was finished and its report file deleted. It is still in history: `git ls-tree e198fd4a7 docs/reports/efficiency-logging-database/` lists it as the file for batch E7, and `git show` reads it from that commit.
 
 ### Tasks
 
 1. **Scan rate during a real install** (report part 0420, Needs verification): measure it on a live stack. Status: open.
 2. **Other ignored directories** (report part 0420, task 2; part 0570, task 2): decide whether a build in `dist` should keep starting scans. Status: open.
 3. **macOS on a healthy `fseventsd`** (report part 0570, tasks 1 and 2, and the Needs verification): re-measure callbacks and the cost of extra recursive watches, then decide whether the root watch should change. The service path is proved. Status: open.
-4. **A real Linux host** (report part 0570, Needs verification): run the watch plan outside Docker Desktop. Status: open.
-5. **How often untracked counts matter** (report part 0450, Needs verification): find out how many untracked files worktrees really hold. Status: open.
+4. **A real Linux host** (report part 0570, Needs verification): run the watch plan outside Docker Desktop. Status: done.
+5. **How often untracked counts matter** (report part 0450, Needs verification): find out how many untracked files worktrees really hold. Status: done (closed unmeasured; reopened only with this area).
 
 ### 1. Scan rate during a real install
 
@@ -82,9 +82,19 @@ Proved on this host, with `fseventsd` still at about 100% of a core: `worktree-w
 
 **Context.** The ticket's constraint: a change in a non-ignored file must still be noticed, including a file in a directory created after the watch began, on both macOS and Linux. Inotify is the kernel's, so the container is real evidence; the remaining risk is the file system and the live stack.
 
-**Investigation.** In that container: `worktree-watcher-real.test.ts` 13 of 13, `worktree-snapshots-git.test.ts` 7 of 7. Both are in the slow tier, so CI's `mise run test:full` runs them on Linux; that had not happened when this was written. A full inotify budget is handled: a watch that fails with `ENOSPC` closes the watcher and its owner falls back to polling, and that path has a fake-watch test. An opt-in real-kernel regression is now available in `apps/backend/src/core/worktree-watcher-enospc.integration.test.ts`; it has not yet run under exhaustion.
+**Investigation.** In that container: `worktree-watcher-real.test.ts` 13 of 13, `worktree-snapshots-git.test.ts` 7 of 7. Both are in the slow tier, so CI's `mise run test:full` runs them on Linux. A full inotify budget is handled: a watch that fails with `ENOSPC` closes the watcher and its owner falls back to polling, and that path has a fake-watch test and an opt-in real-kernel regression, `apps/backend/src/core/worktree-watcher-enospc.integration.test.ts`.
 
-**Decisions.** None: run both files and the benchmark on beelink, and a local environment in a `dev:test` profile there.
+Run on 2026-11-06 at `c1724ab74` on beelink: Omarchy (Arch) Linux, kernel `7.1.8-arch1-3` x86_64, Intel Core Ultra 9 285H with 16 threads, Bun 1.4.4 (`38afee6c8`), Git 2.56.0, `fs.inotify.max_user_watches` 524288. Every fixture was on the host's own `/home`: btrfs on a dm-crypt volume, mounted `noatime,compress=zstd:3,ssd,space_cache=v2`, subvolume `@home`. Neither tmpfs nor overlay was used. Results:
+
+- `worktree-watcher-real.test.ts`: 16 of 16. The file now has 16 tests, against 13 when the container run was recorded. The new directory case, "a file in a directory created after the watch began is noticed", took 1.39 s.
+- `worktree-snapshots-git.test.ts`: 7 of 7 through the real service, including "a file in a directory created after the watch began is detected" (6.0 s) and "a write under the ignored node_modules reaches no hint".
+- `scripts/benchmark-worktree-watch.ts`, five interleaved rounds per mode, matched the container's figures. The table is in [git-scan-caches.md](../../architecture/git-scan-caches.md#measured).
+- A live backend: an isolated `dev:test` profile (`--fixture --headless --no-agent-credentials`), one local environment on the fixture, with its worktree on the same btrfs. Writes were made directly in the worktree, and `orkestrator changes view` was read every 100 ms. A scan stamps `freshness.lastAttemptAt`, so the reads also show when a scan ran. During 40 s idle, reads started no scan, so the watcher was qualified rather than polling: an unqualified owner polls every 15 s, and the safety scan runs every 120 s. A tracked edit, a new root file and a file written 3 s after its directory was created were each detected five times out of five, in 460–538 ms. Each detection was within the first read after the half-second settle. After `node_modules/` was ignored, 200 package directories written into it started no scan in the following 8 s, and none was listed. A source write straight after that was detected in 474 ms. The backend log had no watcher error, `ENOSPC` or fallback.
+- `worktree-watcher-enospc.integration.test.ts` ran under real exhaustion, five of five plus a `test:logged` run, using a private 64-watch quota. See [Assumptions and decisions](#task-4-bounded-native-inotify-exhaustion-qualification).
+
+No product defect was found. Two test defects were, and both are fixed: see [Assumptions and decisions](#task-4-two-test-defects-found-on-this-host).
+
+**Decisions.** None: run both files and the benchmark on beelink, and a local environment in a `dev:test` profile there. Done.
 
 ### 5. How often untracked counts matter
 
@@ -94,7 +104,7 @@ Proved on this host, with `fseventsd` still at about 100% of a core: `worktree-w
 
 **Investigation.** Not measured. `scripts/benchmark-local-diff-scan.ts` shows 200 and 2,000 untracked files read per scan before and none after, on a synthetic workload.
 
-**Decisions.** None: sample `git status --porcelain=v1 -uall | wc -l` across real environments if this area is reopened; otherwise close this task.
+**Decisions.** None: sample `git status --porcelain=v1 -uall | wc -l` across real environments if this area is reopened; otherwise close this task. Closed on 2026-11-06: see [Assumptions and decisions](#task-5-closed-without-a-measurement).
 
 ## Assumptions and decisions
 
@@ -113,23 +123,75 @@ quota, checks that child attachment reports `ENOSPC` without qualifying partial
 coverage, then releases the quota and checks recovery and a single source write.
 All test handles and files are released in `finally`.
 
-Run only in a disposable Linux VM with a dedicated user, Git and the pinned Bun,
-and `fs.inotify.max_user_watches` set to 64 **inside that disposable VM**:
+It needs a small quota that no other process shares. On Linux 5.11 or later, an
+unprivileged user namespace provides one: inotify watches are also charged to
+the namespace, and its own `user.max_inotify_watches` can be lowered inside it.
+The host's `fs.inotify.max_user_watches` is left alone, and a fresh namespace
+starts with no watches charged to it. The test reads the smaller of the two
+limits. Run it like this:
 
 ```sh
-ORKESTRATOR_TEST_INOTIFY_EXHAUSTION=1 mise run test:logged -- --name native-enospc -- bun test --cwd apps/backend ./src/core/worktree-watcher-enospc.integration.test.ts --parallel=1
+unshare --user --map-root-user sh -c 'echo 64 > /proc/sys/user/max_inotify_watches && ORKESTRATOR_TEST_INOTIFY_EXHAUSTION=1 mise run test:logged -- --name native-enospc -- bun test --cwd apps/backend ./src/core/worktree-watcher-enospc.integration.test.ts --parallel=1'
 ```
 
-The test refuses quotas outside 16–128 and allocates at most quota + 1 handles.
-It never changes sysctls. Do not lower the quota on a shared Linux host or in
-Docker Desktop's shared VM; the setting affects other processes. A disposable
-VM is preferred over exhausting a normal host's much larger shared quota, which
-would consume substantial kernel memory and interfere with other watchers.
-The test skips by default, including on macOS. A skip is **not** native Linux
-qualification. This address stage runs on macOS and has no disposable Linux VM
-with a bounded quota; task 4 and the review coverage gap remain open until the
-opt-in test runs there. The existing owner tests cover polling and bounded retry;
-this new test covers the native failure and recovery boundary only.
+A disposable Linux VM with a dedicated user and `fs.inotify.max_user_watches`
+set to 64 **inside that VM** also works. The test refuses quotas outside 16–128
+and allocates at most quota + 1 handles. It never changes a sysctl. Do not lower
+the host-wide quota on a shared Linux host or in Docker Desktop's shared VM,
+because that setting affects other processes. The test skips by default,
+including on macOS, and a skip is **not** native Linux qualification. The
+existing owner tests cover polling and bounded retry; this test covers only the
+native failure and recovery boundary.
+
+It first ran under exhaustion on beelink on 2026-11-06, in the namespace above
+(the host's quota stayed 524288). It passed five of five, and again through
+`test:logged`. Before the change below, its exhaustion half passed but recovery
+failed. Without the opt-in variable it skips. With the variable set and the
+host's quota, it refuses at the quota check before allocating anything.
+
+### Task 4: two test defects found on this host
+
+The watch plan behaved correctly throughout. Two tests did not:
+
+- `worktree-watcher-real.test.ts` "a directory that is not a repository has no
+  answer" failed when `TMPDIR` pointed inside a checkout. That is how fixtures
+  are moved off tmpfs onto a worktree's own disk, and there Git correctly answers
+  for the enclosing repository. The test now sets `GIT_CEILING_DIRECTORIES` to the
+  directory's parent, and passes with `TMPDIR` inside this worktree and with the
+  default `TMPDIR`. The product needs no change, because an environment's
+  worktree is always its own Git root.
+- `worktree-watcher-enospc.integration.test.ts` wrote one file straight after
+  recovery and waited for a hint naming it. Every new watch opens a burst that
+  reports unknown paths (the attachment gap). A write made within the 10 ms
+  settle is folded into that hint, which leads the owner to rescan everything.
+  The change is still noticed, but the expected name never arrives. A probe
+  outside the test confirmed it: Bun delivered the event, and the hint carried no
+  paths. With a 200 ms wait before the write, the path was named. The test now
+  writes distinct files until one is named. Waiting for quiet instead was
+  rejected because it would rest on a timing guess.
+
+The alternatives were to change the watcher so that an attachment gap keeps
+named paths, or so that `GIT_CEILING_DIRECTORIES` is used for every listing. Both
+would change behaviour that is correct: a pathless hint is the safe answer for a
+gap, and a worktree is a repository root.
+
+### Task 4: how the live run was observed
+
+`changes view` reads the change projection without scanning. A scan stamps
+`freshness.lastAttemptAt`, so a stamp unchanged across reads shows that no scan
+ran, and a change listed within a second rules out both the 15 s poll and the
+120 s safety scan. This was used instead of `get_recurring_work_diagnostics`,
+which the public CLI does not expose, and avoided handling the gateway token.
+The trial script and its JSON output were kept outside the change set.
+
+### Task 5: closed without a measurement
+
+Both changes, the stat-keyed line count cache and bounded concurrency in Git
+scopes, are done and cost little, so a measurement would decide nothing about
+keeping them. It would only say whether further work there is worthwhile, and
+none is planned. The task is closed, and is reopened only if untracked-file
+scanning is reopened. Then sample
+`git status --porcelain=v1 -uall | wc -l` across real environments first.
 
 ## Current state
 
@@ -150,7 +212,7 @@ The report file is deleted, so this table is its closing record. It has one row 
 | 0440 Needs verification, process counts per scan | Done. The report's 7 to 9 measured as 7, and 4 after | `scripts/benchmark-local-diff-scan.ts`, workload `scan-1k` | `commands-files-local-scan.test.ts` "runs one combined diff, resolves the base once and ensures the exclude file once" |
 | 0450 task 1, stat-keyed line count cache | Done, on the settled-stamp rule | `countUntrackedFileLines` (`local-git-scan-caches.ts`) | `local-git-scan-caches.test.ts` "untracked line counts"; `commands-files-local-scan.test.ts` "a scan reads an unchanged settled untracked file once, and a fresh one every time" |
 | 0450 task 2, bounded concurrency in Git scopes | Done, still recording `ambiguous-index-membership` | `mapWithConcurrency`, `UNTRACKED_SCAN_CONCURRENCY` (`change-tracking/git-scopes.ts`) | `change-tracking/git-scopes.test.ts` "a scope counts untracked files with bounded concurrency" |
-| 0450 Needs verification, how often worktrees hold enough untracked files | Moved to to-do 5060, task 5 | Not measured; only a synthetic workload | None |
+| 0450 Needs verification, how often worktrees hold enough untracked files | Closed in to-do 5060, task 5, unmeasured, to be reopened only with this area | Not measured; only a synthetic workload | None |
 | 0460 task 1, expire scope demand | Done. The recommended TTL, plus a `reset` event, because the TTL alone would freeze an open view | `gitScopeDemandTtlMs` (`change-tracking/policy-registry.ts`), `demandTtlMs` (`change-tracking/git-scopes.ts`) | `change-tracking/git-scopes.test.ts` "Git scope demand (ST-18)" |
 | 0460 Needs verification, how long a view stays open without a read | No longer holds: no read cadence exists to set the TTL from. A view reads once on mount and on a resync (`apps/web/src/lib/changes/subscriptions.ts`) | The `reset` event replaces that dependency | `change-tracking/git-scopes.test.ts` "a view left open follows changes across expiry: reset, read, recompute" |
 | 0570 task 1, what the watch costs: Linux | Done. One inotify watch per directory: 4,672 on `watch-nm-4k` | `scripts/benchmark-worktree-watch.ts`; [the measured tables](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) | `worktree-watcher-real.test.ts` "takes no inotify watches inside an ignored node_modules" |
@@ -158,7 +220,7 @@ The report file is deleted, so this table is its closing record. It has one row 
 | 0570 task 2, watch non-ignored subtrees: a proved `node_modules` | Done, with a per-platform plan instead of the recommended shape. Linux takes 170 watches against 4,672; macOS keeps one root and drops the events on arrival. The recommended shape stalled macOS and missed nested `node_modules` | `planWatchTargets`, `listIgnoredDependencyTrees` (`worktree-watch-plan.ts`), `startWorktreeWatcher` (`worktree-watcher.ts`) | `worktree-watch-plan.test.ts`; `worktree-watcher-split.test.ts`; `worktree-watcher-real.test.ts` "a write under an ignored node_modules goes unreported while a source write is noticed", "a file in a directory created after the watch began is noticed", "a tracked file under node_modules is noticed"; `worktree-snapshots-git.test.ts` "a file in a directory created after the watch began is detected" |
 | 0570 task 2, watch non-ignored subtrees: every other ignored directory | Moved to to-do 5060, task 2 | They stay watched, because the tree view shows them | None |
 | 0570 task 2, watch non-ignored subtrees: macOS event callbacks | Moved to to-do 5060, task 3 | Events under `node_modules` still reach JavaScript there, because Bun's `fs.watch` exposes no exclusion paths | None |
-| 0570 Needs verification, Bun's recursive watcher on Linux | Done in `oven/bun:1.4.4` on Docker Desktop's VM. A Linux host's own file system is moved to to-do 5060, task 4 | The Linux column of [the platform table](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) | `worktree-watcher-real.test.ts` and `worktree-snapshots-git.test.ts`, run in that container |
+| 0570 Needs verification, Bun's recursive watcher on Linux | Done in `oven/bun:1.4.4` on Docker Desktop's VM, and on beelink's own btrfs and through a live local environment (to-do 5060, task 4) | The Linux column of [the platform table](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) | `worktree-watcher-real.test.ts`, `worktree-snapshots-git.test.ts` and `worktree-watcher-enospc.integration.test.ts`, run on both |
 | 0570 Needs verification, Bun's recursive watcher on macOS | Moved to to-do 5060, task 3 | Coverage is proved, but one write's prompt delivery is not, on the host available: Bun and Node each received the same 6 of 12 writes ([flake 5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)) | `worktree-watcher-real.test.ts` proves the coverage; delivery has no test |
 
 The report's constraints still hold: scans keep their hardening (`commands-files-local-scan.test.ts` "scanning a worktree does not run a program its own Git config names"), and a watcher event stays a hint behind the safety scan (`worktree-snapshots.test.ts` "the watched tree recovers from a missed hint on the safety tick").

@@ -194,10 +194,18 @@ describe("listIgnoredDependencyTrees", () => {
   });
 
   test("a directory that is not a repository has no answer", async () => {
-    const elsewhere = await fs.mkdtemp(
-      path.join(await fs.realpath(process.env.TMPDIR ?? "/tmp"), "not-repo-"),
-    );
+    const parent = await fs.realpath(process.env.TMPDIR ?? "/tmp");
+    const elsewhere = await fs.mkdtemp(path.join(parent, "not-repo-"));
     cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
+    // TMPDIR can sit inside a checkout (fixtures moved off tmpfs onto a
+    // worktree's own disk), where Git would answer for the enclosing repository.
+    // Stop discovery at the parent so the directory is in no repository.
+    const ceiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = parent;
+    cleanups.push(() => {
+      if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = ceiling;
+    });
     expect(await listIgnoredDependencyTrees(elsewhere)).toBeUndefined();
   });
 

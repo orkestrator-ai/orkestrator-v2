@@ -68,6 +68,16 @@ describe("default allowlists", () => {
     }
   });
 
+  test("no default or required host is a telemetry endpoint (to-do 6100)", () => {
+    for (const domain of [
+      ...DEFAULT_ALLOWED_DOMAINS,
+      ...Object.values(AGENT_NETWORK_DOMAINS_BY_PLATFORM).flat(),
+      ...imageDefaultAllowedDomains(),
+    ]) {
+      expect(domain).not.toMatch(/(^|\.)(sentry\.io|statsig\.com|statsig\.anthropic\.com)$/);
+    }
+  });
+
   test("Cursor's restricted list includes the SDK's agent API host", () => {
     // `cursor.com` is an exact entry: it does not open `api.cursor.com`.
     expect(AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor).toContain("api.cursor.com");

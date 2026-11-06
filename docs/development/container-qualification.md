@@ -53,6 +53,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
+| Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
@@ -209,6 +210,83 @@ variables clear Docker context and TLS selection so the private socket wins.
 `tests/unit/disposable-docker-daemon.test.ts` covers the arguments, the
 private paths and environment, the removal boundaries and a start, restart
 and stop of a stand-in process tree, with no Docker.
+
+## Agent CLIs without telemetry hosts on rootful Linux Engine (2026-11-06)
+
+To-do 6100 (security finding M12, task 3 of S-0100): do the agent CLIs need
+the telemetry hosts the default allowlist carried (`sentry.io`,
+`statsig.anthropic.com`, `statsig.com`)? They do not, so the three were
+removed from `DEFAULT_ALLOWED_DOMAINS` and the image fallback, and the to-do
+was deleted.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64), host Docker Engine
+  29.9.2 rootful. The default address pools were full, so the run used the
+  test-only network shim (`apps/desktop/scripts/dev/docker-qualification-bin`
+  with `ORKESTRATOR_QUALIFICATION_DOCKER`, as in
+  [7041](../todo/containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md)).
+  The daemon, the host firewall and other owners' resources were not
+  touched; every container and network the run made carried its private
+  owner label and was removed by it.
+- **Image:** `orkestrator-v2:dev-2462db30da8c`, built with
+  `mise run docker:build:dev` from `main` at `c1724ab74` (before the list
+  changed; the runtime got its allowlist explicitly). Claude Code 2.1.314,
+  codex-cli 0.166.0, OpenCode 1.19.5, Pi 1.4.0, Grok 1.0.70.
+- **Setup:** `apps/backend/tests/container-live-telemetry-hosts.test.ts`. A
+  restricted runtime behind its egress gateway with name checks on, allowlist
+  `registry.npmjs.org` only, so all three hosts and the CLIs' Sentry ingest
+  hosts (`o1158394.ingest.us.sentry.io` for Claude Code, `o33249…` for Codex,
+  `o4508179396558848…` for Grok, read from the binaries) answer `REFUSED`. A
+  fake provider on the runtime's loopback serves Anthropic Messages, OpenAI
+  Chat Completions and Responses, and a failing `/broken` route. Claude's
+  nonessential traffic and error reporting were left on, as the backend
+  leaves them. `ORKESTRATOR_TELEMETRY_HOSTS_TRACE` put a packet reader in the
+  gateway's namespace (a labelled sidecar) and marked each turn with a
+  lookup of a reserved `.invalid` name.
+
+| Turn | Result | Time | Names looked up during the turn |
+| --- | --- | --- | --- |
+| Claude Code print (`claude -p`) | `ok`, exit 0 | 0.47 s | `api.anthropic.com` (refused) |
+| Claude Code Agent SDK stream-json | result `ok`, `is_error: false` | 0.33 s | `api.anthropic.com` |
+| Claude Code, provider answers 500 | exit 1 | 0.39 s | `api.anthropic.com` |
+| Codex `exec` on a Responses provider | `ok`, exit 0 | 5.9 s | `github.com`, `chatgpt.com`, `ab.chatgpt.com` |
+| Codex, provider answers 500 | exit 1 | 0.38 s | `chatgpt.com`, `github.com` |
+| OpenCode `run` on an OpenAI-compatible provider | `ok`, exit 0 | 3.2 s | `models.opencode.ai`, `registry.npmjs.org` |
+| Pi `-p` on a `models.json` provider | `ok`, exit 0 | 0.61 s | none |
+
+No turn looked up `sentry.io`, `statsig.anthropic.com`, `statsig.com` or any
+Sentry ingest host; those names appear in the trace only for the test's own
+`dig` checks. The suite passed on four traced runs while it was written
+(16–25 s each; one attempt in between failed on the test's own trace setup,
+since fixed), and the final file passed without the trace (21.4 s).
+
+A search of the binaries for these hosts agrees. Claude Code's contains the
+string `sentry.io` and its ingest host, and no Statsig host; Codex and Grok
+each carry one ingest DSN; OpenCode and Pi name none. The Cursor SDK's Statsig client uses `featureassets.org`,
+`prodregistryv2.org`, `statsigapi.net` and `api.statsigcdn.com`, none of the
+three. Under name checks an entry allows exactly its own name, so `sentry.io`
+never let a client reach an ingest host there anyway.
+
+At the initial qualification, Grok and Cursor were not run as turns. They were tracked in [7420](../todo/containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md).
+Native linux-arm64 execution of this suite also remains unverified (7420 task 4);
+the workflow schedules it, but the recorded runs above are x86_64 only.
+
+### Review follow-up: Grok fake-provider turn (2026-11-06)
+
+The extended suite passed on the same x86_64 host and amd64 qualification
+image in 21.3 s, with the test-only network shim described above. Grok 1.0.70
+completed `grok -p` in 542 ms, returned `ok` and exited 0 without a login.
+Its isolated home receives fake keys only; `GROK_XAI_API_BASE_URL`,
+`GROK_CLI_CHAT_PROXY_BASE_URL`, `GROK_MODELS_BASE_URL` and
+`GROK_MODELS_LIST_URL` all point at the loopback fake provider. The test
+checks that response/chat request counts increase across Grok's turn.
+The other seven turns also passed (235–5589 ms). Cleanup assertions passed.
+
+The opt-in packet trace recorded no outside DNS or TCP activity during Grok's
+turn, and no removed telemetry or ingest name during any turn. This is a
+trace observation; the test asserts DNS refusal and bounded turn completion.
+The local trace is `output/agent-testing/telemetry-review/trace-with-grok.json`.
+Cursor still has no live turn in this suite, and native arm64 execution
+remains unverified (7420 tasks 2 and 4).
 
 ## Rootless daemon restart on a disposable daemon (2026-11-06)
 

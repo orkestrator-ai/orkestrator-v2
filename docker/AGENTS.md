@@ -241,7 +241,7 @@ whichever container owns the network namespace.
   belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, the
-  Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and
+  Anthropic API, the VS Code marketplace, Context7, and
   Playwright's CDN. It is the only default list. The renderer seeds its
   unloaded config from the same constant, and the firewall's fallback for a
   container with no `ALLOWED_DOMAINS`, `docker/default-allowed-domains`, is

@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { leaseFamily, leaseLogName, leaseWaitMetrics } from "./storage-lease-metrics.js";
+import type { CacheGaugeName, CacheGaugeSource } from "./recurring-diagnostics.js";
 
 const log = createLogger("storage");
 
@@ -268,7 +269,30 @@ export interface StorageDatabaseOptions {
    * beside its `read` while a cache-served read shows as a `read` alone.
    */
   observeFetch?: (length: number) => void;
+  /**
+   * Where this connection reports its row-cache gauges
+   * ({@link StorageDatabase.cacheGauges}) while open; usually
+   * `recurringDiagnosticsRegistry`. Unregistered on close.
+   */
+  cacheGaugeRegistry?: {
+    addCacheSource(name: CacheGaugeName, source: CacheGaugeSource): () => void;
+  };
 }
+
+/** Content-free size of one connection's row cache. */
+export type StorageRowCacheGauges = {
+  /** Open connections reporting (1 per instance; summed in diagnostics). */
+  connections: number;
+  /** Stores held in the cache. */
+  stores: number;
+  /** Rows held across them. */
+  rows: number;
+  /**
+   * Serialized length of the cached rows and documents, in UTF-16 code units
+   * like `observeFetch`: a proxy for retained bytes, not a heap measurement.
+   */
+  bytes: number;
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -296,6 +320,9 @@ export class StorageDatabase {
   /** Random per-database identity; part of every snapshot revision. */
   readonly instanceId: string;
   private readonly cache = new Map<string, CachedStore>();
+  /** Serialized length per cached store. A cached store is never mutated, only replaced. */
+  private readonly cachedLengths = new WeakMap<CachedStore, number>();
+  private unregisterCacheGauges: () => void = () => undefined;
   /**
    * Cache entries written by the open transaction. Applied only after the
    * outermost commit: a rolled-back revision must never be cached, or a later
@@ -372,6 +399,29 @@ export class StorageDatabase {
       this.db.close();
       throw error;
     }
+    this.unregisterCacheGauges =
+      options.cacheGaugeRegistry?.addCacheSource("storage-row-cache", this) ?? (() => undefined);
+  }
+
+  /**
+   * How much this connection's revision-validated store cache holds. Walks
+   * memory only (each store's length is computed once); committed entries
+   * only, not a transaction's pending ones.
+   */
+  cacheGauges(): StorageRowCacheGauges {
+    let rows = 0;
+    let bytes = 0;
+    for (const cached of this.cache.values()) {
+      rows += cached.rows.size;
+      let length = this.cachedLengths.get(cached);
+      if (length === undefined) {
+        length = cached.document?.length ?? 0;
+        for (const row of cached.rows.values()) length += row.value.length;
+        this.cachedLengths.set(cached, length);
+      }
+      bytes += length;
+    }
+    return { connections: this.closed ? 0 : 1, stores: this.cache.size, rows, bytes };
   }
 
   /**
@@ -389,6 +439,7 @@ export class StorageDatabase {
     }
     this.closed = true;
     this.cache.clear();
+    this.unregisterCacheGauges();
     this.db.close();
   }
 

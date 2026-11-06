@@ -84,6 +84,16 @@ export function dropLocalGitScanCaches(worktreePath: string): void {
   worktrees.delete(worktreePath);
 }
 
+/**
+ * Cache gauges for recurring diagnostics (`local-git-scan`): worktrees with a
+ * cache and the line counts held across them. Counts only.
+ */
+export function localGitScanCacheGauges(): { worktrees: number; counts: number } {
+  let counts = 0;
+  for (const cache of worktrees.values()) counts += cache.counts.size;
+  return { worktrees: worktrees.size, counts };
+}
+
 /** Tests and benchmarks: how a worktree's cache has been used, if it has one. */
 export function localGitScanCacheStats(
   worktreePath: string,

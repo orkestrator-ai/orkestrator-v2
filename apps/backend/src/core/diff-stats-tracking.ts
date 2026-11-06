@@ -22,6 +22,7 @@ import {
 import { startWorktreeWatcher } from "./worktree-watcher.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+import { localGitScanCacheGauges } from "./local-git-scan-caches.js";
 import {
   ContainerWorktreeSignals,
   type ContainerWorktreeSignalContext,
@@ -166,6 +167,7 @@ export class DiffStatsTracking {
   readonly worktreeSignals: ContainerWorktreeSignals;
   private signalContext: ContainerWorktreeSignalContext | null = null;
   private readonly removeSignalDiagnostics: () => void;
+  private readonly removeCacheGauges: () => void;
   /** Local environments whose baseline can move, refreshed by every sync. */
   private readonly baselineCandidates = new Map<string, BaselineCandidate>();
   /** In-flight checks, and whether another scan asked for one meanwhile. */
@@ -202,6 +204,17 @@ export class DiffStatsTracking {
       "container-worktree-signal",
       this.worktreeSignals,
     );
+    const removeSnapshotGauges = recurringDiagnosticsRegistry.addCacheSource(
+      "worktree-snapshots",
+      this,
+    );
+    const removeScanCacheGauges = recurringDiagnosticsRegistry.addCacheSource("local-git-scan", {
+      cacheGauges: localGitScanCacheGauges,
+    });
+    this.removeCacheGauges = () => {
+      removeSnapshotGauges();
+      removeScanCacheGauges();
+    };
     // Aliases of one physical worktree share scans and watchers; their
     // logical comparisons (environment + ref) stay separate.
     const physicalKeys = new PhysicalKeyResolver();
@@ -521,5 +534,22 @@ export class DiffStatsTracking {
     this.service.shutdown();
     this.removeFetchPolicyDiagnostics();
     this.removeSignalDiagnostics();
+    this.removeCacheGauges();
+  }
+
+  /**
+   * Cache gauges (`worktree-snapshots`): the service's, plus this owner's own
+   * per-environment and per-worktree maps, which must shrink when an
+   * environment goes away.
+   */
+  cacheGauges(): Record<string, number> {
+    return {
+      ...this.service.cacheGauges(),
+      ownedWorktrees: this.ownedWorktreePaths.size,
+      scanCacheWorktrees: this.scanCacheWorktreePaths.size,
+      endedContainers: this.endedContainers.size,
+      baselineCandidates: this.baselineCandidates.size,
+      baselineChecks: this.baselineChecks.size,
+    };
   }
 }

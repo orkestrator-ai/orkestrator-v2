@@ -76,6 +76,55 @@ test("cleanup drains lifecycle work before releasing tracking and diagnostics", 
   expect(await fs.exists(harness.root)).toBe(false);
 });
 
+test("worktree cache gauges follow the tracked environment and leave diagnostics on cleanup", async () => {
+  const cache = (name: string) =>
+    recurringWorkDiagnostics().caches.find((entry) => entry.name === name);
+  const sourcesBefore = {
+    snapshots: cache("worktree-snapshots")?.sources ?? 0,
+    scans: cache("local-git-scan")?.sources ?? 0,
+  };
+  const { harness } = await trackedHarness();
+  const tracking = harness.context.runtime.diffStats;
+  expect(tracking.cacheGauges()).toMatchObject({
+    entries: 1,
+    watched: 1,
+    treeTargets: 1,
+    ownedWorktrees: 1,
+    scanCacheWorktrees: 1,
+    endedContainers: 0,
+  });
+  expect(cache("worktree-snapshots")?.sources).toBe(sourcesBefore.snapshots + 1);
+  expect(cache("local-git-scan")?.sources).toBe(sourcesBefore.scans + 1);
+  // Content-free: no environment id or worktree path reaches the gauges.
+  const serialized = JSON.stringify(recurringWorkDiagnostics().caches);
+  expect(serialized).not.toContain("same-environment");
+  expect(serialized).not.toContain(harness.root);
+
+  // Removing the environment empties every per-environment map.
+  await harness.storage.removeEnvironment("same-environment");
+  await tracking.sync(harness.context);
+  expect(tracking.cacheGauges()).toMatchObject({
+    entries: 0,
+    active: 0,
+    watched: 0,
+    inFlight: 0,
+    retryTimers: 0,
+    treeTargets: 0,
+    treeBodies: 0,
+    treeBytes: 0,
+    treeInFlight: 0,
+    ownedWorktrees: 0,
+    scanCacheWorktrees: 0,
+    baselineCandidates: 0,
+    baselineChecks: 0,
+  });
+
+  harnesses.splice(harnesses.indexOf(harness), 1);
+  await harness.cleanup();
+  expect(cache("worktree-snapshots")?.sources ?? 0).toBe(sourcesBefore.snapshots);
+  expect(cache("local-git-scan")?.sources ?? 0).toBe(sourcesBefore.scans);
+});
+
 test("restart releases the old runtime while the replacement tracks and emits", async () => {
   const { harness, events, projectPath } = await trackedHarness();
   const previous = harness.context.runtime.diffStats;

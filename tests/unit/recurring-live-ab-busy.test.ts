@@ -1,8 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { __testing, parseOptions } from "../../scripts/recurring-live-ab";
 import {
   BUSY_ROWS,
   busyFailed,
+  busyRuntime,
   busyRowSummary,
   busySummaryLines,
   measureBusy,
@@ -49,6 +54,8 @@ function busyHarness(scenario: Scenario = {}) {
   let mails = 0;
   let reviewReads = 0;
   let commits = 0;
+  let reads = 0;
+  let reviewLaunches = 0;
   const linkCalls: boolean[] = [];
   const hiddenCalls: boolean[] = [];
   const closed: string[] = [];
@@ -144,6 +151,7 @@ function busyHarness(scenario: Scenario = {}) {
     }
     if (verb === "review launch") {
       reviewReads = 0;
+      reviewLaunches += 1;
       return json({ workflowId: `wf-${now}`, phase: "preparing" });
     }
     if (verb === "review cancel") return json({});
@@ -155,18 +163,34 @@ function busyHarness(scenario: Scenario = {}) {
     const phase = phases[Math.min(phases.length - 1, Math.floor(reviewReads / 2))]!;
     // Each phase change follows the model getting the previous result back.
     if (reviewReads % 2 === 1 && reviewReads > 1 && reviewReads < 8) {
-      const entry = (workflow.submit_review_report ??= { calls: 0, resultsAt: [] });
+      const tool = reviewReads === 3 ? "submit_validation_plan" : "submit_review_report";
+      const entry = (workflow[tool] ??= { calls: 0, resultsAt: [] });
       entry.calls += 1;
       entry.resultsAt.push(now);
     }
     return phase;
   };
   const gateway = {
-    metrics: async () => ({
-      recurringWork: {
-        metrics: { kinds: { "diff-scan": { changed, started: changed, workUnits: {} } } },
-      },
-    }),
+    metrics: async () => {
+      reads += 1;
+      return {
+        recurringWork: {
+          metrics: {
+            kinds: { "diff-scan": { changed, started: changed, workUnits: {} } },
+          },
+          admission: [
+            {
+              pool: "workflow-provider",
+              active: reads % 3,
+              waiting: reads % 2,
+              oldestWaitMs: reads % 2 ? 40 : null,
+              granted: 10 + reads,
+              rejected: { capacity: 1 },
+            },
+          ],
+        },
+      };
+    },
     invoke: async (command: string, args: Record<string, unknown>) => {
       if (command === "create_environment") {
         environments.push({ id: "env-busy-ask", name: String(args.name), projectId: "p1" });
@@ -248,6 +272,13 @@ function busyHarness(scenario: Scenario = {}) {
       commits += 1;
       return true;
     },
+    validationRuns: () =>
+      new Map(
+        Array.from({ length: reviewLaunches }, (_, index) => [
+          `run-${index}`,
+          { queuedMs: 5, commandMs: 20, runMs: 900 },
+        ]),
+      ),
     processes: () => ({ backend: { cpuMs: now, rssKiB: 1024 } }),
     now: () => now,
     sleep: async (ms) => {
@@ -266,6 +297,12 @@ function busyHarness(scenario: Scenario = {}) {
     commits: () => commits,
   };
 }
+
+const directories: string[] = [];
+afterEach(() => {
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
 
 const options = (overrides: Partial<Parameters<typeof measureBusy>[2]> = {}) => ({
   busyRounds: 1,
@@ -335,6 +372,12 @@ describe("busy phase", () => {
     expect(result.samples["queued-dispatch"]).toHaveLength(3);
     expect(result.samples["workflow-complete"]).toHaveLength(3);
     expect(result.samples["workflow-progress"].length).toBeGreaterThan(0);
+    // The plan's result is followed by its commands, not only a keyed wake: its own row.
+    expect(result.samples["workflow-validation"]).toHaveLength(3);
+    // One new validation run per review, read from the review environment.
+    expect(result.validationRuns).toEqual(
+      Array.from({ length: 3 }, () => ({ queuedMs: 5, commandMs: 20, runMs: 900 })),
+    );
     expect(result.samples["approval-backend"]).toHaveLength(3);
     // One client, then two (the cut one is not expected to follow the approval).
     expect(result.samples["approval-visible"]).toHaveLength(3);
@@ -360,6 +403,12 @@ describe("busy phase", () => {
     expect(lines).toContain("3 reviews completed");
     expect(lines).toContain("Pending approval visible");
     expect(lines).toContain("≤ 2000");
+    expect(lines).toContain("≤ 2400");
+    // Granted and refused are deltas over the phase; peaks are the most any read saw.
+    const pool = result.admission["workflow-provider"]!;
+    expect(pool.granted).toBeGreaterThan(0);
+    expect(pool).toMatchObject({ rejected: 0, maxActive: 2, maxWaiting: 1, maxOldestWaitMs: 40 });
+    expect(lines).toContain("Admission: workflow-provider");
   });
 
   test("records a lost approval, a failed review and a duplicated dispatch as failures", async () => {
@@ -389,6 +438,8 @@ describe("busy phase", () => {
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
       failures: [],
       windowSamples: [],
+      admission: {},
+      validationRuns: [],
       modelRequests: 0,
       durationMs: 0,
     });
@@ -407,6 +458,8 @@ describe("busy phase", () => {
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
       failures: [],
       windowSamples: [],
+      admission: {},
+      validationRuns: [],
       modelRequests: 0,
       durationMs: 0,
     };
@@ -417,5 +470,46 @@ describe("busy phase", () => {
         { ...base, busy: { ...busy, failures: [{ clients: 0, round: 1, step: "queue" }] } },
       ]),
     ).toBe(1);
+  });
+
+  test("writes and removes bursts, reads validation timings and commits the review fixture", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "recurring-busy-"));
+    directories.push(root);
+    const worktree = path.join(root, "worktree");
+    mkdirSync(worktree);
+    busyRuntime.writeBurst([worktree], path.join("busy-burst", "r1"), 3);
+    expect(readdirSync(path.join(worktree, "busy-burst", "r1")).sort()).toEqual([
+      "f-0.txt",
+      "f-1.txt",
+      "f-2.txt",
+    ]);
+    busyRuntime.removeBurst([worktree], path.join("busy-burst", "r1"));
+    expect(existsSync(path.join(worktree, "busy-burst", "r1"))).toBe(false);
+
+    expect(busyRuntime.validationRuns(worktree).size).toBe(0);
+    const runs = path.join(worktree, ".orkestrator", "review-artifacts");
+    mkdirSync(path.join(runs, "review-validation-a"), { recursive: true });
+    writeFileSync(
+      path.join(runs, "review-validation-a", "state.json"),
+      JSON.stringify({
+        run: {
+          startedAt: "2026-11-06T19:27:30.460Z",
+          completedAt: "2026-11-06T19:27:31.576Z",
+          results: [{ queuedMs: 7, durationMs: 11 }],
+        },
+      }),
+    );
+    // A run still being written (no completion) and an unrelated directory are skipped.
+    mkdirSync(path.join(runs, "review-validation-b"));
+    writeFileSync(path.join(runs, "review-validation-b", "state.json"), "{");
+    mkdirSync(path.join(runs, "other"));
+    expect(Array.from(busyRuntime.validationRuns(worktree))).toEqual([
+      ["review-validation-a", { queuedMs: 7, commandMs: 11, runMs: 1_116 }],
+    ]);
+
+    expect(spawnSync("git", ["init", "-q", worktree]).status).toBe(0);
+    expect(busyRuntime.commitFixture(worktree)).toBe(true);
+    const log = spawnSync("git", ["-C", worktree, "log", "--format=%s"], { encoding: "utf8" });
+    expect(log.stdout.trim()).toBe("Busy review fixture");
   });
 });

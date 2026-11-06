@@ -937,6 +937,51 @@ mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
   --out output/benchmarks/recurring-long-soak.json
 ```
 
+`--busy-rounds N` adds the busy profile (todo
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+task 1, `scripts/recurring-live-ab-busy.ts`), after the window and before any
+soak. It needs a local fixture environment and the Pi toolchain, and no
+credential, login or provider: every turn goes to the fake model.
+
+- Setup: `--busy-environments` (default 10) local environments, the
+  fixture's included. One, `busy-ask`, is created with an `ask` execution
+  policy (a registry setting, so through the gateway); a Pi session is opened
+  in it and in `busy-1`, and `busy-2` gets a committed fixture file for a
+  review to read.
+- Rounds: for every count in `--busy-clients` (default `0,1,2`; headless
+  Playwright clients from `scripts/recurring-live-ab-busy-clients.ts`, each
+  signed in with its own `dev:login` link and showing `busy-ask`'s Pi tab),
+  N rounds of: `--busy-burst-files` (default 200) files written into every
+  environment at once and removed; a turn in `busy-1` held at the model
+  (`[hold:<id>]`) with a prompt queued behind it (`session prompt
+  --enqueue`); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
+  which Pi parks as an approval, and agent mail to that tab; with two
+  clients the second one's link cut (the outage link of
+  `client-outage-support.ts`), with one its document hidden; the approval
+  answered through the public action, the held turn released and the queued
+  prompt sent; a Multi Review on `busy-2` with every slot on the fake model
+  (it runs `git rev-parse HEAD` through Pi's `bash` for its validation plan,
+  then submits fixed finding-free results) followed to `ready`; and the cut
+  or hidden client restored.
+- Measures: each row of the latency budgets the round reaches, from the
+  moment its cause is known (the fake model's arrival times, or the command's
+  return) to what each connected client's page showed, plus backend rows
+  (the approval in `session.interactions`, the queued prompt reaching the
+  model, a Multi Review phase change after the model got a result back) and
+  the resumed client's convergence. Obligations: each held turn and queued
+  prompt reaches the model exactly once, the approval is answered and its
+  turn finishes, and every review reaches `ready`. `recurringWork` and
+  process totals are sampled at every round boundary for the arm comparison.
+- A busy phase fails the run (exit 1) on a failed step, a wait that ran out,
+  a duplicated dispatch or a guard line.
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate,rollback --repeats 1 \
+  --window-ms 60000 --freshness-probes 0 --fixture-environments local \
+  --agent-platforms pi --busy-rounds 3 --out output/benchmarks/recurring-busy.json
+```
+
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
 

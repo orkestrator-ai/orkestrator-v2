@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -30,7 +30,10 @@ import { percentile, pickKindCounters, type LiveSample } from "./recurring-live-
  *    with one client its document hidden;
  * 5. the approval answered, the held turn released, the queued prompt sent;
  * 6. a Multi Review with every slot on the fake model, launched and followed
- *    to `ready` (the workflow completion);
+ *    to `ready` (the workflow completion). Its validation plan runs one
+ *    read-only command, which waits in the host-wide test scheduler
+ *    (`host-test-scheduler.ts`) like any validation, so that step is its own
+ *    row rather than a sample of "progress after a result";
  * 7. the cut link restored, or the document shown again (the client resume).
  *
  * Every wait is timed in this process from the moment the cause is known:
@@ -72,8 +75,9 @@ export const BUSY_DEFAULTS: BusyOptions = {
  */
 export const BUSY_ROWS = {
   "burst-backend": { budgetMs: null, side: "backend", label: "Burst: every environment rescanned" },
-  "burst-badge": { budgetMs: 2_000, side: "client", label: "Burst: change badge shows it" },
-  "burst-clear": { budgetMs: 2_000, side: "client", label: "Burst removed: badge back" },
+  // ≤ 2 s after the save settles, timed from the write: 2.4 s (0048 decision M1).
+  "burst-badge": { budgetMs: 2_400, side: "client", label: "Burst: change badge shows it" },
+  "burst-clear": { budgetMs: 2_400, side: "client", label: "Burst removed: badge back" },
   "activity-working": {
     budgetMs: 4_000,
     side: "client",
@@ -105,6 +109,13 @@ export const BUSY_ROWS = {
     budgetMs: 3_000,
     side: "backend",
     label: "Workflow progress after a result",
+  },
+  // The plan's next phase waits for its commands, which queue in the
+  // host-wide test scheduler with every other worktree's validation and tests.
+  "workflow-validation": {
+    budgetMs: null,
+    side: "backend",
+    label: "Validation plan result to reviewing (runs the plan)",
   },
   "workflow-complete": {
     budgetMs: null,
@@ -161,6 +172,16 @@ export type BusyGateway = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown>;
 };
 
+export type ValidationTiming = { queuedMs: number; commandMs: number; runMs: number };
+
+export type AdmissionPeak = {
+  granted: number;
+  rejected: number;
+  maxActive: number;
+  maxWaiting: number;
+  maxOldestWaitMs: number;
+};
+
 export type BusyFailure = { clients: number; round: number; step: string; detail?: string };
 
 export type BusyResult = {
@@ -182,6 +203,14 @@ export type BusyResult = {
   failures: BusyFailure[];
   /** `recurringWork` kinds and process totals, sampled at each round boundary. */
   windowSamples: LiveSample[];
+  /**
+   * Admission pools over the phase, from every metrics read: leases granted
+   * and refused (exact, cumulative deltas) and the most active, waiting and
+   * oldest wait any read saw (a lower bound on the true peaks).
+   */
+  admission: Record<string, AdmissionPeak>;
+  /** Each review's validation run: host-scheduler queue, command and whole-run times. */
+  validationRuns: ValidationTiming[];
   modelRequests: number;
   durationMs: number;
 };
@@ -195,6 +224,8 @@ export type BusyRuntime = {
   removeBurst(worktrees: string[], relative: string): void;
   /** Commits one fixture file in a worktree, so a review has a change to read. */
   commitFixture(worktree: string): boolean;
+  /** Timings of the validation runs recorded in a worktree, by run id. */
+  validationRuns(worktree: string): Map<string, ValidationTiming>;
   processes(): LiveSample["processes"];
   now(): number;
   sleep(ms: number, signal?: AbortSignal): Promise<void>;
@@ -230,6 +261,40 @@ export const busyRuntime: BusyRuntime = {
       ).status === 0;
     return git(["add", "busy-review.txt"]) && git(["commit", "-q", "-m", "Busy review fixture"]);
   },
+  validationRuns: (worktree) => {
+    const runs = new Map<string, ValidationTiming>();
+    const root = path.join(worktree, ".orkestrator", "review-artifacts");
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(root).filter((name) => name.startsWith("review-validation-"));
+    } catch {
+      return runs;
+    }
+    for (const name of entries) {
+      try {
+        const run = (
+          JSON.parse(readFileSync(path.join(root, name, "state.json"), "utf8")) as {
+            run?: {
+              startedAt?: string;
+              completedAt?: string;
+              results?: Array<{ queuedMs?: number; durationMs?: number }>;
+            };
+          }
+        ).run;
+        const runMs = Date.parse(run?.completedAt ?? "") - Date.parse(run?.startedAt ?? "");
+        if (!Number.isFinite(runMs)) continue;
+        const results = run?.results ?? [];
+        runs.set(name, {
+          queuedMs: results.reduce((total, entry) => total + (entry.queuedMs ?? 0), 0),
+          commandMs: results.reduce((total, entry) => total + (entry.durationMs ?? 0), 0),
+          runMs,
+        });
+      } catch {
+        // A run still being written is read on a later round.
+      }
+    }
+    return runs;
+  },
   processes: () => ({}),
   now: () => performance.now(),
   sleep: async (ms, signal) => {
@@ -240,7 +305,7 @@ export const busyRuntime: BusyRuntime = {
 /** Client-visible waits give up after this; a miss is a timeout, not a hang. */
 const CLIENT_WAIT_MS = 30_000;
 const BACKEND_WAIT_MS = 60_000;
-const WORKFLOW_WAIT_MS = 5 * 60_000;
+const WORKFLOW_WAIT_MS = 15 * 60_000;
 const POLL_MS = 50;
 const STEP_TIMEOUT = "10m";
 const PI_RUN_ENDED = new Set([0, 7]);
@@ -311,12 +376,46 @@ export async function measureBusy(
     obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
     failures: [],
     windowSamples: [],
+    admission: {},
+    validationRuns: [],
     modelRequests: 0,
     durationMs: 0,
   };
+  const admissionStart = new Map<string, { granted: number; rejected: number }>();
+  /** Folds one metrics read's admission pools into the phase's peaks. */
+  const noteAdmission = (metrics: Record<string, unknown> | null) => {
+    const pools = (metrics?.recurringWork as { admission?: unknown } | undefined)?.admission;
+    for (const raw of Array.isArray(pools) ? pools : []) {
+      const pool = raw as Record<string, unknown>;
+      if (typeof pool.pool !== "string") continue;
+      const count = (value: unknown) =>
+        typeof value === "number" && Number.isFinite(value) ? value : 0;
+      const granted = count(pool.granted);
+      const rejected = Object.values((pool.rejected as Record<string, unknown>) ?? {}).reduce(
+        (total: number, value) => total + count(value),
+        0,
+      );
+      const start = admissionStart.get(pool.pool) ?? { granted, rejected };
+      admissionStart.set(pool.pool, start);
+      const peak = (result.admission[pool.pool] ??= {
+        granted: 0,
+        rejected: 0,
+        maxActive: 0,
+        maxWaiting: 0,
+        maxOldestWaitMs: 0,
+      });
+      peak.granted = Math.max(0, granted - start.granted);
+      peak.rejected = Math.max(0, rejected - start.rejected);
+      peak.maxActive = Math.max(peak.maxActive, count(pool.active));
+      peak.maxWaiting = Math.max(peak.maxWaiting, count(pool.waiting));
+      peak.maxOldestWaitMs = Math.max(peak.maxOldestWaitMs, count(pool.oldestWaitMs));
+    }
+    return metrics;
+  };
+  const readMetrics = async () => noteAdmission(await gateway.metrics());
   const elapsed = () => runtime.now() - startedAt;
   const sampleWindow = async () => {
-    const metrics = await gateway.metrics();
+    const metrics = await readMetrics();
     const block = metrics?.recurringWork as { metrics?: { kinds?: unknown } } | undefined;
     result.windowSamples.push({
       atMs: Math.round(elapsed()),
@@ -545,7 +644,7 @@ export async function measureBusy(
               }
             }),
           );
-        const changedBefore = diffChanged(await gateway.metrics());
+        const changedBefore = diffChanged(await readMetrics());
         const burstAt = runtime.now();
         runtime.writeBurst(worktrees, burstPath, options.busyBurstFiles);
         const backendBurst =
@@ -555,8 +654,7 @@ export async function measureBusy(
                 "burst-backend",
                 burstAt,
                 async () =>
-                  (diffChanged(await gateway.metrics()) ?? 0) >=
-                  changedBefore + environments.length,
+                  (diffChanged(await readMetrics()) ?? 0) >= changedBefore + environments.length,
                 BACKEND_WAIT_MS,
               );
         await watchBadges(
@@ -728,6 +826,7 @@ export async function measureBusy(
             );
           }
         }
+        await readMetrics();
         const releasedAt = runtime.now();
         fakeModel.release(held);
         const queuedAfter = await until(
@@ -754,6 +853,7 @@ export async function measureBusy(
 
         // 6. A Multi Review to completion, every slot on the fake model.
         if (reviewId) await step(["review", "cancel", reviewId]);
+        const validationsBefore = runtime.validationRuns(reviewEnvironment.worktree);
         const launchAt = runtime.now();
         const workflowsBefore = fakeModel.workflow();
         const launched = cliJson(
@@ -784,6 +884,8 @@ export async function measureBusy(
                 phase = next;
                 transitions.push({ phase: next, at: runtime.now() });
               }
+              if (transitions.length > 0 && runtime.now() - transitions.at(-1)!.at < POLL_MS * 2)
+                await readMetrics();
               return REVIEW_TERMINAL.has(phase);
             },
             WORKFLOW_WAIT_MS,
@@ -791,13 +893,19 @@ export async function measureBusy(
           record("workflow-complete", completed);
           if (phase !== "ready") fail("workflow", `the review ended ${phase || "unread"}`);
           else result.obligations.workflows += 1;
+          for (const [id, timing] of runtime.validationRuns(reviewEnvironment.worktree))
+            if (!validationsBefore.has(id)) result.validationRuns.push(timing);
           // Each accepted result is followed by the phase that consumed it.
           const after = fakeModel.workflow();
           for (const [tool, entry] of Object.entries(after)) {
             const earlier = workflowsBefore[tool]?.resultsAt.length ?? 0;
             for (const resultAt of entry.resultsAt.slice(earlier)) {
               const next = transitions.find((transition) => transition.at >= resultAt);
-              if (next) record("workflow-progress", Math.round(next.at - resultAt));
+              if (next)
+                record(
+                  tool === "submit_validation_plan" ? "workflow-validation" : "workflow-progress",
+                  Math.round(next.at - resultAt),
+                );
             }
           }
         }
@@ -881,6 +989,20 @@ export function busySummaryLines(label: string, result: BusyResult): string[] {
             `${entry.step} (${entry.clients} clients, round ${entry.round}${entry.detail ? `: ${entry.detail}` : ""})`,
         )
         .join(", ") || "none"
+    }.`,
+    `Admission: ${
+      Object.entries(result.admission)
+        .sort()
+        .map(
+          ([pool, peak]) =>
+            `${pool} ${peak.granted} granted, ${peak.rejected} refused, at most ${peak.maxActive} active and ${peak.maxWaiting} waiting (oldest ${peak.maxOldestWaitMs} ms)`,
+        )
+        .join("; ") || "not read"
+    }.`,
+    `Validation runs (queue/commands/run ms): ${
+      result.validationRuns
+        .map((run) => `${run.queuedMs}/${run.commandMs}/${run.runMs}`)
+        .join(", ") || "none read"
     }.`,
     "",
     "| Row | Side | Samples | Timeouts | p50 ms | p95 ms | Max ms | Budget (p95) | Within |",

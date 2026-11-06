@@ -1,8 +1,7 @@
 # OpenCode agent-tool background configuration timing
 
 - **ID:** 0280
-- **Status:** open
-
+- **Status:** resolved
 ## Observation — 2026-10-17 (device-login main merge)
 
 - **Test:** `OpenCode agent-tool configuration > reconciles in the background and memoizes a healthy generation`, in `apps/backend/src/core/commands-agent-tools.test.ts:174`.
@@ -32,3 +31,11 @@ no product code, assertions, timeouts, or skips in these owners changed.
 
 The exact default-suite command subsequently passed (exit 0, 160.5 s):
 `mise run test:logged -- --name capacity-review-default-tests -- mise run test`.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the test slept a fixed 150 ms and then expected the background reconcile, whose fixture response is delayed 75 ms, to have finished. On a loaded host the response, the reconcile or the timer ran late. `schedule()` registers the cleanup that drops the in-flight entry (`task.finally`) before it chains the returned outcome (`task.then`), so the outcome promise settles only after the entry is gone. That promise is the completion signal the test should await.
+- **Reproduced:** yes. With the fixture response delayed to 400 ms, the unchanged test failed with configuration count 1, not 0, as in the aggregate.
+- **Fix:** `commands-agent-tools.test.ts` now awaits the outcome, then asserts zero configurations, one outcome and one request. The memoized second `schedule()` also awaits its returned promise instead of a 25 ms sleep, and it now also asserts that no reconcile was started. No assertion was removed and no product code changed.
+- **Verification:** with the 400 ms delay (temporary), the fixed test passed. `mise run test:logged -- --name n0320-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --rerun-each=20` passed 420 tests with 0 failures.
+- Same test and cause as [0320](0320-opencode-agent-tools-background-reconcile.md).

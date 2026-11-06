@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { chromium } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -110,6 +110,32 @@ const CHROMIUM = [
 ].find((candidate) => existsSync(candidate));
 
 describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
+  // Both CI failures (2931) were the first browser starts in this file: a
+  // nested spec's 30 s budget, then its DevToolsActivePort poll. A cold start
+  // (binary pages, font caches) on a busy runner is not what these cases check,
+  // so pay it once here, outside the nested runs' budgets.
+  beforeAll(() => {
+    const profile = mkdtempSync(path.join(tmpdir(), "ork-pw-warm-"));
+    try {
+      spawnSync(
+        CHROMIUM!,
+        [
+          "--headless",
+          "--no-sandbox",
+          "--disable-gpu",
+          "--disable-crash-reporter",
+          "--no-first-run",
+          `--user-data-dir=${profile}`,
+          "--dump-dom",
+          "about:blank",
+        ],
+        { stdio: "ignore", timeout: 120_000 },
+      );
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  }, 130_000);
+
   for (const config of [
     "e2e/playwright.config.ts",
     "e2e/public-site/playwright.config.ts",
@@ -175,10 +201,11 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
               pid = child.pid;
               child.unref();
               writeFileSync(${JSON.stringify(workerFile)}, JSON.stringify({ tmp: tmpdir(), pid }));
+              // Bounded inside the spec's 30 s budget; the default 5 s raced a loaded runner.
               await expect.poll(() => {
                 try { return readFileSync(path.join(profile, "DevToolsActivePort"), "utf8").length > 0; }
                 catch { return false; }
-              }).toBe(true);
+              }, { timeout: 20_000 }).toBe(true);
             } else {
               const browser = await chromium.launch({ executablePath: ${JSON.stringify(CHROMIUM)} });
               await browser.close();

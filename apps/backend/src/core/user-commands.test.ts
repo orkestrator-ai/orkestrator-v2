@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -241,7 +242,7 @@ function controlledWorld() {
       };
       processes.push(control);
       return {
-        pid: 42,
+        pid: fakePid(42),
         write() {},
         resize() {},
         kill() {},

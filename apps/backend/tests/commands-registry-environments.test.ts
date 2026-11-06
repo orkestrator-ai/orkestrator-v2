@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test, setDefaultTimeout } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import * as dockerImage from "../src/core/docker-image";
 import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
@@ -1929,7 +1930,10 @@ esac
     const terminationResult = new Promise<boolean>((resolve) => {
       releaseTermination = resolve;
     });
-    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95050));
+    context.runtime.localServers.adoptProcess(
+      `codex:${environment.id}`,
+      createFakeChild(fakePid(95050)),
+    );
     localServerHooks.terminateProcessTree = async () => {
       announceTermination();
       return terminationResult;
@@ -2166,7 +2170,10 @@ exit 0
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95010));
+    context.runtime.localServers.adoptProcess(
+      `codex:${environment.id}`,
+      createFakeChild(fakePid(95010)),
+    );
     localServerHooks.terminateProcessTree = async () => false;
 
     await expect(
@@ -3806,7 +3813,7 @@ exit 0
     const environment = createEnvironment({ id: "env-delete-failure", worktreePath });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    const child = createFakeChild(92001);
+    const child = createFakeChild(fakePid(92001));
     context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
     localServerHooks.terminateProcessTree = async () => false;
 

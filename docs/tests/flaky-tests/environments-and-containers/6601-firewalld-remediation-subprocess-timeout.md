@@ -35,3 +35,20 @@ The failure is in the existing bounded synchronous shell fixture, before its
 rule assertions. Subprocess scheduling under concurrent work is a possible
 cause, but no process trace establishes that cause. Keep the test and its
 assertions unchanged; this entry records the failure and isolated pass.
+
+## Investigation — 2026-11-06
+
+`executeRemediation` runs the firewalld command through
+`node:child_process.spawnSync("/bin/sh", …, { timeout: 5_000 })`: a `sh -c`,
+the `sudo` stub, the inner `sh -c` and two `firewall-cmd` stubs, about five
+processes that finish in milliseconds alone. A SIGTERM at 5,004.98 ms is
+`spawnSync`'s own five-second timeout killing a child it had not seen exit.
+Raw host load is a poor fit for so little work (compare the firewall
+fixtures, 0192/0632/9837, which fork more than a hundred processes). The
+macOS lost-exit defect in
+[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md)
+fits better: an exited child stays a zombie that Bun never reports, and
+`spawnSync` has no watchdog. The same applies to 1532. Not reproduced on
+Linux; status left open. On a recurrence, record the child's `ps` state. If
+it is a zombie, give these fixtures the backend `runCommand` path, which
+carries the macOS exit watchdog, rather than a longer timeout.

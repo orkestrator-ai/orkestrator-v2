@@ -34,6 +34,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/unit/firewall-default-boot.test.ts",
     "tests/unit/firewall-policy.test.ts",
     "tests/unit/firewall-refresh.test.ts",
+    // Real Git repositories built per run.
+    "tests/unit/flaky-tests-tooling-git.test.ts",
     "tests/unit/git-branch-helpers.test.ts",
     "tests/unit/migrate-copy.test.ts",
     "tests/unit/pi-bridge-vendor.test.ts",
@@ -44,6 +46,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/unit/runtime-env-wiring.test.ts",
     "tests/unit/test-all.test.ts",
     "tests/unit/test-diagnostic-bounds.test.ts",
+    // Real busy-loop processes pinned to a core, and a signalled runner.
+    "tests/unit/test-under-contention-processes.test.ts",
   ],
   "apps/backend": [
     ...LIVE_PATTERNS,

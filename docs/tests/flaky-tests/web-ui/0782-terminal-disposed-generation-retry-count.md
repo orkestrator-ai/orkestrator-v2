@@ -1,7 +1,7 @@
 # useTerminal reconnect behavior > cancels a queued reconciliation retry when the connection generation is disposed
 
 - **ID:** 0782
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `useTerminal reconnect behavior > cancels a queued reconciliation retry when the connection generation is disposed`
 - **Owning file:** `apps/web/src/hooks/useTerminal.test.tsx`
@@ -18,3 +18,27 @@
 - **Disposition:** open.
 - **Evidence:** after `waitFor(... toHaveBeenCalledTimes(3))` (`useTerminal.test.tsx:2200`), the retry loop keeps running until `disconnect()`. Under load, two more snapshot reads landed first.
 - **Next step:** control the retry timer (fake timers or an injected delay) so the count at disconnect is fixed.
+
+### Resolution — 2026-11-06
+
+**Root cause.** The triage above was right. Once the backend keeps answering an
+older revision, the hook queues a reconciliation retry every
+`TERMINAL_RECONCILE_RETRY_MS` (100 ms). The test waited for exactly three
+snapshot reads, disconnected, then asserted the count was still three. If
+`waitFor` observed three more than 100 ms before `disconnect()` ran, as on a
+loaded host, a retry had already run (5 reads), even though disposal correctly
+stopped every later retry.
+
+**Reproduction.** Inserting a 130 ms wait after the `waitFor` in a copy of the
+unchanged owner reproduced the exact failure (expected 3 calls, received 5).
+
+**Fix.** `apps/web/src/hooks/useTerminal.test.tsx`: the test records the read
+count at disposal and asserts that no read happens in the 150 ms after
+`disconnect()`, longer than the retry delay. That is the property under test:
+a queued retry does not survive disposal.
+
+**Verification.** The delayed copy passes with the fix. Then
+`mise run test:logged -- --name web-0782-owner -- bun --cwd=apps/web test src/hooks/useTerminal.test.tsx`
+passed (exit 0), and
+`mise run test:logged -- --name web-0782-stress -- bun --cwd=apps/web test src/hooks/useTerminal.test.tsx -t "reconnect behavior" --rerun-each=20`
+passed (exit 0, 26.3 s).

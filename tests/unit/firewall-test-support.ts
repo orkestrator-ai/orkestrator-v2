@@ -6,6 +6,18 @@ export const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 export const policyPath = "/etc/orkestrator";
 
 /**
+ * Outer budget for a test that runs the real firewall scripts against stubs.
+ * One run forks well over a hundred short processes (a bash stub per
+ * `iptables`, `ipset`, `dig` or `curl` call, plus the GNU tools): about
+ * 0.3–1 s on an idle Linux host, 1–3 s on an idle macOS host, and past
+ * Bun's generic five seconds when an aggregate saturates a macOS host. At
+ * that deadline Bun kills the still-running `spawnSync` child, so the test
+ * saw `exitCode: null` (flake cases 0192, 0199, 0632, 0983, 6602, 9837).
+ * Owners set this with `setDefaultTimeout`, which Bun scopes to the file.
+ */
+export const SHELL_FIXTURE_TEST_TIMEOUT_MS = 30_000;
+
+/**
  * The PATH reset at the top of every root container script (security H2):
  * the image runs them with root-owned directories only. A fixture removes it
  * so its command stubs and the GNU tools on its PATH apply instead of the

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, mock, spyOn } from "bun:test";
+import { afterEach, describe, expect, test, mock, setDefaultTimeout, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +25,13 @@ import { StorageService, createProject } from "./storage.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { listRootChanges } from "./root-changes.js";
 import { readWorktreeStatus } from "./workspace-code-rewind.js";
+
+// Most cases build a repository with a linked worktree and scan it with real
+// Git, and on macOS start or stop a real fsmonitor daemon. The commands carry
+// their own 10–30 s deadlines; under Bun's generic five-second test budget a
+// saturated macOS aggregate cut cases off mid-scan (flake case 1253), and the
+// Git child then rejected between tests. On macOS the owner takes 8–18 s alone.
+setDefaultTimeout(30_000);
 
 const tempDirectories: string[] = [];
 

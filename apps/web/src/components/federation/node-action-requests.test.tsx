@@ -230,64 +230,78 @@ const rootRequest = {
   },
 } as NodeActionRequestView;
 
+// The over-limit case needs 501 rows, each a Radix checkbox, rendered three
+// times (listing, Select all, Clear). That synchronous React and DOM work takes
+// three to five seconds alone on a loaded host, against Bun's five-second
+// default, so it carries its own budget (case 2402). Waiting for the last row
+// by its aria-label rather than by role also matters: every `*ByRole` poll
+// computes the accessible name and visibility of all 501 checkboxes (about
+// 350 ms each), so `findByRole` there cost over two seconds on its own.
+const OVER_LIMIT_BUDGET_MS = 30_000;
+
 for (const state of ["listing-error", "empty", "conflicts", "over-limit"]) {
-  test(`root-change approval handles ${state} and still permits rejection`, async () => {
-    const resolved: Array<Record<string, unknown>> = [];
-    const settled = mock(() => {});
-    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
-      if (command === "list_project_root_changes") {
-        if (state === "listing-error") throw new Error("Checkout is unavailable");
-        return {
-          files:
-            state === "empty"
-              ? []
-              : state === "over-limit"
-                ? Array.from({ length: 501 }, (_, i) => ({
-                    path: `file-${i}.ts`,
-                    status: "modified",
-                  }))
-                : [{ path: "a.ts", status: "modified" }],
-          conflicts: state === "conflicts" ? 2 : 0,
-          truncated: state === "conflicts",
-          headCommit: "a".repeat(40),
-        };
+  const budget = state === "over-limit" ? OVER_LIMIT_BUDGET_MS : undefined;
+  test(
+    `root-change approval handles ${state} and still permits rejection`,
+    async () => {
+      const resolved: Array<Record<string, unknown>> = [];
+      const settled = mock(() => {});
+      invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+        if (command === "list_project_root_changes") {
+          if (state === "listing-error") throw new Error("Checkout is unavailable");
+          return {
+            files:
+              state === "empty"
+                ? []
+                : state === "over-limit"
+                  ? Array.from({ length: 501 }, (_, i) => ({
+                      path: `file-${i}.ts`,
+                      status: "modified",
+                    }))
+                  : [{ path: "a.ts", status: "modified" }],
+            conflicts: state === "conflicts" ? 2 : 0,
+            truncated: state === "conflicts",
+            headCommit: "a".repeat(40),
+          };
+        }
+        if (command === "resolve_node_action_request") {
+          resolved.push(args);
+          return { ...rootRequest, state: "rejected" };
+        }
+        return undefined;
+      });
+      render(<RootChangesApprovalDialog request={rootRequest} onSettled={settled} />);
+      if (state === "listing-error") await screen.findByText("Checkout is unavailable");
+      else if (state === "empty")
+        await screen.findByText("The checkout has no uncommitted changes now.");
+      else if (state === "conflicts") {
+        await screen.findByText("2 conflicted files are left out.");
+        expect(screen.getByText("Only the first 1 changed files are listed.")).toBeTruthy();
+      } else {
+        expect((await screen.findByLabelText("file-500.ts")).getAttribute("role")).toBe("checkbox");
+        fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+        await screen.findByText("Pick at most 500 files.");
+        expect(
+          (screen.getByRole("button", { name: "Apply 501 files" }) as HTMLButtonElement).disabled,
+        ).toBe(true);
+        fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+        expect(
+          (screen.getByRole("button", { name: "Apply 0 files" }) as HTMLButtonElement).disabled,
+        ).toBe(true);
       }
-      if (command === "resolve_node_action_request") {
-        resolved.push(args);
-        return { ...rootRequest, state: "rejected" };
-      }
-      return undefined;
-    });
-    render(<RootChangesApprovalDialog request={rootRequest} onSettled={settled} />);
-    if (state === "listing-error") await screen.findByText("Checkout is unavailable");
-    else if (state === "empty")
-      await screen.findByText("The checkout has no uncommitted changes now.");
-    else if (state === "conflicts") {
-      await screen.findByText("2 conflicted files are left out.");
-      expect(screen.getByText("Only the first 1 changed files are listed.")).toBeTruthy();
-    } else {
-      await screen.findByRole("checkbox", { name: "file-500.ts" });
-      fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-      await screen.findByText("Pick at most 500 files.");
-      expect(
-        (screen.getByRole("button", { name: "Apply 501 files" }) as HTMLButtonElement).disabled,
-      ).toBe(true);
-      fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-      expect(
-        (screen.getByRole("button", { name: "Apply 0 files" }) as HTMLButtonElement).disabled,
-      ).toBe(true);
-    }
-    if (state === "listing-error" || state === "empty")
-      expect(
-        (screen.getByRole("button", { name: "Apply 0 files" }) as HTMLButtonElement).disabled,
-      ).toBe(true);
-    expect(resolved).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
-    await waitFor(() =>
-      expect(resolved).toEqual([{ requestId: "root-approval", decision: "reject" }]),
-    );
-    await waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
-  });
+      if (state === "listing-error" || state === "empty")
+        expect(
+          (screen.getByRole("button", { name: "Apply 0 files" }) as HTMLButtonElement).disabled,
+        ).toBe(true);
+      expect(resolved).toHaveLength(0);
+      fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+      await waitFor(() =>
+        expect(resolved).toEqual([{ requestId: "root-approval", decision: "reject" }]),
+      );
+      await waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
+    },
+    budget,
+  );
 }
 
 for (const outcome of ["rejected", "failed", "error"])

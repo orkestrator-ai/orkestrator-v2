@@ -1,7 +1,7 @@
 # Project initialization hook exceeds the aggregate deadline
 
 - **ID:** 1109
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-27
 - **Test:** `project.init > initializes a local repository with one commit and no remote, and registers it`
 - **Owning file:** `apps/backend/src/core/public-api/public-api-project-init-cascade.test.ts`.
@@ -26,3 +26,23 @@
   budget. This is unconfirmed; an isolated pass establishes intermittent
   behavior, not a pre-existing defect or a root cause. No test, assertion,
   budget, or skip was changed.
+
+### Resolution — 2026-11-06
+
+- **Status reason:** stale; a later change already fixed it. The only
+  observation is the 2026-10-27 aggregate at review head `62c7cc084`, where
+  the hook ran under the generic budget while the file created real
+  repositories and worktrees and waited for their cleanup. The next day
+  `beb1ec4c8` (#1365, "split deterministic and slow validation tiers")
+  moved this owner to the slow tier and gave it `setDefaultTimeout(30_000)`,
+  which Bun also applies to its `afterEach` cleanup hook. No recurrence has
+  been recorded since; the 2026-11-06 edits to this file only replaced
+  references to the deleted todo 0247.
+- **Root cause:** real Git fixture setup and lifecycle cleanup took longer
+  than the generic hook budget under aggregate load, which matches the
+  isolated pass in 13.2 s. The current explicit 30 s fixture budget covers it.
+- **Change in this pass:** none to the test.
+- **Verification:** `mise run test:logged -- --name env-project-init-stress --
+  bun --cwd=apps/backend test ./src/core/public-api/public-api-project-init-cascade.test.ts
+  --parallel=2 --rerun-each=5`: PASS in 40.4 s on the shared host at load
+  average about 20. The original failure was not reproduced.

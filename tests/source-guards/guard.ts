@@ -1,0 +1,41 @@
+import type { AnyNode } from "./ast";
+
+export const GUARD_IDS = [
+  "sleep-before-negative-assertion",
+  "released-port-rebind",
+  "subprocess-without-budget",
+  "small-fake-pid",
+] as const;
+
+export type GuardId = (typeof GUARD_IDS)[number];
+
+export interface ScannedFile {
+  /** Repository-relative, `/`-separated. */
+  path: string;
+  source: string;
+  /** A `*.test.*` file, run by `bun test` (Playwright specs are `*.spec.*`). */
+  isBunTest: boolean;
+}
+
+export interface SourceGuard {
+  id: GuardId;
+  /** What to do instead; printed under every new finding. */
+  advice: string;
+  appliesTo(file: ScannedFile): boolean;
+  /** A cheap text test: `false` means the file cannot offend and is not parsed for this guard. */
+  mayOffend(source: string): boolean;
+  /**
+   * Starts the guard on one parsed file. The scan walks each file once,
+   * calling every applicable guard's handlers for the node types it names.
+   */
+  visit(program: AnyNode, file: ScannedFile): GuardVisitor;
+}
+
+/** Handlers keyed by ESTree node type, as oxc-parser's `Visitor` takes them. */
+export type NodeHandlers = Record<string, (node: AnyNode) => void>;
+
+export interface GuardVisitor {
+  handlers: NodeHandlers;
+  /** Source offsets of each finding, once the walk is over. */
+  finish(): number[];
+}

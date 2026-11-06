@@ -1,7 +1,7 @@
 # Container status: exclude repair timed out in the aggregate suite
 
 - **ID:** 6603
-- **Status:** open
+- **Status:** resolved
 - **Previously:** 9834, renumbered on 2026-11-06 because three cases shared it ([todo 7142](../../../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md))
 - **Date observed:** 2026-11-05
 - **Test:** `container status > repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping`
@@ -85,3 +85,28 @@ mise run test:logged -- --name findings-container-excludes -- bun test --cwd app
 Passing logs were removed; isolated case counts are not inferred. No Git scan
 implementation, assertion, deadline or skip changed. This establishes another
 intermittent observation, not its cause or a fix.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** a budget mismatch with real subprocess work, not a logic
+  race. The test runs two repository inits and seven container status scans.
+  Each scan is a real `bash` status script of about fifteen `git` and
+  coreutils processes. On this Linux host the scans took 160–180 ms each at
+  load average 22, and the test took 1.45 s idle, already 30% of Bun's
+  generic five-second deadline. Process start-up costs more on macOS, so a
+  saturated macOS aggregate (load about 31) pushed the test past five
+  seconds. Bun then killed the running `git`/`bash` child, which is the
+  recorded "killed 1 dangling process".
+- **Fix:** `apps/backend/src/core/commands-files-local-scan.test.ts` sets an
+  explicit 30 s file budget with `setDefaultTimeout`, as the sibling real-Git
+  owners do (`diff-stats-tracking.test.ts`,
+  `commands-environment-worktree-location.test.ts`). Every case in the file
+  drives real Git. No assertion changed.
+- **Reproduction:** the unchanged file with `--timeout 1000` on the loaded
+  host failed this case with "this test timed out after 1000ms" and "killed 1
+  dangling process", the recorded signature at a shortened deadline. The
+  five-second deadline was not reached on Linux.
+- **Verification:** `mise run test:logged -- --name env-local-scan-stress --
+  bun --cwd=apps/backend test ./src/core/commands-files-local-scan.test.ts
+  --parallel=4 --rerun-each=20`: PASS in 51.9 s on the shared host at load
+  average 20–30.

@@ -335,8 +335,12 @@ describe("the manifest is what is written", () => {
 
   test("only the newest debug log bytes are kept, from a line start", async () => {
     const logsDir = await fixtureDirectory();
+    // Redacting the full 8 MiB budget took over five seconds on a loaded host;
+    // a lower budget exercises the same tail and line-start cut.
+    const debugLogBytes = 64 * 1024;
+    expect(debugLogBytes).toBeLessThan(DIAGNOSTICS_DEBUG_LOG_BYTES);
     const line = `${"m".repeat(70)}\n`;
-    const count = Math.ceil((DIAGNOSTICS_DEBUG_LOG_BYTES + 4096) / line.length);
+    const count = Math.ceil((debugLogBytes + 4096) / line.length);
     await fs.writeFile(
       path.join(logsDir, "orkestrator-backend-2026-11-05.log"),
       `FIRST-LINE\n${line.repeat(count)}LAST-LINE\n`,
@@ -345,14 +349,14 @@ describe("the manifest is what is written", () => {
     await fs.writeFile(older, "OLDER-FILE\n");
     await fs.utimes(older, new Date(0), new Date(0));
 
-    const { archive, manifest } = await buildDiagnosticsBundle(sources(logsDir));
+    const { archive, manifest } = await buildDiagnosticsBundle(sources(logsDir, { debugLogBytes }));
     const log = (await untar(archive))
       .get("logs/debug/orkestrator-backend-2026-11-05.log")!
       .toString();
     expect(log.endsWith("LAST-LINE\n")).toBe(true);
     expect(log).not.toContain("FIRST-LINE");
     expect(log.startsWith("mmm")).toBe(true);
-    expect(Buffer.byteLength(log)).toBeLessThanOrEqual(DIAGNOSTICS_DEBUG_LOG_BYTES);
+    expect(Buffer.byteLength(log)).toBeLessThanOrEqual(debugLogBytes);
     // The budget ran out on the newest file, so the older one is not read.
     expect(manifest.entries.map((entry) => entry.path)).not.toContain(
       "logs/debug/orkestrator-backend-2026-11-04.log",

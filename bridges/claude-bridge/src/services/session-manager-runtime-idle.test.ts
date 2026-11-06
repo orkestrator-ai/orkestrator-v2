@@ -15,6 +15,7 @@ import {
   nextQueryCall,
   materializePersistedSession,
   readSessionPreferences,
+  settleSessionPreferenceWritesForTesting,
   PERSISTED_SDK_ID,
   pendingCalls,
   queryControlOverrides,
@@ -627,14 +628,12 @@ describe("a root turn the warm CLI starts on its own", () => {
       expect(session).toMatchObject({ status: "error", interruption: "restart" });
       expect(session.error).toContain("SIGKILL");
       expect(session.abortController).toBeUndefined();
-      // The async preference writes are serialized; wait until the resumed
-      // root's write has reached disk before checking retention.
-      for (
-        let pass = 0;
-        pass < 100 && !(await readSessionPreferences(PERSISTED_SDK_ID))?.turnInFlight;
-        pass++
-      )
-        await Bun.sleep(10);
+      // The mark is written without waiting, and this session queued three
+      // writes: set by the prompt, cleared when it settled, set again by the
+      // resumed root. Polling for "a mark on disk" can stop on the first one
+      // while the clear is still queued, then read the clear (1221). Wait for
+      // the whole queue so the read sees the last write.
+      await settleSessionPreferenceWritesForTesting();
       expect((await readSessionPreferences(PERSISTED_SDK_ID))?.turnInFlight).toBeDefined();
     });
   });

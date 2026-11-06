@@ -99,6 +99,28 @@ let humanPrompts: HumanPromptEntry[] = [];
 /** Held by a test so that the tab stays without a projection. */
 let ensureGate: Promise<void> | undefined;
 
+/** What the tab's progressive reads send: a background poll names the token it holds. */
+interface ReadInput {
+  knownToken?: string;
+  forceSnapshot?: boolean;
+}
+
+/**
+ * Answers a read the way the backend does: `unchanged` when the caller already
+ * holds the current token, a snapshot otherwise. Re-sending an identical
+ * snapshot on every background poll (each 500-1500 ms) commits the tab, so on a
+ * loaded host a poll could land inside a render-count measurement.
+ */
+function unchangedOr<T>(
+  input: ReadInput,
+  token: string,
+  snapshot: (token: string) => T,
+): T | { viewVersion: 1; status: "unchanged"; token: string; identity: NativeAgentViewIdentity } {
+  return input.knownToken === token && !input.forceSnapshot
+    ? { viewVersion: 1, status: "unchanged", token, identity }
+    : snapshot(token);
+}
+
 const dispatchMock = mock(async (input: { requestId: string }) => ({
   outcome: "accepted" as const,
   requestId: input.requestId,
@@ -137,67 +159,53 @@ mock.module("@/lib/backend", () => ({
     active: { claude: "default", codex: "default" },
   }),
   getNativeAgentProjection: async () => null,
-  // Metadata reads with the current token publish nothing, as the backend does.
-  // Re-sending snapshots makes polling look like work caused by the tested write.
-  getNativeAgentTranscriptUpdate: async (input: { knownToken?: string }) =>
-    input.knownToken === `transcript-${served.length}`
-      ? ({
-          viewVersion: 1,
-          status: "unchanged",
-          token: input.knownToken,
+  getNativeAgentTranscriptUpdate: async (input: ReadInput) =>
+    unchangedOr(input, `transcript-${identity.logicalSessionKey}-${served.length}`, (token) => ({
+      viewVersion: 1,
+      status: "snapshot",
+      token,
+      value: {
+        identity,
+        freshness: served.length === 0 ? "empty" : "current",
+        messages: served,
+        historyEpoch: "epoch-1",
+        historyComplete: true,
+      },
+    })) satisfies NativeAgentTranscriptUpdate<NativeMessage>,
+  getNativeAgentSessionStateUpdate: async (input: ReadInput) =>
+    unchangedOr(
+      input,
+      `state-${identity.logicalSessionKey}-${JSON.stringify(queuedItems)}`,
+      (token) => ({
+        viewVersion: 1,
+        status: "snapshot",
+        token,
+        value: {
           identity,
-        } satisfies NativeAgentTranscriptUpdate<NativeMessage>)
-      : ({
-          viewVersion: 1,
-          status: "snapshot",
-          token: `transcript-${served.length}`,
-          value: {
-            identity,
-            freshness: served.length === 0 ? "empty" : "current",
-            messages: served,
-            historyEpoch: "epoch-1",
-            historyComplete: true,
+          connection: "connected",
+          turn: { phase: "idle" },
+          interactions: [],
+          composerControls: [],
+          composer: {
+            models: [{ platform: "codex", id: "gpt-5.4", label: "GPT-5.4" }],
+            selectedModelId: "gpt-5.4",
+            fastModeEnabled: null,
+            fastModeAvailable: false,
+            modes: [],
           },
-        } satisfies NativeAgentTranscriptUpdate<NativeMessage>),
-  getNativeAgentSessionStateUpdate: async (input: { knownToken?: string }) =>
-    input.knownToken === "state-1"
-      ? ({
-          viewVersion: 1,
-          status: "unchanged",
-          token: input.knownToken,
-          identity,
-        } satisfies NativeAgentSessionStateUpdate)
-      : ({
-          viewVersion: 1,
-          status: "snapshot",
-          token: "state-1",
-          value: {
-            identity,
-            connection: "connected",
-            turn: { phase: "idle" },
-            interactions: [],
-            composerControls: [],
-            composer: {
-              models: [{ platform: "codex", id: "gpt-5.4", label: "GPT-5.4" }],
-              selectedModelId: "gpt-5.4",
-              fastModeEnabled: null,
-              fastModeAvailable: false,
-              modes: [],
-            },
-            capabilities: nativeAgentCapabilities(identity.platform),
-            notices: [],
-            ...(queuedItems.length > 0 ? { queue: { items: queuedItems } } : {}),
-          },
-        } satisfies NativeAgentSessionStateUpdate),
-  getNativeAgentDiscoveryUpdate: async (input: { knownToken?: string }) =>
-    input.knownToken === "discovery-1"
-      ? { viewVersion: 1, status: "unchanged", token: input.knownToken, identity }
-      : {
-          viewVersion: 1,
-          status: "snapshot",
-          token: "discovery-1",
-          value: { identity, sections: {} },
+          capabilities: nativeAgentCapabilities(identity.platform),
+          notices: [],
+          ...(queuedItems.length > 0 ? { queue: { items: queuedItems } } : {}),
         },
+      }),
+    ) satisfies NativeAgentSessionStateUpdate,
+  getNativeAgentDiscoveryUpdate: async (input: ReadInput) =>
+    unchangedOr(input, `discovery-${identity.logicalSessionKey}`, (token) => ({
+      viewVersion: 1,
+      status: "snapshot",
+      token,
+      value: { identity, sections: {} },
+    })),
   getAgentHandoff: async () => null,
   dispatchNativeAgentIntent: dispatchMock,
   getNativeAgentModelCatalog: async (_environmentId: string, platform: string) =>

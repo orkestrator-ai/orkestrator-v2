@@ -1618,6 +1618,21 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   return api;
 }
 
+/**
+ * Stops everything a gateway from `createBrowserGatewayApi` runs on its own:
+ * the cookie-session probe, its retry timer and window listeners, watchdogs,
+ * and terminal and relayed streams. A no-op for anything else, and after the
+ * first call. Callers that drop a gateway without replacing it through
+ * `installBrowserGatewayApi` must call this, or its timers keep calling
+ * `fetch` for the life of the page.
+ */
+export function disposeBrowserGatewayApi(api: object, reason?: unknown): void {
+  const dispose = browserGatewayDisposers.get(api);
+  if (!dispose) return;
+  browserGatewayDisposers.delete(api);
+  dispose(reason);
+}
+
 export function installBrowserGatewayApi(
   targetWindow: GatewayWindow = window,
   options: BrowserGatewayOptions = {},
@@ -1628,9 +1643,7 @@ export function installBrowserGatewayApi(
     targetWindow.location.protocol.startsWith("http")
   ) {
     if (options.replaceExisting && targetWindow.orkestrator) {
-      browserGatewayDisposers.get(targetWindow.orkestrator)?.(
-        new Error("Browser gateway replaced"),
-      );
+      disposeBrowserGatewayApi(targetWindow.orkestrator, new Error("Browser gateway replaced"));
       // A replaced gateway may be another backend or other credentials.
       clearProtectedRichContent("gateway-replaced");
     }

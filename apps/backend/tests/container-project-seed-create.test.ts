@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createDockerContainer } from "../src/core/commands-containers";
@@ -242,7 +243,7 @@ test("spawnSetupTerminal reads the container label and emits its notices", async
   const sessionId = `${environment.id}:setup`;
   // Reuse a terminal handle so this integration test exercises the production
   // notice path without spawning a real interactive Docker shell.
-  Object.assign(context.runtime.terminals, { process: () => ({ pid: 123 }) });
+  Object.assign(context.runtime.terminals, { process: () => ({ pid: fakePid(123) }) });
   await withDockerScript(
     `#!/bin/sh
 case "$*" in

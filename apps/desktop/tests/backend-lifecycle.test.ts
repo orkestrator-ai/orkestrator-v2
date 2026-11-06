@@ -66,6 +66,17 @@ describe("desktop backend lifecycle", () => {
     await expect(controls.getWebClientStatus()).resolves.toMatchObject({ enabled: false });
   });
 
+  /**
+   * The held quit is re-issued on its own `setTimeout(0)`, scheduled only once
+   * the hold settles. A loaded host that stalls the event loop past a fixed
+   * sleep runs that already-due sleep before the quit timer the same wake-up
+   * schedules, so wait for the quit itself, with a bound.
+   */
+  async function waitForQuits(state: { quits: number }, count: number): Promise<void> {
+    const deadline = Date.now() + 3_000;
+    while (state.quits < count && Date.now() < deadline) await Bun.sleep(1);
+  }
+
   function fakeQuittingApp() {
     const listeners = new Map<string, Array<(event: { preventDefault(): void }) => void>>();
     const state = { prevented: 0, quits: 0 };
@@ -105,7 +116,7 @@ describe("desktop backend lifecycle", () => {
     expect(state.quits).toBe(0);
 
     exited.resolve();
-    await Bun.sleep(5);
+    await waitForQuits(state, 1);
     expect(state.quits).toBe(1);
     emit("will-quit");
     expect(state.prevented).toBe(2);
@@ -118,7 +129,7 @@ describe("desktop backend lifecycle", () => {
     registerBackendShutdown(app as never, backendProcess as never, 10);
     emit("before-quit");
     emit("will-quit");
-    await Bun.sleep(60);
+    await waitForQuits(state, 1);
     expect(state.quits).toBe(1);
   });
 });

@@ -233,3 +233,21 @@ Original failure evidence: `.orkestrator/review-artifacts/review-validation-2b4e
 - **Original evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HtWRHT/bridges.log.gz` (compressed by aggregate finalization).
 - **Complete unchanged owner rerun:** `mise run test:logged -- --name merge-codex-fake-alone -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed with exit 0 in 0.3 s. Passing raw output was removed by the logged runner.
 - **Assessment:** recurrence of the known intermittent deadline. The cause is not established; no assertion, timeout, skip or implementation in this owner changed. The original aggregate remains non-green.
+
+## Investigation — 2026-11-06 (not reproduced; still open)
+
+- 200 in-process repetitions of the owner passed (`mise run test:logged -- --name br-fakecodex-stress -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --rerun-each=200`, 15.9 s).
+- 40 fresh-process runs of this owner together with `runtime-env.test.ts`
+  (`--parallel=2`), idle and then with three CPU-bound loops and host load
+  average 37, passed (`br-0093-loop`, `br-0093-loop-load`).
+- A standalone harness spawned the fake's `--version` / `exec` paths 1,500
+  times (six at a time, with the parent's event loop blocked 30 ms in every
+  40 ms) on both Bun 1.4.0 and 1.4.4. Every child emitted `close`.
+- Observation: the case and 0093 have the same shape. In each, the timed-out test
+  is the *first* in its file to spawn a child process. The later spawning tests
+  (here the app-server handshake, with its own 2 s inner wait) have not been
+  reported. The deadline is always reached at about 5,000 ms, never a few
+  hundred ms past it, which fits a child whose exit is never observed better
+  than a slow start, because the next test's 2 s wait would also catch a slow start.
+  Unconfirmed. The next recurrence should record whether the child process
+  was still alive and whether `exit` fired without `close`.

@@ -1,3 +1,4 @@
+import "./testing/unit-test-env.js";
 import { describe, expect, test } from "bun:test";
 import { externalSessionToken, parseExternalSessionToken } from "./acp-context.js";
 

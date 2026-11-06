@@ -105,6 +105,12 @@ export interface ObjectStoreOptions {
   manifestCache?: Partial<ManifestCacheLimits>;
   /** Replaces the fsync itself, for tests that observe order or inject failure. */
   fsync?: SyncPath;
+  /**
+   * The compressed bytes at which a batch flushes itself; defaults to
+   * {@link BATCH_MAX_BYTES}. Tests lower it so reaching the bound does not
+   * take 64 MiB of incompressible input.
+   */
+  batchMaxBytes?: number;
 }
 
 export type { SyncPath };
@@ -158,6 +164,7 @@ export class ObjectStore {
   private readonly unsyncedDirectories = new Set<string>();
   private directorySync: Promise<unknown> = Promise.resolve();
   private readonly sync: SyncPath;
+  private readonly batchMaxBytes: number;
   private readonly zlibSlots = new CallSlots(MAX_OFF_LOOP_ZLIB_CALLS);
   /** Parsed manifests by id; {@link readManifest} in capture.ts reads through it. */
   readonly manifests: ManifestCache;
@@ -177,6 +184,7 @@ export class ObjectStore {
     this.objects = join(options.root, "objects");
     this.durable = options.durable ?? true;
     this.sync = options.fsync ?? fsyncPath;
+    this.batchMaxBytes = options.batchMaxBytes ?? BATCH_MAX_BYTES;
     this.manifests = new ManifestCache(options.manifestCache);
   }
 
@@ -337,7 +345,7 @@ export class ObjectStore {
     }
     batch.objects.set(id, object);
     batch.bytes += object.size;
-    if (batch.objects.size >= BATCH_MAX_OBJECTS || batch.bytes >= BATCH_MAX_BYTES)
+    if (batch.objects.size >= BATCH_MAX_OBJECTS || batch.bytes >= this.batchMaxBytes)
       await this.publish(batch);
     return { id, created: true };
   }

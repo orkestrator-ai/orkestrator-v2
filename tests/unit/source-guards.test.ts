@@ -1,0 +1,464 @@
+import { describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  BASELINE_PATH,
+  REGENERATE_COMMAND,
+  baselineFromFindings,
+  compareWithBaseline,
+  formatRegressions,
+  formatStale,
+  parseBaseline,
+  serializeBaseline,
+  type Baseline,
+} from "../source-guards/baseline";
+import { GUARD_IDS, type GuardId, type SourceGuard } from "../source-guards/guard";
+import { releasedPortRebind } from "../source-guards/released-port-rebind";
+import {
+  SOURCE_GUARDS,
+  emptyFindings,
+  listTestSources,
+  scanRepository,
+  scanSource,
+  type Findings,
+} from "../source-guards/scan";
+import { sleepBeforeNegativeAssertion } from "../source-guards/sleep-before-negative-assertion";
+import { smallFakePid } from "../source-guards/small-fake-pid";
+import { subprocessWithoutBudget } from "../source-guards/subprocess-without-budget";
+
+const ROOT = path.resolve(import.meta.dir, "../..");
+const ADVICE = Object.fromEntries(SOURCE_GUARDS.map((guard) => [guard.id, guard.advice])) as Record<
+  GuardId,
+  string
+>;
+
+/** Lines the guard reports for a snippet, as a scan of that one file would. */
+function lines(guard: SourceGuard, source: string, file = "fixture.test.ts"): number[] {
+  return scanSource({ path: file, source, isBunTest: /\.test\./.test(file) }, [guard]).map(
+    (finding) => finding.line,
+  );
+}
+
+describe("source guards over the repository", () => {
+  test("no file has more findings than the baseline allows, and the baseline is not stale", () => {
+    const findings = scanRepository(ROOT);
+    const baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"));
+    const { regressions, stale } = compareWithBaseline(findings, baseline);
+    expect(formatRegressions(regressions, ADVICE)).toBe("");
+    expect(formatStale(stale)).toBe("");
+  }, 30_000);
+
+  test("the committed baseline is in the regenerated form", () => {
+    const text = readFileSync(BASELINE_PATH, "utf8");
+    expect(serializeBaseline(parseBaseline(text))).toBe(text);
+  });
+});
+
+describe("the source walk", () => {
+  test("reads test files and test-support modules once, skipping dependencies and symlinks", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "source-guards-walk-"));
+    try {
+      const included = [
+        "apps/web/src/thing.test.tsx",
+        "bridges/example/src/thing.spec.ts",
+        "packages/protocol/src/testing/helper.ts",
+        "apps/backend/tests/command-fixtures.ts",
+        "bridges/example/src/app-test-harness.ts",
+        "apps/backend/src/core/public-api/test-support.ts",
+        "scripts/thing.test.ts",
+        "e2e/agent-testing/thing.spec.ts",
+        "tests/helpers/anything.ts",
+      ];
+      const excluded = [
+        "apps/web/src/thing.ts",
+        "apps/web/node_modules/dependency/thing.test.ts",
+        "bridges/example/dist/thing.test.ts",
+        "tests/.git/thing.test.ts",
+        "tests/types.d.ts",
+        "tests/fixtures/data.json",
+        "tests/source-guards/fixtures/offender.test.ts",
+        "docs/thing.test.ts",
+      ];
+      for (const file of [...included, ...excluded]) {
+        mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        writeFileSync(path.join(root, file), "export {};\n");
+      }
+      symlinkSync(path.join(root, "apps/web/src"), path.join(root, "apps/linked"), "dir");
+      expect(listTestSources(root)).toEqual([...included].sort());
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a candidate file that does not parse fails the scan instead of passing", () => {
+    expect(() =>
+      scanSource(
+        {
+          path: "broken.test.ts",
+          source: "await Bun.sleep(5); expect(x).toBe(0); const = ;",
+          isBunTest: true,
+        },
+        [sleepBeforeNegativeAssertion],
+      ),
+    ).toThrow("broken.test.ts:");
+  });
+});
+
+describe("sleep-before-negative-assertion", () => {
+  const guard = sleepBeforeNegativeAssertion;
+
+  test("flags a fixed sleep followed by a negative or exact-count assertion", () => {
+    const source = [
+      "// é — non-ASCII text before a finding must not shift its line",
+      "test('a', async () => {",
+      "  await Bun.sleep(50);",
+      "  expect(spy).not.toHaveBeenCalled();",
+      "  await new Promise((resolve) => setTimeout(resolve, 20));",
+      "  expect(items).toHaveLength(0);",
+      "  await sleep(10);",
+      "  expect(count).toBe(0);",
+      "  await delay(10);",
+      "  expect(calls).toEqual([]);",
+      "  await wait(5);",
+      "  expect(value).toBeUndefined();",
+      "  await page.waitForTimeout(500);",
+      "  await expect(page.getByText('x')).not.toBeVisible();",
+      "  await setTimeout(30);",
+      "  expect(done).toBe(false);",
+      "  await new Promise((resolve) => { setTimeout(resolve, 15); });",
+      "  expect(handle).toBeNull();",
+      "  await Bun.sleep(5);",
+      "  expect(started).toBe(true);",
+      "  const total = calls.length;",
+      "  expect(fn).toHaveBeenCalledTimes(1);",
+      "});",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([3, 5, 7, 9, 11, 13, 15, 17, 19]);
+  });
+
+  test("follows local helpers that sleep and sleeps inside act", () => {
+    const source = [
+      "const realTick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));",
+      "async function settle(ms: number) { await Bun.sleep(ms + 30); }",
+      "const flushTimers = () => new Promise((resolve) => setTimeout(resolve, 25));",
+      "const pause = (ms: number) => realTick(ms);",
+      "test('b', async () => {",
+      "  await realTick(30);",
+      "  expect(fn).toHaveBeenCalledTimes(2);",
+      "  await settle(10);",
+      "  expect(x).toBeFalsy();",
+      "  await flushTimers();",
+      "  expect(y).toBeNull();",
+      "  await act(() => new Promise((resolve) => setTimeout(resolve, 40)));",
+      "  expect(z).toEqual([]);",
+      "  await act(async () => { await Bun.sleep(10); });",
+      "  expect(w).not.toContain('a');",
+      "  await pause(5);",
+      "  expect(v).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([6, 8, 10, 12, 14, 16]);
+  });
+
+  test("does not flag positive assertions, awaited events, zero or named delays, or other blocks", () => {
+    const source = [
+      "const wait = mock(async (_ms: number) => {});",
+      "test('positive assertions', async () => {",
+      "  await Bun.sleep(50);",
+      "  expect(spy).toHaveBeenCalled();",
+      "  expect(count).toBe(1);",
+      "});",
+      "test('an awaited event in between', async () => {",
+      "  await Bun.sleep(50);",
+      "  await waitFor(() => expect(row).toBeTruthy());",
+      "  expect(spy).not.toHaveBeenCalled();",
+      "});",
+      "test('a zero delay yields, it does not wait', async () => {",
+      "  await new Promise((resolve) => setTimeout(resolve, 0));",
+      "  expect(items).toHaveLength(0);",
+      "});",
+      "test('a named delay', async () => {",
+      "  await Bun.sleep(SETTLE_MS);",
+      "  expect(items).toHaveLength(0);",
+      "});",
+      "test('a local wait that is not a sleep', async () => {",
+      "  await wait(5);",
+      "  expect(items).toHaveLength(0);",
+      "});",
+      "test('an assertion in another block', async () => {",
+      "  await Bun.sleep(5);",
+      "  if (flag) { expect(items).toHaveLength(0); }",
+      "});",
+      "test('a timer that is not awaited', () => {",
+      "  setTimeout(() => { done = true; }, 50);",
+      "  expect(done).toBe(false);",
+      "});",
+      "test('controlled time', () => {",
+      "  timer.advance();",
+      "  expect(spy).not.toHaveBeenCalled();",
+      "});",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([]);
+  });
+});
+
+describe("released-port-rebind", () => {
+  const guard = releasedPortRebind;
+
+  test("flags helpers that bind port 0, read the port and release it", () => {
+    const source = [
+      "import net from 'node:net';",
+      "function getPortFromProbe(): Promise<number> {",
+      "  return new Promise((resolve) => {",
+      "    const server = net.createServer();",
+      "    server.listen(0, '127.0.0.1', () => {",
+      "      const { port } = server.address() as AddressInfo;",
+      "      server.close(() => resolve(port));",
+      "    });",
+      "  });",
+      "}",
+      "function bunPort(): number {",
+      "  const probe = Bun.serve({ port: 0, fetch: () => new Response('x') });",
+      "  const port = probe.port;",
+      "  probe.stop(true);",
+      "  return port;",
+      "}",
+      "test('refused', async () => {",
+      "  const closed = createServer();",
+      "  const port = await new Promise<number>((resolve) =>",
+      "    closed.listen({ host: '127.0.0.1', port: 0 }, () => resolve(closed.address().port)),",
+      "  );",
+      "  await new Promise<void>((resolve) => closed.close(() => resolve()));",
+      "  await connect(port);",
+      "});",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([5, 12, 20]);
+  });
+
+  test("flags calls to free-port helpers by name and the free-port packages", () => {
+    const source = [
+      "import getPort from 'get-port';",
+      "const a = await getFreePort();",
+      "const b = await findFreePort();",
+      "const [c, d] = await reserveLoopbackPorts(2);",
+      "const e = await fixtures.reserveFreePort();",
+      "const f = await getPort();",
+      "const g = await freePort();",
+      "const h = await getAvailablePort();",
+      "const i = await pickPort();",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  test("does not flag a port 0 server that stays bound, closes only in cleanup or errors, or retries", () => {
+    const source = [
+      "test('bound', async () => {",
+      "  const server = Bun.serve({ port: 0, fetch: () => new Response('ok') });",
+      "  const port = server.port;",
+      "  const url = `http://127.0.0.1:${server.port}/`;",
+      "  try { await fetch(url); await fetch(`http://127.0.0.1:${port}`); } finally { server.stop(); }",
+      "  expect(url).toContain('127.0.0.1');",
+      "});",
+      "test('cleanup', async () => {",
+      "  const other = createServer();",
+      "  await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve));",
+      "  const port = (other.address() as AddressInfo).port;",
+      "  cleanups.push(() => other.close());",
+      "  afterEach(() => other.close());",
+      "  await probe(port);",
+      "});",
+      "async function listenEphemeral(server = createServer()) {",
+      "  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));",
+      "  const address = server.address();",
+      "  if (!address || typeof address === 'string') { server.close(); throw new Error('no port'); }",
+      "  return { server, port: address.port };",
+      "}",
+      "test('retry', async () => {",
+      "  let port = 0;",
+      "  await retryOnAddressInUse(() => {",
+      "    const probe = Bun.serve({ port: 0, fetch: () => new Response('x') });",
+      "    port = probe.port;",
+      "    probe.stop(true);",
+      "    return start(port);",
+      "  });",
+      "});",
+      "const fixed = createServer().listen(3000);",
+      "const owned = server.getPort();",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([]);
+  });
+});
+
+describe("subprocess-without-budget", () => {
+  const guard = subprocessWithoutBudget;
+
+  test("flags a test file that starts real processes with no budget, at the first one", () => {
+    const cases: Array<[string, number]> = [
+      ["test('a', () => {\n  Bun.spawnSync(['git', 'status']);\n});", 2],
+      [
+        "import { execFile } from 'node:child_process';\nimport { promisify } from 'node:util';\nconst run = promisify(execFile);",
+        3,
+      ],
+      ["import { $ } from 'bun';\ntest('a', async () => {\n  await $`git status`;\n});", 3],
+      [
+        "import * as cp from 'node:child_process';\ntest('a', () => {\n  cp.spawnSync('ls');\n});",
+        3,
+      ],
+      ["import { git } from './test-support';\ntest('a', () => {\n  git(repo, 'init');\n});", 3],
+      ["import { spawn as run } from 'child_process';\ntest('a', () => {\n  run('ls');\n});", 3],
+    ];
+    for (const [source, line] of cases)
+      expect([source, lines(guard, source)]).toEqual([source, [line]]);
+  });
+
+  test("accepts setDefaultTimeout or any explicit test or hook budget", () => {
+    const spawn = "Bun.spawnSync(['git', 'status']);";
+    const cases = [
+      `import { setDefaultTimeout } from 'bun:test';\nsetDefaultTimeout(30_000);\ntest('a', () => { ${spawn} });`,
+      `test('a', () => { ${spawn} }, 30_000);`,
+      `test('a', async () => { ${spawn} }, { timeout: TIMEOUT_MS });`,
+      `beforeAll(() => { ${spawn} }, 60_000);\ntest('a', () => {});`,
+      `test.each([1, 2])('a %d', () => { ${spawn} }, 20_000);`,
+      `test.if(posix)('a', () => { ${spawn} }, 20_000);`,
+    ];
+    for (const source of cases) expect([source, lines(guard, source)]).toEqual([source, []]);
+  });
+
+  test("ignores type-only imports, local fakes, non-test modules and Playwright specs", () => {
+    const source = [
+      "import type { ChildProcess } from 'node:child_process';",
+      "import { type SpawnOptions, spawnSync as unused } from 'node:child_process';",
+      "const git = mock(() => '');",
+      "const spawn = mock(() => fakeChild);",
+      "test('a', () => { git('status'); spawn('ls'); });",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([]);
+    const spawning = "test('a', () => { Bun.spawnSync(['ls']); });";
+    expect(lines(guard, spawning, "tests/helpers/support.ts")).toEqual([]);
+    expect(lines(guard, spawning, "e2e/thing.spec.ts")).toEqual([]);
+  });
+});
+
+describe("small-fake-pid", () => {
+  const guard = smallFakePid;
+
+  test("flags plausible pids given to child-process-shaped fakes", () => {
+    const source = [
+      "const a = new FakeChild(4242);",
+      "const b = new ScriptedChild(2000 + index, options);",
+      "const c = new FakeProcess({ pid: 1 });",
+      "const d = new FakeChild(behaviour.pid ?? 1000 + spawnIndex);",
+      "class FakeSubprocess {",
+      "  pid = 1234;",
+      "  constructor(readonly other = 1) { this.pid = 0; }",
+      "}",
+      "class StubChild { constructor(public pid = 77) {} }",
+      "const e = { pid: 123, kill() {}, stdout: stream() };",
+      "const f = Object.assign(new EventEmitter(), { pid: 123_456, kill: mock(() => true) });",
+      "child.pid = 999;",
+      "const g = { pid: -1, exitCode: null, once: () => {} };",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13]);
+  });
+
+  test("does not flag safe pids, process tables, log fields, injected functions or finished results", () => {
+    const source = [
+      "const a = new FakeChild(FAKE_PID_BASE + index);",
+      "const b = new FakeChild(fakePid(1));",
+      "const c = new FakeChild(2_100_000_000);",
+      "const d = new ScriptedChild(UNMAPPED_PID - 1_000 - spawnIndex, merged);",
+      "const table = [{ pid: 123, ppid: 1, command: 'node' }];",
+      "log({ event: 'spawned', pid: 42 });",
+      "const options = { isProcessAlive: (pid: number) => pid === 4242 };",
+      "signalPidFileProcess(4242);",
+      "const result = { status: 0, stdout: '', stderr: '', pid: 1, output: [], signal: null };",
+      "class ProcessTable { rows = [{ pid: 1 }]; }",
+      "const record = { pid: 4242, bridgePid: 3131, cwd: '/tmp' };",
+    ].join("\n");
+    expect(lines(guard, source)).toEqual([]);
+  });
+});
+
+describe("the ratchet", () => {
+  function findingsOf(entries: Array<[GuardId, string, number[]]>): Findings {
+    const findings = emptyFindings();
+    for (const [guard, file, found] of entries)
+      findings[guard][file] = found.map((line) => ({ guard, file, line }));
+    return findings;
+  }
+
+  function baselineOf(entries: Array<[GuardId, string, number]>): Baseline {
+    const baseline = baselineFromFindings(emptyFindings());
+    for (const [guard, file, count] of entries) baseline[guard][file] = count;
+    return baseline;
+  }
+
+  test("passes when every file is at its baseline", () => {
+    const findings = findingsOf([["small-fake-pid", "a.test.ts", [3, 9]]]);
+    const result = compareWithBaseline(findings, baselineFromFindings(findings));
+    expect(result).toEqual({ regressions: [], stale: [] });
+  });
+
+  test("fails on a new file, with each finding's file:line, the advice and the command", () => {
+    const findings = findingsOf([["released-port-rebind", "new.test.ts", [12]]]);
+    const { regressions, stale } = compareWithBaseline(findings, baselineOf([]));
+    expect(stale).toEqual([]);
+    expect(regressions.map(({ file, allowed }) => [file, allowed])).toEqual([["new.test.ts", 0]]);
+    const message = formatRegressions(regressions, ADVICE);
+    expect(message).toContain("new.test.ts:12");
+    expect(message).toContain("retryOnAddressInUse");
+    expect(message).toContain(REGENERATE_COMMAND);
+  });
+
+  test("fails when a file's count rises above its baseline", () => {
+    const findings = findingsOf([["sleep-before-negative-assertion", "old.test.ts", [4, 8, 15]]]);
+    const baseline = baselineOf([["sleep-before-negative-assertion", "old.test.ts", 2]]);
+    const { regressions } = compareWithBaseline(findings, baseline);
+    expect(regressions).toHaveLength(1);
+    const message = formatRegressions(regressions, ADVICE);
+    expect(message).toContain("old.test.ts: 3 finding(s), baseline allows 2");
+    expect(message).toContain("installControlledTimeout");
+  });
+
+  test("fails on a baseline entry above reality, including a file that no longer offends", () => {
+    const findings = findingsOf([["subprocess-without-budget", "kept.test.ts", [1]]]);
+    const baseline = baselineOf([
+      ["subprocess-without-budget", "kept.test.ts", 1],
+      ["small-fake-pid", "fixed.test.ts", 2],
+      ["small-fake-pid", "deleted.test.ts", 1],
+    ]);
+    const { regressions, stale } = compareWithBaseline(findings, baseline);
+    expect(regressions).toEqual([]);
+    expect(stale.map(({ file, allowed, actual }) => [file, allowed, actual])).toEqual([
+      ["deleted.test.ts", 1, 0],
+      ["fixed.test.ts", 2, 0],
+    ]);
+    expect(formatStale(stale)).toContain(REGENERATE_COMMAND);
+  });
+
+  test("serializes deterministically: every guard, sorted files, trailing newline", () => {
+    const unordered = {
+      "small-fake-pid": { "z.test.ts": 1, "a.test.ts": 2 },
+      "sleep-before-negative-assertion": { "m.test.ts": 3 },
+    } as unknown as Baseline;
+    const text = serializeBaseline(unordered);
+    expect(Object.keys(JSON.parse(text))).toEqual([...GUARD_IDS]);
+    expect(Object.keys(JSON.parse(text)["small-fake-pid"])).toEqual(["a.test.ts", "z.test.ts"]);
+    expect(text.endsWith("}\n")).toBe(true);
+    expect(serializeBaseline(parseBaseline(text))).toBe(text);
+  });
+
+  test("the baseline file exists where the regenerate command writes it", () => {
+    expect(existsSync(BASELINE_PATH)).toBe(true);
+    expect(path.relative(ROOT, BASELINE_PATH)).toBe("tests/source-guards/baseline.json");
+  });
+});

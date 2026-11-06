@@ -1,7 +1,7 @@
 # GitHub picker non-git destination alert missing in the root suite
 
 - **ID:** 0352
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-17
 - **File:** `tests/unit/components/GitHubCloneIntegration.test.tsx`.
 - **Test:** `GitHub picker to project registration > handles a non-git destination through the real add_project handler`.
@@ -48,3 +48,23 @@ No implementation, assertion, timeout, or skip changed.
 - **Complete owning-file rerun:** `mise run test:logged -- --name github-clone-rerun -- bun test ./tests/unit/components/GitHubCloneIntegration.test.tsx --parallel=1 --only-failures` passed unchanged (10.5 s).
 - **Evidence:** `orkestrator-test-run.bgBVht` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in this owner changed.
+
+### Resolution — 2026-11-06
+
+**Root cause.** "Clone project" runs the real `add_project` handler, which
+inspects or clones the destination with real Git subprocesses. The test then
+waited with Testing Library's one-second default
+(`findByRole("alert")`, `waitFor(() => changes === [false])`), although the
+test itself has a 30 s budget. Subprocess start-up on a loaded host exceeds
+that one second.
+
+**Reproduction.** A copy of the unchanged owner whose injected
+`projectCreation.runCommand` sleeps 1.2 s before each `git` command failed all
+five destination cases (1.07–1.26 s); the fixed copy passed 7/7.
+
+**Fix.** `tests/unit/components/GitHubCloneIntegration.test.tsx`: the two
+waits on real Git work use `REAL_GIT_WAIT` (`{ timeout: 20_000 }`, within the
+file's 30 s test budget), with a comment. No assertion changed.
+
+**Verification.** `mise run test:logged -- --name root-0352-stress -- bun test tests/unit/components/GitHubCloneIntegration.test.tsx --rerun-each=5`
+passed (exit 0, 5.6 s).

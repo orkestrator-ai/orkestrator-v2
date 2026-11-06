@@ -15,6 +15,7 @@ import {
   decodeEditorTextFile,
   homePath,
   inferLanguage,
+  PARENT_BOUND_SCRIPT,
   pathExists,
   readFileBase64,
   readTextFile,
@@ -353,8 +354,13 @@ describe.skipIf(process.platform === "win32")("spawnParentBoundCommand", () => {
     }
   };
   /** A follower that reports its own PID, then outlives any test unless stopped. */
-  const startFollower = async () => {
-    const child = spawnParentBoundCommand("/bin/sh", ["-c", "echo $$; exec sleep 30"]);
+  const startFollower = async (
+    spawnWrapper: (
+      command: string,
+      args: string[],
+    ) => ReturnType<typeof spawnParentBoundCommand> = spawnParentBoundCommand,
+  ) => {
+    const child = spawnWrapper("/bin/sh", ["-c", "echo $$; exec sleep 30"]);
     const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
     let output = "";
     for await (const chunk of child.stdout) {
@@ -371,20 +377,53 @@ describe.skipIf(process.platform === "win32")("spawnParentBoundCommand", () => {
     return !isAlive(pid);
   };
 
-  test("stops the command when the backend's end of stdin closes", async () => {
-    // EOF is what a SIGKILLed backend leaves behind: no shutdown path ran.
-    const { child, exited, inner } = await startFollower();
-    child.stdin.end();
-    await exited;
-    expect(await waitForDeath(inner)).toBe(true);
-  });
+  // Each case waits up to five seconds for the follower to die, so the test
+  // budget has to exceed that for a failure to report as one.
+  const FOLLOWER_TEST_TIMEOUT_MS = 15_000;
 
-  test("stops the command when the wrapper is terminated", async () => {
-    const { child, exited, inner } = await startFollower();
-    child.kill("SIGTERM");
-    await exited;
-    expect(await waitForDeath(inner)).toBe(true);
-  });
+  test(
+    "stops the command when the backend's end of stdin closes",
+    async () => {
+      // EOF is what a SIGKILLed backend leaves behind: no shutdown path ran.
+      const { child, exited, inner } = await startFollower();
+      child.stdin.end();
+      await exited;
+      expect(await waitForDeath(inner)).toBe(true);
+    },
+    FOLLOWER_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "stops the command when the wrapper is terminated",
+    async () => {
+      const { child, exited, inner } = await startFollower();
+      child.kill("SIGTERM");
+      await exited;
+      expect(await waitForDeath(inner)).toBe(true);
+    },
+    FOLLOWER_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "stops the command when the wrapper is terminated before it notes the command",
+    async () => {
+      // The command can run, and print, before the wrapper reaches its next
+      // line. Widen that window: the signal must still reach the command
+      // rather than kill the wrapper and orphan it (flake case 4471).
+      const started = '"$@" </dev/null 3<&- &';
+      expect(PARENT_BOUND_SCRIPT.split("\n")).toContain(started);
+      const slowed = PARENT_BOUND_SCRIPT.replace(started, `${started}\nsleep 0.5`);
+      const { child, exited, inner } = await startFollower((command, args) =>
+        spawnCommand("/bin/sh", ["-c", slowed, "orkestrator-follower", command, ...args]),
+      );
+      child.kill("SIGTERM");
+      await exited;
+      const died = await waitForDeath(inner);
+      if (!died) process.kill(inner, "SIGKILL");
+      expect(died).toBe(true);
+    },
+    FOLLOWER_TEST_TIMEOUT_MS,
+  );
 
   test("passes the command's output and exit status through", async () => {
     const child = spawnParentBoundCommand("/bin/sh", ["-c", "echo out; echo err >&2; exit 7"]);

@@ -54,6 +54,9 @@ describe("streamed media in Chromium", () => {
   let app: Server | undefined;
   let directory: string | undefined;
 
+  // Launching Chromium beside the aggregate's other browser suites has taken
+  // over Bun's 5 s hook default; content-server.browser.test.ts gives its
+  // launch the same budget.
   beforeAll(async () => {
     if (CHROMIUM) {
       browser = await chromium.launch({
@@ -62,7 +65,7 @@ describe("streamed media in Chromium", () => {
         args: ["--autoplay-policy=no-user-gesture-required"],
       });
     }
-  });
+  }, 60_000);
   afterAll(async () => {
     await browser?.close();
     await content?.close();

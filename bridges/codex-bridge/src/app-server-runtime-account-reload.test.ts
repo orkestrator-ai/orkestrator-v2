@@ -83,6 +83,15 @@ describe("stored account reload admission", () => {
         expect(h.engine.getAccountLoginKind()).toBe("apiKey");
         const failedMessages = await h.runtime.getMessages(sessionId);
         const events = observeReloads(h.engine);
+        // The refusal snapshots the refused credential's fingerprint with an
+        // asynchronous file read. Replace the credential only once that read
+        // has landed: on a loaded host it can still be pending here, read the
+        // replacement as the refused login, and never request the reload
+        // (5880).
+        const refused = (h.engine as unknown as { refusedLoginFingerprint?: Promise<unknown> })
+          .refusedLoginFingerprint;
+        expect(refused).toBeDefined();
+        await refused;
         storeLogin();
         replaced = true;
         if (replacement === "account-updated")

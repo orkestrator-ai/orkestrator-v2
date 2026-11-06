@@ -1,7 +1,7 @@
 # Remote workspace grouping delivery posted five messages instead of none
 
 - **ID:** 1531
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** the grouping-delivery case near the then line 819 (now
   `browser grouping delivery uses the current workspace envelope and survives grant replacement`, line 894, or its neighbour at 870)
@@ -70,3 +70,32 @@ The component, owner and machine grouping store have no diff in
 `origin/main...HEAD`. No new root cause was established and no federation
 assertion or implementation was changed. This recurrence remains an aggregate
 validation limitation; the isolated pass does not make the aggregate green.
+
+### Resolution — 2026-11-06
+
+**Root cause (product).** In `FrameRealm` (`RemoteWorkspaceRegion.tsx`), the
+window `message` listener that filters by workspace ID was registered in a
+passive `useEffect`, while `useRealmRequests` swaps its sender (`latest.current.send`)
+in a layout effect. After a grant replacement commits (the frame's `src` names
+`workspace-2`), there is a window before passive effects flush in which the
+old listener still accepts `workspace-1`. A late `ready` from the replaced
+document arriving in that window set `ready.current = true` and posted the
+full shell state (sidebar, files panel, grouping and so on) through the new
+`workspace-2` sender to a document that had not loaded. On a loaded host the
+test's stale `ready` lands in that window, so it saw five or seven posts where
+it expected none.
+
+**Reproduction.** A probe delivered the stale `workspace-1` `ready` from a
+`MutationObserver` on the frame's `src`, at the commit point. On the unchanged
+component it produced 3 posts, and the test's later expectation then failed.
+
+**Fix.** `apps/web/src/components/federation/RemoteWorkspaceRegion.tsx`: the
+listener is registered in `useLayoutEffect`, so it always names the workspace
+the committed frame was given. The owning test now delivers the stale `ready`
+at exactly that point and asserts zero posts, so the race is covered
+deterministically. Without the product fix this assertion fails (expected 0,
+received 3); with it, it passes.
+
+**Verification.** `mise run test:logged -- --name web-1531-owner-stress -- bun --cwd=apps/web test src/components/federation/RemoteWorkspaceRegion.test.tsx --rerun-each=20`
+passed (exit 0, 19.6 s). The combined ten-owner `--parallel=3` run also
+passed. No other test file imports this component.

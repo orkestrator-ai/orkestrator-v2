@@ -19,3 +19,24 @@
 - **Next step:** let tests inject `now` (or scale the deadlines) so the budgets run out only by visit count; keep the production deadlines.
 - **Recurrence (2026-11-01):** in `mise run test` on branch `shared-logger-foundation-and-electron-r1-slice-1-2a438948d729` based on `066fcb497`, host load averages about 29 to 38: `expect(html).toContain("<custom-widget>Widget</custom-widget>")` failed at `tests/browser-preview-annotation-script.test.ts:352`, the same budget symptom. The owner passed alone, and five more times beside the preview transport owner (`--parallel=2`).
 - **Recurrence (2026-11-02):** on branch `shadow-root-annotations-583af4c65646-r1` based on `38d55ee1` (which changes the anchor kit's scope and resolver code but not `sanitizedHtml` or this test), in a focused `--parallel=4` run of ten `browser-preview-*` desktop files on a host running about ten builds: the same truncated `<custom-widget></custom-widget></div><!-- truncated -->` at `tests/browser-preview-annotation-script.test.ts:352` (95.02 ms; 199 passed, 1 failed). The owner passed alone (28/28), and the same ten-file group passed seven times in a row afterwards (200/200 each).
+
+## Investigation — 2026-11-06
+
+The page script's clock is Bun's own process-wide `performance`: inside a
+happy-dom `Window`, `window.performance === globalThis.performance`, and a
+script run with `window.eval` sees the same object. So the harness
+(`apps/desktop/tests/browser-preview-page-harness.ts`) cannot simply freeze
+`window.performance.now` per page, as the 2026-10-25 triage suggested: that
+would freeze the clock for every test in the worker. A probe that made that
+clock advance 2 ms per call did not fail this test (its walk is short enough
+to reach only a few deadline checks), so the trigger is a real stall of
+25 ms or more between two checks (GC, a descheduled worker), not slow progress.
+
+Fix options, not applied: (1) give the anchor kit a clock the script builders
+can set (for example a `now` captured once per capture call from an option
+that tests pass), keeping production deadlines; (2) in the harness, replace
+the global `performance.now` only for the duration of each synchronous
+`eval`/event dispatch and restore it straight after, which needs every direct
+`dispatchEvent` in the suites routed through the harness. (1) is cleaner but
+changes the page script, so it needs a read of
+`docs/architecture/renderer-security.md` first.

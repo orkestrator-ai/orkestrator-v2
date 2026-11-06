@@ -229,6 +229,21 @@ description = "Run a command with bounded persistent logs"
 raw_args = true
 run = "bun scripts/run-logged.ts"
 
+[tasks."test:contention"]
+description = "Run a command with busy-loop burners pinned to its CPU core, to reproduce load-only flakes ([--core N] [--burners K] [--duration S] -- <command>)"
+raw_args = true
+run = "bun scripts/test-under-contention.ts"
+
+[tasks."flaky:recurrence"]
+description = "Say whether a failure of a registered flake on a base is a real recurrence (<case-id> [--base <commit>] [--registry-ref <ref>]; read-only)"
+raw_args = true
+run = "bun scripts/flaky-tests/recurrence-check.ts"
+
+[tasks."flaky:stale"]
+description = "List open flake cases not observed for N days, with evidence for closing them ([--days N] [--group G]; read-only)"
+raw_args = true
+run = "bun scripts/flaky-tests/stale-report.ts"
+
 [tasks."playwright:install"]
 description = "Download the Chromium builds the pinned Playwright needs; a no-op when they are already installed"
 # A new host, or a Playwright upgrade, otherwise fails every browser test with

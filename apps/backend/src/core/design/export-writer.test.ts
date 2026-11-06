@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
@@ -115,7 +116,7 @@ function fakeSpawn(behaviour: (child: FakeChild) => void): {
       child.stdout = new PassThrough();
       child.stderr = new PassThrough();
       child.stdin.resume();
-      child.pid = 4242;
+      child.pid = fakePid(4242);
       child.kill = mock(() => true);
       children.push(child);
       setTimeout(() => behaviour(child), 1);

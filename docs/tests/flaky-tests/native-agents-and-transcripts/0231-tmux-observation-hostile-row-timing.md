@@ -1,7 +1,7 @@
 # Hostile tmux row observation exceeds its timing bound
 
 - **ID:** 0231
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `tmux observations > bounds hostile padded rows and unterminated terminal controls`
 - **File:** `packages/protocol/src/tmux-observation.test.ts:326`
@@ -27,3 +27,10 @@ mise run test:logged -- --name preparation-tmux-owner -- bun test --cwd packages
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the guard measured wall-clock time for one parse with a 100 ms bound. The parse takes about 3 ms of CPU. A worker that a loaded host deschedules, or one GC pause, reached 120-172 ms without the parser doing any more work.
+- **Fix:** `tmux-observation.test.ts` now bounds the parser's own CPU time (`process.cpuUsage()`, user plus system) and takes the fastest of five runs, still against 100 ms. Every run still asserts the empty usage and the null prompt. A slow parser fails all five runs, so the guard still catches it: with a 150 ms busy loop injected temporarily into `parseTmuxAgentObservation`, the test failed with `Expected: < 100, Received: 147.172`.
+- **Reproduced:** no. The failure needs host descheduling, which was not induced.
+- **Verification:** `mise run test:logged -- --name n0231-owner -- bun test --cwd packages/protocol --preload ../../tests/setup-node.ts ./src/tmux-observation.test.ts --rerun-each=50` passed 1,000 tests with 0 failures.

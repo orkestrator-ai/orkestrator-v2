@@ -268,24 +268,43 @@ describe("http1Request", () => {
         request.on("end", () => response.end(String(bytes)));
       }),
     );
+    // Observe when the headers timer is armed rather than racing it: with a
+    // 60 ms timeout and a 160 ms upload, a loaded host could also let the real
+    // timer expire in the upstream's own think time after the body (flake 2413).
+    // The distinctive delay identifies the headers timer among other timers.
+    const headersTimeoutMs = 4_321;
+    let chunksYielded = 0;
+    const armedAfterChunks: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+      if (delay === headersTimeoutMs) armedAfterChunks.push(chunksYielded);
+      return realSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout;
     async function* slow() {
       for (let index = 0; index < 4; index += 1) {
         await Bun.sleep(40);
         yield Buffer.alloc(10, index);
+        chunksYielded += 1;
       }
     }
-    const result = await http1Request(
-      await socketTo(port),
-      options({
-        method: "POST",
-        body: Readable.from(slow()),
-        bodyLength: null,
-        headersTimeoutMs: 60,
-        bodyIdleTimeoutMs: 1_000,
-      }),
-    );
-    expect(result.statusCode).toBe(200);
-    expect(String(await readAll(result.body))).toBe("40");
+    try {
+      const result = await http1Request(
+        await socketTo(port),
+        options({
+          method: "POST",
+          body: Readable.from(slow()),
+          bodyLength: null,
+          headersTimeoutMs,
+          bodyIdleTimeoutMs: 1_000,
+        }),
+      );
+      expect(result.statusCode).toBe(200);
+      expect(String(await readAll(result.body))).toBe("40");
+      // Armed once, and only after the whole body had been handed over.
+      expect(armedAfterChunks).toEqual([4]);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
   });
 
   test("the headers timeout still fires once the body is sent", async () => {

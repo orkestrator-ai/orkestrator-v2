@@ -1,7 +1,7 @@
 # Standalone backend readiness SIGKILL escalation fails under aggregate load
 
 - **ID:** 0491
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `waitForStandaloneBackendReady > escalates SIGTERM to SIGKILL after the grace period`
 - **File:** `apps/backend/tests/standalone-ready.test.ts`
@@ -216,3 +216,10 @@ aggregate wrapper: `/tmp/orkestrator-test-run.4TSHXn/merge-default-tests.log.gz`
 This repeats the early-SIGKILL assertion; scheduling sensitivity remains a
 hypothesis. No readiness implementation, assertion, timeout or skip changed.
 The isolated pass does not make the aggregate green.
+
+### Resolution — 2026-11-06
+
+- **Root cause (test):** a real-timer ordering race. After the 40 ms ready deadline, the implementation sends SIGTERM and arms a 30 ms SIGKILL escalation. The rejection is then delayed by the 10 ms `Bun.sleep` stderr diagnostic. The test asserted that only SIGTERM had been sent when the rejection arrived, so it assumed the 10 ms sleep would finish before the 30 ms timer. Under load the sleep's wake-up slipped past the grace and SIGKILL was already recorded.
+- **Reproduced:** yes. Raising the stderr diagnostic timeout to 45 ms (simulating the delayed wake-up) failed line 90 with `["SIGTERM", "SIGKILL"]`, the aggregate symptom.
+- **Fix (test only, `apps/backend/tests/standalone-ready.test.ts`):** both cases pass a distinctive `killGraceMs` (`HELD_KILL_GRACE_MS`, 987,653 ms) captured with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`), so the SIGKILL escalation runs only when the test advances it. After the rejection, each case asserts `["SIGTERM"]`, asserts that exactly one escalation is armed, advances it, and asserts `["SIGTERM", "SIGKILL"]`. The ready deadline and stderr sleep stay on the real clock.
+- **Verification:** `mise run test:logged -- --name ready-stress -- bun test --cwd apps/backend tests/standalone-ready.test.ts --rerun-each=30 --parallel=2` PASS (11.6 s, exit 0). With the stderr diagnostic sleep temporarily raised to 200 ms, beyond any grace, the fixed file still passed (`ready-fixed-slow`).

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:net";
+import type { Server } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { listenEphemeral } from "@orkestrator/protocol/testing/ports";
 import { DEFAULT_CONTROL_MCP_PORT, DEFAULT_GATEWAY_PORT } from "../src/fixed-ports.js";
 import { GatewayContext } from "../src/gateway-context.js";
 import { GatewayLifecycle } from "../src/gateway-lifecycle.js";
@@ -80,14 +81,11 @@ async function walk(
   }
 }
 
+/** A port this test keeps bound, so no other process can take it. */
 async function holdFreePort(): Promise<number> {
-  const server = createServer();
+  const { server, port } = await listenEphemeral();
   servers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  return (server.address() as { port: number }).port;
+  return port;
 }
 
 describe("gateway port fallback", () => {

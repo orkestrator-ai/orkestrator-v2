@@ -703,18 +703,24 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       expect(reports).toEqual([]);
       const headers = await session.headersFor(descriptor.url);
       expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+      // The timer starts at the first buffered sample, the tunnel connect. On a
+      // loaded host the first byte can land more than one interval later, so
+      // the two samples may arrive in one report or in two consecutive ones.
+      const reported = (name: string) =>
+        reports.flatMap(
+          (report) => (report as { histograms: Record<string, number[]> }).histograms[name] ?? [],
+        );
       const deadline = Date.now() + 2_000;
-      while (reports.length === 0 && Date.now() < deadline) await Bun.sleep(10);
-      expect(reports).toHaveLength(1);
-      expect(reports[0]).toMatchObject({
-        histograms: {
-          "desktop.connect_ms": [expect.any(Number)],
-          "desktop.first_byte_ms": [expect.any(Number)],
-        },
-      });
+      while (reported("desktop.first_byte_ms").length === 0 && Date.now() < deadline)
+        await Bun.sleep(10);
+      expect(reports.length).toBeGreaterThanOrEqual(1);
+      expect(reports.length).toBeLessThanOrEqual(2);
+      expect(reported("desktop.connect_ms")).toEqual([expect.any(Number)]);
+      expect(reported("desktop.first_byte_ms")).toEqual([expect.any(Number)]);
       // A rejected report is dropped, not retried or kept growing.
+      const reportsBeforeDispose = reports.length;
       await timed.disposeAll();
-      expect(reports).toHaveLength(1);
+      expect(reports).toHaveLength(reportsBeforeDispose);
     } finally {
       await timed.disposeAll();
     }
@@ -753,7 +759,16 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
     expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
     manager.release(descriptor.serviceKey, "tab-2");
-    await Bun.sleep(120);
+    // Retirement drops the service at once, then closes the listener and only
+    // then releases the attachment, so wait for the last step rather than for
+    // a fixed slice of a possibly loaded host's time.
+    const deadline = Date.now() + 3_000;
+    while (
+      (!invoked.includes("release_preview_attachment") ||
+        harness.runtime.access.stats().attachments !== 0) &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(5);
     expect(manager.stats().services).toBe(0);
     expect(invoked).toContain("release_preview_attachment");
     expect(harness.runtime.access.stats().attachments).toBe(0);

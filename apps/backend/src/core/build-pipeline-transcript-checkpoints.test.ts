@@ -14,6 +14,14 @@ import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-
 import { readStoredValue, storageInternals } from "./storage-test-support.js";
 
 /**
+ * The active-tail cases first build several long histories (about 40 real
+ * chunk and directory fsyncs plus SQLite WAL syncs) before measuring one
+ * update. That setup is bound by disk sync latency, which on a loaded host or
+ * a slow volume exceeds Bun's 5 s default; it is not waiting on anything else.
+ */
+const DURABLE_HISTORY_TEST_TIMEOUT_MS = 30_000;
+
+/**
  * Serialized size of every committed control record. An upper bound on what a
  * control write stores: the record layout rewrites only the changed rows.
  */
@@ -90,54 +98,58 @@ async function body(storage: StorageService, id: string, value: PipelineSession)
 }
 
 describe("build pipeline transcript checkpoints", () => {
-  test("an active tail update writes one tail chunk, a manifest and the small control record", async () => {
-    await withStorage(async (storage, dataDir) => {
-      const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
-      // Several long pipelines, each with completed stages.
-      const histories = new Map<string, unknown[]>();
-      for (const id of ["p1", "p2", "p3"]) {
-        const sessions = ["build", "review", "verify"].map((phase) =>
-          session(`${id}:${phase}`, phase as PipelineSession["phase"]),
-        );
-        for (const value of sessions) {
-          const history = messages(1_500, `${value.sessionKey}`);
-          histories.set(value.sessionKey, history);
-          checkpoints.observe(value, history);
+  test(
+    "an active tail update writes one tail chunk, a manifest and the small control record",
+    async () => {
+      await withStorage(async (storage, dataDir) => {
+        const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+        // Several long pipelines, each with completed stages.
+        const histories = new Map<string, unknown[]>();
+        for (const id of ["p1", "p2", "p3"]) {
+          const sessions = ["build", "review", "verify"].map((phase) =>
+            session(`${id}:${phase}`, phase as PipelineSession["phase"]),
+          );
+          for (const value of sessions) {
+            const history = messages(1_500, `${value.sessionKey}`);
+            histories.set(value.sessionKey, history);
+            checkpoints.observe(value, history);
+          }
+          await save(storage, checkpoints, pipeline(id, sessions));
         }
-        await save(storage, checkpoints, pipeline(id, sessions));
-      }
-      const historyBytes = [...histories.values()].reduce(
-        (sum, history) => sum + JSON.stringify(history).length,
-        0,
-      );
-      const controlBytes = controlRecordBytes(dataDir);
-      expect(controlBytes).toBeLessThan(historyBytes / 100);
+        const historyBytes = [...histories.values()].reduce(
+          (sum, history) => sum + JSON.stringify(history).length,
+          0,
+        );
+        const controlBytes = controlRecordBytes(dataDir);
+        expect(controlBytes).toBeLessThan(historyBytes / 100);
 
-      // One active session streams into its newest entry.
-      const active = (await stored(storage, "p2")).sessions[2]!;
-      const history = histories.get(active.sessionKey)!;
-      const streamed = [...history.slice(0, -1), { id: "tail", text: "still streaming" }];
-      const before = storage.buildPipelineTranscriptStats();
-      const current = await stored(storage, "p2");
-      expect(checkpoints.observe(current.sessions[2]!, streamed)).toBe(true);
-      await save(storage, checkpoints, current, (await storage.getBuildPipeline("p2"))!.revision);
-      const after = storage.buildPipelineTranscriptStats();
+        // One active session streams into its newest entry.
+        const active = (await stored(storage, "p2")).sessions[2]!;
+        const history = histories.get(active.sessionKey)!;
+        const streamed = [...history.slice(0, -1), { id: "tail", text: "still streaming" }];
+        const before = storage.buildPipelineTranscriptStats();
+        const current = await stored(storage, "p2");
+        expect(checkpoints.observe(current.sessions[2]!, streamed)).toBe(true);
+        await save(storage, checkpoints, current, (await storage.getBuildPipeline("p2"))!.revision);
+        const after = storage.buildPipelineTranscriptStats();
 
-      const transcriptBytes =
-        after.chunkBytesWritten -
-        before.chunkBytesWritten +
-        (after.manifestBytesWritten - before.manifestBytesWritten);
-      const controlWritten = controlRecordBytes(dataDir);
-      expect(after.chunkWrites - before.chunkWrites).toBe(1);
-      expect(after.chunkBytesWritten - before.chunkBytesWritten).toBeLessThanOrEqual(256 * 1024);
-      // Bytes written per active tail update, measured: not proportional to
-      // the histories of this or any other pipeline.
-      expect(transcriptBytes + controlWritten).toBeLessThan(historyBytes / 20);
-      const updated = (await stored(storage, "p2")).sessions[2]!;
-      expect(updated.messageRevision).toBe(2);
-      expect(await body(storage, "p2", updated)).toEqual(streamed);
-    });
-  });
+        const transcriptBytes =
+          after.chunkBytesWritten -
+          before.chunkBytesWritten +
+          (after.manifestBytesWritten - before.manifestBytesWritten);
+        const controlWritten = controlRecordBytes(dataDir);
+        expect(after.chunkWrites - before.chunkWrites).toBe(1);
+        expect(after.chunkBytesWritten - before.chunkBytesWritten).toBeLessThanOrEqual(256 * 1024);
+        // Bytes written per active tail update, measured: not proportional to
+        // the histories of this or any other pipeline.
+        expect(transcriptBytes + controlWritten).toBeLessThan(historyBytes / 20);
+        const updated = (await stored(storage, "p2")).sessions[2]!;
+        expect(updated.messageRevision).toBe(2);
+        expect(await body(storage, "p2", updated)).toEqual(streamed);
+      });
+    },
+    DURABLE_HISTORY_TEST_TIMEOUT_MS,
+  );
 
   test("a failed checkpoint keeps the old reference and never blocks the control write", async () => {
     await withStorage(async (storage) => {

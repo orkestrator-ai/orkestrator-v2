@@ -89,9 +89,13 @@ describe.skipIf(!CHROMIUM)("in-page deadlines", () => {
     browser = await chromium.launch({ executablePath: CHROMIUM });
     await (await browser.newPage()).close();
   }, 60_000);
+  // Bun gives a hook without an explicit budget the five-second default, and
+  // closing Chromium (every page, the browser process and its profile) can take
+  // longer than that on a loaded host; the timeout is then reported as the
+  // unnamed hook of this describe block (cases 2711 and 2882).
   afterAll(async () => {
     await browser?.close();
-  });
+  }, 60_000);
   for (const stalled of ["headers", "body", "failure"] as const) {
     test(`cleans up watch and status observers for stalled ${stalled}`, async () => {
       const page = await browser.newPage();

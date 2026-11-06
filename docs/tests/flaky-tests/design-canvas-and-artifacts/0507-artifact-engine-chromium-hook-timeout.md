@@ -1,7 +1,7 @@
 # Chromium executable-document policy hook timeout
 
 - **ID:** 0507
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-20
 - **Test:** `executable document policy in chromium > (unnamed)` (hook timeout)
 - **Owner:** `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts`
@@ -89,3 +89,8 @@ implementation, assertion, timeout or skip changed.
 - **Failure:** `(unnamed)` timed out after 5000 ms with "killed 1 dangling process". The engines file then printed `results` as `{}`, so `browser.version()` never ran: the hook that timed out is the `beforeAll` that launches Chromium, not a teardown hook.
 - **Change:** both Chromium launch hooks now take a 60 s timeout (`beforeAll(fn, 60_000)`), the same budget their tests already have. Bun's default for a hook is 5 s, which a cold Chromium launch on a shared CI runner exceeds.
 - **Status:** left open until a CI run on main passes both files with this change.
+
+### Resolution — 2026-11-06
+
+- **Fixed by `9f49e5851`** (2026-11-03, #1686): both Chromium launch hooks take `beforeAll(fn, 60_000)`, as recorded above. The 2026-11-03 CI runs are the last observation. The default suite at `c1724ab74` has since passed, and no later recurrence is recorded.
+- **Verification (this round):** `mise run test:logged -- --name n0507-engines -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts ./src/core/transcript-artifacts/media-stream.browser.test.ts --parallel=2` passed 14 tests with 0 failures. The 26 skips are Firefox and WebKit, which are not installed here.

@@ -659,6 +659,47 @@ afterAll(() => {
   mock.module("@/lib/prompt-queue-persistence", () => realPromptQueuePersistenceSnapshot);
 });
 
+// A startup check that finds Docker or a host tool missing waits a real 1.5 s
+// (Docker) or 250 ms (host tools) before probing again, and unmounting the App
+// does not stop it. Many tests end, and unmount, inside that wait, so the
+// confirming probe used to call the shared `checkDocker`/CLI mocks during
+// whichever test was running when the timer fired: a later test then counted
+// one or two extra probes, and only under load did the timer land in a test
+// that asserted the count (cases 2407, 6061 and 0082). Cancel any confirmation
+// timer a test leaves armed. A test's own `defer*StartupConfirmation` wraps
+// this tracker and restores it, so its captured callbacks are unaffected.
+const STARTUP_CONFIRMATION_DELAYS_MS: ReadonlySet<number> = new Set([
+  DOCKER_STARTUP_CONFIRMATION_DELAY_MS,
+  HOST_TOOL_STARTUP_CONFIRMATION_DELAY_MS,
+]);
+const armedStartupConfirmationTimers = new Set<number>();
+let setTimeoutBeforeStartupConfirmationTracking: typeof window.setTimeout | null = null;
+
+beforeEach(() => {
+  const realSetTimeout = window.setTimeout;
+  setTimeoutBeforeStartupConfirmationTracking = realSetTimeout;
+  window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    if (typeof handler !== "function" || !STARTUP_CONFIRMATION_DELAYS_MS.has(timeout ?? 0)) {
+      return realSetTimeout(handler, timeout, ...args);
+    }
+    const id = realSetTimeout(() => {
+      armedStartupConfirmationTimers.delete(id);
+      handler(...args);
+    }, timeout);
+    armedStartupConfirmationTimers.add(id);
+    return id;
+  }) as typeof window.setTimeout;
+});
+
+afterEach(() => {
+  for (const id of armedStartupConfirmationTimers) window.clearTimeout(id);
+  armedStartupConfirmationTimers.clear();
+  if (setTimeoutBeforeStartupConfirmationTracking) {
+    window.setTimeout = setTimeoutBeforeStartupConfirmationTracking;
+    setTimeoutBeforeStartupConfirmationTracking = null;
+  }
+});
+
 describe("App background processing mounts", () => {
   beforeEach(() => {
     cleanup();

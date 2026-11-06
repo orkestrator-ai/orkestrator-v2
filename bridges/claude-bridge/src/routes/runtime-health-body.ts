@@ -7,6 +7,7 @@
  */
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { openClaudeRuntime } from "../services/session-manager-runtime.js";
 import type { SessionState } from "../types/index.js";
 
 export function sessionRuntimeHealthBody(
@@ -24,7 +25,12 @@ export function sessionRuntimeHealthBody(
       ? { mcpConfig: structuredClone(session.mcpConfigRevision) }
       : {}),
   };
-  if (!session?.health) return { ...emptyRuntimeHealth(), ...mcpConfig };
+  if (!session) return { ...emptyRuntimeHealth(), ...mcpConfig };
+  // Whether the session's Claude CLI is open, in the same vocabulary as the
+  // Cursor and Pi bridges: `detached` once the idle window has released it.
+  // Read from memory only, so observing it never re-attaches the session.
+  const state = openClaudeRuntime(session) ? "attached" : "detached";
+  if (!session.health) return { ...emptyRuntimeHealth(), summary: { state }, ...mcpConfig };
   const { drift, notices } = session.health.snapshot();
-  return { summary: drift ? { drift } : {}, notices, ...mcpConfig };
+  return { summary: { state, ...(drift ? { drift } : {}) }, notices, ...mcpConfig };
 }

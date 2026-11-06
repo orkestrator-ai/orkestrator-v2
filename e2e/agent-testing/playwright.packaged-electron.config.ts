@@ -20,6 +20,7 @@ export default defineConfig({
     "design-canvas-packaged-electron.spec.ts",
     "log-controls-packaged-electron.spec.ts",
     "packaged-security-electron.spec.ts",
+    "watcher-packaged-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

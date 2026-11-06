@@ -1,4 +1,7 @@
 // Test-only PATH shim. Never installed in the host PATH or used by production.
+// `docker-qualification-bin/docker` runs this only for `network create` and
+// execs the real CLI for everything else; the pass-through below serves direct
+// invocations, which are short-lived.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 

@@ -79,6 +79,39 @@ describe("environment inputs section", () => {
     await screen.findByText(/home directories mounted read-only/);
   });
 
+  test("says the record is unavailable when Docker did not answer", async () => {
+    install({
+      get_environment_inputs: () => ({ ...staged, mode: "unknown", revision: null, providers: [] }),
+    });
+    render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+    await screen.findByText(/record of this container.s inputs is unavailable/);
+    expect(screen.queryAllByText(/home directories mounted read-only/)).toHaveLength(0);
+  });
+
+  test("an old runtime with nothing mounted shows nothing, or only its revocations", async () => {
+    const none = {
+      ...staged,
+      mode: "none" as const,
+      revision: null,
+      stagedAt: null,
+      providers: [],
+      missingProviders: [],
+    };
+    install({ get_environment_inputs: () => none });
+    const { container } = render(
+      <EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />,
+    );
+    await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(container.textContent).toBe("");
+    cleanup();
+    install({ get_environment_inputs: () => ({ ...none, revokedProviders: ["codex"] }) });
+    render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+    await screen.findByText(/Codex · revoked for this environment/);
+    expect(screen.getByRole("button", { name: "Allow again" })).toBeTruthy();
+    expect(screen.queryAllByText(/home directories mounted read-only/)).toHaveLength(0);
+  });
+
   test("removing credentials reports a pending rebuild honestly", async () => {
     const revoke = mock((_args: Record<string, unknown>) => ({
       provider: "claude",

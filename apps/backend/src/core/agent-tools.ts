@@ -8,6 +8,8 @@ import { createHash } from "node:crypto";
 import { mintAgentToolsToken } from "@orkestrator/protocol/node/bridge-credential";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { type AgentToolsPeerGate, dockerPeerFilter } from "./agent-tools-peer-filter.js";
+import { closeListeners, listenAgentTools } from "./agent-tools-listen.js";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
@@ -70,6 +72,7 @@ import {
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
 } from "@orkestrator/protocol/transcript-artifacts";
 
+const log = createLogger("docker.reachability");
 const MAX_MCP_REQUEST_BYTES = 512 * 1024;
 const MAX_TITLE_LENGTH = 500;
 const MAX_DESCRIPTION_LENGTH = 100_000;
@@ -965,7 +968,10 @@ function createArtifactOnlyServer(
  * general renderer gateway token or a caller-selectable project id.
  */
 export class AgentToolsServer {
+  /** The bind-address listener; non-null while the server runs. */
   private server: Server | null = null;
+  /** Every listener, including the loopback one `listenAgentTools` may add. */
+  private listeners: Server[] = [];
   private port: number | null = null;
 
   /** Bound port, so preview resolution can refuse it as a target. */
@@ -1029,64 +1035,51 @@ export class AgentToolsServer {
           }
         });
       };
-      const server = createServer(dispatch);
-      // These events otherwise write automatic 400/408/431, 100 or 417
-      // replies before the request handler can finish peer admission.
-      server.on("clientError", (_error, socket) => socket.destroy());
-      server.on("timeout", (socket) => socket.destroy());
-      server.on("checkContinue", (request, response) => dispatch(request, response, "continue"));
-      server.on("checkExpectation", (request, response) =>
-        dispatch(request, response, "unsupported"),
-      );
+      const create = () => {
+        const server = createServer(dispatch);
+        // These events otherwise write automatic 400/408/431, 100 or 417
+        // replies before the request handler can finish peer admission.
+        server.on("clientError", (_error, socket) => socket.destroy());
+        server.on("timeout", (socket) => socket.destroy());
+        server.on("checkContinue", (request, response) => dispatch(request, response, "continue"));
+        server.on("checkExpectation", (request, response) =>
+          dispatch(request, response, "unsupported"),
+        );
 
-      // A peer the filter already refuses is closed on accept, before the
-      // request is read; one it cannot decide yet is decided per request.
-      server.on("connection", (socket) => {
-        if (this.peerFilter.verdict(socket.remoteAddress) === "refuse") {
-          this.peerFilter.recordRefusal(socket.remoteAddress);
-          socket.destroy();
-        }
-      });
-      const listen = (port: number) =>
-        new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(port, this.bindAddress, () => {
-            server.off("error", reject);
-            resolve();
-          });
+        // A peer the filter already refuses is closed on accept, before the
+        // request is read; one it cannot decide yet is decided per request.
+        server.on("connection", (socket) => {
+          if (this.peerFilter.verdict(socket.remoteAddress) === "refuse") {
+            this.peerFilter.recordRefusal(socket.remoteAddress);
+            socket.destroy();
+          }
         });
-      const preferredPort = port ?? this.workflowResults?.capabilityPort() ?? 0;
+        return server;
+      };
+      // The saved port keeps workflow-result capabilities valid across
+      // restarts, but host agents call 127.0.0.1:<port>, so a port whose
+      // loopback address another process holds is given up (todo 7220).
+      const { port: boundPort, servers } = await listenAgentTools({
+        create,
+        bindAddress: this.bindAddress,
+        preferredPort: port ?? this.workflowResults?.capabilityPort() ?? 0,
+        exact: port !== undefined,
+        onLoopbackTaken: (taken) => log.warn("port.loopback-taken", { port: taken }),
+      });
       try {
-        await listen(preferredPort);
+        await this.workflowResults?.recordCapabilityPort(boundPort);
       } catch (error) {
-        // An explicit port is an exact constraint (e.g. isolated evidence must
-        // never fall back to an OS-selected reserved production port).
-        if (
-          port !== undefined ||
-          preferredPort === 0 ||
-          (error as { code?: unknown }).code !== "EADDRINUSE"
-        )
-          throw error;
-        await listen(0);
-      }
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-        throw new Error("Agent tools server did not receive a TCP port");
-      }
-      try {
-        await this.workflowResults?.recordCapabilityPort(address.port);
-      } catch (error) {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await closeListeners(servers);
         throw error;
       }
-      this.server = server;
-      this.port = address.port;
+      this.server = servers[0] ?? null;
+      this.listeners = servers;
+      this.port = boundPort;
       this.unfollowNetworkChanges = this.peerFilter.followNetworkChanges();
       // The primary gateway and desktop supervisor own process lifetime. This
       // auxiliary listener must not keep a partially initialized/test backend
       // alive by itself.
-      server.unref();
+      for (const server of servers) server.unref();
     });
     this.lifecycle = start.catch(() => undefined);
     await start;
@@ -1372,19 +1365,24 @@ export class AgentToolsServer {
 
   async stop(): Promise<void> {
     const stop = this.lifecycle.then(async () => {
-      const server = this.server;
+      const listeners = this.listeners;
       this.server = null;
+      this.listeners = [];
       this.port = null;
       this.credentialsByEnvironment.clear();
       this.scopesByDigest.clear();
       this.stateSignalsByDigest.clear();
       this.unfollowNetworkChanges?.();
       this.unfollowNetworkChanges = null;
-      if (!server) return;
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections?.();
-      });
+      await Promise.all(
+        listeners.map(
+          (server) =>
+            new Promise<void>((resolve, reject) => {
+              server.close((error) => (error ? reject(error) : resolve()));
+              server.closeAllConnections?.();
+            }),
+        ),
+      );
     });
     this.lifecycle = stop.catch(() => undefined);
     await stop;

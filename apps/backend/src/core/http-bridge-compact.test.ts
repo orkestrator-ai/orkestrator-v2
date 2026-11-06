@@ -59,6 +59,26 @@ describe("HTTP bridge compaction", () => {
     },
   );
 
+  test("a compaction Pi was asked to stop is refused in Pi's own words", async () => {
+    const message =
+      "Compaction was stopped before it finished; the conversation was not compacted.";
+    const { provider } = httpProvider(
+      () => Response.json({ error: message, cancelled: true }, { status: 409 }),
+      piConnection,
+    );
+    await expect(provider.performSessionAction!("s-1", { kind: "compact" })).rejects.toThrow(
+      new Error(message),
+    );
+    // Any other refusal keeps naming the operation and the status.
+    const { provider: busy } = httpProvider(
+      () => Response.json({ error: "Session is already running" }, { status: 409 }),
+      piConnection,
+    );
+    await expect(busy.performSessionAction!("s-1", { kind: "compact" })).rejects.toThrow(
+      "pi session compaction failed (HTTP 409): Session is already running",
+    );
+  });
+
   test.each([
     ["Codex", codexConnection],
     ["Grok", grokConnection],

@@ -3,13 +3,14 @@
 ## Task analysis
 
 Analysed 2026-11-01 against `main` at `93b99bfba`. Acted on 2026-11-03 against
-`main` at `4d9ff8690`.
+`main` at `4d9ff8690`, and on 2026-11-06 against `main` at `c1724ab74` (task 1's
+macOS half, tasks 2 and 3, on the Mac `arktech-mini`).
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; real-display Electron and macOS/Windows qualification remain open).
-2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: open.
-3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: open.
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; macOS qualified 2026-11-06; real-display Electron and Windows qualification remain open).
+2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
+3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 
 ### 1. A headless mode for agent-test Electron
 
@@ -179,7 +180,7 @@ browser previews, so they get the fix too.
 
 ### Task 1: surviving network churn in the headless check
 
-The spec fetches scripts and styles with `route.fetch()`, and retries its navigation with a new single-use login link, rather than relying on a quiet host. Its `/proc` assertions run first and are not retried. That keeps the proof independent of other builds' Docker work, which failed the previous version every time when reproduced. Only this spec changed: applying it across the suite changes what those journeys exercise, so that choice was left to [4222](4222-browser-failures-left-after-headless-qualification.md) task 3, which has since applied it to the whole browser suite through `e2e/agent-testing/browser-test.ts`. Retries for the whole browser config were not used, since they would also pass real intermittent failures.
+The spec fetches scripts and styles with `route.fetch()`, and retries its navigation with a new single-use login link, rather than relying on a quiet host. Its `/proc` assertions run first and are not retried. That keeps the proof independent of other builds' Docker work, which failed the previous version every time when reproduced. Only this spec changed: applying it across the suite changes what those journeys exercise, so that choice was left to 4222 (done; deleted 2026-11-06) task 3, which has since applied it to the whole browser suite through `e2e/agent-testing/browser-test.ts`. Retries for the whole browser config were not used, since they would also pass real intermittent failures.
 
 ### Task 1: the runner's test budget
 
@@ -192,6 +193,42 @@ documented contract for dropped output, and raising it is a product decision out
 this ticket, recorded as to-do 4223, since done: the archive now keeps this burst and
 the spec requires it. Without a gap the marker must still be present, and a line printed
 after the burst must always be.
+
+### Task 1: saying so on macOS (2026-11-06)
+
+On this Mac `--headless` was accepted and the profile reached ready, but the
+launcher printed nothing about it: it spoke only when Electron actually went
+headless. A caller who asked for headless, or an agent relying on the
+no-terminal default, got a window with no word why. `electronHeadlessNotice`
+(`lifecycle.ts`) now also prints, on macOS and Windows, that Electron opens a
+window and which input (`--headless`, a variable, or running without a terminal)
+changes nothing there. It asks the same decision as Linux would, so the message
+cannot disagree with the Linux behaviour. A plain interactive run and
+`--no-headless` stay silent. The alternative, leaving it silent and documenting
+the no-op, was rejected because the ticket asks that the launcher say what it
+did. Unit tests cover both platforms; the live run is in Current state.
+
+### Task 2: which host and run (2026-11-06)
+
+The Mac `arktech-mini` is the other host: its login shell is `/bin/zsh`, it has
+no `/etc/profile.d`, and none of `/etc/profile`, `/etc/zprofile`, `/etc/zshrc` or
+the user's zsh startup files mention the systemd OSC context script. An
+interactive login zsh started under a pseudo-terminal emitted no OSC 3008
+sequence (only the count was read, not the output). Shell startup was not changed.
+The case ran against the task 1 profile, which was started with `--fixture`, so
+one disposable profile served both.
+
+### Task 3: no spec changed, the helper copies left as they are (2026-11-06)
+
+Every whole-line comparison of `get_terminal_output_snapshot` output already strips
+control sequences first, so the recommended repair had nothing to move and no owner
+needed a rerun. The raw-snapshot reads that remain are substring checks of a
+computed marker (`$((6*7))` and similar), which an OSC sequence on its own prompt
+or `PS0` line cannot split. The visible-text helper exists as eight near-copies that
+have drifted (some do not strip DCS strings or two-character escapes). Merging them
+would change files with no failing assertion, several of which need Docker or a
+real display to run, so it is recorded as [7340](7340-shared-terminal-visible-text-helper.md)
+rather than done here.
 
 ## Current state
 
@@ -232,7 +269,7 @@ launcher's child. The four failures:
 | `headless-profile.spec.ts` | Its last check did not find the `DEV ·` label with `getByText`; it now checks for the project in the sidebar. | Fixed; passed alone against a `--headless` profile |
 | `web-annotations-gateway.spec.ts`, `a desktop capture…` | The reachability modal, on a page the spec's own helper creates. | Fixed; passed alone against a `--headless` profile |
 | `cli-ui.spec.ts`, `a CLI-initialized project…` | Flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md): a blank page after a second navigation. | Fixed; 10 of 10 across both cases that share the helper |
-| `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Fixed 2026-11-04; see [4222](4222-browser-failures-left-after-headless-qualification.md) |
+| `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Fixed 2026-11-04; see to-do 4222 (done; deleted 2026-11-06) |
 
 `project Home retains…` (4741)
 and the design canvas cases (4221)
@@ -251,7 +288,7 @@ last two were 47 passed, 94 skipped and 3 failed. All three causes are now found
 | --- | --- | --- | --- |
 | `local environment move…`, `persisted diff baselines…` | A client disconnect in `gateway-proxy.ts` destroyed a keep-alive socket already serving another request, which then answered 502 (flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)) | Guard on `proxyRequest.destroyed`, with a regression test | Reload rounds with 502s: 3 of 40 before, 0 of 155 after. Both cases passed 3 of 3 |
 | `real browser gateway exercises…` | The burst overran the archive's 256-record queue (flake [2401](../../tests/flaky-tests/previews-annotations-and-gateway/2401-browser-smoke-terminal-history-marker.md), to-do 4223, since done) | The spec checks what the archive promises, and a later line | Passed 3 of 3 |
-| `a lost terminal write…` | The host has no `vim` ([4222](4222-browser-failures-left-after-headless-qualification.md)) | Falls back to `nvim` | Passed 6 of 6 |
+| `a lost terminal write…` | The host has no `vim` (to-do 4222, done and deleted 2026-11-06) | Falls back to `nvim` | Passed 6 of 6 |
 
 These were focused runs. The whole isolated suite is run by the next review preparation
 and was not rerun here. `headless-profile.spec.ts` skipped in them because that run did
@@ -266,8 +303,8 @@ budget; the run before it hit the budget and was stopped. Reading each saved tra
 | --- | --- | --- | --- |
 | `a headless profile's Electron…` | Host network churn aborted its module loads (flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)); its `/proc` checks had already passed | Modules fetched outside Chromium; a retried navigation with a new login link | Under bridge churn: previous spec 0 of 3, repaired spec 3 of 3 in 8 s |
 | `capped file tree…` | A 5 s assertion ended while the page took 17 s to handle a response (flake [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)) | 240 s test budget, 30 s tree assertions | 3 of 3 at 81–84 s |
-| `a lost terminal write…` | Expected `before-X` as one run of text, which `nvim` need not draw ([4222](4222-browser-failures-left-after-headless-qualification.md)) | Checks `X` after `before-`; the saved buffer stays the precise check | 5 of 5 |
-| `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239`, `graph-run-view.spec.ts:48` | Host network churn, with 82, 119 and 133 aborted requests in their traces (2340) | None here: nothing is wrong with these cases. A run now prints which failed cases have this error. Handled across the suite since by [4222](4222-browser-failures-left-after-headless-qualification.md) task 3 (`e2e/agent-testing/browser-test.ts`) | Not rerun |
+| `a lost terminal write…` | Expected `before-X` as one run of text, which `nvim` need not draw (to-do 4222, done and deleted 2026-11-06) | Checks `X` after `before-`; the saved buffer stays the precise check | 5 of 5 |
+| `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239`, `graph-run-view.spec.ts:48` | Host network churn, with 82, 119 and 133 aborted requests in their traces (2340) | None here: nothing is wrong with these cases. A run now prints which failed cases have this error. Handled across the suite since by 4222 (done; deleted 2026-11-06) task 3 (`e2e/agent-testing/browser-test.ts`) | Not rerun |
 
 The runner's test budget went from 15 to 25 minutes, because a run cut off at the limit
 reports nothing for the cases it never reached. These were focused runs; the whole
@@ -281,7 +318,51 @@ alone, so they are not load flakes. `AgentsMdApproval.spec.ts` and
 `SettingsMachineRouting.spec.ts` fail only with the agent shell's inherited
 `NODE_ENV=production` and pass with it unset, which `mise run test:browser` now does.
 The two Multi Review layout assertions fail either way, with no change on this
-branch to anything they load. [4222](4222-browser-failures-left-after-headless-qualification.md) found the fixture at fault (host font metrics) and fixed it.
+branch to anything they load. To-do 4222 (done; deleted 2026-11-06) found the fixture at fault (host font metrics) and fixed it.
+
+### macOS, 2026-11-06
+
+On `arktech-mini` (macOS 27.2, zsh), branch based on `c1724ab74`, profile
+`t2181-mac-home` (`--fixture --no-agent-credentials --agent-platforms codex`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), started from an agent shell with no
+TTY on stdin or stdout. Nothing bound 34121 or 34122. The profile was stopped and
+reset afterwards.
+
+| Run | Launcher | Electron command line |
+| --- | --- | --- |
+| No TTY, `--headless`, before the notice | Ready; nothing said about headless | `electron apps/desktop/dist/electron/main.js`, no switches |
+| No TTY, `--headless` | Ready; `Electron opens a window: headless mode exists only on Linux, so --headless changes nothing on darwin.` | Same |
+| No TTY, no flag | Ready; `… so running without a terminal changes nothing on darwin.` | Same |
+
+### Home terminal on macOS, 2026-11-06 (task 2)
+
+`project Home retains background work and unread attention beneath the board`
+(`e2e/agent-testing/browser-gateway.spec.ts`) through
+`mise run test:logged -- --name t2181-home-terminal -- mise run test:agent:browser -- --grep "…"`
+against `t2181-mac-home`: passed (38.3 s). A second run with `--reporter=json`
+recorded 1 expected, 0 skipped, 0 unexpected, the case passing in 18.1 s. Passing
+means the background `printf` completed while Kanban was showing, its exact
+visible line was found in the snapshot, and the attention marker survived
+returning to Home and reloading. No terminal contents were recorded.
+
+### Terminal snapshot audit, 2026-11-06 (task 3)
+
+Every `get_terminal_output_snapshot` read in `e2e/`:
+
+| Owner | Comparison | State |
+| --- | --- | --- |
+| `browser-gateway.spec.ts`, Home case | Whole line (`line === marker`) | Already visible text (4741's repair) |
+| `client-outage.spec.ts`, backpressure | Whole lines (`lastLines`: `^\d+$` after `trimEnd`) | Already visible text |
+| `client-outage.spec.ts`, flood end, restart marker, in-page recovery | Substring of a computed marker | Raw, safe: not a line comparison |
+| `terminal-mobile-panes.spec.ts`, `stty size` | Whole line (`^(\d+) (\d+)\s*$`, multiline) | Already visible text |
+| `terminal-input-resume.spec.ts`, `terminal-input-resume-electron.spec.ts` | Prompt at end (`[%$#]\s*$`), substrings | Already visible text |
+| `container-root-terminal.spec.ts` | Prompt at end, marker regexes | Already visible text |
+| `container-claude-terminal-signal.spec.ts` | Whitespace-free screen, substrings | Already visible text |
+| `local-gateway-transport-electron.spec.ts`, `local-gateway-transport-cpu-page.ts` | Substrings | Already visible text |
+
+`idle-observation-live-support.ts` compares whole lines of an agent tool's output,
+not a terminal snapshot, so it is outside this audit. The backend scripts under
+`apps/backend/scripts/` read snapshots for measurement only and assert nothing.
 
 ## Needs verification
 
@@ -290,10 +371,11 @@ branch to anything they load. [4222](4222-browser-failures-left-after-headless-q
   canvas spec's headless opt-in ran here. That spec is intermittent on this host
   (flake [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
   with and without this change. CI's native-menu job covers two of them under Xvfb.
-- macOS and Windows. The no-op there is covered by unit tests with an injected
-  platform and has not run on those systems.
+- Windows. The no-op there is covered by unit tests with an injected platform and
+  has not run on Windows. macOS ran on 2026-11-06 (see Current state).
 
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
-- 4741 and 4221 (both deleted 2026-11-06) and [4222](4222-browser-failures-left-after-headless-qualification.md), found while qualifying this. To-do 4223, also found here, is done.
+- [7340](7340-shared-terminal-visible-text-helper.md), found in task 3's audit.
+- 4741 and 4221 (both deleted 2026-11-06) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.

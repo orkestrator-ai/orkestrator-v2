@@ -972,18 +972,40 @@ What each enforced platform actually does:
   in `Read`, `Grep` and `Glob`, resolving links and refusing a search rooted above
   the directory. It also refuses a command naming such a path, and, with no sandbox
   behind it, one rooted above the directory. That is proven on the pinned CLI on
-  Seatbelt, against a fixture directory and a scripted model
-  (`conformance-coordinator-read-boundary-live.test.ts`). Bubblewrap, a read-only
-  review turn in a worker bridge, and the other providers are in
-  [6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md).
+  Seatbelt and on bubblewrap (Linux, 2026-11-06), against a fixture directory and
+  a scripted model (`conformance-coordinator-read-boundary-live.test.ts`). Under
+  bubblewrap a denied path reads as missing (`No such file or directory`): the
+  directory is masked, with the allowances bound back in. A read-only review turn
+  in a worker bridge gets no boundary, by decision
+  ([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
+  task 4).
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
-  workspace.
+  workspace. The same gate refuses a coordinator's `read`, `grep`, `find` and
+  `ls` that would reach the data directory (`read-boundary.ts`), resolving
+  links, Pi's own path spellings (`@`, `~`, `file://`) and a search rooted above
+  the directory (Pi's `grep` searches hidden directories). The checkout and the
+  coordinator's attachment directory stay readable. A read-only Pi session has
+  no shell, so this covers every built-in read; it is a tool-level check, not an
+  OS boundary, which is why Pi stays `provider-configured`.
 
 OpenCode denies through its own permission rules and runs its `plan` agent, but
 always loads the checkout's project configuration, including any MCP servers it
-declares. Cursor applies the sandbox and a tool ban but exposes no approval
-callback, and is refused outright if its sandbox cannot be enabled.
+declares. Its rules also keep a coordinator out of the data directory: nothing
+in them allows `external_directory`, and the data directory is never inside the
+checkout. OpenCode judges that from the path as written, so a link in the
+checkout pointing into the data directory was read; the coordinator's server
+therefore loads `orkestrator-coordinator-read-boundary.js`
+(`opencode-read-boundary-plugin.ts`) from the host configuration directory,
+which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
+`tool.execute.before`. It is inert in every other server, and absent when the
+user sets their own `OPENCODE_CONFIG_DIR`
+([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
+Both layers are qualified on the pinned binary with a loopback model
+(`opencode-coordinator-read-boundary-live.test.ts`). Cursor applies the sandbox
+and a tool ban but exposes no approval callback, and is refused outright if its
+sandbox cannot be enabled. Its reading tools still reach the data directory
+([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
 
 Grok deny-policy children load a private agent profile that removes `write`,
 `search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`
@@ -999,6 +1021,10 @@ same session a fixed continuation saying the call was refused and must not be
 retried (`POLICY_DENIAL_CONTINUATION`, `acp-prompt.ts`). The continuation
 counts as part of the same turn, and a turn gets at most eight. Without it, a
 Grok coordinator stopped at its first refused tool and never answered.
+Grok's own reading tools are among those that never ask, so nothing keeps a
+Grok coordinator out of the data directory; the bridge's `fs/read_text_file`
+is confined to the workspace already
+([7401](../todo/coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md)).
 
 The coordinator policy names operations, not one provider's tool strings:
 `capabilityPolicy.deny` is `file.write`, `file.patch`, `shell.mutate`, and

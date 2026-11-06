@@ -14,6 +14,7 @@ import {
   enforceBackupBudget,
   listStorageSnapshots,
   purgeStorageSnapshots,
+  releaseFreePagesInChildProcess,
   runDatabaseUpkeep,
   snapshotBeforeMigration,
   takeHourlySnapshotIfDue,
@@ -48,6 +49,13 @@ async function fakeSnapshot(directory: string, prefix: string, at: number, bytes
   const file = path.join(backups, `${prefix}-${stamp(at)}.sqlite`);
   await fs.writeFile(file, Buffer.alloc(bytes));
   return file;
+}
+
+/** Leaves free pages in `database`: a dropped table of 200 KB. */
+function wastePages(database: StorageDatabase): void {
+  database.db.exec(
+    "CREATE TABLE waste (value BLOB); INSERT INTO waste VALUES (zeroblob(200000)); DROP TABLE waste",
+  );
 }
 
 function setMarker(ledger: StorageDatabase, value: string): void {
@@ -249,51 +257,79 @@ describe("database upkeep (reports 0760 and 0910)", () => {
     expect(pragma("page_count")).toBeLessThan(pages / 2);
   });
 
-  test("upkeep never waits for a writer and restores the timeout", async () => {
-    const directory = await dataDir();
-    const main = opened(openBackendDatabase(directory));
-    main.db.exec(
-      "CREATE TABLE waste (value BLOB); INSERT INTO waste VALUES (zeroblob(200000)); DROP TABLE waste",
-    );
-    const writer = new Database(main.path);
-    writer.exec("BEGIN IMMEDIATE");
-    const release = spyOn(main, "releaseFreePages");
+  test("upkeep releases in a child, never on the backend's connection (to-do 1202 task 7)", async () => {
+    const main = opened(openBackendDatabase(await dataDir()));
+    const inProcess = spyOn(main, "releaseFreePages");
+    const files: string[] = [];
+    const release = async (file: string) => {
+      files.push(file);
+      return { released: 0, left: 0 };
+    };
     try {
-      const started = performance.now();
-      await runDatabaseUpkeep(main);
-      expect(performance.now() - started).toBeLessThan(1000);
-      expect(release).toHaveBeenCalledTimes(1);
-      expect(main.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 10000 });
+      // Nothing free: no child is started.
+      await releaseFreePagesInChildProcess(main.path);
+      expect(main.releasableFreePages()).toBe(0);
+      await runDatabaseUpkeep(main, { release });
+      expect(files).toEqual([]);
+      wastePages(main);
+      await runDatabaseUpkeep(main, { release });
+      expect(files).toEqual([main.path]);
+      expect(inProcess).not.toHaveBeenCalled();
     } finally {
-      release.mockRestore();
-      writer.exec("ROLLBACK");
-      writer.close();
+      inProcess.mockRestore();
     }
   });
 
-  test("upkeep caps steps and stops on no progress, logging errors", async () => {
+  test("a failed release is logged without its message", async () => {
     const main = opened(openBackendDatabase(await dataDir()));
-    let remaining = 1000;
-    const release = spyOn(main, "releaseFreePages").mockImplementation(() => --remaining);
+    wastePages(main);
     const logs = captureLogs();
     try {
-      await runDatabaseUpkeep(main);
-      expect(release).toHaveBeenCalledTimes(256);
-      expect(release.mock.calls.every(([pages]) => pages === 1024)).toBe(true);
-      release.mockClear();
-      release.mockReturnValue(100);
-      await runDatabaseUpkeep(main);
-      expect(release).toHaveBeenCalledTimes(2);
-      release.mockImplementation(() => {
-        throw Object.assign(new Error("PRIVATE"), { code: "SQLITE_IOERR" });
+      await runDatabaseUpkeep(main, {
+        release: async () => {
+          throw Object.assign(new Error("PRIVATE"), { code: "SQLITE_IOERR" });
+        },
       });
-      await runDatabaseUpkeep(main);
       expect(logs.records().some((row) => row.event === "upkeep.vacuum-failed")).toBe(true);
       expect(logs.records().some((row) => row.event === "optimize.failed")).toBe(false);
       expect(JSON.stringify(logs.records())).not.toContain("PRIVATE");
     } finally {
-      release.mockRestore();
       logs.restore();
+    }
+    await expect(
+      releaseFreePagesInChildProcess(path.join(await dataDir(), "missing", "db.sqlite")),
+    ).rejects.toThrow("Free-page release failed:");
+  });
+
+  test("the release child keeps to its budget in steps", async () => {
+    const main = opened(openBackendDatabase(await dataDir()));
+    wastePages(main);
+    const before = main.releasableFreePages();
+    expect(before).toBeGreaterThan(20);
+    expect(
+      await releaseFreePagesInChildProcess(main.path, { maxPages: 10, stepPages: 4, pauseMs: 0 }),
+    ).toEqual({ released: 10, left: before - 10 });
+    expect(main.releasableFreePages()).toBe(before - 10);
+  });
+
+  test("the release child gives way to a writer and leaves the backend's timeout alone", async () => {
+    const main = opened(openBackendDatabase(await dataDir()));
+    wastePages(main);
+    const before = main.releasableFreePages();
+    const writer = new Database(main.path);
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      const started = performance.now();
+      expect(await releaseFreePagesInChildProcess(main.path)).toEqual({
+        released: 0,
+        left: before,
+      });
+      // The child's own one-second wait, then it stops; the backend never waits.
+      expect(performance.now() - started).toBeLessThan(10_000);
+      expect(main.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 10000 });
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
     }
   });
 

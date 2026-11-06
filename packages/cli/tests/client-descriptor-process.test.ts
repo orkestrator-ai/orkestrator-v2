@@ -118,6 +118,8 @@ describe("start time parsing", () => {
   test("parses ps lstart as UTC", () => {
     expect(parsePsLstart("Thu Nov  5 16:35:38 2026\n")).toBe(Date.UTC(2026, 10, 5, 16, 35, 38));
     expect(parsePsLstart("Mon Jan 12 03:04:05 2026")).toBe(Date.UTC(2026, 0, 12, 3, 4, 5));
+    // macOS 27.2's /bin/ps pads the column with trailing spaces.
+    expect(parsePsLstart("Fri Nov  6 05:27:51 2026    \n")).toBe(Date.UTC(2026, 10, 6, 5, 27, 51));
     expect(parsePsLstart("")).toBeNull();
     expect(parsePsLstart("Thu Foo  5 16:35:38 2026")).toBeNull();
     expect(parsePsLstart("5 Nov 2026 16:35:38")).toBeNull();
@@ -193,6 +195,33 @@ describe("process start reader", () => {
     expect(started!).toBeGreaterThanOrEqual(before - 2_000);
     expect(started!).toBeLessThanOrEqual(Date.now() + 1_000);
   });
+
+  // BSD ps prints lstart in the caller's locale and zone ("Fr.  6 Nov. ..."
+  // under de_DE), so the reader must pin both rather than inherit them.
+  test.skipIf(process.platform !== "darwin")(
+    "reads a real child's start time whatever the caller's locale and zone",
+    async () => {
+      const saved = { LC_ALL: process.env.LC_ALL, LANG: process.env.LANG, TZ: process.env.TZ };
+      Object.assign(process.env, {
+        LC_ALL: "de_DE.UTF-8",
+        LANG: "de_DE.UTF-8",
+        TZ: "Pacific/Kiritimati",
+      });
+      try {
+        const before = Date.now();
+        const child = startChild();
+        const started = await readProcessStartTime(child.pid);
+        expect(started).not.toBeNull();
+        expect(started!).toBeGreaterThanOrEqual(before - 2_000);
+        expect(started!).toBeLessThanOrEqual(Date.now() + 1_000);
+      } finally {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    },
+  );
 });
 
 describe("descriptorProcessRefusal", () => {

@@ -10,12 +10,13 @@ prototype against `b83ae534` (2026-10-22); the production egress gateway and
 the credential-delivery items against branch
 `todo-0018-container-isolation-e228f2a04b8e` (2026-10-25); tasks 3 and 9
 against `main` at `931e5541` (2026-10-31); task 1 against `main` at
-`e6c3da899` (2026-11-06).
+`e6c3da899` (2026-11-06); task 2 against `main` at `c1724ab74`
+(2026-11-06).
 
 ### Tasks
 
 1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; amd64 run on a self-managed host 2026-11-06, see the result below; arm64 stays open on CI evidence alone, pending the decision below).
-2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done (tamper, gateway restart and default-loopback checks passed 2026-11-04; rootless daemon restart remains open).
+2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: done 2026-11-06 (tamper, gateway restart and default-loopback checks passed 2026-11-04; the rootless daemon restart passed 2026-11-06 on a disposable daemon from [4730](4730-disposable-docker-daemon-for-live-suites.md); `live-restore` on and other RootlessKit drivers are [7390](7390-rootless-restart-remaining-settings.md)).
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
 4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
 5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: open.
@@ -109,8 +110,34 @@ probe 1/1. With host loopback enabled on slirp4netns, the firewall passed
 with production port-collision recovery, and C22's authenticated agent-tools
 reply passed 1/1. VPNKit's enabled
 host-service path remained blocked; that limitation is recorded in the guide.
-Task 2 stays partly done because a rootless daemon restart with runtimes
-remains unqualified.
+Task 2 stayed partly done then because a rootless daemon restart with
+runtimes remained unqualified.
+
+**Result (2026-11-06, rootless daemon restart).** The pass criterion
+4730 task 3 recommended: the 2026-10-31 assertions, with `live-restore`
+off, on slirp4netns with host loopback disabled. On beelink a disposable
+host rootless Engine 29.9.2 (RootlessKit 3.3.0, slirp4netns 1.3.3, builtin
+ports) started by `mise run docker:disposable`, with
+`orkestrator-v2:dev-f199d298c1eb` (`egress-gateway=1`, `egress-filter=1`,
+`network-policy=3`; firewall and gateway scripts identical to `c1724ab74`):
+- the daemon-restart case of `container-live-egress-conditions.test.ts`
+  passed 1/1, with two restarts through the launcher's restart command. A
+  runtime stopped through the backend and one running when the daemon
+  stopped both came back with neither container started, a bare
+  `docker start` was refused while the gateway was stopped, and the
+  backend's start path restored both in order with the policy applied;
+- a restart replaced RootlessKit, its network namespace and slirp4netns
+  (observed: new pid, new namespace inode, new slirp4netns process), so the
+  policy was re-applied in a new namespace, which a nested rootful restart
+  cannot show;
+- the whole suite passed 3/3 there (IPv6 with an attached network, DNS
+  rotation, restart), and the committed default-loopback test passed 1/1.
+
+Details are in [container qualification](../../development/container-qualification.md#rootless-daemon-restart-on-a-disposable-daemon-2026-11-06).
+Not run: `live-restore` on, VPNKit, pasta and gvisor-tap-vsock, and arm64,
+now [7390](7390-rootless-restart-remaining-settings.md). Task 2 is done:
+its recommended run covered the default settings, and those remain
+secondary settings.
 
 **Decisions.**
 
@@ -639,7 +666,8 @@ and renewal delivery with real, fresh provider logins.
      Docker Desktop (2026-10-25); IPv6, a daemon restart and DNS rotation
      passed on a disposable Linux Engine (2026-10-31); the gateway suites
      and name checks passed on a self-managed rootful amd64 host
-     (2026-11-06). arm64 off CI and the rootless daemon restart remain.
+     (2026-11-06); the rootless daemon restart passed on a disposable
+     rootless daemon (2026-11-06). arm64 off CI remains.
      See Qualification.
    A plain HTTP proxy was not pursued: it does not constrain direct sockets
    without network enforcement beside it.
@@ -712,9 +740,9 @@ and renewal delivery with real, fresh provider logins.
     gateway applied its firewall 3.8 s after `docker start` and used 1.8 MiB
     and 3 PIDs.
 - Egress gateway on Linux Engine and rootless (high; on by default for
-  restricted runtimes on a current image). Still owed: a rootless daemon
-  restart with runtimes (task 2; the 2026-11-04 live gateway checks are
-  recorded above), and the decision whether the CI runs below count as the rootful
+  restricted runtimes on a current image). The rootless daemon restart
+  with runtimes passed on 2026-11-06 (task 2, result above). Still owed:
+  the decision whether the CI runs below count as the rootful
   pass (task 1), which since 2026-11-06 matters for arm64 only: amd64 also
   has a self-managed run. On a rootless host run the live suites against an image
   built there. The `ORKESTRATOR_EGRESS=in-container` fallback was removed on
@@ -979,6 +1007,17 @@ and renewal delivery with real, fresh provider logins.
 
 ## Assumptions and decisions
 
+### Task 2: the rootless restart ran on an existing review image
+
+Chosen on 2026-11-06: use `orkestrator-v2:dev-f199d298c1eb`, already on
+beelink, rather than build an image from this branch. Its firewall, gateway
+and entrypoint scripts are identical to `c1724ab74`; only
+`orkestrator-state-signal.sh` and `workspace-setup.sh` differ, and neither
+takes part in the restart path. A fresh build would add a 5.45 GB image to a
+shared host for no difference in what the case exercises. Task 2 is marked
+done on the recommended default settings, with the rest recorded in 7390
+rather than holding the task open for secondary settings.
+
 ### Task 1: the self-managed amd64 run used a disposable daemon
 
 Chosen on 2026-11-06: run the gateway suites on a labelled, privileged
@@ -1209,7 +1248,9 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
   preview relay), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md)
   (network and auth for MCP outside the backend host).
 - [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md):
-  a repo-owned daemon for task 2's rootless restart.
+  the repo-owned disposable daemon task 2's rootless restart ran on.
+- [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md):
+  the rootless restart settings task 2 did not run.
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Environment
   networks", "Agent tools reachability" and "Portable inputs".
 

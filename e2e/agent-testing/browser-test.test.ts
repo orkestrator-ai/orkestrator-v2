@@ -7,25 +7,36 @@ import {
 } from "./conditional-reads-measurement";
 
 import { describe, expect, mock, test } from "bun:test";
-import type { BrowserContext, Route } from "@playwright/test";
+import type { BrowserContext, Page, Route } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseSync, visitorKeys, type Node } from "oxc-parser";
 import {
+  DIRECT_LOAD_TIMEOUT_MS,
+  DIRECT_LOAD_NAVIGATION_MS,
+  DIRECT_LOAD_WAIT_MS,
+  runDirectLoads,
   LOOPBACK_URL,
   ModuleCache,
+  NETWORK_CHANGED,
   decodedBodyHeaders,
+  directLoadOutcome,
   fetchModulesOutsideChromium,
   isModuleLoad,
+  isNetworkChangedNavigation,
+  moduleStatusFailure,
+  retryNavigationsOnNetworkChange,
 } from "./browser-test";
 
 const directory = import.meta.dirname;
 
 /** Specs that keep Chromium's own network path for module loads, and why. */
 const DIRECT_SPECS = new Map([
-  ["browser-gateway.spec.ts", "the gateway's direct browser check"],
   ["client-outage.spec.ts", "outages of the browser's own network path"],
 ]);
+
+/** Specs with cases that load modules through Chromium themselves, and how many. */
+const DIRECT_CASES = new Map([["browser-gateway.spec.ts", 1]]);
 
 function browserSuiteSpecs(): string[] {
   const config = readFileSync(path.join(directory, "playwright.browser.config.ts"), "utf8");
@@ -132,6 +143,31 @@ describe("the browser suite's shared test", () => {
       return DIRECT_SPECS.has(spec) === shared;
     });
     expect(offenders).toEqual([]);
+  });
+
+  test("only the listed cases opt back into Chromium's own module loads", () => {
+    const counts = browserSuiteSpecs().flatMap((spec) => {
+      const source = readFileSync(path.join(directory, spec), "utf8");
+      const count = source.split("modulesThroughChromium: true").length - 1;
+      return count > 0 ? [[spec, count] as const] : [];
+    });
+    expect(new Map(counts)).toEqual(DIRECT_CASES);
+  });
+
+  test("a direct load is retried only when it lost modules to network changes alone", () => {
+    expect(directLoadOutcome([], true)).toBe("loaded");
+    expect(directLoadOutcome([], false)).toBe("failed");
+    expect(directLoadOutcome([NETWORK_CHANGED, NETWORK_CHANGED], false)).toBe("network-changed");
+    expect(directLoadOutcome([NETWORK_CHANGED], true)).toBe("network-changed");
+    expect(directLoadOutcome([NETWORK_CHANGED, "HTTP 502"], false)).toBe("failed");
+    expect(directLoadOutcome(["net::ERR_CONNECTION_RESET"], true)).toBe("failed");
+  });
+
+  test("a direct load counts a revalidated module as loaded and any other status as failed", () => {
+    expect(moduleStatusFailure(200)).toBeUndefined();
+    expect(moduleStatusFailure(304)).toBeUndefined();
+    for (const status of [204, 404, 500, 502])
+      expect(moduleStatusFailure(status)).toBe(`HTTP ${status}`);
   });
 
   test("every context a browser-suite spec creates also fetches its modules itself", () => {
@@ -244,6 +280,7 @@ describe("the browser suite's shared test", () => {
 async function moduleHandler() {
   let handler: ((route: Route) => Promise<void>) | undefined;
   const context = {
+    on: mock((_event: string, _listener: unknown) => context),
     route: mock(async (pattern: RegExp, callback: (route: Route) => Promise<void>) => {
       expect(pattern).toBe(LOOPBACK_URL);
       handler = callback;
@@ -349,6 +386,141 @@ describe("installed module route handler", () => {
     await retry.dispatch(handler);
     expect(retry.route.fetch).toHaveBeenCalledTimes(1);
     expect(retry.route.fulfill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("navigations Chromium aborted for a network change", () => {
+  const networkChanged = () => new Error(`page.goto: ${NETWORK_CHANGED} at http://127.0.0.1:1/`);
+
+  function fakePage(outcomes: (Error | string)[]) {
+    const calls: unknown[][] = [];
+    const next = async (...args: unknown[]) => {
+      calls.push(args);
+      const outcome = outcomes.shift();
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    };
+    const page = { goto: next, reload: next };
+    retryNavigationsOnNetworkChange(page as unknown as Page);
+    return { page, calls };
+  }
+
+  test("are tried again with the same arguments until one lands", async () => {
+    const { page, calls } = fakePage([networkChanged(), networkChanged(), "response"]);
+    expect(await page.goto("http://127.0.0.1:1/", { waitUntil: "load" })).toBe("response");
+    expect(calls).toEqual(Array(3).fill(["http://127.0.0.1:1/", { waitUntil: "load" }]));
+  });
+
+  test("covers reload too", async () => {
+    const { page, calls } = fakePage([networkChanged(), "reloaded"]);
+    expect(await page.reload()).toBe("reloaded");
+    expect(calls).toHaveLength(2);
+  });
+
+  test("give up after the last attempt with Chromium's own error", async () => {
+    const { page, calls } = fakePage([networkChanged(), networkChanged(), networkChanged()]);
+    await expect(page.goto("http://127.0.0.1:1/")).rejects.toThrow(NETWORK_CHANGED);
+    expect(calls).toHaveLength(3);
+  });
+
+  test("never retry any other failure", async () => {
+    const { page, calls } = fakePage([new Error("page.goto: net::ERR_CONNECTION_REFUSED")]);
+    await expect(page.goto("http://127.0.0.1:1/")).rejects.toThrow("ERR_CONNECTION_REFUSED");
+    expect(calls).toHaveLength(1);
+    expect(isNetworkChangedNavigation("net::ERR_NETWORK_CHANGED")).toBe(false);
+  });
+
+  test("apply to every page a routed context opens", async () => {
+    const listeners: ((page: Page) => void)[] = [];
+    const context = {
+      on: (event: string, listener: (page: Page) => void) => {
+        expect(event).toBe("page");
+        listeners.push(listener);
+      },
+      route: async () => {},
+    };
+    await fetchModulesOutsideChromium(context as unknown as BrowserContext);
+    expect(listeners).toHaveLength(1);
+    const outcomes: (Error | string)[] = [networkChanged(), "response"];
+    const page = {
+      goto: async () => {
+        const outcome = outcomes.shift();
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+      },
+      reload: async () => "reloaded",
+    };
+    listeners[0]!(page as unknown as Page);
+    expect(await page.goto()).toBe("response");
+  });
+});
+
+describe("one-shot login navigation recovery", () => {
+  test("renews a consumed code rather than accepting a replayed 401", async () => {
+    const spent = new Set<string>();
+    const urls: string[] = [];
+    const first = "http://127.0.0.1:1/__orkestrator/agent-test/login?code=first";
+    const second = first.replace("first", "second");
+    const page = {
+      goto: async (url: string) => {
+        urls.push(url);
+        if (spent.has(url)) return { status: 401 };
+        spent.add(url);
+        if (url === first) throw new Error(NETWORK_CHANGED);
+        return { status: 200 };
+      },
+      reload: async () => undefined,
+    };
+    retryNavigationsOnNetworkChange(page as unknown as Page, 3, () => second);
+    expect(await page.goto(first)).toEqual({ status: 200 });
+    expect(urls).toEqual([first, second]);
+  });
+
+  test("does not renew a login on an unrelated error", async () => {
+    const renew = mock(() => "unused");
+    const page = {
+      goto: async () => {
+        throw new Error("refused");
+      },
+      reload: async () => {},
+    };
+    retryNavigationsOnNetworkChange(page as unknown as Page, 3, renew);
+    await expect(
+      (page as unknown as Page).goto("http://127.0.0.1/__orkestrator/agent-test/login?code=one"),
+    ).rejects.toThrow("refused");
+    expect(renew).not.toHaveBeenCalled();
+  });
+});
+
+describe("direct-load orchestration budget", () => {
+  test("four blank churn loads finish with the churn diagnostic inside the case budget", async () => {
+    let elapsed = 120_000;
+    let calls = 0;
+    await expect(
+      runDirectLoads(async () => {
+        calls += 1;
+        // Model both navigations exhausting their retries and the entire blank UI wait.
+        elapsed += 2 * 3 * DIRECT_LOAD_NAVIGATION_MS + DIRECT_LOAD_WAIT_MS;
+        return { failures: [NETWORK_CHANGED], rendered: false };
+      }),
+    ).rejects.toThrow("All 4 loads lost module requests");
+    expect(calls).toBe(4);
+    expect(elapsed).toBeLessThanOrEqual(DIRECT_LOAD_TIMEOUT_MS);
+    const spec = readFileSync(path.join(directory, "browser-gateway.spec.ts"), "utf8");
+    expect(spec).toContain("test.setTimeout(DIRECT_LOAD_TIMEOUT_MS)");
+    expect(spec).toContain("await runDirectLoads(");
+  });
+
+  test("allows the fourth load to succeed and stops real module errors immediately", async () => {
+    let calls = 0;
+    await runDirectLoads(async () => ({
+      failures: ++calls < 4 ? [NETWORK_CHANGED] : [],
+      rendered: calls === 4,
+    }));
+    expect(calls).toBe(4);
+    const load = mock(async () => ({ failures: ["HTTP 500"], rendered: false }));
+    await expect(runDirectLoads(load)).rejects.toThrow("HTTP 500");
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });
 

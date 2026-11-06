@@ -22,7 +22,8 @@ const repositoryRoot = "/repo";
 describe("packaged Electron app launch", () => {
   test("finds the inspectable unpacked Linux build under release/packaged-test/ unless overridden", () => {
     const unpacked = process.arch === "x64" ? "linux-unpacked" : `linux-${process.arch}-unpacked`;
-    expect(packagedAppExecutable(repositoryRoot, {})).toBe(
+    // Linux named explicitly: on a macOS host the default is the `.app` bundle.
+    expect(packagedAppExecutable(repositoryRoot, {}, "linux")).toBe(
       path.join(repositoryRoot, "release", "packaged-test", unpacked, "orkestrator-v2"),
     );
     expect(
@@ -100,10 +101,12 @@ describe("packaged Electron app launch", () => {
       "design-canvas-packaged-electron.spec.ts",
       "log-controls-packaged-electron.spec.ts",
       "packaged-security-electron.spec.ts",
+      "watcher-packaged-electron.spec.ts",
     ]);
     expect(electron.testMatch).not.toContain("packaged-security-electron.spec.ts");
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
     expect(electron.testMatch).not.toContain("log-controls-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("watcher-packaged-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });
 });

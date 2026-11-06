@@ -76,3 +76,62 @@ mise run test:logged -- --name activity-sweep-isolated -- bun test tests/unit/ac
 Passed with exit 0 in 0.4 s. Passing output was deleted by the logged
 runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
+
+## Legacy host-mount coverage review — 2026-11-06
+
+- **Commit:** `b8ff1848b` (coverage repair `5279014f9`).
+- **Original command:** `mise run test:logged -- --name review-default-tests -- mise run test`.
+  The backend workspace group used four isolated workers alongside the other
+  packages. `a worker reset or fast-forwarded to a newer target has no changes of its own`
+  in `apps/backend/src/core/diff-baseline.test.ts` timed out at 5,032.69 ms
+  (5,000 ms limit), interrupting a fixture `git fetch origin` with SIGTERM.
+- **Aggregate result:** exit 1 after 1,708.7 s. Backend totals are unavailable:
+  its group was terminated after 300,000 ms without output. Root reported
+  3,746 passed and four failed; desktop reported 1,868 passed, 16 skipped and
+  one failed. The backend also reported two other test timeouts.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-diff-baseline-owner -- bun test --cwd apps/backend ./src/core/diff-baseline.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed with exit 0 in 10.1 s. Passing output was removed, so isolated counts
+  are not inferred.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YdSBOn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer wrapper: `orkestrator-test-run.GlSHmN/review-default-tests.log.gz`
+  under the same temporary root.
+- **Disposition:** open recurrence; cause unconfirmed. Neither this owner nor
+  its implementation changed in the branch. No assertion, timeout or skip changed.
+
+## Bridge authority review repairs — 2026-11-06
+
+At `451fccdf1`, `mise run test:logged -- --name repair-default -- mise run test`
+reported `activity sweep bridge ownership > readiness timeout reaps the child
+and removes copied credentials (ignores TERM: %s)` failing after 135.78 ms:
+cleanup's process-group signal at line 111 returned `EPERM`. The root group
+used one Bun worker. The outer run ended at its 30-minute deadline after an
+approximately 23-minute host-lease wait, so final aggregate totals are unknown.
+
+The complete unchanged owner passed alone (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name isolate-activity-bridge -- bun test ./tests/unit/activity-sweep-bridge.test.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary artifacts `orkestrator-test-run.HNKlxf/root-and-agent-support-tests.log`
+and `orkestrator-test-run.Iu6GYp/repair-default.log.gz`. This confirms
+intermittence; the cause remains unconfirmed. No assertion, timeout or skip
+changed.
+
+## Environment-deletion follow-up review recurrence — 2026-11-06
+
+Preparation at `228561646` ran `mise run test:logged -- --name
+review-default-tests -- mise run test`, with four isolated backend workers.
+Both `diff-baseline.test.ts` cases listed above timed out near 5 s
+(5,020.67 ms for the first); late Git failures were also reported between tests.
+The workspace group ended at its no-progress watchdog, so its complete totals
+are unavailable. Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-dd80c812-46c6-4f02-b538-897dbf04bdfd/validation-04.stderr.txt`.
+
+At repair commit `b32cfe416`, the unchanged complete owner passed alone:
+`mise run test:logged -- --name recorded-baseline-alone -- bun test --cwd
+apps/backend ./src/core/diff-baseline.test.ts --parallel=1 --only-failures`
+(exit 0, 13.3 s). Passing raw output was deleted; totals are not inferred.
+The repair changes deletion-command termination waiting, not baseline selection
+or the Git fixture. This establishes intermittence, not an environmental cause
+or a fix for the incomplete aggregate. No assertions, skips or timeouts changed.

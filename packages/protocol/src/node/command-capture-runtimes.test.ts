@@ -125,7 +125,7 @@ console.log(JSON.stringify({
   earlyExit: await failure(runCommand("sh", ["-c", "exit 4"], { stdin: "x".repeat(1 << 20) })),
   exit: await failure(runCommand("sh", ["-c", "printf o; printf e >&2; exit 7"])),
   missing: await failure(runCommand("/nonexistent/orkestrator-tool")),
-  timeout: await failure(runCommand("sh", ["-c", "printf partial; exec sleep 30"], { timeoutMs: 200 })),
+  timeout: await failure(runCommand("sh", ["-c", "printf partial; exec sleep 30"], { timeoutMs: 200, waitForTermination: true, waitForDescendants: true })),
   overLimit: await failure(runCommand("sh", ["-c", "printf 123456; exec sleep 30"], { maxOutputBytes: 5 })),
   aborted: await failure(runCommand("sleep", ["30"], { signal: controller.signal })),
 }));

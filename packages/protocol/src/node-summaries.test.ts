@@ -1,6 +1,8 @@
 import type { BackendId } from "./federation.js";
 import { expect, test } from "bun:test";
 import {
+  ENVIRONMENT_DELETION_STEPS,
+  environmentDeletionStepLabel,
   MAX_SUMMARY_MAIL_COUNT,
   repositoryHint,
   toNodeProjectSummary,
@@ -303,6 +305,7 @@ test("a failed delete is relayed as failed, not as still running", () => {
   expect(running?.deleting).toBe(true);
   expect(running?.deleteFailure).toBeUndefined();
   expect(running?.deletingSince).toBe("2026-11-05T12:00:00.000Z");
+  expect(running?.deletingStep).toBeUndefined();
 
   // An old error with no delete behind it says nothing about deleting.
   const stale = toNodeEnvironmentSummary("bk_test" as never, {
@@ -312,6 +315,43 @@ test("a failed delete is relayed as failed, not as still running", () => {
   });
   expect(stale?.deleting).toBe(false);
   expect(stale?.deleteFailure).toBeUndefined();
+});
+
+test("a running delete relays the step it is on, and a failed or unknown one does not", () => {
+  const base = {
+    id: "env",
+    projectId: "project",
+    lifecycleOperation: "deleting",
+    lifecycleOperationStartedAt: "2026-11-05T12:00:00.000Z",
+  };
+  expect(
+    toNodeEnvironmentSummary("bk_test" as never, { ...base, deletionStep: "worktree" })
+      ?.deletingStep,
+  ).toBe("worktree");
+  expect(
+    toNodeEnvironmentSummary("bk_test" as never, {
+      ...base,
+      deletionStep: "worktree",
+      deletionError: "Terminal process trees are still running",
+    })?.deletingStep,
+  ).toBeUndefined();
+  // A step a newer backend added, or anything else, is not relayed.
+  expect(
+    toNodeEnvironmentSummary("bk_test" as never, { ...base, deletionStep: "/Users/me/secret" })
+      ?.deletingStep,
+  ).toBeUndefined();
+  // No tombstone, no step.
+  expect(
+    toNodeEnvironmentSummary("bk_test" as never, {
+      id: "env",
+      projectId: "project",
+      deletionStep: "worktree",
+    })?.deletingStep,
+  ).toBeUndefined();
+  expect(environmentDeletionStepLabel("worktree")).toBe("removing the worktree");
+  for (const step of ENVIRONMENT_DELETION_STEPS) {
+    expect(environmentDeletionStepLabel(step)).toMatch(/^[a-z][a-z ]+$/);
+  }
 });
 
 for (const field of ["deletionError", "cleanupAfterMergeError"]) {

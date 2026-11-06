@@ -4,17 +4,17 @@ Checked against `main` at `06297124` (2026-10-23).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-06 against `main` at `c1724ab74` (tasks 2, 6 and 7; tasks 1 and 3–5 were last analysed 2026-10-27 at `863b5782`).
 
 ### Tasks
 
 1. **Record the Linux Engine CI results**: the follow-up to the answered CI question ("record them in this file then, including the C22 host-level reachability verdict"). Status: partly done (CI has run on both architectures; nothing is recorded here, and `container-qualification.md` still says "Not covered: Linux Engine").
-2. **Rootless host without `cpu` delegation**: check that the budget read-back stays truthful when only `memory pids` are delegated. Status: open.
+2. **Rootless host without `cpu` delegation**: check that the budget read-back stays truthful when only `memory pids` are delegated. Status: open (depends on [4730](4730-disposable-docker-daemon-for-live-suites.md), which is building a disposable rootless daemon).
 3. **Grok C13 resume and C21 rotation**: qualify Grok resume after a rebuild, and Grok login rotation. Status: blocked (on a current host Grok login; the rotation half also on 0061 item 7's live run).
 4. **Claude C21 half with a disposable account**: a real re-authentication through `markContainersForClaudeLoginRefresh`, and a refresh-token rotation through the keeper. Status: blocked (needs a disposable Claude account).
 5. **Daemon-wide restart during launch and rebuild copy**: a Docker restart or Desktop quit at both points. Status: open (needs a dedicated host or VM).
-6. **Container log followers on a live backend after the per-backend move**: a Docker log view streams, its follower exits after the idle grace and with the backend. Moved from to-do 0733 (deleted 2026-11-06). Status: open.
-7. **Fixture restart keeps the container's origin bind on native Docker**: a `dev:test` restart with `--fixture-environments local,container` keeps the same container, and `git fetch origin` still works inside it. Moved from to-do 2180 (deleted 2026-11-06). Status: open.
+6. **Container log followers on a live backend after the per-backend move**: a Docker log view streams, its follower exits after the idle grace and with the backend. Moved from to-do 0733 (deleted 2026-11-06). Status: done (2026-11-06 on beelink, native Docker Engine 29.9.2; found and fixed two follower leaks, see [Results, 2026-11-06](#results-2026-11-06-tasks-6-and-7-on-native-docker)).
+7. **Fixture restart keeps the container's origin bind on native Docker**: a `dev:test` restart with `--fixture-environments local,container` keeps the same container, and `git fetch origin` still works inside it. Moved from to-do 2180 (deleted 2026-11-06). Status: done (2026-11-06 on beelink, native Docker Engine 29.9.2; three restarts kept the same container and a live origin bind).
 
 ### 1. Record the Linux Engine CI results
 
@@ -52,7 +52,7 @@ So the next weekly run on `main` should fail only that C14 case. The benchmark n
 
 **Context.** omarchy-hp's rootless daemon delegates `cpu memory pids`, so it cannot show this case. Unit tests already cover a rootless daemon with only memory delegated (`commands-registry-resource-limits.test.ts`, 0061 item 11). The built-in default drops and reports an unenforceable axis (0022 decision 4).
 
-**Investigation.** Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
+**Investigation.** 2026-11-06: not run. To-do [4730](4730-disposable-docker-daemon-for-live-suites.md) is building a repo-owned disposable rootless daemon in another build; this task waits for it rather than hand-building a third private daemon on a shared host. Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
 
 **Decisions.**
 
@@ -259,6 +259,86 @@ platform dimensions and the benchmark targets are in
 [container-qualification.md](../../development/container-qualification.md).
 Gaps this pass found but did not fix are in
 [0061-container-qualification-follow-ups.md](0061-container-qualification-follow-ups.md).
+
+## Results, 2026-11-06 (tasks 6 and 7 on native Docker)
+
+Host: beelink (Arch Linux, kernel 7.1.8, x86_64), Docker Engine 29.9.2
+rootful, cgroup driver `systemd`. Branch
+`docker-platform-qualification-b566b507597f-r1` from `main` at `c1724ab74`.
+One isolated profile, `q0019-docker`, started headless with the scoped
+Docker shim (the address pool was not exhausted; the shim was used so the
+run matches `test:agent:docker:isolated`) and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+  PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run dev:test --profile q0019-docker --fixture --fixture-environments local,container \
+  --no-agent-credentials --agent-platforms codex --headless
+```
+
+The log view was driven with Playwright against `browserUrl` (environment
+settings → Container → Container log → Show/Hide). A marker line was written to
+the container's PID 1 stdout to prove live streaming, and followers were
+counted with `ps` by the fixture container's full ID. The profile was reset
+with `dev:reset` afterwards (2 containers, 2 volumes and 1 network, all with
+the profile's owner label).
+
+### Task 6: log followers
+
+| Check | Before the fixes | After the fixes |
+| --- | --- | --- |
+| View streams | Pass: the marker appeared about 1 s after it was written | Pass: about 1 s |
+| Follower exits after the idle grace (5 s) | **Fail**: the follower was still running 180 s later, reparented to systemd | Pass: gone 5.04 s and 5.10 s after Hide |
+| Followers exit with `dev:stop` | Pass (log follower and the OOM `docker events`) | Pass: 6 follower processes before, 0 after |
+| Followers exit when the backend is SIGKILLed (added check) | **Fail**: `docker logs -f` reparented to systemd and was still running 64 s later; the parent-bound OOM watcher exited | Pass: all gone within 200 ms |
+
+Two defects, both fixed with tests:
+
+1. **The scoped Docker shim orphaned every follower it relayed.**
+   `docker-qualification-bin/docker` ran `bun docker-qualification.ts`, which
+   ran the real CLI with `spawnSync`. The backend's SIGTERM stopped bun and left
+   `docker logs -f`, the OOM `docker events` and terminal `docker exec -it`
+   sessions running under systemd. Production does not use the shim, but every
+   `test:agent:docker:isolated` run and every manual profile started as 7041
+   describes did. The shim now `exec`s the real CLI for every call except
+   `network create`. Test: `docker-qualification.test.ts` ("execs the real
+   CLI"), which fails on the old shim because the PID that answers is Docker's
+   child rather than the shim's.
+2. **The container log follower was not parent-bound.**
+   `ContainerLogService` spawned `docker logs -f` with plain `spawnCommand`,
+   unlike the OOM watcher, which has used `spawnParentBoundCommand` since #1301.
+   A SIGKILLed backend runs no shutdown, and a quiet container writes nothing
+   that would raise SIGPIPE, so the follower lived until the container next
+   logged or stopped. It now uses `spawnParentBoundCommand`. Test:
+   `container-log-service.test.ts` ("a follower does not outlive a SIGKILLed
+   backend") runs the real service in a child Bun process with a fake `docker`
+   on PATH, SIGKILLs it and requires the follower to exit. It fails on the old
+   code.
+
+The per-backend move itself behaved as designed: each backend's followers
+were its own children, and `dev:stop` (SIGTERM, `shutdown()`) ended them.
+
+### Task 7: fixture restart keeps the origin bind
+
+The profile was restarted three times over the same fixture: after `dev:stop`,
+after a SIGKILLed backend (the launcher exited with it), and after a second
+SIGKILL.
+
+- Every restart reused `fixture-local` (`e1cd9676…`) and `fixture-container`
+  (`03c9558d…`) from `orkestrator-fixture-environments.json`. The backend
+  listed one project with exactly those two environments, both `running`.
+- There was one runtime container, `0b4977a6da4a`, `running`, with the same
+  `StartedAt` (03:48:20 UTC) and `RestartCount` 0 throughout. It was neither
+  recreated nor restarted, because `seedFixture` skips a running environment.
+- `origin.git` kept inode 25131863 on the host. Inside the container
+  `/orkestrator-agent-test-origin.git` showed the same inode and was still a
+  read-write bind of that path.
+- `git fetch origin` in `/workspace` succeeded after each restart, and
+  `origin/main` matched the host's `main` (`f0018d8`). A commit pushed to the
+  host `origin.git` after a restart (`b2932b6`, branch `q0019-bind-check`) was
+  fetched inside the container, so the bind is live rather than a stale copy.
 
 ## Results, 2026-10-23
 
@@ -1119,6 +1199,62 @@ considered, the choice, why, and its pros and cons.
     [0061](0061-container-qualification-follow-ups.md), since an existing todo
     file never takes new items. Two flake recurrences were added to their
     existing cases (0506, 0518).
+
+### 2026-11-06, task 6: fix the scoped Docker shim by exec, not signal forwarding
+
+The shim kept its pass-through child alive after a SIGTERM. Options: forward
+signals from the bun shim to its child; or `exec` the real CLI from the shell
+wrapper for everything except `network create` (chosen). Exec makes the shim
+the Docker process itself, so SIGTERM, SIGKILL, SIGWINCH for `exec -it` and
+exit status all reach Docker unchanged. Signal forwarding cannot cover
+SIGKILL of the shim, and it adds a bun process per Docker call. Con: the
+wrapper resolves the real CLI in POSIX shell, a second copy of the
+TypeScript lookup (`ORKESTRATOR_QUALIFICATION_DOCKER`, else the first `docker`
+on PATH outside the shim directory). `network create` still goes through
+bun, because that is where the /29 fallback lives and the call is short-lived.
+
+### 2026-11-06, task 6: parent-bind the container log follower
+
+`ContainerLogService` now spawns followers with `spawnParentBoundCommand`.
+The alternatives were to leave it, since a follower dies on its next write
+after the backend is gone, or to sweep orphans at backend start. Leaving it
+fails on a quiet container, which is the usual state once setup has
+finished: the live run had one still alive after 64 s. A start-up sweep would
+need to identify another process's followers by command line, which is the
+kind of process-scan signalling this repository forbids. Parent-binding is the
+mechanism the OOM watcher already uses (#1301). Con: two extra shell processes
+per followed container, at most 16 followers per backend.
+
+### 2026-11-06, task 6: add a SIGKILL step to the qualification
+
+The to-do's steps cover only the graceful `dev:stop` path. The run also
+SIGKILLed the profile's own backend (PID and start time read from
+`dev:status` and checked against `/proc` first), because that is how a
+backend actually disappears on this host (AGENTS.md: the production backend
+has been SIGKILLed during test runs). It found defect 2 above. It affected
+only the isolated profile.
+
+### 2026-11-06, task 7: restart over a live container, three times
+
+Each restart ran the same `dev:test` command. The run did not stop the fixture
+container between restarts, because a backend stop leaves containers running
+by design and the to-do asks whether a restart reuses that container. Reuse
+after a SIGKILLed backend was checked as well, since the fixture code cannot
+tell the two cases apart.
+
+### 2026-11-06, task 2: wait for 4730
+
+Task 2 stays open and depends on 4730's disposable rootless daemon, which
+another build is creating. Hand-building a third private daemon on beelink
+would repeat work 4730 replaces, and 4730's launcher is what later runs will
+use.
+
+### 2026-11-06: no new to-dos
+
+Both defects were fixed in this change, so numbers 7410–7419 are unused. The
+shim's orphans on other worktrees' runs stop once those branches carry the
+fixed shim. None were left under systemd at the end of this run, and none
+were removed.
 
 ## Constraints and rationale
 

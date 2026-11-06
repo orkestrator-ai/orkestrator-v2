@@ -339,7 +339,7 @@ function AccountRow({
           ) : (
             <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
               <span className="truncate">{account.label}</span>
-              {account.isActive ? (
+              {login.isActive ? (
                 <span className="flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-500">
                   <Check className="h-3 w-3" />
                   Active
@@ -385,7 +385,7 @@ function AccountRow({
         </div>
         {!editing ? (
           <div className="flex shrink-0 items-center gap-1">
-            {!account.isActive ? (
+            {!login.isActive ? (
               <Button type="button" size="sm" variant="outline" onClick={onUse} disabled={busy}>
                 Use
               </Button>

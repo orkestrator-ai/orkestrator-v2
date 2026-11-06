@@ -114,9 +114,12 @@ export interface UsageLimitStopSession {
 export type LimitedAccountMove =
   { moved: true; to: string } | { moved: false; reason: CoordinatorAccountKeptReason };
 
+/** Backend-only fence for decisions that outlive a manual selection or settings change. */
+export type AutoSwitchSnapshot = AgentAccountsSnapshot & { selectionRevision?: number };
+
 export interface AgentAccountAutoSwitcherDeps {
   settings(): Promise<AgentAccountAutoSwitchSettings>;
-  snapshot(): Promise<AgentAccountsSnapshot>;
+  snapshot(): Promise<AutoSwitchSnapshot>;
   readUsage(
     platform: AgentAccountPlatform,
     accountId: string,
@@ -145,6 +148,7 @@ export interface AgentAccountAutoSwitcherDeps {
   noteKept?(
     platform: AgentAccountPlatform,
     kept: AgentAccountAutoSwitchLastKept,
+    expected: AutoSwitchSnapshot,
   ): Promise<void> | void;
   /** Called once per stopped turn, whatever happens to it next. */
   onLimitStop?(report: UsageLimitStopReport): Promise<void> | void;
@@ -448,7 +452,7 @@ export class AgentAccountAutoSwitcher {
       const best = rankAutoSwitchAccounts(accounts, activeId, "after-refusal")[0];
       if (!best) {
         const from = limited.has(activeId) ? activeId : (limited.values().next().value ?? activeId);
-        await this.noteKept(platform, from, accounts, activeId, limited);
+        await this.noteKept(platform, from, accounts, snapshot, limited);
         return { moved: false, reason: "no-account-with-headroom" };
       }
       const to = label(snapshot, platform, best.account.id);
@@ -507,7 +511,7 @@ export class AgentAccountAutoSwitcher {
     const accounts = await this.readings(platform, state, stopped, "probe");
     const best = rankAutoSwitchAccounts(accounts, state.activeId, "after-refusal")[0];
     if (!best) {
-      await this.noteKept(platform, ranOn, accounts, state.activeId, stopped);
+      await this.noteKept(platform, ranOn, accounts, state.snapshot, stopped);
       return "stop";
     }
     if (best.account.id !== state.activeId) {
@@ -545,16 +549,20 @@ export class AgentAccountAutoSwitcher {
     platform: AgentAccountPlatform,
     fromAccountId: string,
     accounts: readonly AutoSwitchAccount[],
-    activeId: string,
+    expected: AutoSwitchSnapshot,
     stoppedIds: ReadonlySet<string>,
   ): Promise<void> {
     if (!this.deps.noteKept) return;
     try {
-      await this.deps.noteKept(platform, {
-        fromAccountId,
-        at: new Date(this.now()).toISOString(),
-        blocked: explainNoRoom(accounts, activeId, "after-refusal", stoppedIds),
-      });
+      await this.deps.noteKept(
+        platform,
+        {
+          fromAccountId,
+          at: new Date(this.now()).toISOString(),
+          blocked: explainNoRoom(accounts, expected.active[platform], "after-refusal", stoppedIds),
+        },
+        expected,
+      );
     } catch {
       log.warn("kept-note.failed", { platform });
     }

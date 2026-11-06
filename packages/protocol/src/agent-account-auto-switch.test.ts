@@ -1341,6 +1341,47 @@ describe("after a limit refused a turn", () => {
     expect(rankAutoSwitchAccounts([out, stale], "out", "after-refusal")).toEqual([]);
   });
 
+  for (const usedPercent of [98, 99, 100]) {
+    test(`an active ${usedPercent}% login and its fresh twin use the refusal rule`, () => {
+      const moved = login("moved", "b@example.com", { usedPercent, resetsAt: at(30) });
+      const twin = login("twin", "b@example.com", { usedPercent, resetsAt: at(30) });
+      expect(
+        rankAutoSwitchAccounts([out, moved, twin], "moved", "after-refusal").map(
+          (entry) => entry.account.id,
+        ),
+      ).toEqual(usedPercent < 100 ? ["moved"] : []);
+      expect(rankAutoSwitchAccounts([out, moved, twin], "moved")).toEqual([]);
+    });
+  }
+
+  for (const rule of ["between-turns", "after-refusal"] as const) {
+    test(`a fresh five-hour twin without a weekly reading blocks under ${rule}`, () => {
+      const candidate = login("candidate", "b@example.com", { usedPercent: 20, resetsAt: at(30) });
+      const twin = login("twin", "b@example.com", {
+        freshness: "none",
+        fiveHour: { freshness: "fresh", usedPercent: 100, resetsAt: at(2) },
+      });
+      expect(rankAutoSwitchAccounts([out, candidate, twin], "out", rule)).toEqual([]);
+      expect(rankAutoSwitchAccounts([out, candidate, twin], "candidate", rule)).toEqual([]);
+    });
+  }
+
+  test("a stale five-hour twin cannot veto a fresh five-hour reading", () => {
+    const candidate = login("candidate", "b@example.com", {
+      freshness: "none",
+      fiveHour: { freshness: "fresh", usedPercent: 20, resetsAt: at(2) },
+    });
+    const twin = login("twin", "b@example.com", {
+      usedPercent: 20,
+      fiveHour: { freshness: "stale", usedPercent: 100, resetsAt: at(2) },
+    });
+    expect(
+      rankAutoSwitchAccounts([out, candidate, twin], "out", "after-refusal").map(
+        (entry) => entry.account.id,
+      ),
+    ).toEqual(["candidate"]);
+  });
+
   test("the account just moved onto at 99% still has room for the next stopped turn", () => {
     const moved = login("moved", "b@example.com", { usedPercent: 99, resetsAt: at(30) });
     expect(
@@ -1371,6 +1412,28 @@ describe("why the machine stayed", () => {
       { accountId: "five", blocker: "five-hour", usedPercent: 100 },
       { accountId: "pays", blocker: "would-pay" },
     ]);
+  });
+
+  test("a five-hour blocker uses its own stale flag when no weekly window exists", () => {
+    const reading = usageLimitReading(
+      "claude",
+      snapshot({
+        stale: true,
+        windows: [{ window: "five_hour", usedPercent: 100, resetsAt: inHours(2) }],
+      }),
+      NOW,
+    );
+    expect(reading.freshness).toBe("none");
+    expect(
+      explainNoRoom(
+        [
+          login("out", "a@example.com", { usedPercent: 100 }),
+          login("five", "b@example.com", reading),
+        ],
+        "out",
+        "after-refusal",
+      ),
+    ).toEqual([{ accountId: "five", blocker: "five-hour", usedPercent: 100, stale: true }]);
   });
 
   test("an unreadable record reads as absent, and its entries are bounded", () => {

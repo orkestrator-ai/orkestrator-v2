@@ -261,7 +261,6 @@ function isAccountRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Peer summaries are untrusted. Reject malformed rows and copy only display fields. */
 /**
  * One login as the views show it. Entries with one email (ignoring case) share one
  * allowance, as automatic switching already treats them. They arise when an added
@@ -271,8 +270,10 @@ function isAccountRecord(value: unknown): value is Record<string, unknown> {
  * it can still be signed in again or removed.
  */
 export interface AgentAccountLogin {
-  /** The entry the login is shown as and switched to, with the login's `isActive`. */
+  /** The stored entry the login is shown as and switched to, with its own activity. */
   account: AgentAccountSummary;
+  /** Whether any entry of this login is active. */
+  isActive: boolean;
   /** Every entry of the login, `account` first. */
   entryIds: string[];
   /** The host login is one of the entries, shown under an added account. */
@@ -300,7 +301,8 @@ export function groupAgentAccountLogins(
     const added = entries.filter((entry) => !entry.isDefault);
     const shown = added.find((entry) => entry.isActive) ?? added[0] ?? entries[0]!;
     return {
-      account: { ...shown, isActive: entries.some((entry) => entry.isActive) },
+      account: shown,
+      isActive: entries.some((entry) => entry.isActive),
       entryIds: [shown.id, ...entries.filter((entry) => entry !== shown).map(({ id }) => id)],
       alsoHostLogin: !shown.isDefault && entries.some((entry) => entry.isDefault),
     };
@@ -317,6 +319,7 @@ export function agentAccountLoginOf(
     : logins.find((login) => login.entryIds.includes(accountId));
 }
 
+/** Peer summaries are untrusted. Reject malformed rows and copy only display fields. */
 export function parseAgentAccountsSnapshot(value: unknown): AgentAccountsSnapshot | undefined {
   if (!isAccountRecord(value) || !Array.isArray(value.accounts) || !isAccountRecord(value.active)) {
     return undefined;

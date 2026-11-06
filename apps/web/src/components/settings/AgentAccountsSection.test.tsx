@@ -146,6 +146,40 @@ function accountOrder(): string[] {
 }
 
 describe("AgentAccountsSection", () => {
+  test("removes an inactive saved twin while the host login stays active", async () => {
+    snapshot.accounts[2] = { ...snapshot.accounts[2]!, identity: { email: "HOST@example.com" } };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(within(row).getByText("Active")).toBeTruthy();
+    expect(within(row).getByText("Also the host login")).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Use" }) === null).toBe(true);
+    fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Confirm remove" }));
+    const host = await screen.findByRole("listitem", { name: "Host login" });
+    expect(within(host).getByText("Active")).toBeTruthy();
+    expect(snapshot.active.codex).toBe("default");
+    expect(calls).toContainEqual({
+      command: "remove_agent_account",
+      args: { platform: "codex", accountId: ADDED_ID },
+    });
+  });
+
+  test("an active saved twin remains protected from removal", async () => {
+    snapshot.active.codex = ADDED_ID;
+    snapshot.accounts[1] = { ...snapshot.accounts[1]!, isActive: false };
+    snapshot.accounts[2] = {
+      ...snapshot.accounts[2]!,
+      isActive: true,
+      identity: { email: "host@example.com" },
+    };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(within(row).getByText("Active")).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Remove" }) === null).toBe(true);
+    expect(within(row).queryByRole("button", { name: "Use" }) === null).toBe(true);
+  });
+
   test("rename and removal notify the adjacent status reader", async () => {
     await mount();
     const added = await screen.findByRole("listitem", { name: "second@example.com" });

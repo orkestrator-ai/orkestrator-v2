@@ -12,6 +12,7 @@ import {
   resumeAgentAccountAutoSwitch,
   setActiveAgentAccount,
   setAgentAccountAutoSwitch,
+  snapshotAgentAccountsForAutoSwitch,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import { BackendRuntime } from "./backend-runtime.js";
@@ -219,7 +220,12 @@ describe("the feature's own switch", () => {
       blocked: [{ accountId: B, blocker: "weekly" as const, usedPercent: 98 }],
     };
     emitted = [];
-    await recordAgentAccountAutoSwitchKept(context, "codex", kept);
+    await recordAgentAccountAutoSwitchKept(
+      context,
+      "codex",
+      kept,
+      await listAgentAccounts(context),
+    );
     expect(emitted).toEqual([
       { event: AGENT_ACCOUNTS_CHANGED_EVENT, payload: { platform: "codex" } },
     ]);
@@ -438,3 +444,124 @@ for (const optOut of ["provider", "target"] as const) {
     expect(notices).toBe(0);
   });
 }
+
+describe("kept notes follow the current selection", () => {
+  const kept = {
+    fromAccountId: A,
+    at: "2026-11-06T04:07:56.000Z",
+    blocked: [{ accountId: B, blocker: "weekly" as const, usedPercent: 100 }],
+  };
+
+  for (const target of [A, B]) {
+    test(`a manual choice of ${target === A ? "the same" : "another"} account clears the note`, async () => {
+      await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+      await recordAgentAccountAutoSwitchKept(
+        context,
+        "codex",
+        kept,
+        await listAgentAccounts(context),
+      );
+      await setActiveAgentAccount(context, "codex", target);
+      expect((await state()).lastKept).toBeUndefined();
+      await resumeAgentAccountAutoSwitch(context, "codex");
+      expect((await state()).lastKept).toBeUndefined();
+    });
+  }
+
+  for (const change of [
+    "switch",
+    "pin",
+    "pin-resume",
+    "switch-back",
+    "identity",
+    "off",
+    "none",
+  ] as const) {
+    test(`a pending no-room probe gives way to a manual ${change}`, async () => {
+      await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+      let release!: () => void;
+      let entered!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reading = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const switcher = new AgentAccountAutoSwitcher({
+        settings: async () => ({ codex: { enabled: true, excludedEmails: [] } }),
+        snapshot: async () => {
+          const snapshot = await snapshotAgentAccountsForAutoSwitch(context);
+          for (const account of snapshot.accounts) account.signedIn = true;
+          return snapshot;
+        },
+        readUsage: async (_platform, id) => {
+          if (id === B) {
+            entered();
+            await paused;
+          }
+          return {
+            platform: "codex",
+            status: "ok",
+            fetchedAt: new Date().toISOString(),
+            windows: [
+              {
+                window: "secondary",
+                windowMinutes: 10080,
+                usedPercent: 100,
+                resetsAt: new Date(Date.now() + 3600000).toISOString(),
+              },
+            ],
+          };
+        },
+        switchAccount: (platform, id, automatic) =>
+          applyAutomaticAccountSwitch(context, platform, id, automatic),
+        sessionAccount: async () => ({
+          platform: "codex",
+          source: "account",
+          running: true,
+          account: (await listAgentAccounts(context)).accounts.find((account) => account.id === A)!,
+        }),
+        bridgeBusy: async () => false,
+        notify: () => undefined,
+        noteKept: (platform, note, expected) =>
+          recordAgentAccountAutoSwitchKept(context, platform, note, expected),
+      });
+      const pending = switcher.handleLimitStop({
+        platform: "codex",
+        environmentId: "env",
+        requestId: "stopped",
+        error: "You've hit your limit",
+        resends: 0,
+      });
+      await reading;
+      if (change === "switch" || change === "pin")
+        await setActiveAgentAccount(context, "codex", change === "switch" ? B : A);
+      else if (change === "pin-resume" || change === "switch-back") {
+        await setActiveAgentAccount(context, "codex", change === "switch-back" ? B : A);
+        if (change === "switch-back") await setActiveAgentAccount(context, "codex", A);
+        await resumeAgentAccountAutoSwitch(context, "codex");
+      } else if (change === "off")
+        await setAgentAccountAutoSwitch(context, "codex", { enabled: false });
+      else if (change === "identity")
+        await storage.agentAccounts.mutateAgentAccounts((store) => ({
+          store: {
+            ...store,
+            accounts: store.accounts.map((account) =>
+              account.id === A
+                ? { ...account, identity: { email: "changed@example.com" } }
+                : account,
+            ),
+          },
+          result: undefined,
+        }));
+      release();
+      expect(await pending).toBe("stop");
+      await resumeAgentAccountAutoSwitch(context, "codex");
+      expect(Boolean((await state()).lastKept)).toBe(change === "none");
+      expect(
+        Boolean((await storage.agentAccounts.loadAgentAccounts()).autoSwitch?.codex?.lastKept),
+      ).toBe(change === "none");
+      switcher.stop();
+    });
+  }
+});

@@ -475,8 +475,8 @@ const FRESHNESS_ORDER = { fresh: 0, stale: 1, none: 2 } as const;
  * so an older reading never overrules a newer one: a stale twin past the
  * threshold says nothing against a twin read just now.
  */
-function speaksFor(other: UsageLimitReading, entry: UsageLimitReading): boolean {
-  return FRESHNESS_ORDER[other.freshness] <= FRESHNESS_ORDER[entry.freshness];
+function speaksFor(other: LimitLevel, entry: LimitLevel | undefined): boolean {
+  return FRESHNESS_ORDER[other.freshness] <= FRESHNESS_ORDER[entry?.freshness ?? "none"];
 }
 
 function freshlyPastThreshold(reading: UsageLimitReading): boolean {
@@ -551,13 +551,14 @@ function twinOut(
   active: boolean,
   rule: AutoSwitchRoomRule,
 ): AutoSwitchAccount | undefined {
+  const blocks = (other: LimitLevel | undefined, own: LimitLevel | undefined) =>
+    other !== undefined && speaksFor(other, own) && !levelHasRoom(other, active, rule);
   return accounts.find(
     (other) =>
       other !== entry &&
       sameLogin(other, entry) &&
-      (active
-        ? freshlyPastThreshold(other.reading)
-        : speaksFor(other.reading, entry.reading) && !hasRoom(other.reading, false, rule)),
+      (blocks(other.reading, entry.reading) ||
+        blocks(other.reading.fiveHour, entry.reading.fiveHour)),
   );
 }
 
@@ -573,7 +574,7 @@ export function explainNoRoom(
   rule: AutoSwitchRoomRule = "between-turns",
   stoppedIds: ReadonlySet<string> = new Set(),
 ): AutoSwitchBlockedAccount[] {
-  const stale = (reading: UsageLimitReading) =>
+  const stale = (reading: LimitLevel) =>
     reading.freshness === "stale" ? { stale: true as const } : {};
   const stopped = accounts.filter(
     ({ account }) => account.id === activeAccountId || stoppedIds.has(account.id),
@@ -596,7 +597,7 @@ export function explainNoRoom(
           accountId,
           blocker: "five-hour",
           usedPercent: reading.fiveHour.usedPercent,
-          ...stale(reading),
+          ...stale(reading.fiveHour),
         },
       ];
     }

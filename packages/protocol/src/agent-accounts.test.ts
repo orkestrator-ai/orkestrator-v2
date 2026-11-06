@@ -139,7 +139,8 @@ describe("one row per login", () => {
     ]);
     expect(logins).toHaveLength(2);
     expect(logins[0]).toMatchObject({
-      account: { id: "added", isActive: true },
+      account: { id: "added", isActive: false },
+      isActive: true,
       entryIds: ["added", "default"],
       alsoHostLogin: true,
     });

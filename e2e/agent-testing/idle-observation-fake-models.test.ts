@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   type FakeModelHandle,
+  fakeModelSettingsFile,
   startLocalFakeModel,
   startModel,
   withFakeModelCleanup,
@@ -82,3 +83,29 @@ for (const stage of ["create_environment", "openClient"]) {
     }
   });
 }
+
+test("Pi's fake is added to the profile's own models.json and removed again", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "idle-fake-pi-"));
+  const file = fakeModelSettingsFile("pi", directory);
+  // Under the backend's isolated HOME, never a real ~/.pi.
+  expect(file).toBe(
+    path.join(directory, "agent-credentials", "home", ".pi", "agent", "models.json"),
+  );
+  mkdirSync(path.dirname(file), { recursive: true });
+  const original = '{"providers":{"kept":{"baseUrl":"http://kept"}}}\n';
+  writeFileSync(file, original);
+  const { child, spawnModel } = fakeChild("ready");
+  try {
+    const handle = await startLocalFakeModel("pi", directory, { spawnModel });
+    const written = JSON.parse(readFileSync(file, "utf8")) as {
+      providers: Record<string, { baseUrl: string }>;
+    };
+    expect(Object.keys(written.providers).sort()).toEqual(["idleqa-fake", "kept"]);
+    expect(written.providers["idleqa-fake"]!.baseUrl).toBe("http://127.0.0.1:1234");
+    await handle.stop();
+    expect(child.killed).toBe(true);
+    expect(readFileSync(file, "utf8")).toBe(original);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

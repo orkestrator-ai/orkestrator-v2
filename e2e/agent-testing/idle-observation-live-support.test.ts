@@ -7,6 +7,7 @@ import {
   droppableGatewayEvent,
   failedCases,
   freshToolResults,
+  freshToolStates,
   shellOutputContainsMarker,
   gapHistogram,
   invalidationCauseDelta,
@@ -21,6 +22,35 @@ describe("idle observation live support", () => {
     expect(selectedCases(undefined)).toEqual([...IDLE_OBSERVATION_CASES]);
     expect(selectedCases(" hidden , approval ")).toEqual(["approval", "hidden"]);
     expect(() => selectedCases("approval,typo")).toThrow("typo");
+  });
+
+  test("tool states name fresh calls and sub-agent cards without their content", () => {
+    const messages = [
+      {
+        id: "old",
+        role: "assistant",
+        parts: [{ type: "tool-invocation", toolName: "bash", toolState: "success" }],
+      },
+      {
+        id: "prompt",
+        role: "user",
+        parts: [{ type: "tool-invocation", toolName: "bash", toolState: "pending" }],
+      },
+      {
+        id: "new",
+        role: "assistant",
+        parts: [
+          { type: "text", content: "IDLEQA-BG-1" },
+          { type: "tool-invocation", toolName: "bash", toolState: "pending", toolOutput: "secret" },
+          { type: "subagent", toolState: "success", subagentPrompt: "secret" },
+        ],
+      },
+    ];
+    expect(freshToolStates(messages, new Set(["old"]))).toEqual([
+      "bash:pending",
+      "subagent:success",
+    ]);
+    expect(selectedCases("async-question")).toEqual(["async-question"]);
   });
 
   test("invalidation deltas count one provider's causes and environment-wide ones", () => {

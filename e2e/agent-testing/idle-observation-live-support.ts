@@ -6,6 +6,7 @@
 export const IDLE_OBSERVATION_CASES = [
   "missed-final",
   "bridge-restart",
+  "async-question",
   "approval",
   "subagents",
   "background",
@@ -207,6 +208,31 @@ export function freshToolResults(
     visit(message.parts);
   }
   return results;
+}
+
+/**
+ * `toolName:toolState` of every tool call on fresh non-user rows, in order,
+ * and `subagent:toolState` for every sub-agent card (Codex renders a child as
+ * a `subagent` part, not a tool call): content-free evidence of what a
+ * command still running at the end of its turn looks like afterwards, and of
+ * whether a child was left running (todo 0049 tasks 3 and 8).
+ */
+export function freshToolStates(
+  messages: readonly { id: string; role: string; parts?: unknown }[],
+  previous: ReadonlySet<string>,
+): string[] {
+  const states: string[] = [];
+  for (const message of messages) {
+    if (message.role === "user" || previous.has(message.id) || !Array.isArray(message.parts)) {
+      continue;
+    }
+    for (const part of message.parts as Array<Record<string, unknown>>) {
+      if (part?.type === "subagent") states.push(`subagent:${String(part.toolState ?? "?")}`);
+      if (part?.type !== "tool-invocation") continue;
+      states.push(`${String(part.toolName ?? "?")}:${String(part.toolState ?? "?")}`);
+    }
+  }
+  return states;
 }
 
 /** An echoed command/argument is not the line the shell was asked to emit. */

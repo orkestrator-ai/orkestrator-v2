@@ -6,10 +6,12 @@
  *
  * It answers the spec's own prompts the way a compliant model would
  * (`scriptedStep`): "reply with exactly W" replies W, "the uppercase form of
- * this text: w" replies W, "run this shell command and wait" calls `Bash`
- * and replies once the result is back, and "start this shell command as a
- * background task" calls `Bash` with `run_in_background`. Anything else (a
- * title request, a task notification) gets a short reply.
+ * this text: w" replies W, "run this shell command and wait" (or "run this
+ * exact shell command once", the approval case) calls `Bash` and replies once
+ * the result is back, "start this shell command as a background task" calls
+ * `Bash` with `run_in_background`, and "use your sub-agent" delegates a child
+ * reply to the `Agent` tool. Anything else (a title request, a task
+ * notification) gets a short reply.
  *
  *   bun idle-observation-fake-claude.ts [--port 0] [--reply-delay-ms 0]
  *
@@ -21,7 +23,17 @@
 import { createServer, type IncomingMessage } from "node:http";
 
 export type ScriptedStep =
-  { kind: "text"; text: string } | { kind: "shell"; command: string; background: boolean };
+  | { kind: "text"; text: string }
+  | { kind: "shell"; command: string; background: boolean }
+  /** Delegate `task` (a whole prompt for the child) to a sub-agent. */
+  | { kind: "subagent"; task: string }
+  /** Ask one question without waiting for the answer (Codex's async question). */
+  | { kind: "question"; title: string; options: string[] };
+
+/** The reply to an answered async question (`serializeAsyncQuestionAnswers`). */
+export const CODEWORD_REPLY_PREFIX = "CODEWORD_CHOSEN=";
+/** Without a sub-agent tool the spec's prompt asks for this reply. */
+export const NO_SUBAGENT_REPLY = "NO-SUBAGENT-TOOL";
 
 type Block = { type?: string; text?: string };
 type Message = { role?: string; content?: string | Block[] };
@@ -36,6 +48,9 @@ const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 /** What the reply of a prompt is, once any command it asked for has run. */
 export function finalReply(prompt: string): string {
+  // The web card sends "Answers to your questions:" then "- <title>: <answer>".
+  const answered = /^Answers to your questions:[\s\S]*?\?: (\S+)\s*$/m.exec(prompt)?.[1];
+  if (answered) return `${CODEWORD_REPLY_PREFIX}${answered}`;
   const exact = /reply with exactly (\S+?) and nothing else/i.exec(prompt)?.[1];
   if (exact) return exact;
   const upper = /uppercase form of this text and nothing else: (\S+?)\.(?:\s|$)/i.exec(prompt)?.[1];
@@ -49,6 +64,24 @@ export function finalReply(prompt: string): string {
  */
 export function scriptedStep(prompt: string, afterTool: boolean): ScriptedStep {
   if (afterTool) return { kind: "text", text: finalReply(prompt) };
+  const child =
+    /use your sub-agent or task delegation tool[\s\S]*?give it this task: reply with the text (\S+?)\./i.exec(
+      prompt,
+    )?.[1];
+  if (child) {
+    return {
+      kind: "subagent",
+      task: `Reply with exactly ${child} and nothing else. Do not use any tools.`,
+    };
+  }
+  const question = /ask me one question, "([^"]+)", with the options (\S+) and (\S+?)\./i.exec(
+    prompt,
+  );
+  if (question) {
+    return { kind: "question", title: question[1]!, options: [question[2]!, question[3]!] };
+  }
+  const approval = /run this exact shell command once: ([^\n]+)/i.exec(prompt)?.[1];
+  if (approval) return { kind: "shell", command: approval.trim(), background: false };
   const background = /as a background task and do not wait for it: ([\s\S]+?) Right after/i.exec(
     prompt,
   )?.[1];
@@ -108,9 +141,30 @@ export function requestState(body: MessagesBody): { prompt: string; afterTool: b
 export function responseContent(body: MessagesBody, id: number): Array<Record<string, unknown>> {
   const { prompt, afterTool } = requestState(body);
   let step = scriptedStep(prompt, afterTool);
-  const bash = (body.tools ?? []).some((tool) => tool.name === "Bash");
-  if (step.kind === "shell" && !bash) step = { kind: "text", text: finalReply(prompt) };
+  const offered = new Set((body.tools ?? []).map((tool) => tool.name));
+  if (step.kind === "shell" && !offered.has("Bash")) {
+    step = { kind: "text", text: finalReply(prompt) };
+  }
+  // The CLI names its delegation tool `Agent` (formerly `Task`).
+  const agentTool = offered.has("Agent") ? "Agent" : offered.has("Task") ? "Task" : null;
+  if (step.kind === "subagent" && !agentTool) step = { kind: "text", text: NO_SUBAGENT_REPLY };
+  // Claude has no async question; this script asks one only of Codex.
+  if (step.kind === "question") step = { kind: "text", text: finalReply(prompt) };
   if (step.kind === "text") return [{ type: "text", text: step.text }];
+  if (step.kind === "subagent") {
+    return [
+      {
+        type: "tool_use",
+        id: `toolu_idleqa_${id}`,
+        name: agentTool,
+        input: {
+          description: "Child reply",
+          prompt: step.task,
+          subagent_type: "general-purpose",
+        },
+      },
+    ];
+  }
   return [
     {
       type: "tool_use",

@@ -4,6 +4,7 @@ import {
 } from "@orkestrator/protocol/agent-command-catalogue";
 import {
   NATIVE_AGENT_COMMAND_REFRESH_OUTCOMES,
+  normalizeAccountExpiry,
   normalizePendingSignIn,
   type NativeAgentAuthStatus,
   type NativeAgentMcpServer,
@@ -319,9 +320,8 @@ export class HttpBridgeCatalogAdapter {
               ...(nonEmptyString(account?.plan)
                 ? { plan: nonEmptyString(account?.plan)!.slice(0, 256) }
                 : {}),
-              ...(nonEmptyString(account?.expiresAt)
-                ? { expiresAt: nonEmptyString(account?.expiresAt)!.slice(0, 128) }
-                : {}),
+              // An unreadable date is no date: the renderer omits the line.
+              ...normalizeAccountExpiry(account),
             },
           }
         : {}),

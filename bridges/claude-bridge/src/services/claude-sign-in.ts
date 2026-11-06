@@ -12,10 +12,11 @@
 import { controlOnlyQuery } from "./control-only-query.js";
 import { liveInitializationResult, readFromLiveClaude } from "./live-claude-control.js";
 import type { AccountInfo, Query } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  NativeAgentAuthStatus,
-  NativeAgentReadiness,
-  NativeAgentSignInRoute,
+import {
+  normalizeAccountExpiresAt,
+  type NativeAgentAuthStatus,
+  type NativeAgentReadiness,
+  type NativeAgentSignInRoute,
 } from "@orkestrator/protocol/native-agent";
 import { claudeExecutableOptions } from "./session-manager-core.js";
 
@@ -54,11 +55,61 @@ let authGeneration = 0;
 let turnAuthenticationFailedUntil = 0;
 /** Launch-time accounts stay suspect until a model proves authentication works. */
 let reuseLiveAccounts = true;
+/**
+ * The end of a claude.ai login, as the last numbered result reported it
+ * (`credential_expires_at`), with the account key of the CLI that sent it.
+ * Served only beside that same account, so a different login never shows
+ * another's date. Memory only: the next result after a restart refills it.
+ */
+let credentialExpiry: { accountKey: string; expiresAt: string } | undefined;
 
 function withTurnFailure(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
   return Date.now() < turnAuthenticationFailedUntil && value.state === "signed-in"
     ? { ...value, state: "expired" }
     : value;
+}
+
+/**
+ * The login end a result reported, on the account it belongs to. Compared on
+ * the probe's own answer, before a turn failure turns it `expired`, so a
+ * refused login still shows the date that may explain the refusal.
+ */
+function withCredentialExpiry(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
+  const expiry = credentialExpiry;
+  if (!expiry || !value.account || claudeAccountKey(value) !== expiry.accountKey) return value;
+  // Claude cannot say whether its date is the server's or its own 30-day
+  // guess, and either may be up to three days late, so it is always "about".
+  return {
+    ...value,
+    account: { ...value.account, expiresAt: expiry.expiresAt, expiresAtEstimated: true },
+  };
+}
+
+function served(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
+  return withTurnFailure(withCredentialExpiry(value));
+}
+
+/**
+ * Record what one result says about the login that sent it.
+ *
+ * `accountKey` is that CLI's own account (its initialize answer), never the
+ * bridge's last read, which may already describe a newer login. A date is
+ * kept for that account. A numbered result without one says the credential
+ * has no known end (an API key, a token from the environment), so that
+ * account's date is dropped; an unnumbered result says nothing either way.
+ */
+export function noteClaudeCredentialExpiry(
+  accountKey: string,
+  result: { credential_expires_at?: unknown; result_index?: unknown },
+): void {
+  const expiresAt = normalizeAccountExpiresAt(result.credential_expires_at);
+  if (expiresAt) {
+    credentialExpiry = { accountKey, expiresAt };
+    return;
+  }
+  if (typeof result.result_index === "number" && credentialExpiry?.accountKey === accountKey) {
+    credentialExpiry = undefined;
+  }
 }
 
 export function resetClaudeSignInForTesting(): void {
@@ -69,6 +120,7 @@ export function resetClaudeSignInForTesting(): void {
   authGeneration += 1;
   turnAuthenticationFailedUntil = 0;
   reuseLiveAccounts = true;
+  credentialExpiry = undefined;
 }
 
 /** Claude reports an absent source as the literal string "none". */
@@ -158,7 +210,7 @@ async function probeAccount(): Promise<NativeAgentAuthStatus> {
 
 export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
   if (authCache && authCache.expiresAt > Date.now()) {
-    return Promise.resolve(withTurnFailure(authCache.value));
+    return Promise.resolve(served(authCache.value));
   }
   if (authRead) return authRead;
   const generation = authGeneration;
@@ -178,7 +230,7 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
       if (generation === authGeneration) {
         authCache = { expiresAt: Date.now() + ttl, value };
       }
-      return withTurnFailure(value);
+      return served(value);
     })
     .finally(() => {
       if (authRead !== read) return;

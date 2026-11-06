@@ -1,8 +1,18 @@
 import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
-import type { SDKMessage, SDKStartupFailureReason } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  AccountInfo,
+  SDKMessage,
+  SDKStartupFailureReason,
+} from "@anthropic-ai/claude-agent-sdk";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import type { SdkResultMessage } from "../../types/index.js";
+import {
+  claudeAccountKey,
+  normalizeClaudeAccount,
+  noteClaudeCredentialExpiry,
+} from "../claude-sign-in.js";
 import { eventEmitter } from "../event-emitter.js";
+import { liveInitializationResult } from "../live-claude-control.js";
 import { debugLog } from "../logger.js";
 import { appendLocalCommandResult } from "../session-manager-commands.js";
 import {
@@ -102,11 +112,37 @@ const STOPPED_TERMINAL_REASONS: ReadonlySet<string> = new Set([
   "aborted_tools",
 ]);
 
+/**
+ * Credit a result's `credential_expires_at` to the account of the CLI that
+ * wrote it, read from that CLI's held initialize answer (no request is sent).
+ * The date describes the process's login, not this turn, so every result
+ * counts, including one this turn goes on to skip. Never awaited: it must not
+ * reorder the result's own handling.
+ */
+export function recordClaudeCredentialExpiry(turn: TurnState, result: SdkResultMessage): void {
+  if (result.credential_expires_at === undefined && typeof result.result_index !== "number") return;
+  const control = turn.runtime?.control ?? turn.queryIteratorControl;
+  const initialization = control ? liveInitializationResult(control) : undefined;
+  void initialization
+    ?.then((answer) => {
+      const account = answer?.account;
+      if (!account || typeof account !== "object") return;
+      const status = normalizeClaudeAccount(account as AccountInfo);
+      // A CLI that launched without a login has no account to credit.
+      if (status.state !== "signed-in" || !status.account) return;
+      noteClaudeCredentialExpiry(claudeAccountKey(status), result);
+    })
+    .catch((error: unknown) => {
+      debugLog("[session-manager] Credential expiry not recorded:", error);
+    });
+}
+
 /** `result`: the end of a model turn, or of a continuation the turn was retained for. */
 export async function handleResultMessage(turn: TurnState, message: SDKMessage): Promise<void> {
   const { session, sessionId, stream } = turn;
   // Only allowlisted metadata reaches the shared debug sink.
   const resultMsg = message as SdkResultMessage;
+  recordClaudeCredentialExpiry(turn, resultMsg);
   // A resumed CLI can finish a turn of its own (a replayed task
   // notification) before it reaches this prompt. That result says
   // nothing about this turn; ending on it closed the CLI's input, which

@@ -1832,6 +1832,55 @@ export interface NativeAgentSignInRoute {
   hint?: string;
 }
 
+/**
+ * The signed-in account a platform reports. Every field but `label` is
+ * optional and absent when the provider does not say.
+ */
+export interface NativeAgentAccount {
+  label: string;
+  plan?: string;
+  /**
+   * When this login ends for good and the user has to sign in again, as an ISO
+   * 8601 instant: the end of a refresh chain or a key's expiry, never an access
+   * token the provider renews by itself. Filled only from the provider's own
+   * data; absent when it reports none. A past date means the login has
+   * probably ended.
+   */
+  expiresAt?: string;
+  /**
+   * The provider says `expiresAt` is an estimate, and the login may end a few
+   * days before it. Only ever `true`, and only beside `expiresAt`.
+   */
+  expiresAtEstimated?: true;
+}
+
+/** Longest `expiresAt` text accepted from a bridge; an ISO instant is 24 characters. */
+const MAX_ACCOUNT_EXPIRES_AT_CHARS = 64;
+
+/**
+ * A provider's login end as a canonical ISO instant, or undefined for anything
+ * that is not a date. An unreadable value is a missing one, never an error.
+ */
+export function normalizeAccountExpiresAt(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (!text || text.length > MAX_ACCOUNT_EXPIRES_AT_CHARS) return undefined;
+  const ms = Date.parse(text);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+/** The expiry fields of an untrusted account record, validated together. */
+export function normalizeAccountExpiry(
+  account: Record<string, unknown> | null | undefined,
+): Pick<NativeAgentAccount, "expiresAt" | "expiresAtEstimated"> {
+  const expiresAt = normalizeAccountExpiresAt(account?.expiresAt);
+  if (!expiresAt) return {};
+  return {
+    expiresAt,
+    ...(account?.expiresAtEstimated === true ? { expiresAtEstimated: true as const } : {}),
+  };
+}
+
 export interface NativeAgentAuthStatus {
   state: NativeAgentAuthState;
   /**
@@ -1839,7 +1888,7 @@ export interface NativeAgentAuthStatus {
    * Null confirms no pending login; absent means the bridge predates this snapshot.
    */
   pendingSignIn?: NativeAgentPendingSignIn | null;
-  account?: { label: string; plan?: string; expiresAt?: string };
+  account?: NativeAgentAccount;
   providers?: Array<{
     id: string;
     label: string;

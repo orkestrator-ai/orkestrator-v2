@@ -81,6 +81,7 @@ import type { MultiReviewReviewer } from "@orkestrator/protocol/multi-review";
 import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
+import { SignInExpiry } from "@/components/native-agent/SignInExpiry";
 import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
 
 interface AgentInfoButtonProps {
@@ -1614,6 +1615,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                           {auth.state.replaceAll("-", " ")}
                           {auth.account?.plan ? ` · ${auth.account.plan}` : ""}
                         </div>
+                        <SignInExpiry account={auth.account} className="mt-0.5" />
                       </div>
                       {auth.state === "signed-in" && auth.signOut ? (
                         <Button

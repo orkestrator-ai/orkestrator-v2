@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { AlertCircle, CheckCircle2, CircleHelp, KeyRound, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ClaudeAccountSignInAction } from "@/components/claude/ClaudeAccountSignInAction";
+import { SignInExpiry } from "@/components/native-agent/SignInExpiry";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { getAgentSignInStatus } from "@/lib/backend";
 import { useAccountMachine } from "./account-machine";
@@ -115,10 +116,13 @@ export function AgentSignInCard({
             {status ? <StateBadge state={status.state} /> : null}
           </h3>
           {status?.account ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {status.account.label}
-              {status.account.plan ? ` · ${status.account.plan}` : ""}
-            </p>
+            <>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {status.account.label}
+                {status.account.plan ? ` · ${status.account.plan}` : ""}
+              </p>
+              <SignInExpiry account={status.account} className="mt-1" />
+            </>
           ) : null}
         </div>
         <Button

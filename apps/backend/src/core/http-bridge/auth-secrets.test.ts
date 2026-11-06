@@ -71,6 +71,33 @@ describe.each(CONNECTIONS)("%s bridge auth boundary", (_agent, connection) => {
     expectNothingSecretLogged(output, "auth status");
   });
 
+  test("passes on a valid login end and its estimate marker, and drops an unreadable one", async () => {
+    const answer = (account: Record<string, unknown>) =>
+      httpProvider(
+        () => Response.json({ state: "signed-in", account: { label: "Team", ...account } }),
+        connection,
+      ).provider.authStatus!();
+
+    const estimated = await answer({
+      expiresAt: "2026-12-03T10:00:00Z",
+      expiresAtEstimated: true,
+    });
+    expectAuthStatusShape(estimated);
+    expect(estimated.account).toEqual({
+      label: "Team",
+      expiresAt: "2026-12-03T10:00:00.000Z",
+      expiresAtEstimated: true,
+    });
+    expect((await answer({ expiresAt: "2026-12-03T10:00:00.000Z" })).account).toEqual({
+      label: "Team",
+      expiresAt: "2026-12-03T10:00:00.000Z",
+    });
+    expect(
+      (await answer({ expiresAt: AUTH_SECRET_CANARIES.accessToken, expiresAtEstimated: true }))
+        .account,
+    ).toEqual({ label: "Team" });
+  });
+
   test("passes on only the sign-in URL and code, and logs neither", async () => {
     const { provider } = httpProvider(
       () =>

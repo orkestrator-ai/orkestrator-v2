@@ -247,6 +247,12 @@ export interface SdkResultMessage extends SdkMessageBase {
   errors?: string[];
   startup_failure_reason?: import("@anthropic-ai/claude-agent-sdk").SDKStartupFailureReason;
   terminal_reason?: import("@anthropic-ai/claude-agent-sdk").TerminalReason;
+  /**
+   * When the claude.ai login this process sends ends, as an ISO instant: the
+   * server's date or a 30-day estimate, so the real end can be days earlier.
+   * Absent for any other credential and on results the process did not number.
+   */
+  credential_expires_at?: string;
   usage?: Record<string, unknown>;
   modelUsage?: Record<
     string,

@@ -11,6 +11,8 @@ against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 [Live soak](#live-soak-2026-10-25-macos),
 [Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux)
 and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
+Task 10 rechecked against `main` at `281de1a17` (2026-11-06), with live
+evidence from Linux that day; see [Long soak](#long-soak-2026-11-06-linux).
 
 ### Tasks
 
@@ -23,7 +25,7 @@ and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: partly done (the `dev:test` save-detection run passed).
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open.
 9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open.
-10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: partly done (driver and a 10-cycle soak exist).
+10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: open.
 12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: blocked (on tasks 1, 5 and 10); the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11).
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (on tasks 1, 5 and 10).
@@ -273,6 +275,22 @@ lost the selection to a seeded terminal; fixed (decision 23). See
   - **Credential-free only.**
     - Pros: free and repeatable.
     - Cons: misses the provider observation footprint.
+
+**Outcome (2026-11-06).** Rechecked on `281de1a17`: the references above
+hold. Both recommendations were taken, the second in a changed form: the
+sessions are real Pi sessions on a fake model rather than credentialed
+Claude ones (decision 25), because this run must make no billed provider
+turn. Recurring diagnostics gained a `caches` block (decision 24): the
+storage row cache, the worktree snapshot caches, the local scan cache, the
+native projection's per-session maps and change tracking's fences. The soak
+samples them after every cycle and reports what is still rising. A 60-cycle
+local soak on the build before the fix found the native projection keeping
+every deleted environment's session views (fixed, decision 26), and a
+60-cycle soak over more than an hour on the fixed build kept those gauges
+flat; see [Long soak](#long-soak-2026-11-06-linux). Containers could not be
+soaked on this host (decision 27). The `dev:stop` failure recurred and is
+fixed in the driver (decision 28), so the note about a `dev:stop` todo is
+closed.
 
 ### 11. Multi-client, restarts and an older backend
 
@@ -631,6 +649,20 @@ and the decisions below were recorded.
   subscribers) before and after, counts guard lines, and exits 1 on a failed
   step, a leaked gauge or a guard line (`soakFootprint`, `soakLeaks` in
   `recurring-live-ab-summary.ts`).
+- Cache gauges (2026-11-06): the `caches` block of recurring diagnostics
+  (`addCacheSource`, `recurring-diagnostics.ts`; table in
+  [recurring-work.md](../../architecture/recurring-work.md)) counts the
+  caches the footprint cannot see: each open connection's row cache, the
+  diff-stats tracker's tree lineages, bodies, ad hoc reads and
+  per-environment maps, the local scan cache, every per-session map of the
+  native projection, and change tracking's owners and deletion fences. The
+  soak reads them after every cycle (`soakCacheGauges`) and lists gauges
+  still rising (`gaugeTrends`). `--soak-sessions N` keeps real Pi sessions
+  open on a loopback fake model (`recurring-live-ab-fake-model.ts`),
+  `--soak-cycle-gap-ms` spaces cycles out, and `--agent-platforms` narrows
+  the profile's toolchains.
+- Environment deletion releases the native projection's caches for that
+  environment's sessions (`forgetEnvironmentProjections`, 2026-11-06).
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
@@ -915,6 +947,62 @@ checked. The merge state reaches the view through environment events, which
 the inactive and second-window steps cover. The output dialog polls only
 while a command is queued or running, and these runs had finished.
 
+### Long soak (2026-11-06, Linux)
+
+Host: beelink, Linux 7.1.8 x86_64, Docker Engine 29.9.2 on a shared host, Bun
+1.4.4, headless `dev:test` profiles of this branch with the reachability
+check off. Each run was a fresh profile with one local fixture environment,
+no agent credentials and only the Pi toolchain (seeded from the host).
+Command of the acceptance run:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --settle-ms 60000 --window-ms 60000 --sample-ms 30000 --freshness-probes 0 \
+  --fixture-environments local --agent-platforms pi --soak-cycles 60 \
+  --soak-environments local --soak-cycle-gap-ms 65000 --soak-sessions 2 \
+  --profile-prefix rw-fixsoak --out output/benchmarks/recurring-long-soak-fixed-2026-11-06.json
+```
+
+Every cycle created, started to `ready`, stopped, restarted and deleted one
+local environment, opened a Pi session in it on the fake model before the
+stop, and sent one prompt to each of two Pi sessions kept open on the
+fixture environment for the whole soak. Two runs, both with exit 0:
+
+| Run | Build | Cycles | Duration | Failed steps | Turns (model requests) | Leaked footprint gauges | Guard lines | Backend RSS MiB, first/last/max |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Before the fix (45 s gap) | `7e3ee6a80` | 60/60 | 54 min | none | 182 | none | 0 | 250/406/481 |
+| Acceptance (65 s gap) | `5755afef7` | 60/60 | 74 min | none | 182 | none | 0 | 243/302/413 |
+
+Both started and reset their profile through the script; nothing was left
+running. The footprint (9 schedulers, 3 pools, scheduler keys per kind, no
+lease, fetch or signal record, one event stream) returned to its baseline
+exactly in both.
+
+Cache gauges, first and last of the 60 trend samples (one after each
+cycle). Every gauge not listed was flat (worktree snapshot entries, tree
+targets and watched worktrees at 1; owned and scan-cache worktrees at 2;
+change tracking's owners and sources at 1; 10 row-cache connections):
+
+| Gauge | Before the fix | Acceptance | Reading |
+| --- | --- | --- | --- |
+| `native-projection:projections`, `projectionRevisions`, `projectedMessageSessions` | 3 → 62 | 2 → 2 | One per deleted environment's session, kept until LRU churn (bug, fixed, decision 26). Flat at the two open sessions after the fix. |
+| `native-projection:projectionEpochs` | 1 → 60 | 0 → 0 | The same, fixed. |
+| `native-projection:projectedMessages` / `projectedMessageBytes` | 10 → 362 / 10 KB → 371 KB | 8 → 244 / 8 KB → 247 KB | After the fix, the two open sessions' own rows: two per prompt over 120 prompts. Bounded per session (4,096 rows) and in total (8,192 rows, 48 MiB). |
+| `change-tracking:deletedEnvironments` | 1 → 60 | 1 → 50 | One fence per deleted environment until its purge finishes, after the 1 h orphan grace. The acceptance run levelled at 49 to 50 from about an hour in, as purges finished; bounded by an hour of deletions. |
+| `storage-row-cache:rows` / `bytes` | 12 → 67 / 209 KB → 843 KB | 12 → 70 / 209 KB → 845 KB | The connection's cache of stores read whole, following durable data: the CLI's operation records, usage history, artifact grants and deletion tombstones, each with its own retention (tombstones are permanent by design and a few bytes each). Not a cache leak. |
+| `native-projection` progressive and snapshot maps | 0 | 0 | Never filled: no client read a transcript ([7100](7100-long-soak-follow-ups.md) tasks 3 and 4). |
+
+The trend check flagged the last three as rising, as designed: their floor
+in the last third of the samples was above their peak in the first. Each
+was read against its bound above. Backend RSS rose over the first run and
+ended lower than its peak in the second; under Bun it is still not a leak
+gauge, and the counts above are the evidence.
+
+Not covered: containers (the daemon had no free address pool, decision 27;
+[7100](7100-long-soak-follow-ups.md) task 2), a browser reader (7100 task
+4), and providers other than Pi.
+
 ## Outstanding work
 
 ### Qualification
@@ -960,10 +1048,13 @@ credentials or a platform CI lacks are batched in
   profile lifecycles of 2026-10-22 had zero guard lines each; that is not a
   soak. 2026-10-25: the driver exists (`--soak-cycles`, see Current state)
   and a first 10-cycle local and container soak ran (see
-  [Live soak](#live-soak-2026-10-25-macos)). Still owed: a long soak (at least
-  50 cycles over an hour or more, with agent sessions open), and cache
-  counts the footprint cannot see yet (worktree snapshot and row caches have
-  no diagnostics gauge).
+  [Live soak](#live-soak-2026-10-25-macos)). ~~Still owed: a long soak (at
+  least 50 cycles over an hour or more, with agent sessions open), and cache
+  counts the footprint cannot see yet.~~ Done 2026-11-06 on Linux for local
+  environments with fake-model Pi sessions, with cache gauges (see
+  [Long soak](#long-soak-2026-11-06-linux)). Still owed, in
+  [7100](7100-long-soak-follow-ups.md): the same soak with containers, and
+  one with a browser reader.
 - Two clients with one disconnected; backend and bridge restarts at durable
   transition boundaries; an older backend.
 - ~~Real-browser QA of the Files panel, the coordinator view, validation
@@ -1022,8 +1113,9 @@ Removal not started; its preparation is done (2026-10-25: `stableJitterMs`
 moved, the metrics switch decided). The idle A/B on macOS shows the keyed
 drivers starting no more often than the rollback drivers, with the same
 freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
-footprint. But the busy profile, live GitHub, providers and a long soak have
-not run, so the rollback drivers stay.
+footprint, and on 2026-11-06 a 60-cycle local soak over more than an hour
+with fake-model sessions open left none either. But the busy profile, live
+GitHub and providers have not run, so the rollback drivers stay.
 
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
   domain by domain, with the desktop allowlist entry. Remove the
@@ -1448,8 +1540,90 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     case of `container-app-wiring.spec.ts`, which starts from no persisted
     layout and checks the persisted selection.
 
+### Task 10: long soak and cache gauges (2026-11-06)
+
+24. **What the cache gauges count, and where they live.** Options: entry
+    counts for the worktree snapshot and row caches only, as task 10
+    proposed; every cache an owner keeps per environment or per session,
+    reported through one registry; or heap snapshots during the soak.
+    Chosen: the registry (`addCacheSource` in `recurring-diagnostics.ts`),
+    with five sources: `storage-row-cache`, `worktree-snapshots`,
+    `local-git-scan`, `native-projection` and `change-tracking`. Why: the
+    soak is meant to find a map that grows with every session or
+    environment ever seen, and the projection and change-tracking maps are
+    where those live; heap snapshots name no owner and contain content.
+    Pros: content-free by construction (the registry drops any field that
+    is not a short identifier or a finite count, and bounds sources and
+    fields); owners register and unregister with their own lifetime, so a
+    leaked owner shows as an extra source. Cons: a cache nobody registers
+    stays invisible; the row cache's `bytes` is serialized length, not heap.
+    Tests: `recurring-diagnostics-caches.test.ts`,
+    `storage-database-cache-gauges.test.ts`,
+    `native-agent-projection-cache-gauges.test.ts`,
+    `change-tracking/service-cache-gauges.test.ts`, and the worktree case
+    in `public-api/test-support.test.ts`.
+25. **Agent sessions without a billed turn.** Options: credentialed Claude
+    sessions, as task 10 recommended; a credential-free profile with
+    sessions that never get a turn; or real Pi sessions whose model is a
+    fake endpoint. Chosen: Pi on a fake model. The driver serves an
+    OpenAI-compatible endpoint on 127.0.0.1 and writes it into the new
+    profile's own Pi `models.json` under the profile's isolated HOME, so the
+    real Pi bridge, SDK session files, backend projection and observation
+    run, and only the model is fake. Why: this run must make no billed turn
+    and touch no real login, and a session that never runs a turn leaves
+    the projection and turn paths idle. Pros: free and repeatable, and each
+    cycle runs real turns (182 model requests in the first run). Cons: Pi
+    alone, so Claude's and Codex's own observation paths are not soaked
+    (0049 owns those); Pi runs end `run-unknown` (exit 7), so the driver
+    counts a turn only when the fake model answered it.
+26. **The deleted-environment projection growth (bug, fixed).** The first
+    run found `projections`, `projectionRevisions`,
+    `projectedMessageSessions` and `projectionEpochs` rising by one per
+    deleted environment, to 62 after 60 cycles. Options: release them at
+    environment deletion; or add a byte bound to the projection cache.
+    Chosen: release at deletion (`forgetEnvironmentProjections`, called by
+    `deleteEnvironment` after the session records go, and
+    `NativeAgentTranscriptProjection.forgetEnvironment`). Why: nothing can
+    read a deleted environment's sessions again, and the count-only bounds
+    (1,024 projections of up to 16 MiB each) would otherwise hold them
+    until churn. Pros: reuses `invalidateProjection` and its epoch fence.
+    Cons: sessions are found through the cached projections' inputs (the
+    key is a hash), so one read only through the progressive path is left
+    to that path's own bounds. Tests: the release case in
+    `native-agent-projection-cache-gauges.test.ts` and the ordering case in
+    `commands-environment-cleanup.test.ts`; live, the fixed run kept them at
+    the two long-lived sessions (see Long soak). Three other projection
+    maps have no eviction at all but stayed at zero without a browser
+    reader; they are [7100](7100-long-soak-follow-ups.md) task 3.
+27. **Containers left out of the long soak.** Options: free the host's
+    Docker address pools first; run on another host; or soak local
+    environments only and record why. Chosen: local only. Why: 29 of the
+    daemon's 34 networks were unattached reach-probe networks from other
+    backends (created 2026-10-31 to 2026-11-02), `dev:test` with a
+    container fixture failed with `resource-exhausted`, and this work may
+    neither prune networks nor remove what it did not create (0241 task 5
+    leaves that sweep to the user). Pros: the acceptance soak still ran.
+    Cons: container lifecycle, signal and fetch records were not soaked for
+    an hour; that is [7100](7100-long-soak-follow-ups.md) task 2.
+28. **The driver's own failures on this host.** Three attempts stopped
+    early, each fixed with a test, none a product bug: the container
+    fixture above; a toolchain download that failed with
+    `ERR_NETWORK_CHANGED` (an agent-test profile exits when it cannot
+    prepare its toolchains), answered by `--agent-platforms pi`, since Pi is
+    seeded from the host; and `agent options` refusing the `--timeout` the
+    soak appended, so the fake model was never listed. The 2026-10-25
+    `dev:stop` failure also recurred: `dev:stop` gives up about seven
+    seconds into the launcher's shutdown, before the launcher records
+    `stopped`, so the driver skipped the reset. It now waits for its own
+    launcher to exit before judging the stop (`recurring-live-ab-runner.test.ts`,
+    "a stop that gives up while the launcher is still exiting waits for it,
+    then resets").
+
 ## Related
 
+- [7100-long-soak-follow-ups.md](7100-long-soak-follow-ups.md): what task 10's
+  long soak left (containers, a browser reader, three projection maps
+  without eviction).
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
   remaining checks are tasks 16–20 here) and

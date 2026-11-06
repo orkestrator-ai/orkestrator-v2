@@ -878,13 +878,37 @@ its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`. For each provider in
 server (`mcp-probe-server.mjs`) through the MCP editor's own commands in every
 writable scope, then edits, renames and removes it, and reads from the
 server's log whether each model call really reached it. It refuses to write a
-source outside the test worktree or the profile's data directory. Authorizing
-the Codex or OpenCode credential source points those providers at the host's
-own homes, so their user scopes are then skipped; the
-[live record](../todo/mcp/0039-mcp-management.md#live-apply-record-2026-10-18) shows
-how those scopes were covered with an access-only credential seeded into the
-profile. Run one provider at a time (flake 0420). Each provider writes
+source outside the test worktree or the profile's data directory. Every
+provider home is the profile's own, also when it authorizes a Codex or
+OpenCode credential source (that adds only a restricted copy of the host's
+login, since #1116), so user scopes run there too; the hand-seeded
+credentials of the
+[2026-10-18 live record](../todo/mcp/0039-mcp-management.md#live-apply-record-2026-10-18)
+are no longer needed. Run one provider at a time (flake 0420). Each provider writes
 `output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
+
+`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` runs the probe for Claude, Codex or
+Pi against a scripted loopback model (`e2e/agent-testing/mcp-fake-model.ts`)
+instead of a provider: the spec points the profile's own Claude settings,
+Codex `config.toml` or Pi `models.json` at it before the environment starts,
+and restores them afterwards. The real CLI, app-server or SDK, bridge and
+probe servers run; only the model is fake, and no login is used. The fake
+calls a probed tool whenever the runtime offers it (Codex's code mode looks it
+up in `ALL_TOOLS` from a code cell), so a fake-model pass proves what the
+runtime offered and the server logged, not what a real model would do; the
+summary records `fakeModel`. Start the profile without a Claude login and
+with a throwaway `CODEX_HOME` whose `auth.json` holds a made-up API key:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off CODEX_HOME=<throwaway dir> \
+  mise run dev:test --profile mcp-fake --fixture --credential-source codex \
+  --agent-platforms claude,codex,pi --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp-fake ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=pi \
+  ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 \
+  mise run test:logged -- --name mcp-fake-pi -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts
+```
 
 The live idle-observation spec (`e2e/agent-testing/idle-observation-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. For each
@@ -1600,6 +1624,20 @@ check but drops the ones that need the model to answer: Claude's bridge
 records the MCP files a query was built from when the query starts, so the
 apply half still runs when the provider refuses requests (a rate limit, say).
 A full-mode pass is still needed for the tool-call checks.
+`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` runs full mode against the scripted
+loopback model described under the live MCP apply probe, on a profile with no
+Claude login.
+
+`e2e/agent-testing/mcp-apply-inactive-codex.spec.ts` is the Codex
+process-wide variant: one environment with two Codex threads on one
+app-server, the browser on a second environment. One save while the first is
+inactive plans both threads and reloads the app-server once; each thread then
+becomes `applied` only after its own next turn (the first with the page
+offline and its event stream cut), on the same bridge process, and a removal
+is proven the same way. It writes only the environment's `.codex/config.toml`
+and a trust entry in the profile's own `CODEX_HOME`. It needs the live-MCP
+opt-in and either a Codex login or `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`
+with the fake-model profile above.
 
 ### MCP editor and live panel without credentials
 
@@ -1623,6 +1661,17 @@ ORKESTRATOR_AGENT_TEST_PROFILE=mcp-ui ORKESTRATOR_AGENT_TEST_MCP_UI=1 \
   mise run test:logged -- --name mcp-ui -- mise run test:agent:browser -- \
   e2e/agent-testing/mcp-ui-matrix.spec.ts
 ```
+
+A fourth case, reconnect on a running CLI, needs a turn that succeeds, so it
+runs only with `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` on a profile that
+keeps the default `CLAUDE_BRIDGE_RUNTIME_IDLE_MS` (the CLI must stay warm;
+select it with `--grep "running CLI"`): it points the profile's Claude
+settings at the scripted loopback model for the case alone. The live-control
+reconnect must start only the reconnected server; once the bridge releases
+the idle CLI (the case waits up to 12 minutes,
+`ORKESTRATOR_AGENT_TEST_MCP_CLI_EXIT_WAIT_MS`) a reconnect runs through the
+probe and changes only its row, and the next turn's CLI report replaces the
+list, before and after a reload. It takes about 10 minutes.
 
 Screenshots go to `output/agent-testing/<run-id>/mcp-ui-matrix/`. Secret
 values are compared in memory and never printed or captured.

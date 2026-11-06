@@ -12,7 +12,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **Live container sessions (review gap 9)**: save an environment-private server during a running turn in a container and confirm the turn finishes and the next turn loads it, for Claude, Codex, Cursor and Pi (plus terminal work not being interrupted). Status: open.
 2. **Real-browser pass of the overlay UI**: overlay states, conflict and divergence actions, the refresh dialog and the corrupt-record reset in a real browser against a container fixture. Status: done (2026-11-01); three bugs fixed, see its Outcome.
-3. **Remote-browser check**: from a browser on a second machine, the URL location hint and container sign-in reason show and no callback is offered. Status: open (needs two machines).
+3. **Remote-browser check**: from a browser on a second machine, the URL location hint and container sign-in reason show and no callback is offered; in the same run, host-target rows show the backend's paths and an apply operation recovers after the connection drops (moved from 0039 task 9 on 2026-11-06). Status: open (needs two machines).
 4. **Stale notes in this file**: the 0058 observation and the remote-run batching reference are out of date. Status: done (2026-10-31).
 
 ### 1. Live container sessions (review gap 9)
@@ -104,6 +104,8 @@ Bugs found and fixed, each with a test:
 **Problem.** A remote browser, the backend and a container are three different hosts. The editor's location hint and the container sign-in reason exist to stop a remote user assuming `localhost` means their machine, but they have not been seen from a second machine.
 
 **Context.** The file batches remote runs with [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md). Decision 12 says remote backends are not detected on the backend side; the editor shows where the connection is made from instead.
+
+**Moved here from 0039 task 9 (2026-11-06).** 0039 also asked a remote browser to show "correct backend paths and operation recovery". This check covered container rows only, so that part is added as a second check of the same run: on a host (backend-user or project) target, the source paths shown are the backend host's, not the browser machine's, and a save-and-apply whose browser connection drops mid-operation shows the operation's real outcome after reconnecting (`get_mcp_operation`, the settings card). Nothing is new in the UI for it; 0039 closed its task and points here.
 
 **Investigation.** The text is rendered unconditionally from the environment, not from any remote detection (`McpServerForm.tsx:460`), so what a remote browser sees is the same component output as a local one. 0031's "Two machines or a remote backend" row (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:470`) lists this file since 2026-10-31 (task 4), so the batch picks this item up. Its Docker row (`:468`) already listed 0040.
 

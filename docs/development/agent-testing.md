@@ -955,6 +955,58 @@ Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
 
+### Measuring Electron main's CPU
+
+Anything attached to a page over the DevTools protocol makes Electron main do
+that page's DevTools work. Playwright holds a session on every page with its
+network domain enabled, and a development window (`ELECTRON_DEV=1`) also opens
+a detached DevTools window (`window.ts`). Every load, response and stream chunk
+the page receives then becomes a DevTools event that main's `CrBrowserMain`
+receives (`blink.mojom.DevToolsSessionHost`) and its
+`Chrome_DevToolsHandlerThread` writes to the client. A page that gets its data
+over the network, such as a window on the direct local transport, pays this.
+One that gets it over IPC, as on the relay, hardly does. So the main-process
+CPU that `local-gateway-transport-electron.spec.ts` records is good for
+comparing runs of that spec, not for comparing the two transports. It closes the
+development DevTools windows before it measures, but it cannot detach
+Playwright.
+
+`local-gateway-transport-cpu-electron.spec.ts` measures main with no DevTools
+client. It starts Electron with only main's Node inspector (`--inspect=0`,
+which sees main's JavaScript and none of the pages). It then closes the
+development DevTools windows, drives the pages with `executeJavaScript`, and
+waits until a page has stopped loading Vite modules before each measured
+window. It is opt-in and writes
+`output/agent-testing/local-transport-counts/no-devtools.json`, three
+alternating runs per transport by default (`ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS`):
+
+```bash
+ORKESTRATOR_LOCAL_TRANSPORT_CPU=1 bunx playwright test \
+  --config e2e/agent-testing/playwright.electron.config.ts \
+  local-gateway-transport-cpu-electron.spec.ts
+```
+
+`ORKESTRATOR_LOCAL_TRANSPORT_PROFILE=1` adds, in either spec, a V8 CPU profile
+of main (`.cpuprofile`) and a Chromium trace (`.perfetto-trace`) next to the
+counts. Electron 45 writes traces only as Perfetto protobuf. Read them with
+Perfetto's `trace_processor`, whose `thread_dur` gives each top-level task's
+own CPU time:
+
+```sql
+select p.name as process, t.name as thread, round(sum(s.thread_dur) / 1e6, 1) as cpu_ms
+from slice s
+join thread_track tt on s.track_id = tt.id
+join thread t using (utid)
+join process p using (upid)
+where s.depth = 0 and s.thread_dur is not null
+group by 1, 2 order by cpu_ms desc;
+```
+
+The profiled windows include the profilers' cost, so take figures from a run
+without it. Note the host's load average with the figures. Other worktrees'
+suites share the machine, and on a loaded host a page goes on loading modules
+for longer, so even an idle window costs main hundreds of milliseconds.
+
 ### Live transcript paging
 
 `e2e/agent-testing/transcript-paging-live.spec.ts` drives transcripts past the

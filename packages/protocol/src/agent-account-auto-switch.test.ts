@@ -6,12 +6,14 @@ import {
   legacyAutoSwitchEvent,
   confirmedLimitResetsAt,
   decideAutoSwitch,
+  explainNoRoom,
   fiveHourWindow,
   generalWeeklyWindow,
   isAgentAccountAutoSwitchedEvent,
   isAutoSwitchAccountIncluded,
   nextFiveHourRefresh,
   normalizeAgentAccountAutoSwitchSettings,
+  parseAgentAccountAutoSwitchLastKept,
   parseAgentAccountAutoSwitchStates,
   rankAutoSwitchAccounts,
   usageLimitResendCount,
@@ -491,7 +493,7 @@ describe("the same login", () => {
     }
   });
 
-  test("a twin's stale reading never moves the active entry, but rules out an idle one", () => {
+  test("a twin's stale reading never moves the active entry, and never overrules a fresher twin", () => {
     const stale = login("old", "same@example.com", {
       freshness: "stale",
       usedPercent: 100,
@@ -517,12 +519,34 @@ describe("the same login", () => {
         "host",
       ),
     ).toEqual(STAY);
+    // The idle twin was read just now; the old reading of the same login says nothing.
     expect(
       decideAutoSwitch(
         [
           login("active", "a@example.com", { usedPercent: 20, resetsAt: at(100) }),
           login("idle", "same@example.com", { usedPercent: 35, resetsAt: at(1) }),
           stale,
+        ],
+        "active",
+      ),
+    ).toEqual({ action: "switch", accountId: "idle", reason: "soonest-reset" });
+  });
+
+  test("a stale twin past the threshold still rules out an equally stale one", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("active", "a@example.com", { usedPercent: 20, resetsAt: at(100) }),
+          login("idle", "same@example.com", {
+            freshness: "stale",
+            usedPercent: 35,
+            resetsAt: at(1),
+          }),
+          login("old", "same@example.com", {
+            freshness: "stale",
+            usedPercent: 100,
+            resetsAt: at(5),
+          }),
         ],
         "active",
       ),
@@ -1277,6 +1301,172 @@ describe("a resend's identity", () => {
   test("continues the conversation rather than repeating the prompt", () => {
     expect(usageLimitResendPrompt()).toContain("Do not repeat work");
     expect(usageLimitResendPrompt()).toContain("not by the user");
+  });
+});
+
+describe("after a limit refused a turn", () => {
+  const out = login("out", "a@example.com", { usedPercent: 100, resetsAt: at(80) });
+
+  test("a fresh reading under 100% is somewhere to go; between turns it is not", () => {
+    const nearlyFull = login("near", "b@example.com", { usedPercent: 98, resetsAt: at(30) });
+    expect(rankAutoSwitchAccounts([out, nearlyFull], "out")).toEqual([]);
+    expect(
+      rankAutoSwitchAccounts([out, nearlyFull], "out", "after-refusal").map((e) => e.account.id),
+    ).toEqual(["near"]);
+  });
+
+  test("the 5-hour limit is held to the same bar", () => {
+    const fiveHour = login("near", "b@example.com", {
+      usedPercent: 10,
+      resetsAt: at(30),
+      fiveHour: { freshness: "fresh", usedPercent: 99, resetsAt: at(2) },
+    });
+    expect(
+      rankAutoSwitchAccounts([out, fiveHour], "out", "after-refusal").map((e) => e.account.id),
+    ).toEqual(["near"]);
+    const full = login("full", "c@example.com", {
+      usedPercent: 10,
+      resetsAt: at(30),
+      fiveHour: { freshness: "fresh", usedPercent: 100, resetsAt: at(2) },
+    });
+    expect(rankAutoSwitchAccounts([out, full], "out", "after-refusal")).toEqual([]);
+  });
+
+  test("only a fresh reading is trusted that close: a stale 98% with its reset ahead stays out", () => {
+    const stale = login("stale", "b@example.com", {
+      freshness: "stale",
+      usedPercent: 98,
+      resetsAt: at(30),
+    });
+    expect(rankAutoSwitchAccounts([out, stale], "out", "after-refusal")).toEqual([]);
+  });
+
+  for (const usedPercent of [98, 99, 100]) {
+    test(`an active ${usedPercent}% login and its fresh twin use the refusal rule`, () => {
+      const moved = login("moved", "b@example.com", { usedPercent, resetsAt: at(30) });
+      const twin = login("twin", "b@example.com", { usedPercent, resetsAt: at(30) });
+      expect(
+        rankAutoSwitchAccounts([out, moved, twin], "moved", "after-refusal").map(
+          (entry) => entry.account.id,
+        ),
+      ).toEqual(usedPercent < 100 ? ["moved"] : []);
+      expect(rankAutoSwitchAccounts([out, moved, twin], "moved")).toEqual([]);
+    });
+  }
+
+  for (const rule of ["between-turns", "after-refusal"] as const) {
+    test(`a fresh five-hour twin without a weekly reading blocks under ${rule}`, () => {
+      const candidate = login("candidate", "b@example.com", { usedPercent: 20, resetsAt: at(30) });
+      const twin = login("twin", "b@example.com", {
+        freshness: "none",
+        fiveHour: { freshness: "fresh", usedPercent: 100, resetsAt: at(2) },
+      });
+      expect(rankAutoSwitchAccounts([out, candidate, twin], "out", rule)).toEqual([]);
+      expect(rankAutoSwitchAccounts([out, candidate, twin], "candidate", rule)).toEqual([]);
+    });
+  }
+
+  test("a stale five-hour twin cannot veto a fresh five-hour reading", () => {
+    const candidate = login("candidate", "b@example.com", {
+      freshness: "none",
+      fiveHour: { freshness: "fresh", usedPercent: 20, resetsAt: at(2) },
+    });
+    const twin = login("twin", "b@example.com", {
+      usedPercent: 20,
+      fiveHour: { freshness: "stale", usedPercent: 100, resetsAt: at(2) },
+    });
+    expect(
+      rankAutoSwitchAccounts([out, candidate, twin], "out", "after-refusal").map(
+        (entry) => entry.account.id,
+      ),
+    ).toEqual(["candidate"]);
+  });
+
+  test("the account just moved onto at 99% still has room for the next stopped turn", () => {
+    const moved = login("moved", "b@example.com", { usedPercent: 99, resetsAt: at(30) });
+    expect(
+      rankAutoSwitchAccounts([out, moved], "moved", "after-refusal").map((e) => e.account.id),
+    ).toEqual(["moved"]);
+  });
+});
+
+describe("why the machine stayed", () => {
+  test("names what kept each other included, signed-in account out", () => {
+    const entries = [
+      login("out", "a@example.com", { usedPercent: 100, resetsAt: at(80) }),
+      login("twin", "a@example.com", { usedPercent: 10, resetsAt: at(80) }),
+      login("weekly", "b@example.com", { freshness: "stale", usedPercent: 98, resetsAt: at(30) }),
+      login("five", "c@example.com", {
+        usedPercent: 20,
+        resetsAt: at(30),
+        fiveHour: { freshness: "fresh", usedPercent: 100, resetsAt: at(1) },
+      }),
+      login("pays", "d@example.com", { usedPercent: 20, resetsAt: at(30), wouldPay: true }),
+      login("unticked", "e@example.com", { usedPercent: 0 }, { included: false }),
+      login("signed-out", "f@example.com", { usedPercent: 0 }, { signedIn: false }),
+    ];
+    expect(rankAutoSwitchAccounts(entries, "out", "after-refusal")).toEqual([]);
+    expect(explainNoRoom(entries, "out", "after-refusal")).toEqual([
+      { accountId: "twin", blocker: "same-login" },
+      { accountId: "weekly", blocker: "weekly", usedPercent: 98, stale: true },
+      { accountId: "five", blocker: "five-hour", usedPercent: 100 },
+      { accountId: "pays", blocker: "would-pay" },
+    ]);
+  });
+
+  test("a five-hour blocker uses its own stale flag when no weekly window exists", () => {
+    const reading = usageLimitReading(
+      "claude",
+      snapshot({
+        stale: true,
+        windows: [{ window: "five_hour", usedPercent: 100, resetsAt: inHours(2) }],
+      }),
+      NOW,
+    );
+    expect(reading.freshness).toBe("none");
+    expect(
+      explainNoRoom(
+        [
+          login("out", "a@example.com", { usedPercent: 100 }),
+          login("five", "b@example.com", reading),
+        ],
+        "out",
+        "after-refusal",
+      ),
+    ).toEqual([{ accountId: "five", blocker: "five-hour", usedPercent: 100, stale: true }]);
+  });
+
+  test("an unreadable record reads as absent, and its entries are bounded", () => {
+    expect(parseAgentAccountAutoSwitchLastKept({ at: "x" })).toBeUndefined();
+    const parsed = parseAgentAccountAutoSwitchLastKept({
+      fromAccountId: "out",
+      at: "2026-11-06T04:07:56.000Z",
+      blocked: [
+        { accountId: "b", blocker: "weekly", usedPercent: 140, stale: true },
+        { accountId: "c", blocker: "because" },
+        ...Array.from({ length: 40 }, (_, index) => ({
+          accountId: `x${index}`,
+          blocker: "would-pay",
+        })),
+      ],
+    });
+    expect(parsed?.blocked[0]).toEqual({
+      accountId: "b",
+      blocker: "weekly",
+      usedPercent: 100,
+      stale: true,
+    });
+    expect(parsed?.blocked.some((entry) => entry.accountId === "c")).toBe(false);
+    expect(parsed!.blocked.length).toBeLessThanOrEqual(32);
+  });
+
+  test("peer state carries it", () => {
+    const lastKept = { fromAccountId: "out", at: "2026-11-06T04:07:56.000Z", blocked: [] };
+    expect(
+      parseAgentAccountAutoSwitchStates({
+        claude: { mode: "automatic", includedAccountIds: ["out"], lastKept },
+      })?.claude?.lastKept,
+    ).toEqual(lastKept);
   });
 });
 

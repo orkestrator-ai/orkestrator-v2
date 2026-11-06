@@ -28,6 +28,8 @@ import {
 } from "@/lib/backend";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import {
+  agentAccountLoginOf,
+  groupAgentAccountLogins,
   isAgentAccountPlatform,
   type AgentAccountPlatform,
   type AgentAccountsSnapshot,
@@ -146,11 +148,14 @@ function AccountSection({
     }
   };
 
-  const accounts = snapshot?.accounts.filter((account) => account.platform === platform) ?? [];
-  const activeId = snapshot?.active[platform];
+  const logins = groupAgentAccountLogins(
+    snapshot?.accounts.filter((account) => account.platform === platform) ?? [],
+  );
+  // One option per login; the active entry may be a twin the option stands for.
+  const activeId = agentAccountLoginOf(logins, snapshot?.active[platform])?.account.id;
   const where = machineName ? ` on ${machineName}` : "";
   const autoSwitch = snapshot?.autoSwitch?.[platform];
-  const pinned = accounts.find((account) => account.id === autoSwitch?.pinnedAccountId);
+  const pinned = agentAccountLoginOf(logins, autoSwitch?.pinnedAccountId)?.account;
 
   return (
     <div
@@ -181,7 +186,7 @@ function AccountSection({
         </p>
       ) : null}
 
-      {session?.source !== "container" && accounts.length > 1 && activeId ? (
+      {session?.source !== "container" && logins.length > 1 && activeId ? (
         <div>
           <label
             className="mb-2 block text-muted-foreground"
@@ -200,7 +205,7 @@ function AccountSection({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {accounts.map((option) => (
+              {logins.map(({ account: option }) => (
                 <SelectItem key={option.id} value={option.id}>
                   {accountOptionLabel(option)}
                 </SelectItem>
@@ -209,7 +214,7 @@ function AccountSection({
           </Select>
         </div>
       ) : null}
-      {autoSwitch?.mode === "automatic" && accounts.length > 1 ? (
+      {autoSwitch?.mode === "automatic" && logins.length > 1 ? (
         <p className="leading-relaxed text-muted-foreground">
           Switching automatically. Choosing an account here pins it and turns that off until it is
           ticked again in Settings.
@@ -235,7 +240,7 @@ function AccountSection({
           className="h-7"
           onClick={() => requestGlobalSettings(platform)}
         >
-          {accounts.length > 1 ? "Manage accounts" : "Add an account"}
+          {logins.length > 1 ? "Manage accounts" : "Add an account"}
         </Button>
       ) : null}
     </div>

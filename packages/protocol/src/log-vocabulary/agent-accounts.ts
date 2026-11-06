@@ -8,6 +8,8 @@ export const AGENT_ACCOUNTS_LOG_AREAS = defineLogAreas({
       "switch-notice.failed":
         "A notice about an automatic account switch failed; the switch stands. `audience` says whose.",
       "auto-switch.check-failed": "An automatic account check failed; the next nudge retries.",
+      "kept-note.failed":
+        "Recording why a limit stop found no account to move to failed; the stop stands.",
       "container-sync.failed":
         "Handing a login or account to a container failed; `step` says which part.",
       "last-usage.save-failed":

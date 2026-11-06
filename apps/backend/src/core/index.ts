@@ -71,8 +71,9 @@ import { compatibilityPathUsageDatabaseSink } from "./compatibility-path-usage-s
 import {
   applyAutomaticAccountSwitch,
   autoSwitchSettings,
-  listAgentAccounts,
+  snapshotAgentAccountsForAutoSwitch,
   readAgentAccountUsage,
+  recordAgentAccountAutoSwitchKept,
   renewAgentAccountLogin,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
@@ -930,7 +931,7 @@ export class OrkestratorBackend {
     const artifactLedger = () => this.transcriptArtifacts ?? null;
     this.accountAutoSwitch = new AgentAccountAutoSwitcher({
       settings: () => autoSwitchSettings(context),
-      snapshot: () => listAgentAccounts(context),
+      snapshot: () => snapshotAgentAccountsForAutoSwitch(context),
       readUsage: (platform, accountId, { force }) =>
         readAgentAccountUsage(context, platform, accountId, {
           force,
@@ -956,6 +957,8 @@ export class OrkestratorBackend {
           ...(quietProjectId ? { quietProjectId } : {}),
         });
       },
+      noteKept: (platform, kept, expected) =>
+        recordAgentAccountAutoSwitchKept(context, platform, kept, expected),
       onLimitStop: (report) => this.usageLimitNotices.noteStop(report),
     });
     context.accountAutoSwitch = this.accountAutoSwitch;

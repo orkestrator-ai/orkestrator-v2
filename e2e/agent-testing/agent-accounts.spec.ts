@@ -93,6 +93,14 @@ test("automatic switching, its pin and its ticks rehydrate from the real backend
     if (await mainTick().isChecked()) await mainTick().click();
     await expect(mainTick()).not.toBeChecked();
     await expect(region().getByText("Off", { exact: true })).toBeVisible();
+    // The disposable profile may be reused after a failed run; reset both fixture ticks.
+    for (const name of ["Fixture one", "Fixture two"]) {
+      const included = row(name).getByRole("checkbox", {
+        name: `Include ${name} in automatic switching`,
+      });
+      if (!(await included.isChecked())) await included.click();
+      await expect(included).toBeChecked();
+    }
 
     // Ticked, the host login is not included, so the machine moves by itself.
     await mainTick().click();
@@ -246,7 +254,10 @@ for (const width of [1280, 390]) {
     const original = accountRegistry(status.dataDir, "read");
     const openOverview = async () => {
       const settings = page.getByRole("button", { name: "Global settings", exact: true });
-      if (width < 768) {
+      const settingsOpen = await page
+        .getByRole("dialog", { name: "Settings", exact: true })
+        .isVisible();
+      if (!settingsOpen && width < 768) {
         await expect(
           page
             .getByRole("dialog", { name: "Projects and environments", exact: true })
@@ -256,19 +267,21 @@ for (const width of [1280, 390]) {
         // projects drawer, which may already be open on first load.
         const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
         await expect(async () => {
-          if (!(await drawer.isVisible())) {
-            await page
-              .getByRole("button", { name: "Open projects and environments" })
+          if (!(await page.getByRole("dialog", { name: "Settings", exact: true }).isVisible())) {
+            if (!(await drawer.isVisible())) {
+              await page
+                .getByRole("button", { name: "Open projects and environments" })
+                .click({ timeout: 1_000 });
+            }
+            await drawer
+              .getByRole("button", { name: "Global settings", exact: true })
               .click({ timeout: 1_000 });
           }
-          await drawer
-            .getByRole("button", { name: "Global settings", exact: true })
-            .click({ timeout: 1_000 });
           await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible({
             timeout: 1_000,
           });
         }).toPass({ timeout: 15_000 });
-      } else {
+      } else if (!settingsOpen) {
         await settings.click();
       }
       if (width < 768) {

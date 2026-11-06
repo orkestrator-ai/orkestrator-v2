@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AgentAccountAutoSwitchState } from "@orkestrator/protocol/agent-account-auto-switch";
 import type { AgentAccountsSnapshot } from "@orkestrator/protocol/agent-accounts";
+import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 const portalCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let snapshot: AgentAccountsSnapshot;
+let usageById: Record<string, PlanUsageSnapshot> = {};
 
 function answer(command: string, args: Record<string, unknown> = {}): Promise<unknown> {
   calls.push({ command, args });
@@ -13,12 +15,14 @@ function answer(command: string, args: Record<string, unknown> = {}): Promise<un
     case "list_agent_accounts":
       return Promise.resolve(snapshot);
     case "get_agent_account_usage":
-      return Promise.resolve({
-        platform: "codex",
-        status: "ok",
-        windows: [],
-        fetchedAt: new Date(0).toISOString(),
-      });
+      return Promise.resolve(
+        usageById[String(args.accountId)] ?? {
+          platform: "codex",
+          status: "ok",
+          windows: [],
+          fetchedAt: new Date(0).toISOString(),
+        },
+      );
     case "get_agent_account_login":
       return Promise.resolve({ state: "idle" });
     case "set_active_agent_account":
@@ -51,6 +55,7 @@ mock.module("@/lib/native/backend", () => ({
 const { AgentAccountsSection } = await import("./AgentAccountsSection");
 
 beforeEach(() => {
+  usageById = {};
   calls.length = 0;
   portalCalls.length = 0;
   snapshot = {
@@ -158,5 +163,131 @@ describe("automatic account switching in Settings", () => {
     render(<AgentAccountsSection platform="codex" />);
     await screen.findByText("a@example.com");
     expect(screen.queryByRole("checkbox") === null).toBe(true);
+  });
+});
+
+function weekly(used: number, fetchedAt: string, stale = false): PlanUsageSnapshot {
+  return {
+    platform: "codex",
+    status: "ok",
+    windows: [{ window: "primary", label: "Weekly limit", usedPercent: used }],
+    fetchedAt,
+    ...(stale ? { stale: true } : {}),
+  };
+}
+
+describe("one login listed twice", () => {
+  beforeEach(() => {
+    // The host login was signed in to b@example.com after it was added.
+    snapshot = {
+      ...snapshot,
+      accounts: [
+        ...snapshot.accounts.slice(0, 1),
+        {
+          id: "b",
+          platform: "codex",
+          label: "b@example.com",
+          isDefault: false,
+          isActive: false,
+          signedIn: true,
+          identity: { email: "b@example.com" },
+        },
+        {
+          id: "default",
+          platform: "codex",
+          label: "Host login",
+          isDefault: true,
+          isActive: false,
+          signedIn: true,
+          identity: { email: "B@example.com" },
+        },
+      ],
+    };
+  });
+
+  test("is shown once, under the added account, with the freshest reading", async () => {
+    usageById = {
+      b: weekly(96, "2026-11-05T21:45:00.000Z", true),
+      default: weekly(98, "2026-11-06T13:05:00.000Z"),
+    };
+    render(<AgentAccountsSection platform="codex" />);
+    expect(await screen.findByRole("listitem", { name: "b@example.com" })).toBeTruthy();
+    expect(screen.queryByRole("listitem", { name: "Host login" }) === null).toBe(true);
+    const card = screen.getByRole("listitem", { name: "b@example.com" });
+    expect(within(card).getByText("Also the host login")).toBeTruthy();
+    expect(await within(card).findByText("98% used")).toBeTruthy();
+    expect(within(card).queryByText(/Last known usage/) === null).toBe(true);
+    const asked = calls
+      .filter((call) => call.command === "get_agent_account_usage")
+      .map((call) => call.args.accountId);
+    expect(new Set(asked)).toEqual(new Set(["a", "b", "default"]));
+  });
+
+  test("using it switches to the added entry", async () => {
+    render(<AgentAccountsSection platform="codex" />);
+    const card = await screen.findByRole("listitem", { name: "b@example.com" });
+    fireEvent.click(within(card).getByRole("button", { name: "Use" }));
+    await waitFor(() =>
+      expect(calls.find((call) => call.command === "set_active_agent_account")?.args).toMatchObject(
+        { platform: "codex", accountId: "b" },
+      ),
+    );
+  });
+
+  test("while the host entry is active the one card is active", async () => {
+    snapshot = {
+      ...snapshot,
+      active: { ...snapshot.active, codex: "default" },
+      accounts: snapshot.accounts.map((account) => ({
+        ...account,
+        isActive: account.id === "default",
+      })),
+    };
+    render(<AgentAccountsSection platform="codex" />);
+    const card = await screen.findByRole("listitem", { name: "b@example.com" });
+    expect(within(card).getByText("Active")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Use" }) === null).toBe(true);
+  });
+});
+
+describe("a limit stop with nowhere to go", () => {
+  test("says which account stopped and what kept each other login out", async () => {
+    setAutoSwitch({
+      mode: "automatic",
+      includedAccountIds: ["a", "b"],
+      lastSwitch: {
+        fromAccountId: "b",
+        toAccountId: "a",
+        reason: "soonest-reset",
+        at: "2026-11-05T20:00:00.000Z",
+      },
+      lastKept: {
+        fromAccountId: "a",
+        at: "2026-11-06T04:07:56.000Z",
+        blocked: [{ accountId: "b", blocker: "weekly", usedPercent: 98 }],
+      },
+    });
+    render(<AgentAccountsSection platform="codex" />);
+    const note = await screen.findByTestId("auto-switch-kept");
+    expect(within(note).getByText(/Stayed on a@example.com/)).toBeTruthy();
+    expect(within(note).getByText("API key: weekly limit 98% used")).toBeTruthy();
+    expect(screen.queryByText(/Last moved to/) === null).toBe(true);
+  });
+
+  test("a later switch replaces it", async () => {
+    setAutoSwitch({
+      mode: "automatic",
+      includedAccountIds: ["a", "b"],
+      lastSwitch: {
+        fromAccountId: "a",
+        toAccountId: "b",
+        reason: "five-hour",
+        at: "2026-11-06T05:30:00.000Z",
+      },
+      lastKept: { fromAccountId: "a", at: "2026-11-06T04:07:56.000Z", blocked: [] },
+    });
+    render(<AgentAccountsSection platform="codex" />);
+    expect(await screen.findByText("Last moved to API key.")).toBeTruthy();
+    expect(screen.queryByTestId("auto-switch-kept") === null).toBe(true);
   });
 });

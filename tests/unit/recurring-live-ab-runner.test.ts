@@ -80,7 +80,7 @@ function harness(overrides: Partial<typeof __testing.armRuntime> = {}) {
       }
       return { status: 0 };
     }) as typeof __testing.armRuntime.mise,
-    gatewayFor: () => ({ metrics: mock(async () => metrics(now)) }),
+    gatewayFor: () => ({ metrics: mock(async () => metrics(now)), invoke: async () => null }),
     processSamples: () => ({ backend: { cpuMs: now, rssKiB: 10 } }),
     countGuardLines: mock(() => 2),
     ...overrides,
@@ -143,7 +143,7 @@ describe("live benchmark lifecycle", () => {
   test("metrics-off keeps process sampling and skips freshness probes", async () => {
     const probe = mock(async () => []);
     const h = harness({
-      gatewayFor: () => ({ metrics: async () => null }),
+      gatewayFor: () => ({ metrics: async () => null, invoke: async () => null }),
       measureFreshness: probe,
     });
     const result = await runArm(
@@ -591,7 +591,13 @@ test.each(["SIGTERM", "SIGINT"] as const)(
     const runtime = { ...__testing.armRuntime,
       readStatus: () => status,
       startProfile: () => { status = { status: "ready", startedAt: "owned", processStartTimes: { launcher: 100 }, pids: { launcher: child.pid }, live: { launcher: true } }; return child; },
-      gatewayFor: () => ({ metrics: async () => { record("sampling"); return null; } }),
+      gatewayFor: () => ({
+        metrics: async () => {
+          record("sampling");
+          return null;
+        },
+        invoke: async () => null,
+      }),
       processSamples: () => ({}),
       mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },
     };
@@ -669,7 +675,10 @@ test.each(["SIGTERM", "SIGINT"] as const)(
       const runtime = { ...__testing.armRuntime,
         readStatus: () => status,
         startProfile: () => { status = { status: "ready", startedAt: "owned", processStartTimes: { launcher: 100 }, pids: { launcher: child.pid }, live: { launcher: true } }; return child; },
-        gatewayFor: () => ({ metrics: async () => ({ recurringWork: {} }) }),
+        gatewayFor: () => ({
+          metrics: async () => ({ recurringWork: {} }),
+          invoke: async () => null,
+        }),
         processSamples: () => ({}),
         measureSoak: (gateway, cli, options, rss, signal) => measureSoak(gateway, cli, options, rss, signal, { ...__testing.soakRuntime, sleep: async () => {} }),
         mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },

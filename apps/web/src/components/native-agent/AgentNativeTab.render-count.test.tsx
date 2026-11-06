@@ -10,6 +10,8 @@
  * none of the send's inputs, but once each refusal that holds it is released.
  */
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { FloatingNoticeLayer } from "@/components/ui/floating-notice";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import { Profiler } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
@@ -93,6 +95,7 @@ const transcript: NativeMessage[] = Array.from({ length: 40 }, (_, index) => ({
 
 let identity = identityFor(OWN_TAB);
 let served: NativeMessage[] = transcript;
+let humanPrompts: HumanPromptEntry[] = [];
 /** Held by a test so that the tab stays without a projection. */
 let ensureGate: Promise<void> | undefined;
 
@@ -119,6 +122,7 @@ const runUserCommandMock = mock(async (_input: Record<string, unknown>) => ({}))
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
+  listHumanPrompts: async () => ({ prompts: humanPrompts }),
   getNativeAgentSyncCapabilities: async () => ({
     projectionSyncVersions: [1],
     historyPagingVersions: [1],
@@ -255,6 +259,7 @@ beforeEach(() => {
   commits = 0;
   identity = identityFor(OWN_TAB);
   served = transcript;
+  humanPrompts = [];
   ensureGate = undefined;
   queuedItems = [];
   resetNativeAgentSyncCapabilityForTests();
@@ -302,6 +307,7 @@ async function renderTab(
   data: NativeAgentTabData,
   initialPrompt?: string,
   props: Pick<AgentNativeTabProps, "beforeSend"> = {},
+  floating = false,
 ): Promise<(next: string | undefined) => void> {
   identity = identityFor(tabId);
   const tree = (prompt: string | undefined) => (
@@ -314,11 +320,17 @@ async function renderTab(
       <AgentNativeTab tabId={tabId} data={data} initialPrompt={prompt} isActive {...props} />
     </Profiler>
   );
-  const { rerender } = render(tree(initialPrompt));
+  const wrapped = (prompt: string | undefined) =>
+    floating ? (
+      <FloatingNoticeLayer columnRem={56}>{tree(prompt)}</FloatingNoticeLayer>
+    ) : (
+      tree(prompt)
+    );
+  const { rerender } = render(wrapped(initialPrompt));
   await settle();
   expect(commits).toBeGreaterThan(0);
   commits = 0;
-  return (next) => rerender(tree(next));
+  return (next) => rerender(wrapped(next));
 }
 
 function holdSessionCreation(): void {
@@ -823,5 +835,64 @@ test.each(["locked", "unassigned"] as const)(
         });
       });
     }
+  },
+);
+
+test("anchor resize does not render the native controller", async () => {
+  const originalObserver = globalThis.ResizeObserver;
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  let width = 1600;
+  const callbacks = new Set<() => void>();
+  globalThis.ResizeObserver = class {
+    constructor(callback: ResizeObserverCallback) {
+      callbacks.add(() => callback([], this as unknown as ResizeObserver));
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    return { width, height: 800, top: 0, bottom: 800, left: 0, right: width } as DOMRect;
+  };
+  try {
+    await renderTab(OWN_TAB, lockedTab, undefined, {}, true);
+    commits = 0;
+    await act(async () => {
+      width = 800;
+      for (const callback of callbacks) callback();
+    });
+    expect(commits).toBe(0);
+  } finally {
+    globalThis.ResizeObserver = originalObserver;
+    HTMLElement.prototype.getBoundingClientRect = originalRect;
+  }
+});
+
+test.each([false, true])(
+  "agent prompts render once in the correct location (floating=%s)",
+  async (floating) => {
+    humanPrompts = [
+      {
+        id: "prompt-floating",
+        environmentId: "env-1",
+        tabId: OWN_TAB,
+        source: "agent-tool",
+        since: "2026-11-06T00:00:00Z",
+        command: "gh auth login",
+        prompt: {
+          kind: "device-code",
+          url: "https://github.com/login/device",
+          code: "AAAA-BBBB",
+          wantsEnter: false,
+          text: "Enter the code",
+          key: "device",
+        },
+      },
+    ];
+    await renderTab(OWN_TAB, lockedTab, undefined, {}, floating);
+    const card = await screen.findByRole("status", { name: "Waiting for you" });
+    expect(screen.getAllByRole("status", { name: "Waiting for you" })).toHaveLength(1);
+    expect(Boolean(card.closest("[data-floating-notice-stack]"))).toBe(floating);
+    expect(card.textContent).toContain("AAAA-BBBB");
   },
 );

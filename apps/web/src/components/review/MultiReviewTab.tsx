@@ -3,7 +3,6 @@ import { WorkflowResultStatus } from "./WorkflowResultStatus";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
-  AlertTriangle,
   ExternalLink,
   GitPullRequest,
   History,
@@ -108,6 +107,7 @@ import {
   type MultiReviewStepStatus,
 } from "./multi-review-steps";
 import { ReviewerStartFailureNotice } from "./ReviewerStartFailureNotice";
+import { FloatingNotice, FloatingNoticeLayer } from "@/components/ui/floating-notice";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -1896,52 +1896,54 @@ function MultiReviewOverviewTab({
   const headerStalled = reviewSessionStalled || addressFindingsSessionStalled;
 
   const notices: ReactNode[] = [];
+  // Warnings float at the top right of the tab instead of filling a strip.
+  const floatingNotices: ReactNode[] = [];
   if (headerStalled) {
-    notices.push(
-      <section
+    const stalledTitle = reviewSessionStalled
+      ? "Review preparation model appears stalled"
+      : "Address Findings model appears stalled";
+    floatingNotices.push(
+      <FloatingNotice
         key="stalled"
+        tone="warning"
+        label="No recent activity"
+        summary={stalledTitle}
         role="status"
         aria-live="polite"
-        className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 p-4"
       >
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-amber-500/12 text-amber-500">
-          <AlertTriangle className="size-4" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-amber-500">
-            {reviewSessionStalled
-              ? "Review preparation model appears stalled"
-              : "Address Findings model appears stalled"}
-          </h2>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            No new activity has arrived. Cancel now, or wait for the workflow to stop automatically
-            and then retry.
-          </p>
-        </div>
-      </section>,
+        <p className="font-medium">{stalledTitle}</p>
+        <p className="mt-1 text-muted-foreground">
+          No new activity has arrived. Cancel now, or wait for the workflow to stop automatically
+          and then retry.
+        </p>
+      </FloatingNotice>,
     );
   }
   if (workflow.reviewWorktreeChanged === true) {
-    notices.push(
-      <div
+    floatingNotices.push(
+      <FloatingNotice
         key="worktree-changed"
+        tone="warning"
+        label="Review may be out of date"
+        summary="The worktree changed during this review."
         data-testid="multi-review-worktree-changed"
-        className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500"
       >
         The worktree changed during this review. The review carried on, so its report may not
         describe the code as it is now.
-      </div>,
+      </FloatingNotice>,
     );
   }
   if (workflow.reviewSnapshotStale === true && !workflow.reviewPackage) {
-    notices.push(
-      <div
+    floatingNotices.push(
+      <FloatingNotice
         key="snapshot-stale"
-        className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500"
+        tone="warning"
+        label="Worktree changed"
+        summary="The repository worktree changed after this Multi Review started."
       >
         The repository worktree changed after this Multi Review started. The review continued, so
         reviewer reports may reflect different worktree states.
-      </div>,
+      </FloatingNotice>,
     );
   }
   if (workflow.engine === "graph" && workflow.graphRun) {
@@ -1999,13 +2001,16 @@ function MultiReviewOverviewTab({
     );
   }
   if (presentationNotice || workflow.presentationError) {
-    notices.push(
-      <div
+    const presentation = presentationNotice ?? workflow.presentationError ?? "";
+    floatingNotices.push(
+      <FloatingNotice
         key="presentation"
-        className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500"
+        tone="warning"
+        label="Display problem"
+        summary={presentation}
       >
-        {presentationNotice ?? workflow.presentationError}
-      </div>,
+        {presentation}
+      </FloatingNotice>,
     );
   }
   if (workflow.addressPromptPending === true && !workflow.error) {
@@ -2089,56 +2094,59 @@ function MultiReviewOverviewTab({
           {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
         </header>
 
-        <OverviewScroll>
-          <div className="@container flex min-h-full flex-col">
-            {notices.length > 0 ? (
-              <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
-            ) : null}
-            <MultiReviewFlowGraph
-              packageNode={packageView.node}
-              reviewerNodes={reviewerViews.map((view) => view.node)}
-              consolidationNode={consolidationView.node}
-              addressFindingsNode={addressFindingsView.node}
-              prNode={prView.node}
-              edges={edges}
-              reviewLabel={reviewerColumnLabel(workflow.reviewers)}
-              reviewTitle={reviewerProgressSummary(workflow.reviewers)}
-              selectedId={selected.node.id}
-              onSelect={setSelectedNodeId}
-              panelId={panelId}
-              viewKey={workflow.id}
-              fullscreenContainer={tabRoot}
-              isActive={isActive}
-            />
-            {/* The body's row takes the rest of the window, so a transcript can
-              fill it down to the footer. */}
-            <div className="grid min-h-80 flex-1 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_1fr] px-4 py-4 sm:px-6">
-              {/* Sits beside the inspector header, and stays in view while the
-                inspector scrolls. */}
-              <MultiReviewFindingsBadge
-                isActive={isActive}
-                findings={findings}
-                reviewerCount={reviewerCount}
-                provisionalCount={provisionalCount}
-                className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
-              />
-              <FlowInspectorPanel
-                panelId={panelId}
+        <FloatingNoticeLayer>
+          {floatingNotices}
+          <OverviewScroll>
+            <div className="@container flex min-h-full flex-col">
+              {notices.length > 0 ? (
+                <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
+              ) : null}
+              <MultiReviewFlowGraph
+                packageNode={packageView.node}
+                reviewerNodes={reviewerViews.map((view) => view.node)}
+                consolidationNode={consolidationView.node}
+                addressFindingsNode={addressFindingsView.node}
+                prNode={prView.node}
+                edges={edges}
+                reviewLabel={reviewerColumnLabel(workflow.reviewers)}
+                reviewTitle={reviewerProgressSummary(workflow.reviewers)}
                 selectedId={selected.node.id}
-                testId="multi-review-inspector"
-                className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
-              >
-                <div className="col-start-1 row-start-1 min-w-0">
-                  <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
-                </div>
-                {/* Full width: the badge only overlaps it once stuck. */}
-                <div className="col-span-full row-start-2 flex min-w-0 flex-col">
-                  {selected.body}
-                </div>
-              </FlowInspectorPanel>
+                onSelect={setSelectedNodeId}
+                panelId={panelId}
+                viewKey={workflow.id}
+                fullscreenContainer={tabRoot}
+                isActive={isActive}
+              />
+              {/* The body's row takes the rest of the window, so a transcript can
+              fill it down to the footer. */}
+              <div className="grid min-h-80 flex-1 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_1fr] px-4 py-4 sm:px-6">
+                {/* Sits beside the inspector header, and stays in view while the
+                inspector scrolls. */}
+                <MultiReviewFindingsBadge
+                  isActive={isActive}
+                  findings={findings}
+                  reviewerCount={reviewerCount}
+                  provisionalCount={provisionalCount}
+                  className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
+                />
+                <FlowInspectorPanel
+                  panelId={panelId}
+                  selectedId={selected.node.id}
+                  testId="multi-review-inspector"
+                  className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
+                >
+                  <div className="col-start-1 row-start-1 min-w-0">
+                    <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
+                  </div>
+                  {/* Full width: the badge only overlaps it once stuck. */}
+                  <div className="col-span-full row-start-2 flex min-w-0 flex-col">
+                    {selected.body}
+                  </div>
+                </FlowInspectorPanel>
+              </div>
             </div>
-          </div>
-        </OverviewScroll>
+          </OverviewScroll>
+        </FloatingNoticeLayer>
 
         <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
           {workflow.phase === "failed" && workflow.engine !== "graph" && (

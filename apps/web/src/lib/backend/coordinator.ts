@@ -12,6 +12,11 @@ import {
   type CoordinatorActivitySnapshot,
   type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
+import {
+  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+  parseCoordinatorLaunchOverrides,
+  type CoordinatorLaunchOverridesSnapshot,
+} from "@orkestrator/protocol/coordinator-launch-overrides";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { invoke } from "@/lib/native/backend";
@@ -53,6 +58,10 @@ export const getProjectCoordinatorView = (
 /** Every project whose coordinator is working or waiting. Older backends answer "Unknown backend command". */
 export const listCoordinatorActivity = (): Promise<CoordinatorActivitySnapshot> =>
   invoke<unknown>(COORDINATOR_ACTIVITY_COMMAND).then(parseCoordinatorActivitySnapshot);
+
+/** Worker tabs whose launch overrode the default. Older backends answer "Unknown backend command". */
+export const listCoordinatorLaunchOverrides = (): Promise<CoordinatorLaunchOverridesSnapshot> =>
+  invoke<unknown>(COORDINATOR_LAUNCH_OVERRIDES_COMMAND).then(parseCoordinatorLaunchOverrides);
 
 /** The turn holding this project's checkout. Older backends answer "Unknown backend command". */
 export const getCoordinatorCheckoutTurn = (

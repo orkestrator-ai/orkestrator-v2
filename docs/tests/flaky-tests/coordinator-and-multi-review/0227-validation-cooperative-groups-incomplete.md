@@ -91,3 +91,22 @@ text, durations, commands, suite counts and retained evidence are recorded in
 [0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
 No implementation, assertion, deadline or skip changed; the original aggregate
 remains failed.
+
+
+## Worktree-probe coverage repair recurrence — 2026-11-06
+
+- **Change under test:** `process-lock-issues-14d91b2bd13c-r1`, based on
+  `9b2bb7aab`. This owner adds optional-lock coverage; the failing cooperative
+  scheduler test and its implementation are unchanged.
+- **Command (initial run and exact rerun):** `mise run test:logged -- --name validation-worker-regressions -- bun test --cwd apps/backend ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures`.
+- **Initial result:** 65 passed, one failed across 66 tests in 111.99 s
+  (112.0 s logged). The cooperative-groups test expected `passed` but received
+  `incomplete` at line 1472 after 4089.57 ms. Its preceding queue assertions passed.
+  Focused worktree-probe tests and the backend typecheck also ran on this host
+  during the initial invocation.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.l2Cxrk/validation-worker-regressions.log.gz`.
+- **Complete-owner rerun:** unchanged after the failure, exit 0 in 152.2 s
+  logged, using one isolated Bun worker again. All 66 tests passed.
+- **Assessment:** recurrence of the known intermittent deadline failure.
+  Host contention remains a hypothesis; this run does not establish a root
+  cause. No failing-test assertion, deadline or skip was changed.

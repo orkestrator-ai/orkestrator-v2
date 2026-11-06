@@ -13,6 +13,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 3. **Grok C13 resume and C21 rotation**: qualify Grok resume after a rebuild, and Grok login rotation. Status: blocked (on a current host Grok login; the rotation half also on 0061 item 7's live run).
 4. **Claude C21 half with a disposable account**: a real re-authentication through `markContainersForClaudeLoginRefresh`, and a refresh-token rotation through the keeper. Status: blocked (needs a disposable Claude account).
 5. **Daemon-wide restart during launch and rebuild copy**: a Docker restart or Desktop quit at both points. Status: open (needs a dedicated host or VM).
+6. **Container log followers on a live backend after the per-backend move**: a Docker log view streams, its follower exits after the idle grace and with the backend. Moved from to-do 0733 (deleted 2026-11-06). Status: open.
+7. **Fixture restart keeps the container's origin bind on native Docker**: a `dev:test` restart with `--fixture-environments local,container` keeps the same container, and `git fetch origin` still works inside it. Moved from to-do 2180 (deleted 2026-11-06). Status: open.
 
 ### 1. Record the Linux Engine CI results
 
@@ -121,6 +123,74 @@ So the next weekly run on `main` should fail only that C14 case. The benchmark n
   - **Keep the proxy evidence.**
     - Pros: no work.
     - Cons: the scenario that loses data in other tools (a helper killed mid-write) stays untested.
+
+### 6. Container log followers on a live backend after the per-backend move
+
+**Problem.** The container log and OOM services moved from module state onto
+`BackendRuntime`, so two backends in one process no longer share their
+`docker logs -f` followers. Unit tests prove the move; no live backend has
+followed a container's logs since.
+
+**Context.** Moved from to-do 0733 (deleted 2026-11-06). `containerLogs` and
+`containerOom` are on `BackendRuntime`
+(`apps/backend/src/core/backend-runtime.ts`), tested in `backend-runtime.test.ts`
+("two OrkestratorBackends in one process"). The idle grace for followers was last
+measured live before 2026-10-28 (Qualification, "Log followers after the idle
+grace").
+
+**Investigation.** Steps:
+
+1. On a disposable `dev:test` profile with Docker, open a container
+   environment's Docker log view and check that lines stream.
+2. Close the view and wait past the idle grace. Check with `ps` that no
+   `docker logs -f` follower is left.
+3. Reopen the view, then stop the profile with `dev:stop`. Check that the
+   followers exit with the backend.
+
+**Decisions.**
+
+- **Run it alone or with the next container pass?**
+  - **With the next container qualification pass on any Docker host (recommended).**
+    - Pros: a few minutes on a profile that is already running.
+    - Cons: low value on its own: production runs one backend per process and
+      the change only moved where the service is held.
+  - **Drop it.**
+    - Pros: no work.
+    - Cons: the per-backend shutdown path would stay unobserved live.
+
+### 7. Fixture restart keeps the container's origin bind on native Docker
+
+**Problem.** A `dev:test --fixture` restart now reuses the fixture project and
+its environments instead of orphaning them. A local-only restart kept the IDs
+and inodes live on beelink; the container fixture's bind mount of the fixture
+origin has not been checked across a restart on native Docker.
+
+**Context.** Moved from to-do 2180 (deleted 2026-11-06). The reuse is in
+`apps/desktop/scripts/dev/fixture.ts` (`fixtureRepositoryIntact`, the
+`orkestrator-fixture-environments.json` IDs file), tested in `fixture.test.ts` and
+described in [`agent-testing.md`](../../development/agent-testing.md).
+
+**Investigation.** Steps:
+
+1. On a Linux native-Docker host, start a fresh profile with
+   `mise run dev:test --profile <p> --fixture --fixture-environments local,container`.
+2. Run `mise run dev:stop --profile <p>`, then the same `dev:test` command again.
+3. Check that there is still one `fixture-container`, with the same ID and
+   status `running`, and that `origin.git` kept its inode.
+4. Inside that container, check that `git fetch origin` against
+   `/orkestrator-agent-test-origin.git` succeeds. Then `dev:reset` the profile.
+
+**Decisions.**
+
+- **Is the check worth a run?**
+  - **Run it once with the next native-Docker pass (recommended).**
+    - Pros: the inode was seen to survive a local-only restart, so a pass is
+      likely and cheap to show.
+    - Cons: low value.
+  - **Drop it.**
+    - Pros: no work.
+    - Cons: a stale bind would surface as a confusing fetch failure in a later
+      live suite.
 
 The container lifecycle (durable operations, persistent storage, staged
 inputs, per-environment networks, resource budgets, bounded logs) shipped in

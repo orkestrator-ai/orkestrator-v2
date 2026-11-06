@@ -23,6 +23,7 @@ four switching gaps are on `main` and are not repeated as tasks.
 1. **Approve a real Codex sign-in from the tab**: finish a browser or device-code ChatGPT sign-in and confirm the composer unlocks. Status: open (needs a person).
 2. **Claude usage windows after an account switch**: repeat the Codex switch check for Claude. Status: blocked (on a Claude turn that reports rate-limit windows).
 3. **Close out the file**: what to do with this file once tasks 1 and 2 are settled. Status: open.
+4. **Cursor status with Cursor's API unreachable**: a signed-in Cursor bridge answers status in about 3 s with the stored email or "Cursor account" while `Cursor.me` hangs. Moved from to-do 1173 (deleted 2026-11-06). Status: open (needs a real Cursor login).
 
 ### 1. Approve a real Codex sign-in from the tab
 
@@ -88,6 +89,40 @@ four switching gaps are on `main` and are not repeated as tasks.
     - Pros: closes the file immediately; 0031 already batches person-dependent live runs.
     - Cons: the README says never add new todos to an existing file, so 0031 cannot take it; it would need a new numbered file instead.
 
+### 4. Cursor status with Cursor's API unreachable
+
+**Problem.** Cursor session status no longer waits on `Cursor.me` for the
+account label. The lookup is bounded at 3 s, falls back to the stored email or
+"Cursor account" without caching the fallback, and concurrent reads share one
+lookup. This has only been proved against a stubbed lookup that never answers.
+
+**Context.** Moved from to-do 1173 (deleted 2026-11-06). The bound is
+`ACCOUNT_LOOKUP_TIMEOUT_MS` in `bridges/cursor-bridge/src/config.ts`, used by
+`credentials.ts`. The tests are in `credentials.test.ts` and `http.test.ts`. The
+behaviour is described under sign-in readiness in
+[`agent-accounts.md`](../../architecture/agent-accounts.md).
+
+**Investigation.** Steps:
+
+1. Open a `dev:test` profile with a real signed-in Cursor bridge.
+2. Block `api2.cursor.sh` (a firewall rule or a hosts entry on a disposable
+   host), then wait past the 15 s auth cache.
+3. Open a Cursor tab. Check that status answers in about 3 s and that the
+   composer is not locked.
+4. Check that Settings › Cursor shows the stored email or "Cursor account".
+5. Unblock the host. Check that the real label comes back on a read after the
+   15 s window.
+
+**Decisions.**
+
+- **How to make the API unreachable?**
+  - **Block the host on a disposable machine or VM (recommended).**
+    - Pros: the real SDK call hangs or fails as it would on a bad network.
+    - Cons: a hosts entry or firewall rule must be undone afterwards.
+  - **Stub the lookup again.**
+    - Pros: no host change.
+    - Cons: already done in unit tests; it is not live evidence.
+
 Each platform should report a normalized sign-in state. Sign-in should happen
 in the app wherever the vendor has an API for it, and losing auth mid-turn
 should show in the tab, not as a spawn failure. Claude and Codex can also hold
@@ -95,8 +130,9 @@ more than one login, switched globally per platform. All of that is now in the
 tree: the status type, the bridge routes, the per-session and settings account
 cards, the turn-time `auth` notice, Codex sign-in cancel, the bridge-output
 scrub and the four switching gaps, each checked on the real stack. What is left
-needs a person to approve a Codex sign-in, and a Claude turn that reports
-rate-limit windows (see [What is left](#what-is-left)). How accounts work is in
+needs a person to approve a Codex sign-in, a Claude turn that reports
+rate-limit windows (see [What is left](#what-is-left)), and a Cursor status
+check with Cursor's API blocked (task 4). How accounts work is in
 [agent-accounts.md](../../architecture/agent-accounts.md).
 
 ## Current state

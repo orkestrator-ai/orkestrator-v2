@@ -12,7 +12,7 @@ tests. The live runs stay open; their exact steps are under Outstanding work.
 
 Follows [0001](0001-agent-interactions-and-permissions.md) decision 1 (Claude
 offers no "always allow" option) and
-[0160](0160-codex-saved-rules-list-and-revoke.md) (Codex's "Approve with
+0160 (Codex's "Approve with
 command/network policy" options were removed). Both would have saved rules in
 the provider's own files, which Orkestrator cannot reliably list or remove.
 The standing constraint was: no "always allow" option ships without a way to
@@ -47,6 +47,7 @@ What is left is qualification on real logins.
 4. **OpenCode live card run**: `bash`, `edit` and `webfetch` through the app. Status: open (billed; the plain-command shape is now confirmed from the pinned binary and tested).
 5. **Codex card in the app**: the rendered "Approve and remember…" panel, and a rule answering while another environment is shown. Status: open (billed live run only; the panel is rendered from fixtures in Playwright and the inactive path is tested).
 6. **Claude Bash suggestion shape**: the `canUseTool` `suggestions` value for `Bash` on the pinned SDK. Status: done (read from the pinned Claude Code 2.1.309 binary, which writes `prefix *`; the bridge now parses it. Task 1 still sees the preselection live).
+7. **Codex managed-network card in the app**: on an administrator-managed host, the card reads "Approve network access", is enabled and offers no amendment. Moved from to-do 0160 (deleted 2026-11-06). Status: open (needs a disposable managed host).
 
 ### 1. Claude live card run
 
@@ -342,6 +343,50 @@ suggestion with any other `*`.
   - **Drop the Claude preselection.**
     - Pros: less code.
     - Cons: the card loses a useful default for Claude only.
+
+### 7. Codex managed-network card in the app
+
+**Problem.** Codex raises a managed-network approval only when
+`/etc/codex/requirements.toml` enables its network proxy. No one has looked at
+that card in the app. It should offer "Approve network access" with no
+"Approve with network policy" amendment, so Orkestrator saves no rule it
+cannot list or revoke.
+
+**Context.** Moved from to-do 0160 (deleted 2026-11-06), whose tasks 1 to 3
+were done on Codex 0.166.0. The bridge never sends an amendment
+(`bridges/codex-bridge/src/app-server/approvals.ts`). The backend labels a
+host-only card "Approve network access" and drops amendments from an older
+bridge (`apps/backend/src/core/http-bridge-interactions.ts`). The payload is
+proved through the bridge's engine in a container
+(`mise run verify:codex:network-approval`), the mapping by a unit test, and a
+real command card by `e2e/agent-testing/codex-saved-rules-live.spec.ts`.
+
+**Investigation.** Steps:
+
+1. On a disposable Linux VM or container host, never a real workstation, start
+   a `dev:test` profile with the pinned Codex and an isolated `CODEX_HOME`. A
+   made-up key and a loopback model, as in `codex-saved-rules-live.spec.ts`,
+   are enough.
+2. Write `/etc/codex/requirements.toml` with `[network_proxy] enabled = true`.
+3. In an Ask session, have Codex reach a host that is not allowed, for example
+   `curl http://probe-host.example.test`.
+4. Check that the card's "Approve network access" is enabled, that Deny,
+   Cancel turn, Approve for session and "Approve and remember…" are offered,
+   and that there is no "Approve with network policy".
+5. Approve. Check that the request goes through and that the profile's
+   `CODEX_HOME/rules/` stays empty.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **A disposable VM or container host (recommended).**
+    - Pros: writing `/etc/codex/requirements.toml` cannot affect a real Codex
+      install; a made-up key keeps it free.
+    - Cons: one more host to prepare.
+  - **Leave it to the first user on a managed host.**
+    - Pros: no work now.
+    - Cons: a broken card would be found by a user; both the bridge and the
+      backend already refuse amendments, so the risk is the label only.
 
 ## Current state
 
@@ -661,6 +706,6 @@ it was left alone and only reported.
 
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md),
   decision 1.
-- [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md).
+- `0160-codex-saved-rules-list-and-revoke.md` (deleted 2026-11-06).
 - [0722-per-machine-agent-accounts.md](0722-per-machine-agent-accounts.md):
   the per-machine model followed here.

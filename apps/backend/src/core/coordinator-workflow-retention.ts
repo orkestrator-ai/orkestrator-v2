@@ -75,6 +75,8 @@ export interface CoordinatorWorkflowCleanupInput {
  *   exists, or for any remote environment, whose existence is unknown here;
  * - the newest delegation record per worker tab while the environment exists,
  *   which is what goal and tab actions read as the coordinator's ownership;
+ * - the newest source-stating launch delegation per worker tab while the
+ *   environment exists, which supplies the tab and Work row launch override;
  * - a record holding a live worker outcome watch (`workerOutcome` not yet
  *   ended), which is what tells the coordinator its worker merged or was
  *   deleted; the watch ends with that, and then the record can go;
@@ -97,13 +99,21 @@ export function selectCoordinatorWorkflowsToClear(
   const reviewsFollowed = new Set<string>();
   // The newest delegation record per worker tab: later entries win.
   const newestDelegation = new Map<string, string>();
+  const newestLaunch = new Map<string, CoordinatorWorkflowAssociation>();
   for (const association of workflows) {
     const reviewId = association.pullRequest?.reviewAssociationId;
     if (association.kind === "pull-request" && !association.terminalNotifiedAt && reviewId) {
       reviewsFollowed.add(reviewId);
     }
     if (association.kind === "environment" && association.delegation) {
-      newestDelegation.set(delegationTabKey(association), association.id);
+      const key = delegationTabKey(association);
+      newestDelegation.set(key, association.id);
+      if (!association.pending && association.delegation.request?.source) {
+        const previous = newestLaunch.get(key);
+        const requestedAt = Date.parse(association.delegation.requestedAt) || 0;
+        const previousAt = Date.parse(previous?.delegation?.requestedAt ?? "") || 0;
+        if (!previous || requestedAt >= previousAt) newestLaunch.set(key, association);
+      }
     }
   }
 
@@ -159,7 +169,9 @@ export function selectCoordinatorWorkflowsToClear(
       const exists = association.nodeId ? remote : input.environmentExists(association.resourceId);
       if (exists) {
         if (!association.delegation || association.baseCommit) return;
-        if (newestDelegation.get(delegationTabKey(association)) === association.id) return;
+        const key = delegationTabKey(association);
+        if (newestDelegation.get(key) === association.id) return;
+        if (newestLaunch.get(key)?.id === association.id) return;
       }
     }
     candidates.push({

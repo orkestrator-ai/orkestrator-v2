@@ -309,7 +309,7 @@ test.skipIf(!enabled)(
       image!,
       "-c",
       `mkdir -p "$HOME" && git config --global --add safe.directory ${REMOTE_PATH} &&
-       git clone -q --no-tags --reference /orkestrator-git-mirror/mirror.git --dissociate file://${REMOTE_PATH} /tmp/clone &&
+       git clone -q --no-tags --reference-if-able /orkestrator-git-mirror/mirror.git --dissociate file://${REMOTE_PATH} /tmp/clone &&
        test ! -e /tmp/clone/.git/objects/info/alternates &&
        git -C /tmp/clone log -1 --format=%s`,
     ]);

@@ -1651,7 +1651,7 @@ need it once cloned.
 
 - **The clone.** The setup script checks the mirror cheaply (the directory exists,
   its refs can be read, the tip's tree is present), then runs `git clone --no-tags
-  --reference <mirror> --dissociate <url>`. The remote is contacted for its refs
+  --reference-if-able <mirror> --dissociate <url>`. The remote is contacted for its refs
   and for anything the mirror lacks, so `origin` is still the project's remote and
   a stale mirror costs only the difference. `--dissociate` copies what the clone
   needs and drops the link, so the result is self-contained. `--dissociate` walks
@@ -1662,12 +1662,17 @@ need it once cloned.
   `git/git`) and fetched it back from the remote on demand. A blobless clone also
   pays for history reads one lazy fetch at a time; see
   [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
-- **`--reference`, not `--reference-if-able`.** A mirror removed between the check
-  and the clone then fails and falls back to the blobless clone, rather than
-  downloading the full history without saying so.
+- **`--reference-if-able`, checked again afterwards.** A mirror removed between
+  the check and the clone does not fail the clone: Git clones from the remote
+  alone, with the full history. The script then checks the mirror again and, if
+  it has gone, reports `vanished` instead of `used`, so that download is logged
+  (`git-mirror.clone-fallback`) rather than passing as a mirror clone. A mirror
+  that disappears part-way through `--dissociate` still fails the clone
+  (`clone-failed`) and falls back as below.
 - **Fallback.** Anything else leaves the ordinary clone (blobless, then full) to
   run as it always did, after one line saying why, with one fixed reason word:
-  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`. The line
+  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`
+  (`vanished` keeps the clone it already made and does not fall back). The line
   goes to the setup output, and `prepareContainerWorkspace`'s caller logs it
   (`git-mirror.clone-fallback`, `git-mirror.clone-used`). The first environment of
   a project normally reports `missing`. The last three mark the mirror suspect, so

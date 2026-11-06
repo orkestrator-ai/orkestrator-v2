@@ -2438,6 +2438,8 @@ The ticket asked for a mirror without saying which refs. Took `+refs/heads/*` be
 
 The report and the ticket suggested `--reference-if-able`. With no `--filter`, a mirror removed between the check and the clone would then download the whole history silently. `--reference` fails instead, so that race falls back to the blobless clone and says why. The script does the check itself, so the flag's tolerance added nothing.
 
+Superseded by E25 (closing check in `docs/reports/efficiency-logging-database/0000-index.md`): the clone now uses `--reference-if-able`, as the E25 ticket required, and the script checks the mirror again after the clone, reporting `vanished` when it went away, so the full-history download is no longer silent.
+
 ### Task 15: stale means the difference, not a fallback
 
 The ticket lists a stale mirror among those that fall back to today's clone. A clone from a stale mirror already works and downloads only what it lacks (73 MiB rather than the 124 MiB of a blobless clone, in the 2,000-commit case above), so it is not treated as a failure. It is logged as `used`.

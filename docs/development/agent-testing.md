@@ -479,7 +479,13 @@ agent picker.
 
 Startup seeds each toolchain from your host installation when it has the same
 pinned version, so the default normally costs a local copy rather than a
-download. Anything the host lacks is downloaded as usual, and a toolchain the
+download. The launcher downloads whatever the host lacks before it starts
+Electron, through the same manager and hash checks
+(`prefetchAgentToolchains`), and Electron only verifies and activates the
+result. The launcher uses Bun's `fetch`. Electron's download goes through
+Chromium, which aborts it with `net::ERR_NETWORK_CHANGED` whenever Docker adds
+or removes an interface, and an unattended profile quits on that failure.
+Electron still downloads anything the launcher could not, and a toolchain the
 profile already has is left alone. Narrow the set when a run does not need all
 five:
 

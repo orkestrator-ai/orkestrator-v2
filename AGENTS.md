@@ -1547,7 +1547,8 @@ to a PATH lookup only outside agent-test profiles; inside one, a missing agent
 fails with `<Agent> is not installed in this agent-test profile's toolchain`.
 Cursor and Grok resolve only through the managed toolchain everywhere.
 Anything the host cannot seed is downloaded at
-startup, which needs network access; an agent-test profile that cannot prepare
+startup by the launcher, before Electron, with Bun's `fetch`. Chromium's
+download aborts whenever Docker changes an interface. This needs network access; an agent-test profile that cannot prepare
 its toolchains logs the reason and exits rather than waiting on a retry dialog.
 
 If startup reports `failed`, inspect the manifest and files below its `logDir`.

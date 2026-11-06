@@ -171,12 +171,25 @@ the `container`, `volumes` and `network` steps) and `worktree` (the `worktree`
 and `branch` steps), have a deadline (`environment-deletion-steps.ts`): 10 and
 20 minutes. When one fires, the stage's signal kills every command it is
 running, including the confined-removal helper, and starts no new one. The
-delete fails only once that work has settled, so a retry can never overlap it,
-and its reason is a fixed message naming the stage ("Deletion stopped while
-removing the worktree: it took longer than 20 min. Retry to continue."). The
+command runner uses `waitForTermination` and `waitForDescendants` for these
+stages: cancellation, command timeouts and output overflow retain the delete
+guard until leader exit (or the lost-exit zombie fallback) and no live members
+of the private process group are confirmed. Unknown termination keeps the guard
+held; sending SIGKILL alone never admits a retry. The confined-removal helper
+also waits for exit. The delete's reason is a fixed message naming the stage
+("Deletion stopped while removing the worktree: it took longer than 20 min. Retry to continue."). The
 ledger keeps the interrupted step pending. Each command also keeps its own
-timeout; the deadline bounds the stage as a whole. The deadlines are generous
-on purpose: six fixture worktrees of 75,608 files took 17.2 s to remove together
+timeout; the deadline requests cancellation of the stage as a whole. Waiting
+for confirmed termination can extend beyond that deadline.
+
+This confirms local Docker CLI termination only. Docker may continue a drain or
+removal request it already accepted after its client is killed. No new local
+command starts after cancellation. Interrupted resource steps remain in the
+ledger, and Retry probes current daemon state and ownership before continuing;
+already-absent containers, volumes and networks are treated as removed. A CLI
+exit is not a claim that daemon-side work has stopped.
+
+The deadlines are generous on purpose: six fixture worktrees of 75,608 files took 17.2 s to remove together
 on a loaded Mac, and a deadline that fires on a genuinely large tree only makes
 the user retry the same work. Stages that run in the backend itself (terminal
 teardown, store writes) have no deadline: nothing could prove them stopped.

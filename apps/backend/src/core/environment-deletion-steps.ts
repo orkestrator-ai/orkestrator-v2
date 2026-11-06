@@ -41,8 +41,9 @@ export type EnvironmentDeletionSteps = {
   enter(step: EnvironmentDeletionStep): Promise<void>;
   /**
    * Records `step`, then runs `work` with a signal that fires at the step's
-   * deadline. Settles only once `work` has: a stopped step is proven stopped
-   * before the delete fails, so a retry can never overlap it. If the signal
+   * deadline. Settles only once `work` has. Child commands must opt into
+   * termination confirmation so the delete guard outlives cancellation. This
+   * confirms local processes, not work already accepted by the Docker daemon. If the signal
    * fired, the delete fails with `EnvironmentDeletionDeadlineError` whatever
    * `work` returned, because a step cut short has not done its job.
    */

@@ -36,7 +36,12 @@ export type EnvironmentCleanupContext = Pick<
 export type CleanupCommandRunner = (
   command: string,
   args: string[],
-  options: { timeoutMs: number; signal?: AbortSignal },
+  options: {
+    timeoutMs: number;
+    signal?: AbortSignal;
+    waitForTermination?: boolean;
+    waitForDescendants?: boolean;
+  },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export type CleanupStepOptions = {
@@ -172,7 +177,7 @@ async function cleanupContainer(
   if (containerId) {
     // Refuses a container another development profile owns, and an
     // unreachable daemon; a container the daemon has forgotten passes.
-    if (!ownershipVerified) await assertDockerContainerOwned(containerId, context);
+    if (!ownershipVerified) await assertDockerContainerOwned(containerId, context, { run });
     try {
       await run("docker", ["rm", "-f", containerId], { timeoutMs: DOCKER_TIMEOUT_MS });
     } catch (error) {
@@ -181,7 +186,7 @@ async function cleanupContainer(
   }
   // Recovery copies go with the environment, each verified on its own.
   for (const retained of entry.retainedContainers ?? []) {
-    await assertDockerContainerOwned(retained, context);
+    await assertDockerContainerOwned(retained, context, { run });
     try {
       await run("docker", ["rm", "-f", retained], { timeoutMs: DOCKER_TIMEOUT_MS });
     } catch (error) {
@@ -523,7 +528,12 @@ export async function runEnvironmentCleanupStep(
   const run: CleanupCommandRunner = signal
     ? async (command, args, runOptions) => {
         throwIfStopped(signal);
-        return baseRun(command, args, { ...runOptions, signal });
+        return baseRun(command, args, {
+          ...runOptions,
+          signal,
+          waitForTermination: true,
+          waitForDescendants: true,
+        });
       }
     : baseRun;
   try {
@@ -542,7 +552,7 @@ export async function runEnvironmentCleanupStep(
       if ((current ?? entry).pending.includes("container")) {
         throw new CleanupRefusedError("container removal is still pending");
       }
-      const result = await removeEnvironmentNetwork(context, entry.environmentId);
+      const result = await removeEnvironmentNetwork(context, entry.environmentId, run);
       if (result === "in-use") throw new CleanupRefusedError("network still has containers");
       if (result === "unreachable") throw new CleanupRefusedError("docker unreachable");
     } else if (step === "worktree") await cleanupWorktree(entry, context, run, options);
@@ -568,6 +578,10 @@ export async function runEnvironmentCleanupStep(
       error: formatLogError(error, { message: false }),
     });
     await ledger.fail(entry.environmentId, step, summary).catch(() => undefined);
+    return false;
+  }
+  if (signal?.aborted) {
+    await ledger.fail(entry.environmentId, step, "deletion deadline passed").catch(() => undefined);
     return false;
   }
   await ledger.complete(entry.environmentId, step).catch((error: unknown) => {

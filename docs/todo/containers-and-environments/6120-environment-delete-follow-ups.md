@@ -134,7 +134,11 @@ Chose the recommended option: the delete records its stage on the environment re
 
 ### Task 4: what bounds a hang
 
-Chose the recommended deadline per external stage: 10 minutes for `container` and 20 for `worktree`, the two stages whose work runs in child processes, so killing them proves they stopped. The stage's signal reaches every command (`runCommand` kills the process group and settles after exit), the drain and the confined-removal helper, and no further command starts. The delete fails only after the stage's work settles, with a fixed reason naming the stage, so the existing failure path, its row and **Retry** apply unchanged and a retry cannot overlap the abandoned work. Stages that run in the backend (terminal teardown, store writes) have no deadline, because nothing could prove them stopped; their child commands already carry their own timeouts.
+Chose the recommended deadline per external stage: 10 minutes for `container` and 20 for `worktree`. A deadline requests cancellation; the delete guard remains held until local commands and their private process groups are confirmed stopped. Deletion commands explicitly use `waitForTermination` and `waitForDescendants`, including per-command timeouts and output overflow. The macOS lost-exit watcher remains active during cancellation. Unknown termination keeps the guard held even beyond the deadline. Sending SIGKILL alone is insufficient: rejecting immediately could admit an overlapping retry.
+
+The same signal-aware runner now reaches network inspection/removal and current and retained container ownership probes as well as the drain, volumes, gateways and worktree commands. The confined-removal helper waits for exit. No later command starts after cancellation, and the ledger retains interrupted work. Tests separately hold leader and descendant termination and verify Retry is refused, drive deadlines through each container stage, and cover resource-only cleanup with no current runtime.
+
+Docker can continue work it accepted after its CLI exits; local termination does not prove daemon-side completion. Retry checks resource existence and ownership and treats absent resources as removed. Stages that run in the backend (terminal teardown, store writes) retain no overall deadline because their work cannot be cancelled safely.
 
 ### Task 5: what readiness means
 
@@ -142,7 +146,7 @@ Chose to leave `established` as "the helper's `fs.watch` returned", the recommen
 
 ## Current state
 
-Directory watches on macOS run in a helper process, the worktree is no longer watched while it is removed, recovery stands aside while a delete runs, and a failed delete shows its reason with a retry. A slow delete names the stage it is on, the container and worktree stages stop and fail the delete at a deadline, and an agent-test profile can stage a real failed delete on demand. What remains is task 1 (live confirmation on `arktech-mini`, which needs a release containing the fix) and task 6 (store cleanup that holds the event loop, which overlaps the agent-mail storage work).
+Directory watches on macOS run in a helper process, the worktree is no longer watched while it is removed, recovery stands aside while a delete runs, and a failed delete shows its reason with a retry. A slow delete names the stage it is on, the container and worktree stages request cancellation at a deadline and fail only after local termination is confirmed, and an agent-test profile can stage a real failed delete on demand. What remains is task 1 (live confirmation on `arktech-mini`, which needs a release containing the fix) and task 6 (store cleanup that holds the event loop, which overlaps the agent-mail storage work).
 
 ## Needs verification
 

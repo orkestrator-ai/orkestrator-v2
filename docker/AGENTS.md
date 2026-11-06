@@ -279,6 +279,12 @@ whichever container owns the network namespace.
   - The gateway records `egress-filter` (`on`, or `off` when created with
     `ORKESTRATOR_EGRESS_FILTER=off`) at its first boot; a start never
     changes it, and an older image's gateway never runs it.
+  - It counts refused connections and DNS queries since the gateway booted
+    (`egress-refusals.json`, shown in the Network section) and records
+    nothing else about them. Never add a refused name, part of one or a
+    digest of one to a counter, log or report: a refused name can carry the
+    data an agent tried to send. The firewall's own boot checks run under
+    `egress-filter.quiet` so they are not counted.
   - It does not see a name hidden inside TLS (an encrypted ClientHello,
     domain fronting), checks only the first request of a kept-alive HTTP
     connection, and leaves UDP entries and other protocols to the address

@@ -14,8 +14,11 @@
  * inert in the compiled brief and forged provenance rejected; pins after
  * hot reload / reorder / duplicate / removal; hash and query route identity
  * with token stripping; no synthetic secret in profile storage or logs;
- * development source hints in a local worktree and, with
- * ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1, a container environment.
+ * development source hints, from fixture HTML and from a real Vite 8 dev
+ * server running the documented emitter, in a local worktree and, with
+ * ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1, a container environment; the
+ * gateway spec's recorded desktop captures still match a fresh capture.
+ * ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 runs it headless on Linux.
  *
  * Native window (rendered by the real renderer, not fixed bounds): the Notes
  * column shrinks the view to its host at app zoom 0.8, 1 and 1.25 (150% turns
@@ -70,13 +73,27 @@ import {
   startFixtureServer,
   type FixtureServer,
 } from "./web-annotations-support";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import {
   recordElectronDiagnostics,
   recordProcessOutput,
   withElectronDiagnostics,
 } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { VITE_APP } from "../../apps/desktop/tests/source-hint-emitter-vite-app";
+import {
+  NATIVE_CAPTURE_TARGETS,
+  comparableNativeCapture,
+  readNativeCaptures,
+  recordNativeCapture,
+  writeNativeCaptures,
+  type RecordedNativeCapture,
+} from "./web-annotations-native-captures";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -84,6 +101,7 @@ const webRoot = path.join(repositoryRoot, "apps", "web");
 const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
 const templateRoot = path.join(repositoryRoot, "test-fixtures", "agent-project");
 const TAB_ID = "annotation-preview-tab";
+const VITE_APP_SCRIPT = path.join(packageRoot, "tests", "source-hint-emitter-vite-app.ts");
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Receipt = { annotationId: string; captureId?: string | null };
@@ -126,16 +144,18 @@ async function launchElectron(
   current: Pick<Stack, "profile" | "profilePath" | "rendererUrl">,
   switches: string[] = [],
 ) {
+  const headless = headlessElectronRequested();
   const app = await electron.launch({
     executablePath: electronExecutable,
     args: [
       ...ELECTRON_TEST_SWITCHES,
+      ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
       ...switches,
       path.join(packageRoot, "dist", "electron", "main.js"),
     ],
     cwd: repositoryRoot,
     env: {
-      ...process.env,
+      ...(headless ? withoutDisplay(process.env) : process.env),
       PATH: `${path.join(current.profile.dataDir, "probe-bin")}${path.delimiter}${process.env.PATH ?? ""}`,
       ORKESTRATOR_ANNOTATION_CODEX_PROBE: path.join(current.profile.dataDir, "codex-launches"),
       ELECTRON_DEV: "1",
@@ -287,6 +307,15 @@ async function waitForApi(window: Page): Promise<void> {
     .toBe(true);
 }
 
+/**
+ * The origin whose web contents the page helpers below drive: the annotation
+ * fixture, or another server a test points the preview at for its duration.
+ */
+let previewOriginOverride: string | null = null;
+function previewOrigin(): string {
+  return previewOriginOverride ?? s().fixture.url;
+}
+
 const invoke: Invoke = (command, args = {}) =>
   s().window.evaluate(
     ({ command, args }) => (globalThis as any).orkestrator.invoke(command, args),
@@ -315,7 +344,7 @@ function inPreview<T>(script: string): Promise<T> {
       if (!contents) throw new Error("Fixture preview web contents not found");
       return contents.executeJavaScript(script, true);
     },
-    { origin: s().fixture.url, script },
+    { origin: previewOrigin(), script },
   ) as Promise<T>;
 }
 
@@ -332,7 +361,7 @@ function inPreviewNow<T>(script: string): Promise<T> {
       if (!contents) throw new Error("Fixture preview web contents not found");
       return contents.mainFrame.executeJavaScript(script, true);
     },
-    { origin: s().fixture.url, script },
+    { origin: previewOrigin(), script },
   ) as Promise<T>;
 }
 
@@ -350,7 +379,7 @@ async function trustedClick(x: number, y: number): Promise<void> {
       contents.sendInputEvent({ type: "mouseDown", ...point, button: "left", clickCount: 1 });
       contents.sendInputEvent({ type: "mouseUp", ...point, button: "left", clickCount: 1 });
     },
-    { origin: s().fixture.url, x, y },
+    { origin: previewOrigin(), x, y },
   );
 }
 
@@ -673,8 +702,14 @@ exit 91
     { cwd: repositoryRoot, encoding: "utf8" },
   );
   expect(emitted.status, `${emitted.stdout}\n${emitted.stderr}`).toBe(0);
+  // And the documented Vite 8 app, served by a real dev server in its own test.
+  const viteApp = spawnSync("bun", [VITE_APP_SCRIPT, "write", projectPath], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  expect(viteApp.status, `${viteApp.stdout}\n${viteApp.stderr}`).toBe(0);
   for (const args of [
-    ["add", "annotation-app", "orkestrator-source-babel-plugin.mjs"],
+    ["add", "annotation-app", "annotation-vite", "orkestrator-source-babel-plugin.mjs"],
     [
       "-c",
       "user.name=Annotation Fixture",
@@ -1164,6 +1199,65 @@ test("hash and query variants keep distinct identities and token parameters are 
   await preview("discardPendingCapture", hash.descriptor.captureId);
 });
 
+/**
+ * The gateway spec replays these captures as its desktop captures, because a
+ * browser client cannot make one. Capture the same elements here, at scroll 0
+ * as the gateway's staged screenshot is, and require the recording to match
+ * apart from font- and display-dependent geometry
+ * (`comparableNativeCapture`). `ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES=1`
+ * rewrites the recording instead; review its diff.
+ */
+test("desktop captures of the gateway spec's targets match the recording it replays", async () => {
+  const records: RecordedNativeCapture[] = [];
+  for (const { route, selector } of NATIVE_CAPTURE_TARGETS) {
+    await navigate(route);
+    await inPreview("window.scrollTo(0, 0); true");
+    // As `settledRect`, but in place: two consecutive reads agree.
+    let rect: WebAnnotationRect | null = null;
+    await expect
+      .poll(
+        async () => {
+          const previous = rect;
+          rect = await rectOf(selector);
+          return rect !== null && JSON.stringify(rect) === JSON.stringify(previous);
+        },
+        { message: `${selector} settles`, timeout: 10_000, intervals: [100] },
+      )
+      .toBe(true);
+    const target = rect!;
+    expect(
+      target.y + target.height,
+      `${selector} is inside the first viewport`,
+    ).toBeLessThanOrEqual(FIXTURE_VIEWPORT.height);
+    const started = await preview<BrowserPreviewSelectionStatus>("startCapture", {
+      tabId: TAB_ID,
+      mode: "element",
+      environmentId: s().environmentId,
+    });
+    expect(started.status).toBe("selecting");
+    await trustedClick(target.x + target.width / 2, target.y + target.height / 2);
+    const status = await awaitCaptureEnd(TAB_ID).catch((error: Error) => {
+      throw new Error(`${selector} at ${JSON.stringify(target)}: ${error.message}`);
+    });
+    if (status.status !== "captured") throw new Error(`Capture failed: ${JSON.stringify(status)}`);
+    const pending = await readPending(status.pending.captureId);
+    await preview("discardPendingCapture", status.pending.captureId);
+    records.push(recordNativeCapture(route, selector, pending.capture));
+  }
+  // Leave the preview where the suite expects it: a later case that navigates
+  // to the route already shown would otherwise get no fresh document.
+  await navigate(ROUTE_VARIANTS.settings);
+  if (process.env.ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES === "1") {
+    writeNativeCaptures(records);
+    test.info().annotations.push({ type: "native-captures", description: "rewritten" });
+    return;
+  }
+  expect(
+    records.map(comparableNativeCapture),
+    "the gateway spec's recorded desktop captures are current (rerun with ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES=1)",
+  ).toEqual(readNativeCaptures().captures.map(comparableNativeCapture));
+});
+
 /** Raw trusted input for drags and keys; `mouseMove` carries the pressed button. */
 async function trustedInput(events: Array<Record<string, unknown>>): Promise<void> {
   await s().app.evaluate(
@@ -1613,7 +1707,12 @@ test("development source hints survive native spool and renderer capability gati
   await captureAndReviewSourceHints();
 });
 
-test("a desktop capture in a container environment has its source hints checked inside the container", async () => {
+/**
+ * Run `body` with a new container environment of the fixture project as the
+ * current environment, then delete it. Its workspace is cloned from the same
+ * origin, so it holds everything `beforeAll` committed.
+ */
+async function inContainerEnvironment(name: string, body: (containerId: string) => Promise<void>) {
   test.skip(
     process.env.ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER !== "1",
     "Needs Docker and this worktree's image (mise run docker:build:dev)",
@@ -1625,7 +1724,7 @@ test("a desktop capture in a container environment has its source hints checked 
   });
   const environment = await invoke<{ id: string }>("create_environment", {
     projectId,
-    name: "annotation-fixture-container",
+    name,
     networkAccessMode: "restricted",
     environmentType: "containerized",
   });
@@ -1636,11 +1735,105 @@ test("a desktop capture in a container environment has its source hints checked 
     });
     expect(containerId).toBeTruthy();
     s().environmentId = environment.id;
-    await captureAndReviewSourceHints(containerId!);
+    await body(containerId!);
   } finally {
     s().environmentId = localEnvironmentId;
     await invoke("delete_environment", { environmentId: environment.id });
   }
+}
+
+test("a desktop capture in a container environment has its source hints checked inside the container", async () => {
+  await inContainerEnvironment("annotation-fixture-container", (containerId) =>
+    captureAndReviewSourceHints(containerId),
+  );
+});
+
+/**
+ * The documented Vite 8 app (`source-hint-emitter-vite-app.ts`), served by the
+ * real Vite CLI from the local worktree as a developer would run it.
+ */
+async function startViteApp(workspace: string): Promise<{ url: string; stop(): Promise<void> }> {
+  const linked = spawnSync("bun", [VITE_APP_SCRIPT, "link", workspace], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  expect(linked.status, `${linked.stdout}\n${linked.stderr}`).toBe(0);
+  const [port] = (await reserveLoopbackPorts(1)) as [number];
+  const { BABEL_ENV: _babelEnv, ...inherited } = process.env;
+  const server = spawn(
+    "bun",
+    [VITE_APP.cli, "--config", "vite.config.js", "--host", "127.0.0.1", "--port", String(port)],
+    {
+      cwd: path.join(workspace, VITE_APP.directory),
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      // A developer's shell leaves NODE_ENV unset, which Babel reads as
+      // development; a build shell may export production, which would turn
+      // the plugin's own gate off.
+      env: { ...inherited, NODE_ENV: "development" },
+    },
+  );
+  ownProcessGroup(server);
+  recordProcessOutput("vite-app", server);
+  const url = `http://127.0.0.1:${port}`;
+  await waitForUrl(url);
+  return { url, stop: () => stopProcessGroup(server) };
+}
+
+/**
+ * Capture the Vite app's Save button in the native preview and save it in the
+ * current environment: the page's stamps become candidates, and the backend
+ * marks each path it finds in that environment's workspace.
+ */
+async function captureViteSourceHints(): Promise<void> {
+  const vite = await startViteApp(s().worktreePath);
+  const tabId = "annotation-vite-tab";
+  await preview("destroy", TAB_ID);
+  previewOriginOverride = vite.url;
+  try {
+    await preview("attach", {
+      tabId,
+      url: `${vite.url}/`,
+      bounds: { x: 0, y: 0, ...FIXTURE_VIEWPORT },
+      visible: true,
+    });
+    // React renders once the dev server has transformed the module graph.
+    const selector = JSON.stringify(VITE_APP.selector);
+    await expect
+      .poll(
+        () =>
+          inPreview<string | null>(
+            `document.querySelector(${selector})?.getAttribute("data-orkestrator-source") ?? null`,
+          ).catch(() => null),
+        { timeout: 60_000 },
+      )
+      .toMatch(/^annotation-vite\/web\/src\/ViteSave\.tsx:2:\d+$/);
+    const { descriptor } = await captureElement(VITE_APP.selector, 0, 1, tabId);
+    const candidates = VITE_APP.candidates.map((candidate) => ({ ...candidate, verified: false }));
+    expect((await readPending(descriptor.captureId)).capture.evidence?.sourceHints).toEqual(
+      candidates,
+    );
+    const receipt = await saveCapture(descriptor.captureId, "Vite source hint: align Save.");
+    const { annotation } = await getAnnotation(receipt.annotationId);
+    const stored = (await captureRecord(annotation.currentCaptureId)).evidence?.sourceHints;
+    expect(stored).toEqual(candidates.map((candidate) => ({ ...candidate, verified: true })));
+    test
+      .info()
+      .annotations.push({ type: "vite-source-hints", description: JSON.stringify(stored) });
+  } finally {
+    previewOriginOverride = null;
+    await preview("destroy", tabId).catch(() => undefined);
+    await vite.stop().catch(() => undefined);
+    await attachPreview(ROUTE_VARIANTS.settings);
+  }
+}
+
+test("a page from a real Vite 8 dev server with the documented emitter yields verified source candidates", async () => {
+  await captureViteSourceHints();
+});
+
+test("the same Vite dev-server capture in a container environment is checked inside the container", async () => {
+  await inContainerEnvironment("annotation-vite-container", () => captureViteSourceHints());
 });
 
 test("the real Notes column shrinks the native view, overlays hide it, and the narrow switch swaps surfaces", async () => {

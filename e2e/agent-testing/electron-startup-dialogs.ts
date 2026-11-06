@@ -30,9 +30,14 @@ export function dismissStartupDialogs(app: ElectronApplication): void {
   const watch = (page: Page) => {
     for (const name of STARTUP_DIALOG_BUTTONS) {
       page
-        .addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
-          button.click(),
-        )
+        .addLocatorHandler(page.getByRole("button", { name, exact: true }), async (button) => {
+          // The button can leave the role tree between the check that ran this
+          // handler and the click: a later modal hides it, or a status refresh
+          // re-renders the dialog. An unbounded click then waits for the whole
+          // action's timeout and fails it; Playwright reruns the handler if
+          // the button is still there afterwards.
+          await button.click({ timeout: 5_000 }).catch(() => undefined);
+        })
         .catch(() => undefined);
     }
     const reachability = page.getByRole("dialog", { name: REACHABILITY_DIALOG, exact: true });

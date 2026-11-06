@@ -1,7 +1,7 @@
 # 1102 — Claude hook concurrent counter snapshot
 
 - **ID:** 1102
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-27
 - **Test:** `hook writers serialize counters and retain a completed turn without any config`
 - **Owner:** `apps/backend/tests/claude-state-signal-integration.test.ts`
@@ -134,3 +134,50 @@ mise run test:logged -- --name hook-writers-isolated -- bun --cwd=apps/backend t
 Passed with exit 0 in 0.9 s. Passing output was deleted by the logged
 runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
+
+## 2026-11-05 environment-deletion review recurrence
+
+Preparation at `2350d1e8da1f721a4e8b11886ccc84df1304c77c` ran
+`mise run test:logged -- --name review-default-tests -- mise run test` and
+observed `working 11 0` instead of `working 20 0` (1178.65 ms). The immutable
+diagnostic is `.orkestrator/review-artifacts/review-validation-99e6b0c3-c310-4ab4-a4da-4957c80f5523/validation-04.stderr.txt:1203`.
+The package's triage marks it related through an indirect import of
+`diff-stats-tracking.ts`; it also identifies this open flake. The package
+reports no reliable complete aggregate count (including two between-test
+errors), so no additional suite total is inferred here.
+
+The owning file passed alone, unchanged, in 0.7 s:
+`mise run test:logged -- --name address-recorded-hook -- bun test --cwd apps/backend ./tests/claude-state-signal-integration.test.ts --parallel=1 --only-failures`.
+This confirms recurrence of intermittent behavior, not a repair. The hook
+script's one-second lock deadline can skip a write on contention while exiting
+successfully, but that path was not instrumented in the captured run; no cause
+is established. No assertion, timeout, skip or hook implementation was changed.
+
+## Root cause and fix (2026-11-05, environment-deletion rework)
+
+**Root cause.** `docker/orkestrator-state-signal.sh` takes its lock with
+`flock -w 1` and, by design, skips its write and still exits 0 when the lock
+is not free within one second, so a hook never holds up Claude. The test
+starts twenty writers at once and expects all twenty increments. Unloaded,
+the twenty serialized critical sections finish in about 80 ms; under an
+aggregate suite's load each one spawns slowly enough that the later writers
+pass the one-second deadline and drop their increments. The recorded cases
+fit that: 6 and 11 of 20 increments, in cases that took 2,493.64 ms and
+1,178.65 ms. A direct probe confirmed the mechanism: with the lock held for
+two seconds, a writer returned 0 after one second and left the snapshot
+unchanged. Sixteen concurrent bursts of twenty writers on this host, three
+rounds, all reached 20 at both a one-second and a sixty-second wait, so the
+load needed to cross the deadline was not reproduced here; the held-lock case
+is the evidence.
+
+**Fix.** The script reads an optional `ORKESTRATOR_STATE_LOCK_WAIT` (whole
+seconds; anything else falls back to the one-second default, and nothing in
+the image sets it). The serialization test sets it to 60, so it tests
+serialization rather than host speed. A new deterministic case,
+`a hook writer that cannot take the lock in time skips its write and still succeeds`,
+holds the lock in a child process and checks that a writer with a zero or
+malformed wait exits 0 without touching the snapshot, and that the next
+writer after release counts on from the persisted value. No assertion was
+loosened. Verified with
+`mise run test:logged -- --name hook-lock -- bun test --cwd apps/backend ./tests/claude-state-signal-integration.test.ts ./tests/tmux-poll-failed-turn.test.ts ./src/core/claude-state-signal.test.ts --parallel=2 --only-failures`
+(passed, 1.8 s).

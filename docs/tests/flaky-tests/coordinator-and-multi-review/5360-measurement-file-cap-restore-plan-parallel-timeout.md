@@ -87,3 +87,18 @@ mise run test:logged -- --name measurement-cap-isolated -- bun --cwd=apps/backen
 Passed with exit 0 in 4.0 s. Passing output was deleted by the logged
 runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
+
+## Environment-deletion main merge — 2026-11-06
+
+`mise run test:logged -- --name merge-default -- mise run test` repeated
+the restore-plan deadline at 5,724.92 ms with four isolated backend workers.
+Evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HtWRHT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The complete unchanged owner still failed alone:
+`mise run test:logged -- --name merge-restore-plan-alone -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`.
+It reported 19 pass, one fail and one between-test error in 11.81 s: the same
+case timed out at 5,812.19 ms, then outstanding work used the closed database.
+Isolated evidence: `orkestrator-test-run.ShXcQv/merge-restore-plan-alone.log.gz`
+under the same temporary root. The nine-worker component browser suite was
+also running. No isolated pass, new root cause or fix is claimed; no assertion,
+deadline, skip or implementation changed.

@@ -35,3 +35,14 @@ the default 5 s test deadline, so a loaded host can plausibly push it past the
 deadline. That is not established. The change under test alters only the review
 worktree probe's script and the command that runs it, and this test reaches
 neither. No assertion, deadline or fixture was changed.
+
+## Environment-deletion main merge — 2026-11-06
+
+`mise run test:logged -- --name merge-default -- mise run test` repeated
+the same case at 5000.27 ms with four isolated backend workers. The component
+browser suite was also running. Evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HtWRHT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+`mise run test:logged -- --name merge-local-scan-alone -- bun test --cwd apps/backend ./src/core/commands-files-local-scan.test.ts --parallel=1 --only-failures`
+passed the complete unchanged owner with exit 0 in 9.0 s. Passing output was
+removed by the logged runner; no isolated counts are inferred. No assertion,
+deadline, skip or implementation changed. Cause unestablished.

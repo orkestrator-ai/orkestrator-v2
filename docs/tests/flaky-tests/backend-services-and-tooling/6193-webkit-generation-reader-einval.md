@@ -79,6 +79,20 @@ Passing output was deleted by the logged runner; no per-test totals were
 retained. This is another observation of the existing flake, not a root-cause
 fix. No assertions, skips, timing budgets, or WebKit implementation changed.
 
+## Environment-deletion main merge — 2026-11-06
+
+`mise run test:logged -- --name merge-default -- mise run test` repeated
+`review regressions > exported paths reuse and force refresh; concurrent publishers preserve readers; idle pruning removes retired revisions`
+at line 651 with `EINVAL` opening `INSTALLATION_COMPLETE` (11.45 ms).
+The root group used one isolated worker; the component browser suite and
+isolated gateway smoke were also running. Original evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HtWRHT/root-and-agent-support-tests.log.gz`.
+
+The complete unchanged owner passed alone in 1.5 s, exit 0:
+`mise run test:logged -- --name merge-webkit-reader-alone -- bun test ./tests/unit/playwright-webkit-host-libs.test.ts --parallel=1 --only-failures`.
+Passing output was deleted by the logged runner; no isolated totals are inferred.
+No implementation, assertion, timeout or skip changed. The cause remains unproved.
+
 ## Coordinator transcript review recurrence — 2026-11-06
 
 At commit `decf86b98`, `mise run test:logged -- --name review-default-tests -- mise run test`

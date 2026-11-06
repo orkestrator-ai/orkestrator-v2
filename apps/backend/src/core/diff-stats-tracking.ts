@@ -416,8 +416,11 @@ export class DiffStatsTracking {
               current: environment.diffBaseline ?? null,
             });
           }
-          const target =
-            environment.environmentType === "local"
+          // A tombstoned environment's worktree is going away; `deleteEnvironment`
+          // stops its work before removing the tree, and this keeps it stopped.
+          const target = environment.deletionRequestedAt
+            ? undefined
+            : environment.environmentType === "local"
               ? environment.worktreePath
                 ? {
                     environmentId: environment.id,
@@ -438,7 +441,7 @@ export class DiffStatsTracking {
           // Readable now: scan it. Not readable but still an environment: hold the
           // last counts and stop scanning, rather than discarding a reading that
           // described work which is still on disk.
-          if (target) this.service.track(target);
+          if (target && this.service.canTrack(target)) this.service.track(target);
           else this.service.pause(environment.id);
         }
 
@@ -516,6 +519,16 @@ export class DiffStatsTracking {
         this.baselineChecks.delete(environmentId);
         if (check.rerun) this.checkBaseline(environmentId);
       });
+  }
+
+  /** Fence new scans, then drain this worktree's already-running filesystem work. */
+  async pauseForRemoval(environmentId: string, worktreePath?: string | null): Promise<void> {
+    this.invalidatePendingSync();
+    if (worktreePath) {
+      const reads = this.service.pauseForRemoval(environmentId, { worktreePath });
+      const key = new PhysicalKeyResolver().key({ kind: "local", worktreePath });
+      await Promise.all([reads, this.sharedScans.settled(`${key}\0`)]);
+    } else this.service.pause(environmentId);
   }
 
   /**

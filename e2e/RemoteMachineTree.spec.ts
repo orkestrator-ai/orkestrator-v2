@@ -153,3 +153,20 @@ test("row accessibility retains badges and deleting without hover warns about it
   await page.screenshot({ path: `${preview}/review-delete-pr-${testInfo.project.name}.png` });
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
 });
+
+test("remote failed deletion shows one complete failure message and a Retry action", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/remote-machine-tree?delete-failed=1");
+  const failure = page.getByText("Deletion failed. Retry on the owning machine.", { exact: true });
+  await expect(failure).toBeVisible();
+  await expect(
+    page.getByText("Delete failed: Deletion failed. Retry on the owning machine.", { exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+  await page.screenshot({
+    path: `output/visual-previews/remote-delete-failure-after-${testInfo.project.name}.png`,
+  });
+  await page.reload();
+  await expect(failure).toBeVisible();
+});

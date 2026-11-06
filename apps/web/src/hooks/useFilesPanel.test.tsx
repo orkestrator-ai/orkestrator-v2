@@ -329,6 +329,34 @@ describe("useFilesPanel on the project root", () => {
     );
   });
 
+  test.each(["deletionError", "cleanupAfterMergeError"] as const)(
+    "a failed %s home cannot admit project file actions",
+    async (field) => {
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...projectHome,
+            deletionRequestedAt: "2026-11-05T12:00:00Z",
+            [field]: "failed",
+            agentActivityState: "waiting",
+          },
+        ],
+      });
+      const { result } = renderHook(() => useFilesPanel());
+      let failure: unknown;
+      await act(async () => {
+        await result.current
+          .copyExternalFiles([droppedFile("a.txt", [1])], ".")
+          .catch((error: unknown) => {
+            failure = error;
+          });
+      });
+      expect(failure).toMatchObject({ message: "The project home is being deleted" });
+      expect(ensureProjectHomeEnvironmentMock).not.toHaveBeenCalled();
+      expect(copyExternalFileMock).not.toHaveBeenCalled();
+    },
+  );
+
   test("reports a project home that cannot be created", async () => {
     ensureProjectHomeEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("The configured local checkout is unavailable");

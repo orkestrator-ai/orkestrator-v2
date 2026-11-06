@@ -12,10 +12,14 @@
 # reads a tab's hook directory when a hook fires instead of on every tick.
 state_file="${ORKESTRATOR_STATE_FILE:-/tmp/.claude-state}"
 snapshot="${state_file}-snapshot"
+# A writer that cannot take the lock in time skips its write rather than hold
+# up the hook. Tests that contend many writers on a loaded host raise the wait.
+lock_wait="${ORKESTRATOR_STATE_LOCK_WAIT:-1}"
+case "$lock_wait" in ''|*[!0-9]*) lock_wait=1 ;; esac
 case "${1:-}" in
   working|waiting|failed)
     (
-      flock -w 1 9 || exit 1
+      flock -w "$lock_wait" 9 || exit 1
       previous=idle revision=0 completions=0
       if [ -f "$snapshot" ]; then
         read -r previous revision completions < "$snapshot" || exit 1

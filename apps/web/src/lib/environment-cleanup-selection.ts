@@ -1,13 +1,10 @@
+import {
+  environmentDeletionFailure,
+  environmentHasDeletionTombstone,
+} from "@orkestrator/protocol/node-summaries";
 import type { Environment } from "@/types";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
-
-function isBackendDeletionTombstone(environment: {
-  lifecycleOperation?: string;
-  deletionRequestedAt?: string;
-}): boolean {
-  return environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt);
-}
 
 /**
  * Leave a tearing-down environment so the project workspace is shown instead
@@ -26,7 +23,11 @@ export function activateProjectForEnvironmentCleanup(
   // sidebar and bulk-delete can leave the workspace immediately. A backend
   // tombstone that still carries the error stays selected so retry remains
   // reachable.
-  if (environment?.cleanupAfterMergeError && !envStore.deletingEnvironments.has(environmentId)) {
+  if (
+    environment &&
+    environmentDeletionFailure(environment) &&
+    !envStore.deletingEnvironments.has(environmentId)
+  ) {
     return false;
   }
 
@@ -59,7 +60,7 @@ export function reconcileSelectedEnvironmentCleanupSelection(): boolean {
   if (!environment) return false;
 
   const locallyDeleting = envStore.deletingEnvironments.has(selectedEnvironmentId);
-  if (environment.cleanupAfterMergeError && !locallyDeleting) return false;
+  if (environmentDeletionFailure(environment) && !locallyDeleting) return false;
   if (!locallyDeleting && !envStore.isDeleting(selectedEnvironmentId)) return false;
 
   return activateProjectForEnvironmentCleanup(selectedEnvironmentId);
@@ -96,9 +97,9 @@ export function startEnvironmentCleanupSelectionSync(): () => void {
     // not a transition and must not be reverted.
     if (
       environment &&
-      !environment.cleanupAfterMergeError &&
-      isBackendDeletionTombstone(environment) &&
-      (!previousEnvironment || !isBackendDeletionTombstone(previousEnvironment))
+      !environmentDeletionFailure(environment) &&
+      environmentHasDeletionTombstone(environment) &&
+      (!previousEnvironment || !environmentHasDeletionTombstone(previousEnvironment))
     ) {
       activateProjectForEnvironmentCleanup(selectedEnvironmentId);
     }

@@ -225,3 +225,11 @@ Original failure evidence: `.orkestrator/review-artifacts/review-validation-2b4e
 - **Failure:** timed out after 5002.36 ms in `bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts`.
 - **Owning-file rerun:** `mise run test:logged -- --name codex-alone -- bun test --cwd bridges/codex-bridge src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (0.1 s).
 - **Hypothesis:** not established. The change under test touches no bridge code. No assertion, timeout or skip was changed.
+
+## Environment-deletion main merge — 2026-11-06
+
+- **Original command:** `mise run test:logged -- --name merge-default -- mise run test`, merging `aeb6617edd1cc0a525c74eedf2b432584ac83b41` with `9f94b114204f3f98c643bc3489d2ac7d2c5220c6`. The aggregate granted the bridge group two worker slots; the Codex package used one isolated worker. The component browser suite and isolated gateway smoke also ran on this host.
+- **Failure:** `fake Codex app-server process > reports its version and rejects unsupported invocations` exceeded 5000.00 ms. Codex reported 2,400 pass, 63 skip and one fail across 113 files (80.07 s); the bridge group exited 1 after 151.6 s.
+- **Original evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HtWRHT/bridges.log.gz` (compressed by aggregate finalization).
+- **Complete unchanged owner rerun:** `mise run test:logged -- --name merge-codex-fake-alone -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed with exit 0 in 0.3 s. Passing raw output was removed by the logged runner.
+- **Assessment:** recurrence of the known intermittent deadline. The cause is not established; no assertion, timeout, skip or implementation in this owner changed. The original aggregate remains non-green.

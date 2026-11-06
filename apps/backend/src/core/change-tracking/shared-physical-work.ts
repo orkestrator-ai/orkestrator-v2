@@ -107,11 +107,13 @@ export class SharedScanQueue<T> {
   }
 
   /** Resolves once no pass is running or queued, including passes queued meanwhile. */
-  async settled(): Promise<void> {
+  async settled(keyPrefix?: string): Promise<void> {
     for (;;) {
-      const pending = [...this.states.values()].flatMap((state) =>
-        [state.running, state.queued].filter((pass): pass is Promise<T> => pass !== null),
-      );
+      const pending = [...this.states.entries()]
+        .filter(([key]) => keyPrefix === undefined || key.startsWith(keyPrefix))
+        .flatMap(([, state]) =>
+          [state.running, state.queued].filter((pass): pass is Promise<T> => pass !== null),
+        );
       if (pending.length === 0) return;
       await Promise.allSettled(pending);
     }

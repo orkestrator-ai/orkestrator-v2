@@ -1009,6 +1009,7 @@ export class ProjectsRepository {
         "deletionRequestedAt",
         "cleanupAfterMergeRequestedAt",
         "cleanupAfterMergeError",
+        "deletionError",
         "autoMergeResolveCompletedAt",
         "lifecycleOperationStartedAt",
         "setupSessionId",

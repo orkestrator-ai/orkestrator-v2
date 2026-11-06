@@ -103,6 +103,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const boundMachine = multiMachineClient ? windowMachine : null;
   const { displayedActivityState, isRunning } = useEnvironmentDisplayActivity(environment);
   const deleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
+  const deletingStartedAt = useEnvironmentStore((s) => s.deletingStartedAt.get(environment.id));
   const deletionRetryable = useEnvironmentStore((s) =>
     isLocalDeletionRetryable(environment, s.deletingEnvironments),
   );
@@ -133,6 +134,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 
   const facts = localEnvironmentRowFacts(environment, {
     deleting,
+    deletingStartedAt,
     deletionRetryable,
     activity: displayedActivityState,
     running: isRunning,

@@ -101,45 +101,51 @@ describe("activateProjectForEnvironmentCleanup", () => {
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-2");
   });
 
-  test("leaves a failed merge-cleanup environment selected so retry stays reachable", () => {
-    const environment = makeEnvironment({
-      id: "env-1",
-      projectId: "project-1",
-      cleanupAfterMergeError: "delete failed",
-      lifecycleOperation: "deleting",
-      deletionRequestedAt: "2026-01-02T00:00:00.000Z",
-    });
-    useEnvironmentStore.setState({ environments: [environment] });
-    useUIStore.setState({
-      selectedProjectId: "project-1",
-      selectedEnvironmentId: "env-1",
-    });
+  test.each(["cleanupAfterMergeError", "deletionError"] as const)(
+    "keeps %s selected so retry stays reachable",
+    (errorField) => {
+      const environment = makeEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        [errorField]: "delete failed",
+        lifecycleOperation: "deleting",
+        deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+      });
+      useEnvironmentStore.setState({ environments: [environment] });
+      useUIStore.setState({
+        selectedProjectId: "project-1",
+        selectedEnvironmentId: "env-1",
+      });
 
-    expect(activateProjectForEnvironmentCleanup("env-1")).toBe(false);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
-  });
+      expect(activateProjectForEnvironmentCleanup("env-1")).toBe(false);
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    },
+  );
 
-  test("lets a fresh renderer-local deletion override a stale merge-cleanup error", () => {
-    const environment = makeEnvironment({
-      id: "env-1",
-      projectId: "project-1",
-      cleanupAfterMergeError: "delete failed",
-      lifecycleOperation: "deleting",
-      deletionRequestedAt: "2026-01-02T00:00:00.000Z",
-    });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      deletingEnvironments: new Set(["env-1"]),
-    });
-    useUIStore.setState({
-      selectedProjectId: "project-1",
-      selectedEnvironmentId: "env-1",
-    });
+  test.each(["cleanupAfterMergeError", "deletionError"] as const)(
+    "local retry overrides stale %s",
+    (errorField) => {
+      const environment = makeEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        [errorField]: "delete failed",
+        lifecycleOperation: "deleting",
+        deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+      });
+      useEnvironmentStore.setState({
+        environments: [environment],
+        deletingEnvironments: new Set(["env-1"]),
+      });
+      useUIStore.setState({
+        selectedProjectId: "project-1",
+        selectedEnvironmentId: "env-1",
+      });
 
-    expect(activateProjectForEnvironmentCleanup("env-1")).toBe(true);
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
-  });
+      expect(activateProjectForEnvironmentCleanup("env-1")).toBe(true);
+      expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    },
+  );
 });
 
 describe("reconcileSelectedEnvironmentCleanupSelection", () => {

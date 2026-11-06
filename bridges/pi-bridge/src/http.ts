@@ -104,6 +104,12 @@ import {
   type CommandSelection,
 } from "./commands.js";
 import { awaitCommandPreview, startCommandPreview } from "./command-preview.js";
+import {
+  COMPACTION_CANCELLED_MESSAGE,
+  publicComposer,
+  requestCompactionCancellation,
+  type ManualCompaction,
+} from "./compaction-controls.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
@@ -685,7 +691,7 @@ async function routeSession(
     return json(response, 200, { servers: publicPiMcpServers(state) });
   }
   if (action === "config" && request.method === "GET") {
-    return json(response, 200, { ...state.composer, commands: state.slashCommands });
+    return json(response, 200, { ...publicComposer(state), commands: state.slashCommands });
   }
   if (action === "config" && request.method === "POST") {
     return await handleConfig(request, response, state);
@@ -856,7 +862,8 @@ async function handleConfig(
     throw new HttpError(409, "Session is already running");
   }
   const patch = parseComposerPatch(body);
-  if (!patch) return json(response, 200, { ...state.composer, commands: state.slashCommands });
+  if (!patch)
+    return json(response, 200, { ...publicComposer(state), commands: state.slashCommands });
   state.dispatching = true;
   try {
     if (applyComposerPatch(state, patch)) {
@@ -869,7 +876,7 @@ async function handleConfig(
   } finally {
     state.dispatching = false;
   }
-  return json(response, 200, { ...state.composer, commands: state.slashCommands });
+  return json(response, 200, { ...publicComposer(state), commands: state.slashCommands });
 }
 
 /**
@@ -885,7 +892,10 @@ async function handleConfig(
  * consumes it at its next boundary, or aborts the run the moment Pi accepts.
  *
  * Configuration and compaction also hold `dispatching`, but they have no
- * prompt claim, so nothing is parked against a future prompt here.
+ * prompt claim, so nothing is parked against a future prompt here. A manual
+ * compaction is stopped instead (Pi's `abortCompaction`): the answer is
+ * `cancelled: true` once the compact route has settled having stopped it, and
+ * 202 pending while it has not settled within the acknowledgement bound.
  */
 async function handleCancel(response: ServerResponse, state: SessionState): Promise<void> {
   // Recorded synchronously, before anything else, so an approval hook reached
@@ -920,6 +930,18 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
   if (claim !== undefined) {
     return json(response, 202, { cancelled: false, pending: true });
   }
+  const compaction = requestCompactionCancellation(state);
+  if (compaction) {
+    // `false` both when the bound passed and when Pi finished the compaction
+    // before the abort reached it; only the latter settles, so it is idle.
+    const outcome = await withTimeout(
+      compaction.then((stopped) => (stopped ? "stopped" : "finished")),
+      cancelAckTimeoutMs,
+      "Pi compaction cancellation is still in flight",
+    ).catch(() => "pending" as const);
+    if (outcome === "pending") return json(response, 202, { cancelled: false, pending: true });
+    return json(response, 200, { cancelled: outcome === "stopped" });
+  }
   return json(response, 200, { cancelled: false });
 }
 
@@ -934,6 +956,9 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
  * the summary. `instructions: "applied"` in the answer is how the backend
  * tells this bridge from one that predates the body and would have compacted
  * without them.
+ *
+ * A cancel stops it (see `handleCancel`); this route then answers 409 with
+ * `cancelled: true`, a definite "not compacted" the user can retry.
  */
 async function handleCompact(
   request: IncomingMessage,
@@ -958,6 +983,15 @@ async function handleCompact(
   state.dispatching = true;
   state.compacting = true;
   state.revision += 1;
+  let settle: (stopped: boolean) => void = () => undefined;
+  const compaction: ManualCompaction = {
+    cancelRequested: false,
+    settled: new Promise<boolean>((resolve) => {
+      settle = resolve;
+    }),
+  };
+  state.manualCompaction = compaction;
+  let stopped = false;
   let instructions: string | undefined;
   try {
     // Read under the claim: the body arrives after the busy check, and a
@@ -966,8 +1000,23 @@ async function handleCompact(
     if (!parsed.ok) throw new HttpError(400, parsed.error);
     instructions = parsed.instructions;
     const session = await ensureSession(state);
-    await session.compact(instructions);
+    // A cancel that landed during the body read or a cold attach: Pi has not
+    // been asked for anything, so nothing needs aborting.
+    if (compaction.cancelRequested) stopped = true;
+    else {
+      try {
+        await session.compact(instructions);
+      } catch (error) {
+        // Pi rejects an aborted compaction ("Compaction cancelled"). Only an
+        // abort this route was asked for is a cancellation; anything else,
+        // including an extension refusing to compact, is still a failure.
+        if (!compaction.cancelRequested) throw error;
+        stopped = true;
+      }
+    }
   } finally {
+    if (state.manualCompaction === compaction) state.manualCompaction = undefined;
+    settle(stopped);
     state.compacting = false;
     state.dispatching = false;
     state.revision += 1;
@@ -975,6 +1024,9 @@ async function handleCompact(
     void runDeferredCommandReload(state)
       .then(() => schedulePersist())
       .catch(() => undefined);
+  }
+  if (stopped) {
+    return json(response, 409, { error: COMPACTION_CANCELLED_MESSAGE, cancelled: true });
   }
   return json(
     response,

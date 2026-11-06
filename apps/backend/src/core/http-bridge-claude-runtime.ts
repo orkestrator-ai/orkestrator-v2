@@ -11,7 +11,7 @@ import { asRecord } from "./agent-provider-runtime.js";
 /**
  * The turn activity a Claude bridge snapshot reports: `activity` names what the
  * CLI said it is doing (only `compacting` today) and `thinkingTokens` is the
- * live thinking estimate. Absent unless the session is running, so an estimate
+ * live thinking estimate. The Pi bridge reports `activity` in the same shape. Absent unless the session is running, so an estimate
  * left over from a finished turn can never decorate an idle tab.
  */
 export function claudeTurnActivityFromPayload(

@@ -94,6 +94,12 @@ import {
 } from "./transcript.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
+import {
+  abortCancelledCompactionOnStart,
+  installAutoCompactionOverride,
+  parseAutoCompaction,
+  readAutoCompactionSetting,
+} from "./compaction-controls.js";
 
 export { newSessionState };
 import {
@@ -244,6 +250,23 @@ export function defaultModelIds(
 }
 
 /**
+ * Re-read Pi's own auto-compaction setting, which the composer toggle shows
+ * as its default. Read with the same project trust as `defaultModelIds`; an
+ * unreadable file keeps the last value read.
+ */
+function refreshAutoCompactionSetting(state: SessionState): void {
+  const setting = readAutoCompactionSetting(() =>
+    SettingsManager.create(workingDirectory, agentDirectory() ?? getAgentDir(), {
+      projectTrusted: piResourceLoaderPolicy(state).projectTrusted,
+    }),
+  );
+  if (setting !== undefined && setting !== state.autoCompactionSetting) {
+    state.autoCompactionSetting = setting;
+    state.revision += 1;
+  }
+}
+
+/**
  * Merge a freshly read catalogue into whatever the composer is *now*.
  *
  * The read this result came from is unbounded, and nothing serializes it
@@ -299,6 +322,7 @@ export async function hydrateSessionComposer(
 
   const operation = (async () => {
     if (settled) await settled;
+    refreshAutoCompactionSetting(state);
     const hydrated = await hydrateComposerForSession(
       state.composer,
       undefined,
@@ -405,6 +429,7 @@ export async function createSession(
     // path does not send.
     if (resolved.id === "coordinator-read-only") state.readOnly = true;
     applyComposerPatch(state, patch);
+    refreshAutoCompactionSetting(state);
     state.composer = await hydrateComposerForSession(
       state.composer,
       undefined,
@@ -577,6 +602,12 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
     sessionStartEvent?: Parameters<typeof createAgentSessionFromServices>[0]["sessionStartEvent"];
   }) => {
     const settingsManager = SettingsManager.create(cwd, runtimeAgentDir);
+    // The session's auto-compaction toggle, applied in memory only: Pi's own
+    // setter would rewrite the account-wide settings file.
+    state.autoCompactionSetting = installAutoCompactionOverride(
+      settingsManager,
+      () => state.autoCompaction,
+    );
     const services = await createPiSessionServices(state, {
       cwd,
       agentDir: runtimeAgentDir,
@@ -721,6 +752,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // object graph — messages, tools, extension runner — alive.
   state.unsubscribe = session.subscribe((event) => {
     applySessionEvent(state, event);
+    abortCancelledCompactionOnStart(state, event, session);
     // Every call that ran was already measured in the `tool_result` hook,
     // which precedes this frame. What is left open here never ran.
     if (event.type === "tool_execution_end") {
@@ -1190,6 +1222,8 @@ export interface ComposerPatch {
   modelId?: string;
   reasoningId?: string;
   persistDefaults?: boolean;
+  /** The auto-compaction toggle (`parameterValues.autoCompaction`). */
+  autoCompaction?: boolean;
 }
 
 export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
@@ -1208,6 +1242,8 @@ export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
   if (nonBlank(body.reasoningEffort)) patch.reasoningId ??= body.reasoningEffort.trim();
   if (nonBlank(body.effort)) patch.reasoningId ??= body.effort.trim();
   if (typeof body.persistDefaults === "boolean") patch.persistDefaults = body.persistDefaults;
+  const autoCompaction = parseAutoCompaction(body.parameterValues);
+  if (autoCompaction !== undefined) patch.autoCompaction = autoCompaction;
   return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
@@ -1235,6 +1271,12 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
     changed = true;
   } else if (patch.reasoningId && patch.reasoningId !== state.composer.selectedReasoningId) {
     state.composer = { ...state.composer, selectedReasoningId: patch.reasoningId };
+    changed = true;
+  }
+  // Read live by the settings override, so an attached session follows it
+  // from Pi's next compaction check without re-attaching.
+  if (patch.autoCompaction !== undefined && patch.autoCompaction !== state.autoCompaction) {
+    state.autoCompaction = patch.autoCompaction;
     changed = true;
   }
   if (changed) state.revision += 1;

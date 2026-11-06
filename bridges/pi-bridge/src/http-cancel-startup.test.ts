@@ -127,7 +127,9 @@ function seedSession(): SessionState {
  */
 function controlledSession(options: { abortGate?: Promise<void> } = {}) {
   const runs: Deferred<void>[] = [];
-  const counts = { prompts: 0, aborts: 0, followUps: 0 };
+  const counts = { prompts: 0, aborts: 0, followUps: 0, compactionAborts: 0 };
+  // Pi rejects a compaction it was asked to abort ("Compaction cancelled").
+  const compactionAborts: Array<() => void> = [];
   const session = {
     sessionId: "pi-session-cancel",
     sessionFile: "/tmp/pi-session-cancel.jsonl",
@@ -153,6 +155,10 @@ function controlledSession(options: { abortGate?: Promise<void> } = {}) {
       target?.resolve();
     },
     compact: async () => undefined,
+    abortCompaction: () => {
+      counts.compactionAborts += 1;
+      for (const abort of compactionAborts.splice(0)) abort();
+    },
     clearQueue: () => ({ steering: [], followUp: [] }),
     setModel: async () => undefined,
     setThinkingLevel: () => undefined,
@@ -165,6 +171,12 @@ function controlledSession(options: { abortGate?: Promise<void> } = {}) {
     session: session as unknown as AgentSession,
     raw: session,
     counts,
+    /** A compaction that settles when the test releases it or Pi aborts it. */
+    heldCompaction: (gate: Promise<void>) =>
+      new Promise<void>((resolve, reject) => {
+        compactionAborts.push(() => reject(new Error("Compaction cancelled")));
+        void gate.then(resolve);
+      }),
     finishRun: (index = runs.length - 1) => runs[index]?.resolve(),
   };
 }
@@ -650,14 +662,14 @@ describe("operations without a prompt claim", () => {
     }
   });
 
-  test("a cancel during compaction parks nothing against the next prompt", async () => {
+  test("a cancel during compaction stops it and parks nothing against the next prompt", async () => {
     const state = seedSession();
     const pi = controlledSession();
     const compactGate = deferred();
     let compactions = 0;
     pi.raw.compact = async () => {
       compactions += 1;
-      await compactGate.promise;
+      await pi.heldCompaction(compactGate.promise);
     };
     state.session = pi.session;
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
@@ -666,13 +678,14 @@ describe("operations without a prompt claim", () => {
       await waitFor(() => compactions === 1);
       expect(state.promptClaim).toBeUndefined();
 
+      // The compaction is what stops; no turn is aborted and no claim exists
+      // for the intent to park against.
       const cancelled = await cancel(state);
       expect(cancelled.status).toBe(200);
-      expect(await cancelled.json()).toEqual({ cancelled: false });
+      expect(await cancelled.json()).toEqual({ cancelled: true });
+      expect(pi.counts.compactionAborts).toBe(1);
       expect(state.cancelRequestedClaim).toBeUndefined();
-
-      compactGate.resolve();
-      expect((await compaction).status).toBe(200);
+      expect((await compaction).status).toBe(409);
 
       const next = await post(`/session/${state.id}/prompt`, { prompt: "runs" });
       expect(next.status).toBe(202);
@@ -931,7 +944,7 @@ describe("the admission window before the prompt body is read", () => {
     let compactions = 0;
     pi.raw.compact = async () => {
       compactions += 1;
-      await compactGate.promise;
+      await pi.heldCompaction(compactGate.promise);
     };
     state.session = pi.session;
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
@@ -941,11 +954,10 @@ describe("the admission window before the prompt body is read", () => {
       const refused = await post(`/session/${state.id}/prompt`, { prompt: "while compacting" });
       expect(refused.status).toBe(409);
       expect(state.promptClaim).toBeUndefined();
-      expect(await (await cancel(state)).json()).toEqual({ cancelled: false });
+      // The owner is the compaction, so that is what the cancel stops.
+      expect(await (await cancel(state)).json()).toEqual({ cancelled: true });
       expect(state.cancelRequestedClaim).toBeUndefined();
-
-      compactGate.resolve();
-      expect((await compaction).status).toBe(200);
+      expect((await compaction).status).toBe(409);
       const next = await post(`/session/${state.id}/prompt`, { prompt: "runs" });
       expect(next.status).toBe(202);
       expect(pi.counts.prompts).toBe(1);

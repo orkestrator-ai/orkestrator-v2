@@ -15,6 +15,7 @@ import {
   type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
+import { publicComposer } from "./compaction-controls.js";
 import { MAX_REQUEST_ID_BYTES, PROVIDER } from "./config.js";
 import { publicPiMcpServers } from "./mcp.js";
 import {
@@ -62,7 +63,8 @@ export function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     ...publicCommandRevision(state),
     sessionId: state.id,
-    composer: state.composer,
+    composer: publicComposer(state),
+    ...publicTurnActivity(state),
     ...(state.policy ? { policy: piReportedPolicy(state.policy, state.readOnly) } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
@@ -107,7 +109,8 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
     // carries one too, but nothing calls it for Pi. Omitting it here left the
     // title Pi reports in `session_info_changed` stranded in bridge state.
     ...(state.title ? { title: state.title } : {}),
-    composer: state.composer,
+    composer: publicComposer(state),
+    ...publicTurnActivity(state),
     ...(state.policy ? { policy: piReportedPolicy(state.policy, state.readOnly) } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
@@ -165,7 +168,16 @@ export function messageWindow(
  * before Pi has settled the abandoned prompt — would contradict it.
  */
 function publicTurnError(state: SessionState): string | undefined {
-  return state.promptClaim !== undefined ? undefined : state.error;
+  return state.promptClaim !== undefined || state.compacting ? undefined : state.error;
+}
+
+/**
+ * What the running session is doing, in the shape the Claude bridge reports
+ * it: `activity: "compacting"` while Pi compacts, so the tab says so beside
+ * its Stop control.
+ */
+function publicTurnActivity(state: SessionState): { activity?: "compacting" } {
+  return state.compacting ? { activity: "compacting" } : {};
 }
 
 /**

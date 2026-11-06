@@ -12,9 +12,7 @@ Work that is already built has no file; the status table below records it.
 
 A batch file combines several reports as numbered parts and takes the rating of its most serious part. A number such as `0720` in this index names a part or a file, and the table below shows where it lives.
 
-| Rank | File | Criticality | Finished | Covers | Why this rating |
-| --- | --- | --- | --- | --- | --- |
-| 1 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+No remaining report files; completed findings and their closing checks are recorded below.
 
 ## Parallel running
 
@@ -26,15 +24,7 @@ This index only changes when a branch merges, so it can't show what is running n
 
 ### Batches
 
-| Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
-| --- | --- | --- | --- | --- | --- |
-| E1 | Baseline run | The baseline task in `0150`, `0160`, `0180` and `0190` | No lane | None | None |
-| E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 1 | E1 (Baseline run) | None |
-
-Why these are grouped:
-
-- **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
-- **E10:** Waiting on the baseline. `0190` links to `0160`.
+No remaining batches in this folder.
 
 ### Files built on their own
 
@@ -74,12 +64,12 @@ When one of these becomes ready, it joins the lane shown.
 | GW-14 | Done | The lookup is a `slice` (`apps/backend/src/gateway-event-replay.ts:191`), and `oversizedAppends` counts frames over the byte bound (`:155`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-15 | Done | A matching `If-None-Match` is answered before compressing (`heldStaticFallbackEncoding`, `apps/backend/src/gateway-proxy.ts:95`, `:835`); see the [E24 closing check](#closing-check-of-e24-gateway-static-and-preview). A revalidation by date alone still compresses: [6160](../../todo/cross-cutting/6160-static-if-modified-since-compression.md). |
 | GW-16 | Done | The idle deadlines refresh one timer (`apps/backend/src/gateway-proxy.ts:313`, `:556`, `packages/protocol/src/node/preview-forward.ts:319`), the decoders are shared (`apps/backend/src/terminal-websocket-server.ts:170-171`), input results are cumulative per flush on a negotiated subprotocol (`:904`, `:1143`), and acks go once a second (`apps/web/src/lib/native/terminal-websocket-client.ts:104`); see 1202 task 11. Live checks past loopback Chromium are in [5080](../../todo/cross-cutting/5080-terminal-websocket-live-evidence.md). |
-| TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`); see 0160. |
+| TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`). E10's `dev:test` baseline (a real Claude bridge streaming against a loopback model): every streaming answer was a delta, 40 of 40 for one viewer and for each of two, about 140 KB per viewer in 20 s. With the fake bridge and the ring disabled, 46 of 47 answers were snapshots, 1.86–6.63 MB per viewer in 10 s. See the [closing check of E10](#closing-check-of-e10-conditional-reads-and-deltas) and [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1. |
 | TX-2 | Done | Reads other than `sync-v1` pass a limit to `legacy` through `interactiveSnapshot`, and dropped refreshes read a 32-row tail (`refreshProjectionState` in `apps/backend/src/core/native-agent-transcript-projection.ts`); see 0150. |
-| TX-3 | Done | The legacy commit compares `digestWithMessages("legacy-commit", …)` through the row memo (`commitProjection`, `apps/backend/src/core/native-agent-transcript-projection.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
-| TX-4 | Done | Reads are keyed (`apps/backend/src/core/storage-native.ts`, `apps/backend/src/core/storage-prompt-queue-store.ts`, #1548 `12289fc56`), and every mutation holding a key's lease now reads one row (`readNativeAgentSessionUnderLease`); the prompt queue half of a steer is 5100. |
-| TX-5 | Open | State reads have no condition (`apps/backend/src/core/http-bridge-progressive.ts:217`) and the hash covers the composer (`apps/backend/src/core/native-agent-transcript-projection.ts:3418-3420`); see 0180. |
-| TX-6 | Open | A bridge answers `unchanged` or a whole snapshot only (`apps/backend/src/core/http-bridge-transcript-v2.ts:197`); see 0190. |
+| TX-3 | Done | The legacy commit compares `digestWithMessages("legacy-commit", …)` (`commitProjection`, `apps/backend/src/core/native-agent-transcript-projection.ts`), which hashes each row's memoised fingerprint since 6260 found the row-JSON version slower than before E11; see [Closing check of E11](#closing-check-of-e11-projection-hashing) and [Measurement of E11](#measurement-of-e11-to-do-6260). |
+| TX-4 | Done | Reads are keyed (`apps/backend/src/core/storage-native.ts`, `apps/backend/src/core/storage-prompt-queue-store.ts`, #1548 `12289fc56`), and every mutation holding a key's lease now reads one row (`readNativeAgentSessionUnderLease`); the prompt queue half of a steer is [5100](../../todo/cross-cutting/5100-prompt-queue-row-writes.md). |
+| TX-5 | Open | Measured in E10 and not built: state reads still have no condition (`readHttpBridgeSessionState`, `apps/backend/src/core/http-bridge-progressive.ts`) and the token hash still covers the composer (`getSessionStateUpdate`, `native-agent-transcript-projection.ts`). On the `dev:test` baseline each state poll made 5 bridge requests. Claude's state body (about 1 KB) repeated on 88–100% of polls, and the bridge answered it in under 0.25 ms. A revision would save that body and nothing else. The hash is 3–14 µs a poll, or 141–266 µs with 300 models (fake bridge). Decisions: [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) tasks 2 and 3; see the [closing check of E10](#closing-check-of-e10-conditional-reads-and-deltas). |
+| TX-6 | Open | Measured in E10 and not built: a bridge still answers `unchanged` or a whole snapshot (`readHttpBridgeSummaryTranscript`, `apps/backend/src/core/http-bridge-transcript-v2.ts`). On the `dev:test` baseline each viewer poll read the bridge transcript once. A snapshot was 38–114 KB decoded and cost the bridge 1.0–1.07 ms on average, gzip included. A delta would have been 7.5–8.2 KB, 5–15 times smaller. With the fake bridge, 517 KB windows would have shrunk 68 times. Decision: [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 4; see the [closing check of E10](#closing-check-of-e10-conditional-reads-and-deltas). |
 | TX-7 | Done | Exact head-row recovery starts at most once a second per view, at once for a quiet view, with a deadline a moving token cannot push back (`PROGRESSIVE_HYDRATION_SETTLE_MS`, `scheduleIncompleteProgressiveHydration`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). How often a trimmed head streams is [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md) task 3. |
 | TX-8 | Done | A miss on a remote reference (prefix `r`, `apps/backend/src/core/native-agent-remote-detail-recovery.ts`) re-registers it from a cached row or page, or runs one summary read, never a raw `sync-v1` refresh (`recoverRemoteToolDetails` in `apps/backend/src/core/native-agent-transcript-projection.ts`, E9); see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | TX-9 | Done | `valueFingerprint` is memoised per object beside `encodings` (`apps/backend/src/core/native-agent-projection-encoding.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
@@ -90,7 +80,7 @@ When one of these becomes ready, it joins the lane shown.
 | TX-14 | Done | A checkpoint is measured and stored from one payload with the checksum unchanged, and stored tails are deep-frozen rather than cloned (`apps/backend/src/core/native-agent-display-tails.ts`, `native-agent-display-tail-store.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
 | TX-15 | Done | Re-checked in E9: only the 32-row dispatch tail is cached twice (100 summary-context rows and 32 inline-context rows on the fixture), within the per-session cache bounds, so no new item; see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | TX-16 | Done | Inline detail references are memoised per part against a private copy, bounded by count and bytes, and a hit still registers (`apps/backend/src/core/native-agent-tool-detail-memo.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
-| TX-17 | Open | The scans remain (`apps/backend/src/core/native-agent-transcript-projection.ts:1267`, `:2176`, `:2219`), left until a profile of a changed read shows them, as the report recommends; [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md) task 1. |
+| TX-17 | Done | Profiled on a changed read and closed without a change: `firstUserMessageIndex` takes 0.03–0.07 µs and the `displayedHead` lookup 0.17–0.27 µs of a 240–453 µs read, and `recoveredHead` runs only on a recovery read; see [Measurement of E11](#measurement-of-e11-to-do-6260). |
 | TX-18 | Done | The fallback reads `this.legacy(sessionId, options.limit)` (`apps/backend/src/core/http-bridge-transcript-reader.ts`), and a cut the legacy read made itself counts as truncation (`apps/backend/src/core/http-bridge-progressive.ts`, E9); see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | BR-1 | Done | Streaming writes are limited to one a second (`bridges/acp-bridge/src/acp-persist-writer.ts:231-241`, #1548 `12289fc56`). The report's fragment cache was not built, because a measurement at the bound was not conclusive; figures and the open questions are in [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md). |
 | BR-2 | Done | `isSessionConfigPersisted` reads one record through `loadRecord` (`bridges/codex-bridge/src/app-server-runtime-sessions.ts:1803`, `bridges/codex-bridge/src/sessions/persistence.ts:386`, #1683 `38ac30844`). |
@@ -163,7 +153,7 @@ When one of these becomes ready, it joins the lane shown.
 | BG-13 | Done | Queued sync shared by later callers, `pr-monitor-runtime.ts:116`, `:169-170` (5254f8e27); the project-scoped alternative was not needed. |
 | BG-14 | Done | One bounded page per reopen, `readPage`, `tmux-transcript-reader.ts`; earlier history pages in, `prependTranscriptPage`, `claudeTmuxStore.ts`; older renderers keep the whole read, counted. Live evidence left in [5120](../../todo/transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md). |
 | BG-15 | No action | The whole-store reads have gone, as the report predicted; what repeats is keyed reads and a deliberate fresh probe, `prompt-queue-drainer.ts:115-170`, kept by 1202's task 10 record and its recommendation to leave it. |
-| DK-1 | Partly done | Local windows on the filtered gateway transport behind a setting that is off by default (2026-11-04, 1202 task 12); the default flip is todo 4501. Measured 2026-11-05, it does not lower Electron main's CPU; why is [5760](../../todo/cross-cutting/5760-local-transport-main-cpu.md). See the closing check of E26 below. |
+| DK-1 | Partly done | Local windows on the filtered gateway transport behind a setting that is off by default (2026-11-04, 1202 task 12); the default flip is todo 4501. Measured 2026-11-06 with no DevTools client attached, it costs Electron main less than the relay on every load measured; the 2026-11-05 figures that said otherwise came from Playwright's DevTools session (to-do 5760, closed; figures in 4501 task 2). See the closing check of E26 below. |
 | DK-2 | Partly done | Two serialisations per invoke on the gateway transport, behind the same off-by-default setting (2026-11-04, 1202 task 12); see the closing check of E26 below. |
 | DK-3 | Done | `file-stamps.ts:34` (da0f720fa). |
 | DK-4 | Done | Idle timeout and `Range:` resume, `download.ts:8-14` (da0f720fa). |
@@ -428,12 +418,12 @@ The outcome of every task in the E26 batch file, checked back against the code o
 
 | Part | Task | Outcome | Code, evidence or to-do |
 | --- | --- | --- | --- |
-| 0400 | 1. Capture the baseline | Done | `local-gateway-transport-electron.spec.ts` samples Electron main's `process.cpuUsage()` and the renderers' CPU (`sampleCpu`, `cpuWindow`, `measureInTerminal`) while idle, during the 300-line load, a 200,000-line (1.29 MB) burst, and both again with two windows; event, byte and command counts as before. Three runs per mode: one-window load 262–342 ms on the relay, 289–330 ms direct; two-window burst 39–67 ms relay, 113–131 ms direct. The direct transport does not lower main's CPU; finding why, and whether 4501's flip waits, moved to [5760](../../todo/cross-cutting/5760-local-transport-main-cpu.md). Two windows were measured, as recommended. |
+| 0400 | 1. Capture the baseline | Done | `local-gateway-transport-electron.spec.ts` samples Electron main's `process.cpuUsage()` and the renderers' CPU (`sampleCpu`, `cpuWindow`, `measureInTerminal`) while idle, during the 300-line load, a 200,000-line (1.29 MB) burst, and both again with two windows; event, byte and command counts as before. Three runs per mode: one-window load 262–342 ms on the relay, 289–330 ms direct; two-window burst 39–67 ms relay, 113–131 ms direct. Those figures said the direct transport does not lower main's CPU. To-do 5760 (closed 2026-11-06) traced the extra time to DevTools forwarding for Playwright's page sessions and the development DevTools windows. `local-gateway-transport-cpu-electron.spec.ts` measures with no DevTools client attached, and there the two-window burst costs main 4–7 ms direct against 46–54 ms on the relay; figures in [4501](../../todo/cross-cutting/4501-local-window-transport-default.md) task 2. Two windows were measured, as recommended. |
 | 0400 | 2. Filtered event stream for local windows | Done (before this batch) | Built 2026-11-04 behind `global.localWindowGatewayTransport` (1202 task 12). Re-checked: main asks for `excludeEvents=terminal-output-` when no window takes the relay (`backend-process.ts:708-710`); #1783 renamed the local window's option to `terminalEventSource` (`web-gateway.ts:157`) and shares one terminal stream. Tests: `web-gateway-local-desktop.test.ts`, the spec's gateway run. The default flip stays in [4501](../../todo/cross-cutting/4501-local-window-transport-default.md). |
 | 0400 | 3. Local `invoke` off the main-process hop | Done (before this batch) | Built with task 2. The spec's gateway run counts 0 commands through main and 76–78 from the page; terminal input ordering moved with it (`TerminalInputSequencer`, `web-gateway.ts:1372`; `web-gateway-local-desktop.test.ts` "local desktop gateway terminal input contract"). |
 | 0400 | Decision: rollback switch scope | Done (before this batch) | Read per window at creation (`main.ts:920-923`); the spec's relay run shows an open window keeping its transport while a new one takes the other. |
 | 0400 | Constraint: reconnect triggers exact snapshot recovery | Holds | `TERMINAL_EVENT_STREAM_CONNECTED_EVENT` on every connect (`backend-process.ts:725-727`); the spec drops every stream and sees a desync and recovery. |
-| 0400 | Needs verification: real main-process cost | Done; follow-up moved to a to-do | Measured as in task 1. The result contradicts the reasoned impact; [5760](../../todo/cross-cutting/5760-local-transport-main-cpu.md). |
+| 0400 | Needs verification: real main-process cost | Done | Measured as in task 1. The first result contradicted the reasoned impact, but it came from the harness: with no DevTools client attached, main's CPU is lower on the direct transport on every load measured (to-do 5760, closed 2026-11-06; figures in [4501](../../todo/cross-cutting/4501-local-window-transport-default.md) task 2). |
 | 0400 | Needs verification: local desktop traffic never compresses | Holds | The window's direct transport reaches `ready.url`, the control listener, and `compressionModeForListener` returns `off` there (`gateway-support-core.ts:540-545`), now tested: `gateway-support-extra.test.ts:76`. |
 | 0860 | 1. Batch file appends | Done (before this batch) | DK-18, `application-logging.ts` (1202 task 16). |
 | 0860 | 2. Bound relay line length | Done | Recommended option: one shared splitter, `packages/protocol/src/node/bounded-line-splitter.ts` (`createBoundedLineSplitter`, `forEachBoundedLine`), now used by the desktop relay (`backend-process.ts`, in place of `readline`) and the bridge hop (`createBridgeOutputForwarder`). Lines end at `\n`, `\r\n` and a lone `\r`, as in Node's `readline`; U+2028/9 do not end a line, as in Node's (Bun's differs); UTF-8 decodes across chunks; a line over 64 KiB is passed on in 64 KiB pieces, never between a surrogate pair. Tests: `bounded-line-splitter.test.ts` (9 cases, including a comparison with `readline`), `backend-process.test.ts` "relays a backend line with no newline in bounded pieces, losing none of it", `bridge-output-redaction.test.ts`. |
@@ -569,18 +559,18 @@ The outcome of every task in the E9 batch file, checked back against the code on
 
 ## Closing check of E11 (Projection hashing)
 
-Built on 2026-11-05 on branch `projection-hashing-fa7e6cc85e60-r1`, based on `main` at `39c26627f`, and checked item by item against the batch file before it was deleted. The full outcome table, naming the code and test for every item, ends the file's last version, in the commit before its deletion (`5c7967550` on that branch). Every finding still held on the base. What needs a profile or live evidence is [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md); nothing else was left over.
+Built on 2026-11-05 on branch `projection-hashing-fa7e6cc85e60-r1`, based on `main` at `39c26627f`, and checked item by item against the batch file before it was deleted. The full outcome table, naming the code and test for every item, ends the file's last version, in the commit before its deletion (`5c7967550` on that branch). Every finding still held on the base. What needed a profile or live evidence went to [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md); nothing else was left over. 6260's profile and measurements are [below](#measurement-of-e11-to-do-6260); only its task 3 (live evidence for 0320) is still open.
 
 | Part | Finding | Outcome |
 | --- | --- | --- |
-| `0210` | TX-3: the legacy commit re-serialises the whole projection to fingerprint it | Done: `digestWithMessages` through the row memo. The saving is 6260 task 2. |
+| `0210` | TX-3: the legacy commit re-serialises the whole projection to fingerprint it | Done: `digestWithMessages` through the row memo. Measured by 6260 task 2: 39% slower than before E11, so it now hashes row fingerprints, 25% faster than before E11. |
 | `0220` | TX-9, TX-13: memoise row fingerprints and hash them for the view token | Done, recommended option. Tokens change once at upgrade, costing each client one snapshot; that is not a compatibility path, so it has no register entry. The saving is 6260 task 2. |
 | `0320` | TX-7: head-row recovery re-reads the raw transcript on each streaming revision | Done: at most one recovery read a second per view, at once for a quiet view, with a fixed deadline so a cached summary is never starved. How often a trimmed head streams is 6260 task 3. |
 | `0330` | TX-11: patch building re-serialises and hashes whole rows | Done, recommended option: the digest is byte-identical and the patch version unchanged. The saving is 6260 task 2. |
 | `0340` | TX-12: already-encoded rows are stringified again on the way out | Done: transcript results are marked in a `WeakSet` and spliced by the gateway; other callers get the same plain object; `revisedMessages` are measured through the memo. |
 | `0345` | TX-14: restart-preview checkpoints are serialised three times and cloned | Done, recommended options: one payload for size and row, checksum unchanged, and frozen tails after checking both production callers of `get`. |
 | `0350` | TX-16: inline tool bodies are re-hashed whenever their row misses the cache | Done, recommended option, bounded at 4,096 entries and 32 MiB; a hit still registers. The saving is 6260 task 2. |
-| `0380` | TX-17: small linear scans in the transcript projection | Left as recommended until a profile shows them; no profile was taken: 6260 task 1. |
+| `0380` | TX-17: small linear scans in the transcript projection | Left as recommended until a profile shows them. Profiled by 6260 task 1: under 0.1% of a changed read each, closed without a change. |
 
 The detailed outcome is retained here so it survives squash merges (line numbers as built; test files are under `apps/backend/src/core/` unless named otherwise):
 
@@ -619,6 +609,58 @@ The detailed outcome is retained here so it survives squash merges (line numbers
 | 0350 | Needs verification: cost on a streaming row | Moved to a to-do | 6260 task 2. |
 | 0380 | Task 1: decide whether the scans matter | Moved to a to-do | No profile was taken, so the scans were left as the report recommends. 6260 task 1. |
 | 0380 | Needs verification: their share of a read | Moved to a to-do | 6260 task 1. |
+
+### Measurement of E11 (to-do 6260)
+
+Measured on 2026-11-05 for [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md) tasks 1 and 2. No provider turn was billed; everything ran against a provider fake.
+
+**Method.** `bun scripts/benchmark-transcript-changed-read.ts --samples=1000 --warmup=100` builds a `NativeAgentService` on a temporary data directory with an in-process provider fake. The fake returns freshly built rows on every read, as a parsed bridge response would, and its strings are cached so its own cost stays out of the figures. Each sample advances the fake by one streamed revision, then makes one changed read:
+
+- a progressive read: `getTranscriptUpdate` with the token the view holds and part patches (`patchVersion: 2`), encoded as the gateway writes it (spliced where `spliceEncodedJson` exists, `JSON.stringify` otherwise);
+- or, for `legacy`, a `getProjection` read encoded with `JSON.stringify`, since that command is not spliced.
+
+CPU is `process.cpuUsage` over 1,000 reads after 100 warm-up reads, divided by the reads. It includes Bun's collector threads. A separate instrumented pass of 20 reads counts the characters `JSON.stringify` produced and the characters fed to SHA-256. Bun exposes no cumulative allocation counter, so these counts stand in for allocations. They are exact and repeat run to run.
+
+Three trees ran interleaved, five rounds each, on an Apple M5 Pro with Bun 1.4.4:
+
+- **Before**: `39c26627f`, with the script copied in.
+- **E11**: `main` at `e6c3da899` with `fbb6c7560`'s encoding module, which is E11 as merged.
+- **Now**: `main` with this change's `digestWithMessages`.
+
+Figures are medians of the five rounds. On the three progressive shapes, E11 and Now run identical code. Their difference, up to 13%, is this host's run-to-run noise.
+
+| Shape | Window | Tree | CPU µs/read | Wall p50 ms | Stringified chars/read | Hashed chars/read |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `tool-parts`: 20 rows; the streaming tail row has 60 inline tool parts with 4 KiB outputs (0350's case) | 46,166-byte snapshot; 2,041-byte delta | Before | 762 | 0.469 | 291,657 | 297,298 |
+| | | E11 | 357 | 0.152 | 29,541 | 13,809 |
+| | | Now | 399 | 0.178 | 29,541 | 13,809 |
+| `revised`: 100 rows of about 1 KiB plus 20 `revisedMessages`, one changing its tool state each read (0340's case) | 242,201-byte snapshot; 3,173-byte delta | Before | 448 | 0.275 | 75,188 | 244,722 |
+| | | E11 | 279 | 0.144 | 7,338 | 5,887 |
+| | | Now | 316 | 0.164 | 7,338 | 5,887 |
+| `near-full`: 100 rows of about 4 KiB, near the 512 KiB target, last row streaming | 422,901-byte snapshot; 4,825-byte delta | Before | 435 | 0.323 | 24,866 | 423,217 |
+| | | E11 | 214 | 0.126 | 18,608 | 7,073 |
+| | | Now | 224 | 0.128 | 18,608 | 7,073 |
+| `legacy`: `getProjection` over the `near-full` rows (0210's case) | 431,511-byte response | Before | 373 | 0.233 | 867,365 | 124 |
+| | | E11 | 517 | 0.383 | 445,057 | 432,087 |
+| | | Now | 281 | 0.189 | 445,057 | 15,943 |
+
+Every progressive sample answered `delta`, and every `legacy` sample a new revision. Delta and response sizes are the same on all three trees. No sample started a recovery read.
+
+**What E11 saved.** On a changed progressive read E11 cut CPU by 53% (`tool-parts`), 38% (`revised`) and 51% (`near-full`). It cut median wall time by 48–68%, and the characters hashed by 95–98%. The benchmark measures E11's parts together; it does not separate 0220, 0330, 0340 and 0350 from one another.
+
+E11's legacy commit (0210) was 39% slower than before. It no longer kept the window's JSON, but it hashed every row's JSON (432,087 characters) instead of comparing one string. `digestWithMessages` now hashes each row's memoised fingerprint, as the view token does, which makes the legacy read 25% faster than before E11. The remaining 445,057 characters are almost all the gateway's response; splicing it is [6860](../../todo/transcripts-and-observation/6860-splice-legacy-projection-response.md). The sync-v1 token, the function's other caller, changes value once at upgrade, as the view token did under 0220.
+
+**The scans (task 1).** `bun --cpu-prof-md --cpu-prof-interval=50` profiled 5,000 changed reads of each progressive shape on `main`. The table is the self time sampled on each scan's lines, per read.
+
+| Shape | CPU µs/read while profiled | `firstUserMessageIndex` | `displayedHead` | `recoveredHead` |
+| --- | ---: | ---: | ---: | ---: |
+| `tool-parts` | 453 | 0.067 µs (0.015%) | 0.216 µs (0.05%) | not reached |
+| `revised` | 359 | 0.059 µs (0.016%) | 0.274 µs (0.08%) | not reached |
+| `near-full` | 240 | 0.030 µs (0.013%) | 0.174 µs (0.07%) | not reached |
+
+`recoveredHead` runs only on a recovery read, which none of these reads was. That read is a whole provider `messages` read, so a pass over its 100 rows is negligible beside it. As an upper bound, `bun scripts/benchmark-transcript-changed-read.ts --samples=1000 --warmup=100 --scan-bound` times each predicate over 100 rows with no match: 0.27–0.42 µs for `firstUserMessageIndex` and 0.67–0.96 µs for a head lookup, over nine runs on `main`. Each is under 0.6% of the cheapest changed read measured (186 µs). None of the three is a meaningful share, so all three stay as they are.
+
+The profile found one serialisation that neither E11 nor 0380 covers. `progressivePreviewFillsWindow` stringifies the provider's raw window on each changed read of an incomplete window under 100 rows. None of the benchmark's shapes reaches it, so it is unmeasured: [6861](../../todo/transcripts-and-observation/6861-raw-preview-window-serialisation.md).
 
 ## Closing check of E24 (Gateway static and preview)
 
@@ -682,6 +724,32 @@ Checked back on 2026-11-05 on branch `renderer-store-report-cf7c05d19868-r1`, ba
 | 0640 reverted (2 runs) | 0 | 170 | 5.41 to 5.77 ms | 11.2 to 13.5 ms |
 
 Store writes were 0 idle and 160 per window streaming (both tabs) in every variant. Neither revert changes the commit count, and the per-commit differences are within noise. A Bun micro-benchmark of `setProjection` with 128 sessions held: 8.86 to 9.34 µs per write before 0640, 3.97 to 4.17 µs after. For 0510, 1202 task 3 already measured the merge at at most 0.3 ms per update before the fix and 0.03 to 0.06 ms after. Production React and a real bridge's cadence were not measured. The question was whether the work shows in a profile, and at this scale it does not.
+
+## Closing check of E10 (Conditional reads and deltas)
+
+Checked back on 2026-11-05 and 2026-11-06 on branch `conditional-reads-deltas-afdcaba484ae-r1`, based on `main` at `cbe0f9a5b`, item by item against the batch file before it was deleted; its last version, with every task's status and an outcome section, is the parent of the commit that deletes it (the branch's last commit). Every finding still held on the base, at the functions named below rather than the report's line numbers. This also ends batch E1 (Baseline run): 0150's baseline was taken in E9, and 0160's, 0180's and 0190's here. Nothing was built: on the real stack the bridge spends about 1 ms on a transcript read and under 0.25 ms on a state read, and the changes would save part of that. What is left is [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md).
+
+**Round 2 measurement correction (2026-11-06).** The original bridge totals below used flush boundaries wider than the renderer windows and are historical only. The aligned rerun on isolated, credential-free `e10-window-repair` passed (136.5 s), then the profile was stopped and reset. In matching 20.001 s windows it measured 39 bridge state/transcript reads with one viewer and 80 with two, alongside 39 renderer deltas and 40 per viewer respectively. State repeated on 35/39 and 76/80 reads; bridge state time averaged 0.29/0.13 ms, transcript time 0.84/0.78 ms. Estimated delta bytes were 308,411 versus 1,502,959 snapshot bytes and 565,503 versus 8,424,022; health probes were 78/160. Idle (30.002 s): 3 state/transcript reads and 3 unchanged renderer answers. These supersede the earlier exact-count/rate claims without changing the deferrals. Full aligned table and method: [6680 task 1](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md#1-take-the-e10-baseline-on-a-real-stack).
+
+**Baseline on a `dev:test` profile.** Taken on 2026-11-06 on the isolated profile `e10-baseline` (`mise run dev:test --profile e10-baseline --fixture --headless-electron --no-agent-credentials --agent-platforms claude,pi`), with no host login and no billed turn. The opt-in spec `e2e/agent-testing/conditional-reads-live.spec.ts` (`ORKESTRATOR_AGENT_TEST_E10_BASELINE=1`) writes `env` into the profile's own Claude settings (its isolated `CLAUDE_CONFIG_DIR`) so the profile's real Claude CLI talks to a loopback Anthropic endpoint, `conditional-reads-fake-model.ts`. That endpoint streams a scripted turn: 120 characters every 100 ms, a `Glob` tool call every 5 s, 18 model responses in all. The spec also puts a `bun` wrapper in the profile's own toolchain directory, which loads `conditional-reads-bridge-counter.ts` into the bridge it starts. The counter records requests, bytes and handler time per route, whether a state body repeated, and what a delta would have carried. Everything else is the real stack: the browser renderer, gateway, backend, Claude bridge and CLI. The spec removes both files afterwards. It measured 20 s with one visible viewer and 20 s with a second browser page on the same tab, both while the turn streamed, then 30 s once it was idle. With one viewer, the two runs' counts matched exactly and their bytes were within 2%. With two viewers the counts differed by one or two requests, and the bytes differed more because the window grew during the run. Output was counts, bytes and milliseconds only, in the git-ignored `output/agent-testing/e10-baseline/`. Codex, Pi, a lagging viewer and large windows were measured only with the fake bridge (`apps/backend/scripts/conditional-reads-baseline.ts`, an in-process fake through `fetchImpl`, also with no billed turn). Its figures and the reasons they were not repeated on the profile are in 6680 task 1. Corrected fake timings vary with host load and are not an upper bound.
+
+| Part | Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0160 | 1. Capture the baseline | Done on the profile (Claude); lagging viewer with the fake only | Profile: the renderer polled twice a second, and every transcript answer while the turn streamed was a delta: 40 of 40 for one viewer, and 40 of 40 for each of two viewers. Each viewer received 135–144 KB in 20 s, with a round-trip p50 of 11–15 ms. Idle: one poll every 10 s, 3 of 3 `unchanged`. Fake, ring disabled (before TX-1): 46 of 47 snapshots, 1.86–6.63 MB per viewer in 10 s. 6680 task 1. |
+| 0160 | 2. Keep a small ring of recent views per key | Already done (2026-11-04) | `TranscriptDeltaBases` (`native-agent-transcript-delta-bases.ts`), 8 bases, 2 MiB per key and 32 MiB in total; used by the cached answer and after the read (`transcriptDeltaForReader`). Both baselines confirm it. |
+| 0160 | Decision: early cached answer also uses the ring | Already done, recommended option | The cached branch of `getTranscriptUpdate` calls `transcriptDeltaForReader` before answering. |
+| 0160 | Constraint: a base from another epoch or provider session never produces a delta | Holds | `transcriptDeltaForReader` refuses a base from another provider session or history epoch, and `sameHistory` (`native-agent-transcript-delta-bases.ts`) empties the ring when the history changes; test "a rewound or replaced session drops its bases with its view" in `native-agent-transcript-delta-bases.test.ts`. |
+| 0160 | Needs verification: how often clients lag or share a session | Partly answered | Two viewers on one session each got deltas on every read. How often real users lag needs usage data, which no profile has; 6680 task 1. |
+| 0180 | 1. Capture the baseline | Done on the profile (Claude); Codex and Pi with the fake only | Profile: 5 bridge requests per state poll (`GET /session/:id`, `/questions`, `/plan-approvals`, `/interactions`, `/steer/dispatch`), 42 polls in 20 s per viewer. Claude's state body (about 1.05 KB streaming, 2.1 KB idle) repeated on 37 of 42 streaming polls with one viewer, 79 of 84 with two, and 3 of 3 idle; the bridge answered it in 0.15–0.22 ms on average. The fake had predicted no repeats while streaming. 6680 task 1. |
+| 0180 | 2. Bridge state revision as `knownToken` | Not done: measured, not worth building | On the profile a revision could have answered `unchanged` on 88–100% of polls, but it would save about 1 KB and under 0.25 ms of bridge time per poll. The round trip would stay, and so would the four other requests. 6680 task 2. |
+| 0180 | 3. Composer catalogue keyed by a revision | Not done: measured, not worth building | Fake: the token hash is 3–14 µs with up to 10 models and 141–266 µs with 300 models, against 27–35 µs with the models removed. That is under 0.3 ms, and the profile's whole state round trip had a p50 of 11–15 ms. The larger cost is Pi's `/status` re-sending a 130 KB composer, and a backend revision would not remove it. A credential-free profile cannot reproduce a real Pi catalogue. 6680 tasks 1 and 3. |
+| 0180 | Constraint: "unchanged" must still reach interaction and queue reads | Not triggered | Nothing built. |
+| 0190 | 1. Capture the baseline | Done on the profile (Claude); 517 KB windows with the fake only | Profile: each viewer poll made one bridge transcript read, 42 in 20 s for one viewer and 84 for two. With one viewer, all 42 reads were snapshots, averaging 38–39 KB decoded and 1.25 KB gzipped on the wire. With two viewers, 43–74 were snapshots averaging 113–114 KB decoded, and the rest were `unchanged`. The fake's filler text gzips far better than real text. Bridge handler time averaged 1.0–1.07 ms per read, gzip included. A delta would have carried 7.5–8.2 KB per snapshot, 5–15 times less decoded. 6680 task 1. |
+| 0190 | 2. A v2 `delta` answer from bridges | Not done: measured, not worth building yet | On loopback a whole read costs the bridge about 1 ms and stays on the machine. A delta would need a new wire form in five bridges, a ring per session and a backend copy of each raw window. The backend's parse of a whole window was not isolated on the profile. A turn whose window nears the 512 KiB bound, or many streaming sessions at once, could change the answer. 6680 task 4. |
+| 0190 | Constraint: `revisedMessages`, missed events, ring bounds | Not triggered | Nothing built; kept as constraints in 6680. |
+| All | Found while measuring: the steer probe on every state poll | Moved to a to-do | One of the five state-poll requests is `steer/dispatch?requestId=orkestrator-steer-qualification`, once a poll on the profile too. 6680 task 5. |
+| All | Found on the profile: two bridge health probes per poll | Moved to a to-do | `GET /global/health` ran 84 times in 20 s for 42 polls (168 for 84). 6680 task 6. |
+| All | Report invariants | Held | No production cache, ring, queue or wire form added. The spec, the fake endpoint and the counter are test-only and opt-in. The counter bounds routes (256), sessions (64) and captured bodies (4 MiB). Both tools report counts, bytes and milliseconds only, to git-ignored output. |
 
 ## Closing note for 0693 (DK-10, second Claude binary)
 

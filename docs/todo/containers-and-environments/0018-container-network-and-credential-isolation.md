@@ -9,11 +9,12 @@ against `688f9f69` (2026-10-21); default allowlists and the external egress
 prototype against `b83ae534` (2026-10-22); the production egress gateway and
 the credential-delivery items against branch
 `todo-0018-container-isolation-e228f2a04b8e` (2026-10-25); tasks 3 and 9
-against `main` at `931e5541` (2026-10-31).
+against `main` at `931e5541` (2026-10-31); task 1 against `main` at
+`e6c3da899` (2026-11-06).
 
 ### Tasks
 
-1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; ticking it waits for the decision below).
+1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; amd64 run on a self-managed host 2026-11-06, see the result below; arm64 stays open on CI evidence alone, pending the decision below).
 2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done (tamper, gateway restart and default-loopback checks passed 2026-11-04; rootless daemon restart remains open).
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
 4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
@@ -53,6 +54,33 @@ In run 40409285999 the x64 network suite passed again. The only failure there wa
   - **Hold this task until the whole workflow is green.**
     - Pros: one clean run to cite.
     - Cons: ties network qualification to unrelated migration fixtures.
+
+**Result (2026-11-06, self-managed rootful amd64).** The "manual run on a
+self-managed Linux host" option, run together with
+[6101](6101-egress-name-checks-platform-coverage.md) task 1 on beelink (Arch
+Linux, kernel 7.1.8, x86_64) with an image built from `main` at
+`e6c3da899` (`egress-gateway=1`, `egress-filter=1`, `network-policy=3`). The
+host daemon (Engine 29.9.2) has no free address pool (the leaked probe
+networks of [0241](0241-leaked-reach-probe-networks.md)), so the suites ran on
+a disposable rootful `docker:29-dind` (Engine 29.9.3) on the same kernel:
+- egress name checks: 5/5;
+- egress conditions (IPv6, DNS rotation, two daemon restarts): 3/3;
+- firewall policy 3 tuples: 1/1;
+- network: C24 and C26 passed;
+- readiness: 8/9, including "a gateway that cannot apply its firewall refuses
+  the start" and C23's DNS-loss re-run.
+
+C22, in both suites, needs the outer host as the service host and cannot pass
+under a nested daemon; CI passes it. C23 was not run, because it reaches
+`example.com`, which is off the default allowlist. A restricted and a full
+runtime were also created on the host daemon itself, with pre-created
+networks. The gateway enforced and failed closed there, and full mode had no
+gateway. Two live test defects that only an `egress-filter=1` image exposes
+were fixed (a bare-word first TCP write, and `node` off the gateway's root
+PATH). They made CI run 42128741746 red on both architectures. Details are in
+[container qualification](../../development/container-qualification.md#egress-name-checks-on-rootful-linux-engine-2026-11-06).
+That run's arm64 job (Engine 28.0.4) passed M12, network 4/4 and readiness
+9/9. arm64 was not run on a self-managed host.
 
 ### 2. Gateway on rootless
 
@@ -609,7 +637,10 @@ and renewal delivery with real, fresh provider logins.
      and stays off (see "Assumptions and decisions").
    - [ ] Qualify on Linux Engine and rootless. Sibling isolation passed on
      Docker Desktop (2026-10-25); IPv6, a daemon restart and DNS rotation
-     passed on a disposable Linux Engine (2026-10-31). See Qualification.
+     passed on a disposable Linux Engine (2026-10-31); the gateway suites
+     and name checks passed on a self-managed rootful amd64 host
+     (2026-11-06). arm64 off CI and the rootless daemon restart remain.
+     See Qualification.
    A plain HTTP proxy was not pursued: it does not constrain direct sockets
    without network enforcement beside it.
 2. [x] Change the network mode in place. Decided 2026-10-25 not to build it:
@@ -684,7 +715,8 @@ and renewal delivery with real, fresh provider logins.
   restricted runtimes on a current image). Still owed: a rootless daemon
   restart with runtimes (task 2; the 2026-11-04 live gateway checks are
   recorded above), and the decision whether the CI runs below count as the rootful
-  pass (task 1). On a rootless host run the live suites against an image
+  pass (task 1), which since 2026-11-06 matters for arm64 only: amd64 also
+  has a self-managed run. On a rootless host run the live suites against an image
   built there. The `ORKESTRATOR_EGRESS=in-container` fallback was removed on
   2026-11-04, before these were recorded (task 4), so a gateway failure on a
   host now needs a release.
@@ -700,6 +732,14 @@ and renewal delivery with real, fresh provider logins.
     and 40799843615 (2026-10-29) passed too. Run 40409285999 (`e53ea683`)
     failed only C14 legacy migration in the replacement suite. The weekly
     run 40304582303 (`main`, 2026-10-26) failed in the lifecycle step.
+  - Self-managed rootful amd64 (beelink, 2026-11-06): the egress name-check,
+    conditions, tuple, network and readiness suites on a disposable
+    Engine 29.9.3, the five name-check cases on the host's Engine 29.9.2;
+    see task 1's result and
+    [container qualification](../../development/container-qualification.md#egress-name-checks-on-rootful-linux-engine-2026-11-06).
+    CI run 42128741746 (2026-11-05, Engine 28.0.4) passed M12, network and
+    readiness on both runners; its firewall and conditions failures were
+    the test defects fixed that day.
   - IPv6, daemon restart and DNS rotation, on a disposable Linux Engine
     29.9.2 (2026-10-31): see task 3's result and
     [container qualification](../../development/container-qualification.md#egress-gateway-conditions-on-linux-engine-2026-10-31).
@@ -938,6 +978,19 @@ and renewal delivery with real, fresh provider logins.
   in-container firewall keep the documented behaviour until they are rebuilt.
 
 ## Assumptions and decisions
+
+### Task 1: the self-managed amd64 run used a disposable daemon
+
+Chosen on 2026-11-06: run the gateway suites on a labelled, privileged
+`docker:29-dind` on beelink, because the host daemon's pools were full and the
+run could neither remove other owners' networks nor reconfigure Docker. On
+the host daemon itself, only the five name-check cases ran, with environment
+networks pre-created on explicit subnets. The nested daemon gives real
+rootful kernel firewall and gateway behaviour. It cannot qualify C22's host
+reply, whose "host" there is the dind container. Task 1 stays partly done for
+arm64; the CI-evidence decision above now applies to arm64 only. The full
+reasoning is in [6101](6101-egress-name-checks-platform-coverage.md)'s
+"Assumptions and decisions".
 
 ### Tasks 2 and 4: review qualification on a disposable rootless daemon
 

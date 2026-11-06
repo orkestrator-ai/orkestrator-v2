@@ -121,15 +121,18 @@ in memory for that context, because routing turns Chromium's HTTP cache off and
 refetching every module on each reload made reloaded pages miss their
 assertions on a loaded host. Navigations, commands and event streams still go
 through Chromium; a `goto` or `reload` that Chromium aborted with
-`net::ERR_NETWORK_CHANGED` is tried again, up to three times. A spec that opens a
-second context calls `fetchModulesOutsideChromium(context)` on it.
+`net::ERR_NETWORK_CHANGED` gets up to three attempts in all (two retries). A
+one-shot login navigation mints a fresh link after a network abort. A spec that
+opens a second context calls `fetchModulesOutsideChromium(context)` on it.
 `client-outage.spec.ts` keeps Chromium's own path for module loads, because the
 browser's network path through outages is what it tests. In
 `browser-gateway.spec.ts` one case, "the gateway serves the renderer's modules
 to Chromium's own network stack", sets `modulesThroughChromium` and loads the
 app through Chromium, loading again when its modules were lost only to network
-changes; under very heavy churn all four of its loads can still lose, and its
-error then says so. `browser-test.test.ts` fails when a new spec in
+changes, up to four loads in all. Its explicit timeout covers setup, all four
+loads (including navigation retries), and final classification. Under very heavy
+churn all four loads can still lose, and its error then says so.
+`browser-test.test.ts` fails when a new spec in
 `playwright.browser.config.ts` uses neither, creates a context it does not
 route, or another case opts out.
 

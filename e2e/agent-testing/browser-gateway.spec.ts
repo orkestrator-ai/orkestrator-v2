@@ -5,8 +5,10 @@ import {
 } from "@orkestrator/protocol/review-workflow";
 import { createHash } from "node:crypto";
 import {
-  NETWORK_CHANGED,
-  directLoadOutcome,
+  DIRECT_LOAD_TIMEOUT_MS,
+  DIRECT_LOAD_WAIT_MS,
+  DIRECT_LOAD_NAVIGATION_MS,
+  runDirectLoads,
   expect,
   isModuleLoad,
   moduleStatusFailure,
@@ -577,6 +579,7 @@ test.describe(() => {
   test("the gateway serves the renderer's modules to Chromium's own network stack", async ({
     page,
   }) => {
+    test.setTimeout(DIRECT_LOAD_TIMEOUT_MS);
     // Navigations are not what this case checks; retry them as every other case does.
     retryNavigationsOnNetworkChange(page);
     const status = await profileStatus();
@@ -586,10 +589,9 @@ test.describe(() => {
       (project) => project.localPath === status.testProject,
     );
     expect(fixture).toBeTruthy();
-    const attempts = 4;
-    for (let attempt = 1; ; attempt += 1) {
+    await runDirectLoads(async () => {
       // Start from a blank page, so no load from the previous attempt is counted.
-      await page.goto("about:blank");
+      await page.goto("about:blank", { timeout: DIRECT_LOAD_NAVIGATION_MS });
       const failures: string[] = [];
       const onFailed = (request: PageRequest) => {
         if (isModuleLoad(request)) failures.push(request.failure()?.errorText ?? "failed");
@@ -602,29 +604,19 @@ test.describe(() => {
       };
       page.on("requestfailed", onFailed);
       page.on("response", onResponse);
-      await page.goto(status.browserUrl!);
+      await page.goto(status.browserUrl!, { timeout: DIRECT_LOAD_NAVIGATION_MS });
       const rendered = page.getByText(fixture!.name, { exact: false }).first();
       const unreachable = page.getByRole("heading", { name: "Orkestrator couldn’t connect" });
       // A page that lost its entry modules shows neither, so wait without failing
       // and let the outcome decide.
       await expect(rendered.or(unreachable))
-        .toBeVisible({ timeout: 30_000 })
+        .toBeVisible({ timeout: DIRECT_LOAD_WAIT_MS })
         .catch(() => undefined);
-      const outcome = directLoadOutcome(failures, await rendered.isVisible());
+      const visible = await rendered.isVisible();
       page.off("requestfailed", onFailed);
       page.off("response", onResponse);
-      if (outcome === "loaded") break;
-      expect(
-        outcome,
-        failures.length > 0
-          ? `module loads failed: ${[...new Set(failures)].join(", ")}`
-          : "the renderer did not load, and no module load failed",
-      ).toBe("network-changed");
-      if (attempt === attempts)
-        throw new Error(
-          `All ${attempts} loads lost module requests to ${NETWORK_CHANGED}: host network interfaces kept changing (flake 2340)`,
-        );
-    }
+      return { failures, rendered: visible };
+    });
   });
 });
 

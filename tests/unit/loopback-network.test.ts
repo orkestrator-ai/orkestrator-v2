@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   HOST_NETWORK_ENV,
@@ -88,4 +88,64 @@ describe("the loopback-network script", () => {
       expect(addresses.join("\n")).toContain("127.0.0.1");
     },
   );
+});
+
+describe("loopback wrapper failure and signal paths", () => {
+  test("reports spawn failure as exit 127", () => {
+    const result = spawnSync("bun", [script, "--", "/nonexistent-orkestrator-test-command"], {
+      encoding: "utf8",
+      env: { ...process.env, [HOST_NETWORK_ENV]: "1" },
+    });
+    expect(result.status).toBe(127);
+    expect(result.stderr).toContain("[loopback-network]");
+  });
+
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    test.skipIf(process.platform === "win32")(
+      `forwards and re-raises ${signal}`,
+      async () => {
+        // This child is created by this test; readiness proves the forwarding handlers are installed.
+        const wrapper = spawn(
+          "bun",
+          [
+            script,
+            "--",
+            process.execPath,
+            "-e",
+            `process.on("${signal}", () => { console.log("forwarded"); process.removeAllListeners("${signal}"); process.kill(process.pid, "${signal}"); }); console.log("ready"); setInterval(() => {}, 1000);`,
+          ],
+          {
+            env: { ...process.env, [HOST_NETWORK_ENV]: "1" },
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+        let output = "";
+        const exited = new Promise<{ code: number | null; signal: string | null }>(
+          (resolve, reject) => {
+            wrapper.on("error", reject);
+            wrapper.on("exit", (code, signal) => resolve({ code, signal }));
+          },
+        );
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error("child did not become ready")), 3000);
+            wrapper.stdout!.on("data", (chunk) => {
+              output += chunk.toString();
+              if (output.includes("ready")) {
+                clearTimeout(timer);
+                resolve();
+              }
+            });
+          });
+          wrapper.kill(signal);
+          const result = await exited;
+          expect(output).toContain("forwarded");
+          expect(result).toEqual({ code: null, signal });
+        } finally {
+          if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill("SIGTERM");
+        }
+      },
+      5000,
+    );
+  }
 });

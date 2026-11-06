@@ -347,12 +347,13 @@ What changed, so this case no longer explains a failure in these suites:
 
 - `browser-gateway.spec.ts` takes `test` from `browser-test.ts`. Only "the gateway
   serves the renderer's modules to Chromium's own network stack" sets
-  `modulesThroughChromium` and loads through Chromium; it loads again (up to four
-  times) when its modules were lost only to network changes, and under very heavy
-  churn its error names this case.
+  `modulesThroughChromium` and loads through Chromium; it makes up to four
+  loads in all when its modules were lost only to network changes; under very
+  heavy churn its error names this case.
 - Every routed context retries a `goto` or `reload` that Chromium aborted with
-  `net::ERR_NETWORK_CHANGED`, up to three times. Navigations are not routed through
-  `route.fetch()`, because they carry the login redirect and cookie.
+  `net::ERR_NETWORK_CHANGED`, up to three attempts in all (two retries). A spent
+  one-shot login link is renewed before retrying. Navigations are not routed
+  through `route.fetch()`, because they carry the login redirect and cookie.
 - `mise run test:browser` runs both suites in a private user and network namespace
   with only loopback raised; a host that cannot create one runs them on the host
   network and prints why, and `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.

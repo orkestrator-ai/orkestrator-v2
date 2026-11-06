@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseSync, visitorKeys, type Node } from "oxc-parser";
 import {
+  DIRECT_LOAD_TIMEOUT_MS,
+  DIRECT_LOAD_NAVIGATION_MS,
+  DIRECT_LOAD_WAIT_MS,
+  runDirectLoads,
   LOOPBACK_URL,
   ModuleCache,
   NETWORK_CHANGED,
@@ -440,5 +444,74 @@ describe("navigations Chromium aborted for a network change", () => {
     };
     listeners[0]!(page as unknown as Page);
     expect(await page.goto()).toBe("response");
+  });
+});
+
+describe("one-shot login navigation recovery", () => {
+  test("renews a consumed code rather than accepting a replayed 401", async () => {
+    const spent = new Set<string>();
+    const urls: string[] = [];
+    const first = "http://127.0.0.1:1/__orkestrator/agent-test/login?code=first";
+    const second = first.replace("first", "second");
+    const page = {
+      goto: async (url: string) => {
+        urls.push(url);
+        if (spent.has(url)) return { status: 401 };
+        spent.add(url);
+        if (url === first) throw new Error(NETWORK_CHANGED);
+        return { status: 200 };
+      },
+      reload: async () => undefined,
+    };
+    retryNavigationsOnNetworkChange(page as unknown as Page, 3, () => second);
+    expect(await page.goto(first)).toEqual({ status: 200 });
+    expect(urls).toEqual([first, second]);
+  });
+
+  test("does not renew a login on an unrelated error", async () => {
+    const renew = mock(() => "unused");
+    const page = {
+      goto: async () => {
+        throw new Error("refused");
+      },
+      reload: async () => {},
+    };
+    retryNavigationsOnNetworkChange(page as unknown as Page, 3, renew);
+    await expect(
+      (page as unknown as Page).goto("http://127.0.0.1/__orkestrator/agent-test/login?code=one"),
+    ).rejects.toThrow("refused");
+    expect(renew).not.toHaveBeenCalled();
+  });
+});
+
+describe("direct-load orchestration budget", () => {
+  test("four blank churn loads finish with the churn diagnostic inside the case budget", async () => {
+    let elapsed = 120_000;
+    let calls = 0;
+    await expect(
+      runDirectLoads(async () => {
+        calls += 1;
+        // Model both navigations exhausting their retries and the entire blank UI wait.
+        elapsed += 2 * 3 * DIRECT_LOAD_NAVIGATION_MS + DIRECT_LOAD_WAIT_MS;
+        return { failures: [NETWORK_CHANGED], rendered: false };
+      }),
+    ).rejects.toThrow("All 4 loads lost module requests");
+    expect(calls).toBe(4);
+    expect(elapsed).toBeLessThanOrEqual(DIRECT_LOAD_TIMEOUT_MS);
+    const spec = readFileSync(path.join(directory, "browser-gateway.spec.ts"), "utf8");
+    expect(spec).toContain("test.setTimeout(DIRECT_LOAD_TIMEOUT_MS)");
+    expect(spec).toContain("await runDirectLoads(");
+  });
+
+  test("allows the fourth load to succeed and stops real module errors immediately", async () => {
+    let calls = 0;
+    await runDirectLoads(async () => ({
+      failures: ++calls < 4 ? [NETWORK_CHANGED] : [],
+      rendered: calls === 4,
+    }));
+    expect(calls).toBe(4);
+    const load = mock(async () => ({ failures: ["HTTP 500"], rendered: false }));
+    await expect(runDirectLoads(load)).rejects.toThrow("HTTP 500");
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });

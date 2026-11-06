@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { test as base, type BrowserContext, type Page, type Request } from "@playwright/test";
 
 export * from "@playwright/test";
@@ -113,26 +114,83 @@ export function isNetworkChangedNavigation(error: unknown): boolean {
   return error instanceof Error && error.message.includes(NETWORK_CHANGED);
 }
 
-/**
- * Makes a page's `goto` and `reload` try again when Chromium aborted the
- * document itself for a host network change. A navigation cannot go through
- * `route.fetch()` like a module: it carries the login redirect and its cookie.
- * Both methods are GETs the case asked for, so repeating one is what the case
- * meant; any other failure, and the last attempt's, still throws.
- */
-export function retryNavigationsOnNetworkChange(page: Page, attempts = 3): void {
+/** Mint again after an ambiguous login navigation: the original code may be spent. */
+function freshLoginUrl(previousUrl: string): string {
+  const command = spawnSync(
+    "mise",
+    [
+      "run",
+      "dev:login",
+      "--profile",
+      process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa",
+      "--json",
+    ],
+    {
+      cwd: import.meta.dirname + "/../..",
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  if (command.status !== 0) throw new Error("dev:login failed while renewing a login link");
+  const login = JSON.parse(command.stdout) as { loginUrl?: unknown };
+  if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
+  if (new URL(login.loginUrl).origin !== new URL(previousUrl).origin)
+    throw new Error("Renewed login link belongs to a different test profile");
+  return login.loginUrl;
+}
+
+/** Retry network-change aborts; one-shot login GETs need a fresh code each time. */
+export function retryNavigationsOnNetworkChange(
+  page: Page,
+  attempts = 3,
+  renewLoginUrl: (previousUrl: string) => string = freshLoginUrl,
+): void {
   for (const method of ["goto", "reload"] as const) {
     const navigate = page[method].bind(page) as (...args: unknown[]) => Promise<unknown>;
     (page as unknown as Record<string, unknown>)[method] = async (...args: unknown[]) => {
+      const login =
+        method === "goto" &&
+        typeof args[0] === "string" &&
+        URL.canParse(args[0]) &&
+        new URL(args[0]).pathname === "/__orkestrator/agent-test/login";
       for (let attempt = 1; ; attempt += 1) {
         try {
           return await navigate(...args);
         } catch (error) {
           if (attempt >= attempts || !isNetworkChangedNavigation(error)) throw error;
+          if (login) args[0] = renewLoginUrl(args[0] as string);
         }
       }
     };
   }
+}
+
+export const DIRECT_LOAD_ATTEMPTS = 4;
+export const DIRECT_LOAD_WAIT_MS = 30_000;
+export const DIRECT_LOAD_NAVIGATION_MS = 10_000;
+// Two navigations per load, each with three attempts, plus UI wait, setup and
+// 30 seconds of headroom for listener cleanup and final outcome classification.
+export const DIRECT_LOAD_TIMEOUT_MS =
+  150_000 + DIRECT_LOAD_ATTEMPTS * (2 * 3 * DIRECT_LOAD_NAVIGATION_MS + DIRECT_LOAD_WAIT_MS);
+
+/** Keep exhausted churn distinct from real module failures and runner timeouts. */
+export async function runDirectLoads(
+  load: () => Promise<{ failures: string[]; rendered: boolean }>,
+): Promise<void> {
+  for (let attempt = 1; attempt <= DIRECT_LOAD_ATTEMPTS; attempt += 1) {
+    const { failures, rendered } = await load();
+    const outcome = directLoadOutcome(failures, rendered);
+    if (outcome === "loaded") return;
+    if (outcome !== "network-changed")
+      throw new Error(
+        failures.length
+          ? `module loads failed: ${[...new Set(failures)].join(", ")}`
+          : "the renderer did not load, and no module load failed",
+      );
+  }
+  throw new Error(
+    `All ${DIRECT_LOAD_ATTEMPTS} loads lost module requests to ${NETWORK_CHANGED}: host network interfaces kept changing (flake 2340)`,
+  );
 }
 
 /**

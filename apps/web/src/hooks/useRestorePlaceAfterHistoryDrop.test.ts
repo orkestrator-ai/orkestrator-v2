@@ -38,9 +38,13 @@ const replayedPage = [prompt("msg-r-0"), stop("msg-r-1", "call-1"), stop("msg-r-
 
 type Props = { messages: NativeMessage[]; loading: boolean; canLoadEarlier: boolean };
 
-function setup(anchor: SemanticAnchor | null, options: { wantsFollow?: boolean } = {}) {
+function setup(
+  anchor: SemanticAnchor | null,
+  options: { wantsFollow?: boolean; initialMessages?: NativeMessage[] } = {},
+) {
   const listeners = new Set<() => void>();
   const controller: { -readonly [K in keyof ReaderPlaceSource]: ReaderPlaceSource[K] } = {
+    setWaitingForHistory: () => {},
     wantsFollow: options.wantsFollow ?? false,
     readingAnchor: anchor,
     generation: 0,
@@ -74,7 +78,13 @@ function setup(anchor: SemanticAnchor | null, options: { wantsFollow?: boolean }
         loadEarlier,
         scrollToIndex,
       }),
-    { initialProps: { messages: [...live, ...liveTail], loading: false, canLoadEarlier: true } },
+    {
+      initialProps: {
+        messages: options.initialMessages ?? [...live, ...liveTail],
+        loading: false,
+        canLoadEarlier: true,
+      },
+    },
   );
   const notify = () =>
     act(() => {
@@ -99,6 +109,21 @@ const readerOnCall1: SemanticAnchor = {
 };
 
 describe("useRestorePlaceAfterHistoryDrop", () => {
+  test("a remount pages back to a persisted anchor missing from its first live tail", () => {
+    const { hook, loadEarlier, scrollToIndex } = setup(readerOnCall1, {
+      initialMessages: replayedTail,
+    });
+    expect(hook.result.current).toBe(true);
+    expect(loadEarlier).toHaveBeenCalledTimes(1);
+    hook.rerender({
+      messages: [...replayedPage, ...replayedTail],
+      loading: false,
+      canLoadEarlier: false,
+    });
+    expect(hook.result.current).toBe(false);
+    expect(scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
   test("pages the dropped history back and returns the reader to their call", () => {
     const { hook, loadEarlier, scrollToIndex } = setup(readerOnCall1);
 

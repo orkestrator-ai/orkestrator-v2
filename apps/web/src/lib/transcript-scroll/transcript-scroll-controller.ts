@@ -234,6 +234,7 @@ export interface ScrollViewState {
   /** Async readers retire work on every reader input or newer navigation. */
   generation: number;
   hasScroller: boolean;
+  waitingForHistory: boolean;
   /**
    * At the true end, or kept there by following or a latest journey that has
    * reached it (UI affordances: the return-to-latest button). Growth reaches
@@ -262,6 +263,7 @@ export const SCROLL_DIAGNOSTICS_PROPERTY = "orkTranscriptScrollDiagnostics";
 export interface TranscriptScrollControllerOptions {
   initialWantsFollow?: boolean;
   initialActive?: boolean;
+  initialReadingAnchor?: SemanticAnchor | null;
   budget?: OperationBudget;
 }
 
@@ -322,6 +324,7 @@ export class TranscriptScrollController {
   private growthFrame: number | null = null;
   private anchorTimer: ReturnType<typeof setTimeout> | null = null;
   private lastReadingAnchor: SemanticAnchor | null = null;
+  private historyRecoveryPending = false;
   /** The scroller's last laid-out width; 0 until known (or while hidden). */
   private lastWidth = 0;
 
@@ -359,6 +362,7 @@ export class TranscriptScrollController {
       options.initialWantsFollow ?? true,
       options.initialActive ?? true,
     );
+    this.lastReadingAnchor = options.initialReadingAnchor ?? null;
     this.budget = options.budget ?? DEFAULT_OPERATION_BUDGET;
     this.snapshot = this.computeSnapshot();
     this.isAtBottomRef.current = this.snapshot.isAtBottom;
@@ -397,6 +401,17 @@ export class TranscriptScrollController {
 
   get hasScroller(): boolean {
     return this.scroller !== null;
+  }
+
+  get waitingForHistory(): boolean {
+    return this.historyRecoveryPending;
+  }
+
+  /** Semantic recovery owns activation until its missing history is back. */
+  setWaitingForHistory(waiting: boolean): void {
+    if (this.historyRecoveryPending === waiting) return;
+    this.historyRecoveryPending = waiting;
+    this.publish();
   }
 
   get currentOwner(): NavigationOwner | null {
@@ -469,6 +484,7 @@ export class TranscriptScrollController {
     return {
       generation: this.state.generation,
       hasScroller: this.scroller !== null,
+      waitingForHistory: this.historyRecoveryPending,
       // A follower is pinned to the end on every resize delivery, and a
       // latest journey that has reached it is converging there. Between a
       // commit and that pin (a scroll event reading the new height first, or
@@ -490,6 +506,7 @@ export class TranscriptScrollController {
     if (
       next.generation === previous.generation &&
       next.hasScroller === previous.hasScroller &&
+      next.waitingForHistory === previous.waitingForHistory &&
       next.isAtBottom === previous.isAtBottom &&
       next.followAllowed === previous.followAllowed &&
       next.mode === previous.mode &&

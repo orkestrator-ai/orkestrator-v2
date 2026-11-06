@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { NavigationOwner } from "@/lib/transcript-scroll/scroll-intent";
 import type { SemanticAnchor } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -23,6 +30,7 @@ export interface ReaderPlaceSource {
   readonly active: boolean;
   readonly hasScroller: boolean;
   subscribe: (listener: () => void) => () => void;
+  setWaitingForHistory: (waiting: boolean) => void;
   /** The reader's place as of their last settled scroll; null while following. */
   readonly readingAnchor: SemanticAnchor | null;
 }
@@ -103,11 +111,20 @@ export function useRestorePlaceAfterHistoryDrop({
   /** Bumped as each page settles, so the next step runs whatever order React renders in. */
   const [settledPages, setSettledPages] = useState(0);
 
-  const track = (restoration: Restoration | null) => {
-    restorationRef.current = restoration;
-    setRestoring(restoration);
-  };
-  const finish = () => track(null);
+  const track = useCallback(
+    (restoration: Restoration | null) => {
+      restorationRef.current = restoration;
+      controller.setWaitingForHistory(restoration !== null);
+      setRestoring(restoration);
+    },
+    [controller],
+  );
+  const finish = useCallback(() => track(null), [track]);
+
+  useEffect(() => {
+    controller.setWaitingForHistory(restorationRef.current !== null);
+    return () => controller.setWaitingForHistory(false);
+  }, [controller]);
 
   // Before paint, while the reader's settled anchor still describes the rows
   // that were on screen (it is recaptured only once scrolling goes idle).
@@ -140,9 +157,9 @@ export function useRestorePlaceAfterHistoryDrop({
       return;
     }
     if (
-      !previous ||
-      previous.sessionKey !== sessionKey ||
-      previous.messages === messages ||
+      (previous && previous.sessionKey !== sessionKey) ||
+      previous?.messages === messages ||
+      messages.length === 0 ||
       controller.wantsFollow
     ) {
       return;
@@ -150,7 +167,10 @@ export function useRestorePlaceAfterHistoryDrop({
     const anchor = controller.readingAnchor;
     const target = anchor?.inner?.partId ?? anchor?.partId;
     if (!anchor || !target) return;
-    if (!sourceIndexOf(previous.messages).part.has(target)) return;
+    // A remounted reader can arrive with a persisted semantic anchor but only
+    // the live tail. Its first non-empty projection also needs recovery.
+    if (previous?.messages.length && !sourceIndexOf(previous.messages).part.has(target)) return;
+    if (!previous?.messages.length && !canLoadEarlier) return;
     if (sourceIndexOf(messages).part.has(target)) return;
     // The drop is observed in the scroll controller and the committed rows, both
     // outside render; the state mirrors it for the paging effect and caller.
@@ -163,7 +183,7 @@ export function useRestorePlaceAfterHistoryDrop({
       pages: 0,
       emptyPages: 0,
     });
-  }, [controller, messages, scrollToIndex, sessionKey, view]);
+  }, [canLoadEarlier, controller, finish, messages, scrollToIndex, sessionKey, track, view]);
 
   // One page at a time, until the part is back or there is nothing left to page.
   // The head is read from the last commit rather than depended on, so a poll
@@ -218,7 +238,17 @@ export function useRestorePlaceAfterHistoryDrop({
     }
     const timer = setTimeout(request, HISTORY_DROP_RESTORE_RETRY_MS);
     return () => clearTimeout(timer);
-  }, [canLoadEarlier, controller, loadEarlier, loading, restoring, sessionKey, settledPages, view]);
+  }, [
+    canLoadEarlier,
+    controller,
+    finish,
+    loadEarlier,
+    loading,
+    restoring,
+    sessionKey,
+    settledPages,
+    view,
+  ]);
 
   return restoring !== null;
 }

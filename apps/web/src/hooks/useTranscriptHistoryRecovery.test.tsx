@@ -26,6 +26,7 @@ test("drop recovery owns paging and navigation across an inactive tab and a pend
   const controller: ReaderPlaceSource & { active: boolean; generation: number } = {
     active: true,
     hasScroller: true,
+    setWaitingForHistory: () => {},
     wantsFollow: false,
     generation: 0,
     readingAnchor: { partId: "old", rowKey: "old", index: 0, offsetPx: 40 },

@@ -744,12 +744,6 @@ async function restartCodexBridge(invoke: Invoke, environmentId: string) {
 
 async function openApp(page: Page, status: Status, fixture: Project, environmentName: string) {
   await page.goto(status.browserUrl!);
-  await page.evaluate(async () => {
-    const { disableAutoLoadEarlier } = await import(
-      /* @vite-ignore */ String("/src/components/native-agent/useAutoLoadEarlier.ts")
-    );
-    disableAutoLoadEarlier();
-  });
   const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
   const entry = page.getByText(environmentName, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
@@ -763,6 +757,18 @@ async function openApp(page: Page, status: Status, fixture: Project, environment
 }
 
 async function connect(page: Page) {
+  // Qualify explicit button paging deterministically: importing the switch
+  // after navigation races the opening page. Run it in Vite's entry module
+  // before React mounts, on every reload, without changing application code.
+  await page.route(/\/src\/main\.tsx(?:\?.*)?$/, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body:
+        'import { disableAutoLoadEarlier as disablePagingForQualification } from "/src/components/native-agent/useAutoLoadEarlier.ts"; disablePagingForQualification();\n' +
+        (await response.text()),
+    });
+  });
   const status = profileStatus();
   const invoke = await signIn(page, status);
   const fixture = (await invoke<Project[]>("get_projects")).find(
@@ -1176,6 +1182,32 @@ test.describe("live transcript paging", () => {
         expect(renderedAfter.foldedCalls, "restart: the folded call count changed").toBe(
           renderedBefore.foldedCalls,
         );
+
+        // Miss an entire restart while another environment owns the UI, then
+        // recover through the authoritative snapshot rather than live events.
+        // The duplicate-row scan ends at the bottom and correctly re-arms
+        // follow. Explicitly return to reading older history before leaving.
+        await oldestRenderedText(page, list);
+        await page.waitForTimeout(300);
+        const inactiveBefore = await firstVisibleStop(list, trail);
+        expect(inactiveBefore?.stop, "inactive restart: no visible anchor").toBeDefined();
+        const other = await createEnvironment(invoke, fixture, "paging-away");
+        environments.push(other);
+        await page.getByText(other.name, { exact: true }).first().click();
+        await expect(list).not.toBeVisible();
+        await restartCodexBridge(invoke, environment.id);
+        await page.getByText(environment.name, { exact: true }).first().click();
+        await expect(list).toBeVisible();
+        await expect
+          .poll(
+            async () => {
+              const anchor = await rowPosition(list, trail, inactiveBefore!.stop!);
+              return anchor?.visible ? holdPosition(inactiveBefore!, anchor).errorPx : Infinity;
+            },
+            { timeout: 30_000, intervals: [500] },
+          )
+          .toBeLessThanOrEqual(8);
+        note("native-inactive-restart", { anchorStop: inactiveBefore!.stop, recovered: true });
       }
 
       await page.reload();

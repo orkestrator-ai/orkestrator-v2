@@ -188,7 +188,9 @@ element's top relative to the viewport.
   coalesced display head keeps its id. Each independent drop can restore the
   same call again. Recovered history waits for an active, mounted viewport
   and an accepted navigation; ordinary held-page restoration and automatic
-  paging stand aside meanwhile. Covered live by `transcript-paging-live.spec.ts`'s
+  paging stand aside meanwhile. A remounted controller inherits its persisted
+  semantic anchor, so a missing part in its first live tail is recoverable
+  too. Activation waits while that history recovery owns the place. Covered live by `transcript-paging-live.spec.ts`'s
   Codex bridge-restart step.
 
 ## Activation and persistence

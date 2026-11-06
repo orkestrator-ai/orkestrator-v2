@@ -1,7 +1,9 @@
 import { useMemo, useState, type KeyboardEvent } from "react";
-import { ExternalLink, Server } from "lucide-react";
+import { ExternalLink, Server, UserRound } from "lucide-react";
 import {
+  AGENT_INTERACTION_HUMAN_REQUIRED_TEXT,
   agentInteractionSourceScopeLabel,
+  agentInteractionToolHintTag,
   type AgentInteractionApplyOutcome,
   type AgentInteractionRequest,
   type AgentInteractionResolution,
@@ -19,6 +21,7 @@ import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/pr
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
 import { RememberRulePanel } from "@/components/native-agent/RememberRulePanel";
 import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
+import { cn } from "@/lib/utils";
 
 type Answer = { optionIds: string[]; freeText: string };
 
@@ -58,6 +61,48 @@ function InteractionSourceLine({ source }: { source: AgentInteractionSource }) {
         </span>
         {scope ? <span> · from {scope}</span> : null}
       </span>
+    </p>
+  );
+}
+
+const TOOL_HINT_TAGS = {
+  "read-only": {
+    label: "Read-only",
+    className: "border-border/60 bg-muted/40 text-muted-foreground",
+  },
+  destructive: { label: "Destructive", className: "border-failure/30 bg-failure/10 text-failure" },
+} as const;
+
+/**
+ * What the MCP server says its tool does. The server declares it itself, so
+ * the tag says so on hover and is never styled as a safety guarantee: a
+ * read-only claim stays neutral rather than green.
+ */
+function ToolHintTag({ tag }: { tag: keyof typeof TOOL_HINT_TAGS }) {
+  const { label, className } = TOOL_HINT_TAGS[tag];
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full border px-1.5 py-px text-[10px] leading-4 font-medium",
+        className,
+      )}
+      title={`The MCP server describes this tool as ${tag}. Servers declare this themselves; it is not verified.`}
+      data-testid="interaction-tool-hint"
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Why the card offers no way to remember the answer. */
+function HumanRequiredLine() {
+  return (
+    <p
+      className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground"
+      data-testid="interaction-human-required"
+    >
+      <UserRound className="mt-px size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0">{AGENT_INTERACTION_HUMAN_REQUIRED_TEXT}</span>
     </p>
   );
 }
@@ -164,7 +209,14 @@ export function NativeAgentInteractionCard({
           }),
   });
 
-  const ruleOffer = interaction.presentation.ruleOffer;
+  // A request a person must answer offers nothing that remembers the answer,
+  // whatever the presentation carries; the backend withholds both as well.
+  const humanRequired = interaction.humanRequired === true;
+  const ruleOffer = humanRequired ? undefined : interaction.presentation.ruleOffer;
+  const approveForSessionLabel = humanRequired
+    ? undefined
+    : interaction.presentation.approveForSessionLabel;
+  const toolHintTag = agentInteractionToolHintTag(interaction.toolHints);
   const [remembering, setRemembering] = useState(false);
   const [rememberBusy, setRememberBusy] = useState(false);
   const approveAndRemember = async (choice: PermissionRuleChoiceInput) => {
@@ -282,7 +334,7 @@ export function NativeAgentInteractionCard({
           Cancel turn
         </Button>
       ) : null}
-      {interaction.presentation.approveForSessionLabel ? (
+      {approveForSessionLabel ? (
         <Button
           size="sm"
           variant="ghost"
@@ -291,7 +343,7 @@ export function NativeAgentInteractionCard({
             void resolve("approve-for-session");
           }}
         >
-          {interaction.presentation.approveForSessionLabel}
+          {approveForSessionLabel}
         </Button>
       ) : null}
       {ruleOffer && onApproveAndRemember ? (
@@ -355,7 +407,17 @@ export function NativeAgentInteractionCard({
       actions={actions}
     >
       <div className="px-4 py-3 text-sm">
-        {interaction.source ? <InteractionSourceLine source={interaction.source} /> : null}
+        {interaction.source || toolHintTag ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            {interaction.source ? <InteractionSourceLine source={interaction.source} /> : null}
+            {toolHintTag ? <ToolHintTag tag={toolHintTag} /> : null}
+          </div>
+        ) : null}
+        {humanRequired ? (
+          <div className={interaction.source || toolHintTag ? "mt-1.5" : undefined}>
+            <HumanRequiredLine />
+          </div>
+        ) : null}
         {remembering && ruleOffer ? (
           <RememberRulePanel
             offer={ruleOffer}

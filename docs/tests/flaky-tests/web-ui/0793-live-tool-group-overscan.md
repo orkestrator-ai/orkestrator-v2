@@ -14,7 +14,7 @@ Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run
 ## Triage 2026-10-25
 
 - **Disposition:** open.
-- **Evidence:** single observation, with nine workers. This is the `above` variant of the test that replaced [0721](0721-tool-fold-history-anchor.md).
+- **Evidence:** single observation, with nine workers. This is the `above` variant of the test that replaced [9883](9883-tool-fold-history-anchor.md).
 - **Next step:** the poll scrolls with mouse-wheel steps of 250 px and 100 ms waits. On recurrence, check whether wheel input was dropped or coalesced; setting `scrollTop` directly would remove that dependency.
 
 ## Growing live tool group: session history review — 2026-10-31

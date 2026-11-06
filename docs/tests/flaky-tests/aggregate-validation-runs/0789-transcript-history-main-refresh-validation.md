@@ -21,7 +21,7 @@ The complete original unmerged path list was captured as NUL-separated bytes bef
 | Path under `docs/tests/flaky-tests/` | Resolution |
 | --- | --- |
 | `agent-bridges/0000-index.md` | Keep the concise Pi summary, add main's runtime-state recurrence, and retain both histories in the case. |
-| `agent-bridges/0514-pi-bridge-vendor-timeout-under-load.md` | Retain both dated transcript-history and runtime-state validation sections. |
+| `agent-bridges/9860-pi-bridge-vendor-timeout-under-load.md` | Retain both dated transcript-history and runtime-state validation sections. |
 | `backend-services-and-tooling/0000-index.md` | Retain both branches' new case rows, including 0748 and 0787. |
 | `environments-and-containers/0000-index.md` | Combine the firewall observations, retain branch-specific SSH/storage recurrences, main's refresh recurrence and new 0750 row, and the feature branch's 0786 row. |
 | `environments-and-containers/0632-firewall-policy-probe-budget.md` | Retain both branches' distinct host-condition observations. |

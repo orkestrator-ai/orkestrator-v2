@@ -14,6 +14,6 @@
 
 - **Disposition:** open. This case now also covers [0765](0765-cli-fix-claude-scratch-aggregate-timeout.md) (duplicate, same test).
 - **Folded from 0765:** 2026-10-24, 0034 mixed-version branch, full suite on mbp3 with the CLI on two workers beside the backend suite. Timed out at 5001.06 ms; the fake `claude` was killed, so exit 143 instead of 7 at line 262. The owner passed alone (3.4 s) and in three plain runs.
-- **Related:** [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md) saw `runFix > passes OpenCode its prompt flag and pinned environment` time out at 5003.35 ms in the same file (passed alone in 5.2 s).
+- **Related:** [9884](../aggregate-validation-runs/9884-coordinator-adapters-main-merge-validation.md) saw `runFix > passes OpenCode its prompt flag and pinned environment` time out at 5003.35 ms in the same file (passed alone in 5.2 s).
 - **Rerun today:** the owner alone (Bun 1.4.4, load average about 37): this case passed. A different case, `packaged launcher dispatches fix without importing a backend or creating data`, failed with ENOENT on `packages/cli/dist/client.js` because the CLI is not built in this worktree. That is a missing build, not a flake; the aggregate builds first.
 - **Next step:** give the `runFix` cases that spawn a fake agent an explicit budget (they use Bun's default five seconds), as 0159 did.

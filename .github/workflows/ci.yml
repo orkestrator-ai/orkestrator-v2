@@ -157,6 +157,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run test:logged -- --name flaky-test-index -- bun test tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures
 
+      - name: Check to-do and flake numbers
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name doc-numbers -- bun test tests/unit/todo-index.test.ts tests/unit/number-claims.test.ts --parallel=1 --only-failures
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest

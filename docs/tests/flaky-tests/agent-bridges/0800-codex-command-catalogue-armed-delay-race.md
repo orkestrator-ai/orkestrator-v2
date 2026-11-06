@@ -6,7 +6,7 @@
 - **Test:** `a cold app-server child > an explicit refresh cannot replace the baseline for an already armed delay`
 - **File:** `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts:284`
 
-Seen while checking [0791](0791-codex-command-catalogue-stale-race.md), the
+Seen while checking [9889](9889-codex-command-catalogue-stale-race.md), the
 sibling case in the same `describe`. The branch does not change any Codex
 bridge code (`git diff origin/main --stat -- bridges/codex-bridge` is empty).
 
@@ -37,7 +37,7 @@ The complete unchanged owner passed: `mise run test:logged -- --name cleanup-cod
 
 ## Triage 2026-10-25
 
-- **Disposition:** resolved as a duplicate of [0791](0791-codex-command-catalogue-stale-race.md). Same `describe`, same fixture, same real 20 ms settle timer and the same `stale`/`ready` symptom. Its facts are folded into 0791's triage section, which is the case to follow.
+- **Disposition:** resolved as a duplicate of [9889](9889-codex-command-catalogue-stale-race.md). Same `describe`, same fixture, same real 20 ms settle timer and the same `stale`/`ready` symptom. Its facts are folded into 0791's triage section, which is the case to follow.
 
 ## 2026-10-25 composer model admission validation
 

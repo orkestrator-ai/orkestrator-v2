@@ -859,15 +859,15 @@ after rebasing onto `main` at `a5d78cfc` (host load average 17 to 38 both
 times). Both runs failed only on causes outside this change:
 - Known load timeouts:
   [0244](../../tests/flaky-tests/environments-and-containers/0244-container-replacement-reconciliation-timeout.md),
-  [0672](../../tests/flaky-tests/environments-and-containers/0672-container-storage-marker-aggregate-timeout.md),
+  [9875](../../tests/flaky-tests/environments-and-containers/9875-container-storage-marker-aggregate-timeout.md),
   [0192](../../tests/flaky-tests/environments-and-containers/0192-firewall-bootstrap-shell-timeout.md),
   [0632](../../tests/flaky-tests/environments-and-containers/0632-firewall-policy-probe-budget.md)
   and [0198](../../tests/flaky-tests/environments-and-containers/0198-git-ssh-fetch-aggregate-timeouts.md).
   Under this load the firewall and container-replacement owners failed alone
   on `main` too.
 - New aggregate timeouts whose owners passed alone:
-  [0785](../../tests/flaky-tests/agent-bridges/0785-local-bridge-reuse-busy-replace-timeout.md),
-  [0786](../../tests/flaky-tests/environments-and-containers/0786-merged-container-cleanup-remote-branch-timeout.md)
+  [9885](../../tests/flaky-tests/agent-bridges/9885-local-bridge-reuse-busy-replace-timeout.md),
+  [9886](../../tests/flaky-tests/environments-and-containers/9886-merged-container-cleanup-remote-branch-timeout.md)
   and [0787](../../tests/flaky-tests/backend-services-and-tooling/0787-gh-channel-install-timeout.md).
 - `conformance-execution-policy.test.ts`'s OpenCode cases, which expect CLI
   "1.19.0" while the toolchain manifest pins 1.19.4. They fail identically on

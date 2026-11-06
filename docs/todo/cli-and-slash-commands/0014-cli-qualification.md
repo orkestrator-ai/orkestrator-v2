@@ -683,7 +683,7 @@ model).
     `storage helper > reports unknown content and foreign markers without
     touching data` five-second timeout. The complete owning file passed alone
     (3.4 s); registered as confirmed flake
-    [0672](../../tests/flaky-tests/environments-and-containers/0672-container-storage-marker-aggregate-timeout.md).
+    [9875](../../tests/flaky-tests/environments-and-containers/9875-container-storage-marker-aggregate-timeout.md).
     Root/support, all bridges and protocol regeneration passed. The aggregate
     remains failed; isolated passes do not replace its result. Evidence:
     `orkestrator-test-run.TfxXYL` below the host temporary directory.
@@ -710,7 +710,7 @@ model).
     `environment launch` and `run wait` stages this branch does not touch.
     Rerun alone: `client-exit` passed, `setup-failure` failed again after
     1052 s at load 400. Only `client-exit` is registered as flake
-    [0671](../../tests/flaky-tests/backend-services-and-tooling/0671-cli-scenarios-environment-start-under-extreme-load.md);
+    [9869](../../tests/flaky-tests/backend-services-and-tooling/9869-cli-scenarios-environment-start-under-extreme-load.md);
     `setup-failure` remains unconfirmed and needs a quiet-host rerun.
   - Package and backend tests: `packages/cli` suite 161/161 pass;
     `public-api-exec.test.ts` 19/19 pass.

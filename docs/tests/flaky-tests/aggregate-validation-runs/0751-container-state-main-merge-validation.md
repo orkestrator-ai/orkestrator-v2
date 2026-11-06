@@ -48,7 +48,7 @@ The web package reported 9,391 passed, ten skipped and one failed across 9,402 t
 ## Electron owner outcomes
 
 - `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-terminal-electron-owner mise run test:logged -- --name merge-terminal-electron-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts terminal-input-resume-electron.spec.ts --workers=1` passed the complete unchanged owner: one passed (64.6 s Playwright execution). This confirms an intermittent terminal-resume environment-visibility failure; no root cause was established.
-- The complete Electron-main owner retained its nickname deadline; see [0515](../electron-and-desktop/0515-electron-nickname-reload-timeout.md).
+- The complete Electron-main owner retained its nickname deadline; see [9863](../electron-and-desktop/9863-electron-nickname-reload-timeout.md).
 - All fourteen complete unchanged service-preview Electron owner cases passed in 228.7 s logged; see [0622](../previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md).
 
 ## Browser outcomes

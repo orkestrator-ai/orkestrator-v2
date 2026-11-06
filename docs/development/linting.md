@@ -40,11 +40,13 @@ on every pull request, alongside the typecheck and test jobs. The lint step
 uses `if: ${{ !cancelled() }}` so a formatting failure does not hide lint
 output — one push reports both.
 
-The same job also runs two repository-wide test guards that need no build: the
+The same job also runs repository-wide test guards that need no build: the
 DOM absence scan (`never passes a DOM-producing query result directly to
-toBeNull` in `tests/unit/dom-absence-scan.test.ts`) and the flaky-test
-index check (`tests/unit/flaky-tests-index.test.ts`), so a PR that breaks either
-fails within minutes. Both also run in `mise run test`, the default tier that
+toBeNull` in `tests/unit/dom-absence-scan.test.ts`), the flaky-test
+index check (`tests/unit/flaky-tests-index.test.ts`), and the to-do index and
+number-claim checks (`tests/unit/todo-index.test.ts`,
+`tests/unit/number-claims.test.ts`), so a PR that breaks one fails within
+minutes. All of them also run in `mise run test`, the default tier that
 review preparation runs, so a branch hears about them before it reaches CI.
 The DOM scan used to be in the slow tier, which no review runs, and seven
 offenders merged on 2026-11-05 (todo

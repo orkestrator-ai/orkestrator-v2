@@ -1770,6 +1770,12 @@ observing branch's base commit and run `mise run flaky:recurrence` before
 counting a recurrence, and prove a fix by reproducing the failure first
 ([Reproduce before fixing](docs/development/testing-guide.md#reproduce-before-fixing)).
 
+A new flake case or to-do file takes the next number after the highest in use
+(files and [claims](docs/number-claims/README.md)) and adds its claim,
+`docs/number-claims/{flaky-tests,todo}/NNNN`, in the same change. If that claim
+conflicts on rebase or merge, another branch took the number first: renumber
+yours and update its links. `tests/unit/number-claims.test.ts` enforces this.
+
 Do not call a test flaky merely because it failed once: run the owning file alone
 first and preserve both results. Do not hide a flake by deleting, skipping, or
 loosening the test. When a flake is fixed, update its existing case file with the

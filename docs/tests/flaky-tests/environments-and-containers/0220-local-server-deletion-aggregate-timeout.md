@@ -245,7 +245,7 @@ exceeded its five-second deadline at 5088.99 ms in the six-file, one-worker
 file passed alone in 72.1 seconds. The previous ledger fix remains in place;
 this observation does not establish that its earlier cause returned. Exact
 commands, the second failure and evidence are in
-[0515](../aggregate-validation-runs/0515-idle-observation-main-merge-validation.md). No assertion, deadline
+[9861](../aggregate-validation-runs/9861-idle-observation-main-merge-validation.md). No assertion, deadline
 or skip changed.
 
 ## Recurrence during 0016 validation (2026-10-24)

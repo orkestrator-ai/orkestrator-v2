@@ -45,13 +45,15 @@ describe("CI workflow contracts", () => {
     });
   }
 
-  test("the fast lint job runs the DOM absence scan and the flaky-test index check", () => {
+  test("the fast lint job runs the DOM absence scan and the documentation number checks", () => {
     const runs = workflow("ci").jobs.oxc!.steps!.flatMap((step) => step.run ?? []);
     const guard = (file: string) => runs.find((run) => run.includes(file));
     expect(guard("tests/unit/dom-absence-scan.test.ts")).toContain(
       "never passes a DOM-producing query result",
     );
     expect(guard("tests/unit/flaky-tests-index.test.ts")).toBeDefined();
+    expect(guard("tests/unit/todo-index.test.ts")).toBeDefined();
+    expect(guard("tests/unit/number-claims.test.ts")).toBeDefined();
   });
 
   test("CI provides every documented required status-check context", () => {

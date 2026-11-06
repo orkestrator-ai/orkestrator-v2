@@ -42,7 +42,7 @@ number. Not changed here.
 The default two-worker backend aggregate repeated this failure while validating
 renderer-only test changes at `33b96fb48`. The complete owners were rerun with one
 isolated Bun worker; exact commands, failures, durations, counts and evidence are
-recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
+recorded in [9890](../aggregate-validation-runs/9890-reconnect-freshness-validation.md).
 The unchanged teardown owner passed; the aggregate measured 336.97 ms against
 its 250 ms bound. No assertion or deadline was changed.
 

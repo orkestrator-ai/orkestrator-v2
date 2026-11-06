@@ -23,7 +23,7 @@
     `PreviewTransportManager (desktop tunnel end to end) > hiding does not
     close the listener; the last release retires it and frees the
     attachment`; see
-    [0790](../previews-annotations-and-gateway/0790-preview-transport-attachment-release-timing.md).
+    [9887](../previews-annotations-and-gateway/9887-preview-transport-attachment-release-timing.md).
   - `apps/desktop/scripts/dev/coordinator-live.test.ts`: `fixture tree digest
     > names every class of change a coordinator could make` (5021.15 ms); see
     [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md).

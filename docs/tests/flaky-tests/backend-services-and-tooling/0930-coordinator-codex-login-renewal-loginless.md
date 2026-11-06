@@ -3,7 +3,7 @@
 - **ID:** 0930
 - **Status:** resolved
 - **Date observed:** 2026-10-25 (first seen inside aggregate case
-  [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md),
+  [9890](../aggregate-validation-runs/9890-reconnect-freshness-validation.md),
   which had no owner case)
 - **Test:** `renews an expired owner login without ordinary sessions before the coordinator handoff`
 - **File:** `apps/backend/src/core/agent-accounts-active.test.ts:571`

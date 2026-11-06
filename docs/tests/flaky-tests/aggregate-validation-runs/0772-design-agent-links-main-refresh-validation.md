@@ -194,7 +194,7 @@ Original conflicted paths (the authoritative list remains in local Git metadata)
 - `docs/tests/flaky-tests/backend-services-and-tooling/0239-agent-account-duplicate-directory-cleanup.md`
 - `docs/tests/flaky-tests/design-canvas-and-artifacts/0000-index.md`
 - `docs/tests/flaky-tests/electron-and-desktop/0000-index.md`
-- `docs/tests/flaky-tests/electron-and-desktop/0515-electron-nickname-reload-timeout.md`
+- `docs/tests/flaky-tests/electron-and-desktop/9863-electron-nickname-reload-timeout.md`
 - `docs/tests/flaky-tests/environments-and-containers/0000-index.md`
 - `docs/tests/flaky-tests/environments-and-containers/0175-container-git-fetch-branch-baseline-timeout.md`
 - `docs/tests/flaky-tests/environments-and-containers/0192-firewall-bootstrap-shell-timeout.md`

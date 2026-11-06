@@ -22,7 +22,7 @@ The default command is `mise run test:logged -- --name merge-tests -- mise run t
 | Failed owner | Aggregate observation | Complete unchanged owner rerun |
 | --- | --- | --- |
 | `apps/web/src/components/federation/RemoteWorkspaceRegion.test.tsx` | Grouping delivery saw five `postMessage` calls instead of zero at line 819 (23.04 ms). | Passed with `merge-remote-workspace-owner` (2.7 s). |
-| `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | External watchdog deadline assertion failed (6156.39 ms). | Passed with `merge-mermaid-owner` (41.3 s); known [0512](../design-canvas-and-artifacts/0512-mermaid-watchdog-elapsed-under-load.md). |
+| `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | External watchdog deadline assertion failed (6156.39 ms). | Passed with `merge-mermaid-owner` (41.3 s); known [9858](../design-canvas-and-artifacts/9858-mermaid-watchdog-elapsed-under-load.md). |
 | `apps/backend/src/core/terminal-history.test.ts` | Chunk/page normalization exceeded 5000 ms (5000.99 ms), followed by a null-cursor error. | Passed with `merge-terminal-history-owner` (7.2 s); known [0213](../backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md). |
 
 All three owning-file commands use `mise run test:logged`, an explicit path, `--parallel=1` and `--only-failures`; backend uses `--preload ../../tests/setup-node.ts`. The passing complete owners confirm intermittent observations, without establishing the cause. Inner group logs belong to host-temporary directory `orkestrator-test-run.bx1qKi`; the outer run is `orkestrator-test-run.GIi7ge`.
@@ -38,7 +38,7 @@ Each complete unchanged owning file was then run separately, sequentially, with 
 | `PaneBreakpoint` | Mobile pane-tree `moveBefore` terminal absent at five seconds. | Passed (27.8 s); known [0342](../web-ui/0342-pane-breakpoint-terminal-startup.md). |
 | `TerminalCornerToolbar` | Mobile touch-history case timed out during reload at 30 seconds. | Passed (16.8 s). |
 | `DesignCanvas` | Desktop canvas journey failed. | Passed (23.6 s). |
-| `MonacoRuntime` | Desktop editor startup failed. | Passed (7.0 s); known [0517](../web-ui/0517-monaco-runtime-browser-startup.md). |
+| `MonacoRuntime` | Desktop editor startup failed. | Passed (7.0 s); known [9865](../web-ui/9865-monaco-runtime-browser-startup.md). |
 | `VirtuosoFollow` | Desktop small-wheel release failed. | Passed (4.9 s); related [0153](../native-agents-and-transcripts/0153-virtuoso-follow-parallel-scroll-release.md). |
 | `AgentLaunchDialog` | Both native branch suggestions retained `rel` instead of selecting `release/2.0`. | Still failed: two passes, two failures (25.3 s). Evidence: `orkestrator-test-run.TWsyYs/merge-owner-AgentLaunchDialog.log.gz`. This remains unresolved, as in [0493](0493-component-browser-aggregate-timeout-cluster.md). |
 

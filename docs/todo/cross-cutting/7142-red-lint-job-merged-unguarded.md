@@ -6,14 +6,15 @@ Analysed 2026-11-06 against `main` at `c5a478f67`. On 2026-11-05 and
 2026-11-06 seven test files with unsafe DOM absence assertions, and two flake
 cases reusing number 9834, reached `main`, so the "bun fmt and oxlint" job
 failed on every pull request. The branch that added this file fixed both and
-closed the local gap that let the scan offenders through. What is left is
-gating merges on the job, which is the maintainer's call.
+closed the local gap that let the scan offenders through. A later branch
+(2026-11-06) made concurrent number collisions conflict in Git (task 3). What
+is left is gating merges on the job, which is the maintainer's call.
 
 ### Tasks
 
 1. **Run the DOM absence scan in the default tier**: isolate the source scan in `tests/unit/dom-absence-scan.test.ts` in the default tier so `mise run test`, which review preparation runs, includes the scan. Status: done (2026-11-06).
 2. **Gate merges on the lint job**: apply the required-check ruleset prepared in [0030](0030-test-suite-and-ci-health.md) task 1, which already lists `bun fmt and oxlint`. Status: open (depends on 0030 task 1; maintainer action).
-3. **Catch number collisions between concurrent branches before they reach `main`**: two branches that each pass the flake-index or todo-index check alone can still collide once both merge. Status: open (depends on 2).
+3. **Catch number collisions between concurrent branches before they reach `main`**: two branches that each pass the flake-index or todo-index check alone can still collide once both merge. Status: done (2026-11-06, number claims; does not depend on 2).
 
 ### 1. Run the DOM absence scan in the default tier
 
@@ -117,10 +118,24 @@ when it is pushed, and the prepared ruleset keeps strict up-to-date checks
 off. Two PRs that are green against the same `main` can still both merge and
 collide.
 
+It recurred on 2026-11-06: #1957, #1958 and #1960 each merged a todo
+numbered 7520, and #1960 and #1961 each merged a 7530, in different area
+folders, so `tests/unit/todo-index.test.ts` failed on `main`.
+
 **Decisions.**
 
 - **How to stop the collision reaching `main`?**
-  - **Reserve a number range for every pipeline and prompt environment that may add a flake case or todo (recommended).**
+  - **A claim file per number, `docs/number-claims/{todo,flaky-tests}/NNNN`, required by `tests/unit/number-claims.test.ts` (recommended, implemented).**
+    - Pros: two branches that take the same number add the same path with
+      different contents, so Git reports an add/add conflict and GitHub will
+      not merge the second PR until it is rebased and renumbered. Different
+      numbers never conflict. No CI trigger or repository setting changes.
+      The test fails a new file without its claim, so the rule does not
+      depend on a brief.
+    - Cons: one extra one-line file per new number; claims are required only
+      from 7500 (todos) and 9800 (flakes) up, so a file that takes an unused
+      number lower down is not protected (new numbers come from the top).
+  - **Reserve a number range for every pipeline and prompt environment that may add a flake case or todo.**
     - Pros: no CI or settings change; already the practice for coordinated work.
     - Cons: relies on whoever writes the brief; a branch without one still takes "the next number".
   - **Turn on strict up-to-date checks or a merge queue.**
@@ -137,11 +152,15 @@ collide.
 Task 1 is done: the scan runs in `mise run test`, and the seven files were
 rewritten with `scripts/rewrite-bounded-dom-assertions.ts`. The duplicate 9834
 cases in `environments-and-containers/` are now 6603 and 6602 after merging
-`main` (which independently renumbered the same cases). Tasks 2 and 3 are open.
+`main` (which independently renumbered the same cases). Task 3 is done: the
+duplicate todos 7520 and 7530 are renumbered and every new number needs a
+claim (see below). Task 2 is open.
 
 ## Related
 
 - [0030](0030-test-suite-and-ci-health.md) task 1: the required-check ruleset.
+- [Number claims](../../number-claims/README.md): how claims work and what to
+  do when one conflicts.
 - [linting.md](../../development/linting.md): what the lint job runs.
 - Flake cases
   [6603](../../tests/flaky-tests/environments-and-containers/6603-container-status-excludes-aggregate-timeout.md)
@@ -165,3 +184,50 @@ Kept main's established case numbers 6603 and 6602 rather than this branch's
 7140 and 7141. This preserves incoming links and the later recurrence evidence
 without duplicating cases. Updated the current-state summary and related links;
 the earlier renumbering account above remains historical.
+
+### Task 3: number claims instead of reserved ranges
+
+Chose a claim file per number over reserved ranges, because a claim makes a
+collision a merge conflict that GitHub enforces without a ruleset (0030 task 1
+stays maintainer-only), and the test enforces the claim, so no brief has to
+hand out a range. Reserved ranges still work: a branch claims its numbers as
+it uses them. Checked by hand that two branches adding `7550` with different
+contents conflict and that `7550` and `7551` merge cleanly; no automated Git
+test was added, because real-Git tests belong to the slow tier.
+
+Claims are required from 7500 (todos) and 9800 (flakes), just below the
+highest numbers in use, rather than for every existing file: backfilling about
+a thousand files adds no protection, because collisions happen at the top, and
+the historical duplicates initially could not have one owner each. The
+review fix below removes the flake exceptions.
+
+The renumbering kept each clashing number on the file that merged first
+(squash-merge commit time): agent-engines 7520 (#1957, 20:51 UTC) and
+transcripts-and-observation 7530 (#1960, 21:28 UTC). The others moved to the
+unused numbers right after the old ones, which no branch taking "the next
+number" will race for: containers-and-environments 7520 (#1958) to 7521,
+transcripts-and-observation 7520 (#1960) to 7522, and
+containers-and-environments 7530 (#1961) to 7531. Each records the old number
+in a "Replaces" section. Review found the full-register cleanup incomplete;
+the follow-up below removes all 29 historical flake collisions.
+
+
+### Task 3: remove historical flake collisions and clarify moves
+
+Renumbered 45 flake cases sharing 29 IDs to 9851–9895, with a claim per new
+number. For each shared ID, the case with the earliest recorded Git addition
+keeps it (path order breaks timestamp ties). Updated case ID fields, group
+index rows and repository filename references. Removed the frozen-duplicate
+allowlist so every flake number must now be unique. This completes the global
+cleanup instead of preserving historical exceptions.
+
+Options: (recommended) renumber historical collisions, which gives every case
+an unambiguous ID but changes old links; keep frozen exceptions, which preserves
+paths but fails the full-register uniqueness requirement. The implemented
+option is renumbering; all tracked filename references were updated.
+
+For moves and slug renames, keep the number and update its claim body in the
+same change. The guard distinguishes an existing owner (collision) from an
+absent owner (possible move or retired number); it cannot infer file identity.
+Fixtures cover both a folder move and a slug rename, the corrected claim,
+and a claimed flake duplicate. Retired numbers remain unavailable to new cases.

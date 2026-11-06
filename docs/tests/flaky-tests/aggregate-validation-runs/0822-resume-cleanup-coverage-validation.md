@@ -27,7 +27,7 @@ error across 162 files (515.96 s).
 | Codex command catalogue expected `stale`, received `ready` | Passed in 2.1 s; [0800](../agent-bridges/0800-codex-command-catalogue-armed-delay-race.md). |
 | Firewall policy-2 host-port fixture exceeded five seconds | Passed in 37.3 s; [0192](../environments-and-containers/0192-firewall-bootstrap-shell-timeout.md). |
 | Disk report exceeded five seconds and produced a between-test error | Passed in 5.4 s; [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md). |
-| Mermaid watchdog measured 6,135 ms against `< 5,000 ms` | Failed again at 7,281 ms; 12 passed, one failed. See [0512](../design-canvas-and-artifacts/0512-mermaid-watchdog-elapsed-under-load.md). |
+| Mermaid watchdog measured 6,135 ms against `< 5,000 ms` | Failed again at 7,281 ms; 12 passed, one failed. See [9858](../design-canvas-and-artifacts/9858-mermaid-watchdog-elapsed-under-load.md). |
 | `apps/backend/tests/container-log-service.test.ts`: `bounded bridge output > the writer stays bounded on output without a single newline` and `the writer rotates by size, keeps N files and cuts oversize lines` found no log files | Both failed again, nine passed and two failed in 7.02 s. |
 | `apps/backend/src/core/container-worktree-signal-install.test.ts`: `orkestrator-worktree-signal > start writes a private config from stdin and launches the watcher` expected `lost, ready`, received only `lost` (1,505.45 ms) | Complete unchanged owner passed (exit 0, 80.1 s); confirms an intermittent failure without establishing its cause. |
 

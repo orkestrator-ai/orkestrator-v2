@@ -13,3 +13,18 @@
 - **Hypothesis:** the fixture writes and captures the measurement cap plus 50 files in one turn, which costs about 3 s on an idle worker, so a loaded host pushes it past the default 5 s deadline. The change under test did not touch the capture, measurement or restore paths this test exercises (it changed only the store's sweep, its byte count and retention's manifest walk, none of which this test runs). Unconfirmed: whether the same run on `main` times out; it was not repeated there.
 - **Later observation (2026-11-05):** during the E3 retention work on `54911a112`, on an external volume with a host load average about 50, it exceeded the deadline (5543.45 ms) under four workers and again when its owning file ran alone. Run alone with `--timeout=30000` and `-t "restore plans at the real cap"` it passed. That change touched no code on this test's capture path. So on a loaded host the 5 s deadline can fail even in isolation.
 - **Recurrence 2026-11-05:** review preparation of `76136cdb7` on `move-pipe-captures-c7893f496669-r1`, based on `af2e566e5`, timed out at 5246.50 ms in `mise run test`. The owning file also timed out alone, three times out of three (5125 to 5371 ms; 19 pass, 1 fail, 1 error) at a host load average of 33 to 37 on 12 cores, with the same closed-database error after the timeout; the first of those ran beside three other owner reruns. With `--timeout=60000` on the command line, for diagnosis only, the test filtered by name passed in 10.3 s at a load average of 37 and the whole file passed alongside `object-store-write-path.test.ts` in 34.0 s, so it was slow rather than stalled. That branch moved `runCommandBuffer`, which this test's capture calls, into `command-capture.ts`; on a successful capture the only differences are the output limit passed as a value and a Windows-only `windowsHide` flag. No idle-host rerun was possible, so a small cost from the move is not excluded by measurement. No assertion, timeout or skip was changed.
+
+## Recurrence 2026-11-06 — coordinator Work panel removal
+
+`mise run test:logged -- --name address-default-suite -- mise run test`
+failed on this unchanged backend test at 5090.23 ms (5,000 ms deadline)
+with four backend workers. Backend totals: 16,356 pass, 126 skip, three failures and two errors;
+web: 12,990 pass, zero failures. The same run also caught two new test type
+errors, corrected in `5f5cb11b1`. Evidence:
+`/tmp/orkestrator-test-run.srVdfm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The owning file passed unchanged with
+`mise run test:logged -- --name address-measurement-isolated -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`
+(exit 0, 6.3 s). No assertion, skip, or timeout was changed. The coordinator
+renderer removal does not edit this backend path; initial timeout cause remains
+unconfirmed. A fresh aggregate run follows the test type fix.

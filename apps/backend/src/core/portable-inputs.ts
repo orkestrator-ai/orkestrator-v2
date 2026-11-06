@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
   chmod,
+  copyFile,
   lstat,
   mkdir,
   open,
@@ -12,6 +13,7 @@ import {
   rm,
   truncate,
   writeFile,
+  type FileHandle,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -538,6 +540,8 @@ export interface StagedInputs {
   providers: ProviderInputSummary[];
   specVersion: number;
   stagedAt: string;
+  /** Files reflinked rather than copied ({@link FileCloner}); not in the manifest. */
+  clonedFiles: number;
 }
 
 class Budget {
@@ -596,11 +600,86 @@ async function assertNoSymlinkAncestry(root: string, relative: string): Promise<
   }
 }
 
-async function copyRegularFile(source: string, destination: string, limit: number): Promise<number>;
+/** How {@link stagePortableInputs} writes a staged file; tests replace `copyFile`. */
+export interface StagingOptions {
+  /** Reflink unfiltered files where the filesystem can. Default true. */
+  cloneFiles?: boolean;
+  copyFile?: typeof copyFile;
+}
+
+/**
+ * Reflinks staged files (DK-14). A reflink shares the source's blocks until
+ * either side writes, so each revision is still an independent copy: a write
+ * to it never reaches the host file or another environment's revision, unlike
+ * a hard link. Where the filesystem cannot (ext4, tmpfs, another device than
+ * the source, any platform but Linux) the file is copied as before.
+ *
+ * Only a file staged byte for byte is cloned. A filtered or guarded one must
+ * be read anyway, and cloning after the read could stage bytes nobody checked.
+ */
+class FileCloner {
+  cloned = 0;
+  /** Source devices a clone failed from, so the rest of the run copies at once. */
+  private readonly refused = new Set<number>();
+  private readonly enabled: boolean;
+  private readonly copy: typeof copyFile;
+
+  constructor(options: StagingOptions = {}) {
+    // `/proc/self/fd` reopens the very file the caller checked, never the path.
+    this.enabled = options.cloneFiles !== false && process.platform === "linux";
+    this.copy = options.copyFile ?? copyFile;
+  }
+
+  /**
+   * Clones the open, identity-checked `handle` to `destination`. Returns its
+   * size, or undefined when nothing was cloned and the caller must copy.
+   */
+  async clone(
+    handle: FileHandle,
+    device: number,
+    destination: string,
+    limit: number,
+  ): Promise<number | undefined> {
+    if (!this.enabled || this.refused.has(device)) return undefined;
+    await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+    try {
+      await this.copy(
+        `/proc/self/fd/${handle.fd}`,
+        destination,
+        fsConstants.COPYFILE_EXCL | fsConstants.COPYFILE_FICLONE_FORCE,
+      );
+    } catch (error) {
+      // An existing destination is the copy's error too, so it must surface.
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw error;
+      this.refused.add(device);
+      await rm(destination, { force: true });
+      return undefined;
+    }
+    try {
+      await chmod(destination, 0o600);
+      // A clone takes the file as it is now, so growth since the check is seen here.
+      const size = (await lstat(destination)).size;
+      if (size > limit) throw new Skip("too-large");
+      this.cloned += 1;
+      return size;
+    } catch (error) {
+      await rm(destination, { force: true });
+      throw error;
+    }
+  }
+}
+
 async function copyRegularFile(
   source: string,
   destination: string,
   limit: number,
+  cloner?: FileCloner,
+): Promise<number>;
+async function copyRegularFile(
+  source: string,
+  destination: string,
+  limit: number,
+  cloner: FileCloner | undefined,
   filter: ((text: string) => string | undefined) | undefined,
   guard?: (contents: Buffer) => void,
 ): Promise<number | undefined>;
@@ -608,6 +687,7 @@ async function copyRegularFile(
   source: string,
   destination: string,
   limit: number,
+  cloner?: FileCloner,
   filter?: (text: string) => string | undefined,
   guard?: (contents: Buffer) => void,
 ): Promise<number | undefined> {
@@ -624,6 +704,10 @@ async function copyRegularFile(
     const opened = await handle.stat();
     if (opened.ino !== before.ino || opened.dev !== before.dev || !opened.isFile()) {
       throw new Skip("changed-while-reading");
+    }
+    if (cloner && !filter && !guard) {
+      const cloned = await cloner.clone(handle, opened.dev, destination, limit);
+      if (cloned !== undefined) return cloned;
     }
     // Read at most limit+1 bytes: growth past the bound is detected while
     // copying, not from the earlier size.
@@ -742,6 +826,7 @@ class ProviderCopier {
     private readonly limits: InputLimits,
     /** Real paths a linked skill may resolve into ({@link linkedSkillRoots}). */
     private readonly skillRoots: readonly string[] = [],
+    private readonly cloner?: FileCloner,
   ) {
     this.summary = { provider, files: 0, bytes: 0, skipped: {} };
   }
@@ -790,6 +875,7 @@ class ProviderCopier {
         source,
         path.join(destinationRoot, relative),
         this.limits.fileBytes,
+        this.cloner,
         filter,
       );
       if (bytes !== undefined) this.record(1, bytes);
@@ -821,6 +907,7 @@ class ProviderCopier {
         source,
         path.join(destinationRoot, relative),
         this.limits.fileBytes,
+        this.cloner,
         undefined,
         withholdCredentials ? extensionCredentialGuard(relative) : undefined,
       );
@@ -905,6 +992,7 @@ class ProviderCopier {
               path.join(source, entry.relative),
               target,
               this.limits.fileBytes,
+              this.cloner,
               undefined,
               withholdCredentials
                 ? extensionCredentialGuard(`${relative}/${entry.relative}`)
@@ -1009,6 +1097,7 @@ export async function stagePortableInputs(
   roots: InputSourceRoots,
   now = new Date(),
   limits: InputLimits = INPUT_LIMITS,
+  options: StagingOptions = {},
 ): Promise<StagedInputs> {
   const parent = portableInputsDirectory(dataDir, environmentId);
   await mkdir(parent, { recursive: true, mode: 0o700 });
@@ -1018,6 +1107,7 @@ export async function stagePortableInputs(
   const directory = path.join(parent, revision);
   await mkdir(partial, { mode: 0o700 });
   const total = new Budget(limits.totalEntries, limits.totalBytes);
+  const cloner = new FileCloner(options);
   const summaries: ProviderInputSummary[] = [];
   const mounts: StagedMount[] = [];
   try {
@@ -1030,7 +1120,7 @@ export async function stagePortableInputs(
     const skillRoots = await linkedSkillRoots(specs, providers, homes);
     for (const spec of specs) {
       if (!providers.has(spec.provider)) continue;
-      const copier = new ProviderCopier(spec.provider, total, limits, skillRoots);
+      const copier = new ProviderCopier(spec.provider, total, limits, skillRoots, cloner);
       for (const source of spec.directories) {
         if (!source.root) continue;
         // The home entry itself is resolved, as the bind mount it replaces
@@ -1109,6 +1199,7 @@ export async function stagePortableInputs(
       providers: summaries,
       specVersion: PORTABLE_INPUT_SPEC_VERSION,
       stagedAt,
+      clonedFiles: cloner.cloned,
     };
   } catch (error) {
     await rm(partial, { recursive: true, force: true }).catch(() => undefined);

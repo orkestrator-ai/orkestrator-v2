@@ -1,3 +1,4 @@
+import { installFakeClaudeApiFixture } from "./container-fake-claude-install";
 import { expect, test, type Page, type TestInfo } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -95,86 +96,48 @@ function docker(args: string[], input?: string): string {
   return result.stdout.trim();
 }
 
-const FAKE_API_PORT = 47_123;
-const FAKE_API_REPLY_DELAY_MS = 3_000;
-const FAKE_API_SCRIPT = "/tmp/orkestrator-qa-fake-claude-api.ts";
-const SETTINGS_BACKUP = "/tmp/orkestrator-qa-claude-settings.json";
-
-/**
- * Starts the fake Messages API in the container and points the image's
- * `claude` at it. Returns the undo, which is safe to call after a partial
- * install.
- */
 async function installFakeClaudeApi(containerId: string): Promise<() => void> {
-  const asNode = (script: string, input?: string) =>
-    docker(["exec", "-i", "--user", "node", containerId, "sh", "-c", script], input);
-  const undo = () => {
-    // pkill runs on its own: a shell whose command line names the script would
-    // match the pattern and kill itself. `ap[i]` cannot match pkill's own line.
-    // Exit 1 (nothing matched) is fine.
-    spawnSync("docker", ["exec", containerId, "pkill", "-f", "orkestrator-qa-fake-claude-ap[i]"], {
-      timeout: 15_000,
-    });
-    asNode(
-      `if [ -f ${SETTINGS_BACKUP} ]; then cat ${SETTINGS_BACKUP} > "$HOME/.claude/settings.json" && rm -f ${SETTINGS_BACKUP}; fi; rm -f ${FAKE_API_SCRIPT}`,
-    );
-  };
-  try {
-    asNode(
-      `cat > ${FAKE_API_SCRIPT}`,
-      readFileSync(path.join(import.meta.dirname, "container-fake-claude-api.ts"), "utf8"),
-    );
-    docker([
-      "exec",
-      "-d",
-      "--user",
-      "node",
-      containerId,
-      "bun",
-      FAKE_API_SCRIPT,
-      "--port",
-      String(FAKE_API_PORT),
-      // A turn as long as a short real one, so its `working` edge is visible.
-      "--reply-delay-ms",
-      String(FAKE_API_REPLY_DELAY_MS),
-    ]);
-    const env = JSON.stringify({
-      ANTHROPIC_BASE_URL: `http://127.0.0.1:${FAKE_API_PORT}`,
-      ANTHROPIC_AUTH_TOKEN: "orkestrator-qa-fixture",
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-    });
-    // Keep the image's hooks and consent: merge, never replace.
-    asNode(
-      `set -e; s="$HOME/.claude/settings.json"; cp "$s" ${SETTINGS_BACKUP}; jq --argjson env '${env}' '.env = ((.env // {}) + $env)' ${SETTINGS_BACKUP} > "$s.qa"; cat "$s.qa" > "$s"; rm -f "$s.qa"`,
-    );
-    await expect
-      .poll(
-        () =>
-          spawnSync(
-            "docker",
-            [
-              "exec",
-              containerId,
-              "curl",
-              "-fsS",
-              "-o",
-              "/dev/null",
-              "-X",
-              "POST",
-              "-d",
-              "{}",
-              `http://127.0.0.1:${FAKE_API_PORT}/v1/messages/count_tokens`,
-            ],
-            { timeout: 5_000 },
-          ).status,
-        { timeout: 15_000 },
-      )
-      .toBe(0);
-  } catch (error) {
-    undo();
-    throw error;
-  }
-  return undo;
+  return installFakeClaudeApiFixture({
+    asNode: (script, input) =>
+      docker(["exec", "-i", "--user", "node", containerId, "sh", "-c", script], input),
+    startServer: (args) => docker(["exec", "-d", "--user", "node", containerId, ...args]),
+    stopServer: () => {
+      // The bracket pattern cannot match pkill's own command line. Exit 1 is fine.
+      spawnSync(
+        "docker",
+        ["exec", containerId, "pkill", "-f", "orkestrator-qa-fake-claude-ap[i]"],
+        {
+          timeout: 15_000,
+        },
+      );
+    },
+    source: readFileSync(path.join(import.meta.dirname, "container-fake-claude-api.ts"), "utf8"),
+    waitUntilReady: async () => {
+      await expect
+        .poll(
+          () =>
+            spawnSync(
+              "docker",
+              [
+                "exec",
+                containerId,
+                "curl",
+                "-fsS",
+                "-o",
+                "/dev/null",
+                "-X",
+                "POST",
+                "-d",
+                "{}",
+                "http://127.0.0.1:47123/v1/messages/count_tokens",
+              ],
+              { timeout: 5_000 },
+            ).status,
+          { timeout: 15_000 },
+        )
+        .toBe(0);
+    },
+  });
 }
 
 /** Container clock minus host clock, in ms, from the tightest of five reads. */

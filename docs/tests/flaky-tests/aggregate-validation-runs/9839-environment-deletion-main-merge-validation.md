@@ -98,3 +98,35 @@ Second-pass validation: `mise run test:logged -- --name merge-pass2-static -- mi
 - `docs/tests/flaky-tests/environments-and-containers/9837-firewall-egress-filter-startup-timeout.md`
 - `docs/tests/flaky-tests/environments-and-containers/9838-container-status-excludes-aggregate-timeout.md`
 - `docs/todo/containers-and-environments/0000-index.md`
+
+
+## Follow-up review preparation at `228561646` — 2026-11-06
+
+Original command: `mise run test:logged -- --name review-default-tests -- mise
+run test`, backend four isolated workers. The workspace ended at the no-progress
+watchdog with no closing summary, so complete totals are unavailable.
+Original evidence remains under
+`.orkestrator/review-artifacts/review-validation-dd80c812-46c6-4f02-b538-897dbf04bdfd/validation-04.stderr.txt`.
+
+`container removal safety and shared revert behavior > revert restores a tracked
+file from the base` (`apps/backend/src/core/commands-files-delete-folder.test.ts`)
+timed out at 5,031.36 ms during `git diff --cached --name-status`.
+At `b32cfe416`, the unchanged complete owner passed alone:
+`mise run test:logged -- --name recorded-revert-alone -- bun test --cwd
+apps/backend ./src/core/commands-files-delete-folder.test.ts --parallel=1
+--only-failures` (exit 0, 24.4 s). Passing raw output was deleted, so totals are
+not inferred. No assertion, skip or timeout changed; this is evidence of
+intermittence, not a demonstrated cause or repair.
+
+Readiness remains unresolved. Preparation's `a pending shell probe is clipped
+to the remaining overall deadline` took 1,893.45 ms against its 1,500 ms cap.
+The complete owner at `b32cfe416` failed alone in
+`mise run test:logged -- --name recorded-readiness-alone -- bun test --cwd
+apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures`:
+19 pass, two fail, 69 assertions (13.02 s). The same probe case took 2,996.14 ms;
+`renews an expired shell wait window and accepts readiness in the next exec`
+also returned `timed-out`. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jqbt6D/recorded-readiness-alone.log.gz`.
+These cases exercise the existing boot-wait path, not the changed deletion drain.
+A combined three-owner run had passed earlier (24.9 s); that does not erase
+the isolated failure or establish its cause. Neither assertion was changed.

@@ -155,7 +155,7 @@ task 8 measured their saving per open tmux tab, and this idle profile had no
 tab open. After's
 `tab-cleanup` makes 5 `docker exec` a minute that base's did not; that is
 new work on an idle container environment and is
-[7530](../containers-and-environments/7530-idle-tab-cleanup-execs.md).
+[7531](../containers-and-environments/7531-idle-tab-cleanup-execs.md).
 
 **BG-15, a real claude-tmux tab on a loopback fake model.** Base here is
 `c1724ab74` (the commit BG-15 was measured against) and after is this branch

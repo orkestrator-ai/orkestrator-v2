@@ -77,3 +77,7 @@ card.
   task 3, which found this.
 - [5040-revision-token-spec-background-output.md](5040-revision-token-spec-background-output.md):
   background command output on Claude.
+
+## Replaces
+
+- Number 7520, renumbered on 2026-11-06. Three pull requests merged a 7520 the same day; the earliest to merge, [7520](../agent-engines/7520-message-rewind-and-branch-switch-have-no-client-surface.md) (#1957), kept it.

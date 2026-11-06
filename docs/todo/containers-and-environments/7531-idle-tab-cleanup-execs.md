@@ -73,3 +73,7 @@ was not checked.
 ## Related
 
 - [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 1 (the measurement) and task 8 (BG-1, BG-2, BG-8).
+
+## Replaces
+
+- Number 7530, renumbered on 2026-11-06. [7530](../transcripts-and-observation/7530-codex-idle-discovery-renewals.md) (#1960) merged first and kept it.

@@ -56,3 +56,7 @@ shells, and they end with the backend.
 ## Related
 
 - [7081-container-claude-cli-tab-leftovers.md](7081-container-claude-cli-tab-leftovers.md) (the close this extends).
+
+## Replaces
+
+- Number 7520, renumbered on 2026-11-06. Three pull requests merged a 7520 the same day; the earliest to merge, [7520](../agent-engines/7520-message-rewind-and-branch-switch-have-no-client-surface.md) (#1957), kept it.

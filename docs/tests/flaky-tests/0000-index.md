@@ -78,6 +78,11 @@ files.
   `FROZEN_DUPLICATES` list and kept, not renumbered; none of them may gain
   another file. When a reused number is cited in prose, cite the case file
   name too.
+- A case numbered 9800 or above also adds its claim,
+  `docs/number-claims/flaky-tests/NNNN`, holding `<group>/NNNN-slug.md`. Two
+  branches that take the same number then conflict in Git instead of both
+  merging ([number-claims](../../number-claims/README.md),
+  `tests/unit/number-claims.test.ts`). Count claims as numbers in use.
 - Status is one of `open`, `resolved` or `environmental`. Change it in place
   in both the case file and the group table; never move or delete a row.
 - Group tables have the columns `ID | Status | Test | File | Symptom | Case`,

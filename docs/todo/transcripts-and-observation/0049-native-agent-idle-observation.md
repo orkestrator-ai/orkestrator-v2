@@ -11,7 +11,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 ag
 
 1. **Bridge restart while backed off**: Claude and Codex; the next turn must be seen within the 3 s completion budget. Status: done (2026-11-06, both providers, loopback models).
 2. **Claude background-task output**: the background case still fails its fresh tool-result assertion. Status: done (2026-11-06: a spec expectation; the output is in the finished task's output file, which the case now reads).
-3. **Codex live async question and background shell**: neither has been exercised live. Status: done (2026-11-06, loopback model: the async question reached a backed-off view in 13 ms and its answer settled; the backgrounded command's card stays "running..." for good, moved to [7520](7520-codex-backgrounded-command-stays-running.md)).
+3. **Codex live async question and background shell**: neither has been exercised live. Status: done (2026-11-06, loopback model: the async question reached a backed-off view in 13 ms and its answer settled; the backgrounded command's card stays "running..." for good, moved to [7522](7522-codex-backgrounded-command-stays-running.md)).
 4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: done (2026-11-06, loopback models: the live per-cause counts are Claude none and Codex `discovery-renewal` 6 in 300 s; naming the section and stopping it moved to [7530](7530-codex-idle-discovery-renewals.md)).
 5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: done (2026-11-06, both providers, loopback models; all passed).
 6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code); open: no loopback model is wired into OpenCode, and this host has no OpenCode login to use instead.
@@ -168,7 +168,7 @@ it was still running when the turn ended. Codex has no background-task
 surface, so the case is recorded `not-exercised` as recommended, but it
 found a defect: the command's card stayed `pending` ("running...") after the
 command had exited, because Codex sends no event for it once the turn is
-over ([7520](7520-codex-backgrounded-command-stays-running.md)).
+over ([7522](7522-codex-backgrounded-command-stays-running.md)).
 
 ### 4. Codex short idle gaps
 
@@ -391,7 +391,7 @@ no loopback model reaches it.
 **Outcome (2026-11-06, loopback models).** With scripted models the tool
 choice is no longer the model's, so the Codex half is done: sub-agents passed
 (task 5) and the background shell really backgrounded its command (task 3,
-which found [7520](7520-codex-backgrounded-command-stays-running.md)). The
+which found [7522](7522-codex-backgrounded-command-stays-running.md)). The
 scripted Codex call had to name the tool's namespace: `spawn_agent` and
 `wait_agent` live in `collaboration`, and Codex answers a bare name with
 "unsupported call". Cursor and OpenCode stay open. Cursor's SDK talks to
@@ -715,7 +715,7 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
 
 - Claude and Codex: every case has now run at the new cadence with loopback
   models (2026-11-06, tasks 3 to 5). Left from them: Codex's backgrounded
-  command card (7520) and the discovery renewals that wake an idle Codex
+  command card (7522) and the discovery renewals that wake an idle Codex
   view (7530). These are loopback-model runs; a real model's own choices
   (and a real provider's latency) are not part of them.
 - Grok: re-run `e2e/agent-testing/idle-observation-live.spec.ts` once a Grok
@@ -851,7 +851,7 @@ Single samples, not p95 estimates.
 | `async-question` (task 3) | skipped (no async question) | passed: card 13 ms, reply 16 ms, answer settled 10 ms | skipped |
 | `approval` | passed: card 6 ms | passed: card 48 ms | passed (policy `ask`): card 9 ms |
 | `subagents` | passed: `Agent`, none left running | passed: one `subagent` card, `success` | not exercised (no tool) |
-| `background` | passed: indicator 4 ms, evidence `output-file` | not exercised: card stays `bash:pending` after the command ended (7520) | not exercised (foreground) |
+| `background` | passed: indicator 4 ms, evidence `output-file` | not exercised: card stays `bash:pending` after the command ended (7522) | not exercised (foreground) |
 | `reconnect` | passed: 53 ms after online | passed: 138 ms | passed: 127 ms |
 | `hidden` | passed: 0 reads hidden, 105 ms | passed: 0 reads, 189 ms | passed: 0 reads, 111 ms |
 | `no-renderer` | passed: aggregate 4 ms, second client 6.1 s | passed: 6 ms, 9.3 s | passed: 6 ms, 6.2 s |
@@ -1283,7 +1283,7 @@ those cases stay `not-exercised` or `skipped` whatever the model does.
 
 **D22. Defects found by this run: fix or record.** Options: fix the stuck
 Codex command card and the idle Codex renewals here, or record them.
-Chosen: record both (7520, 7530). Why: neither is a regression in the
+Chosen: record both (7522, 7530). Why: neither is a regression in the
 observation paths this file qualifies, the first needs a rendering decision
 for a state Codex never reports, and the second's source is not yet named.
 Pros: this change stays a qualification run; each follow-up has its evidence
@@ -1321,7 +1321,7 @@ and options. Cons: both costs remain until then.
   the Codex half of task 10.
 - [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md):
   the host firewall that blocks task 9's later container turns on beelink.
-- [7520-codex-backgrounded-command-stays-running.md](7520-codex-backgrounded-command-stays-running.md):
+- [7522-codex-backgrounded-command-stays-running.md](7522-codex-backgrounded-command-stays-running.md):
   found by task 3; a Codex command left running at the end of its turn reads
   "running..." for good.
 - [7530-codex-idle-discovery-renewals.md](7530-codex-idle-discovery-renewals.md):

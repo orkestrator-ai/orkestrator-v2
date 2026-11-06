@@ -17,7 +17,11 @@ Refreshed 2026-10-15 against `main` at `2459b05c`.
 | [`development/`](#development) | Living contributor guides: testing, upgrades, releases, disk usage. |
 | [`debugging/`](#debugging) | Runbooks for diagnosing failures on a running install: crashes, killed processes, blank windows. |
 | [`tests/`](#tests) | The flaky-test registry, grouped into folders by area. [`tests/flaky-tests/0000-index.md`](tests/flaky-tests/0000-index.md) points to each folder's index, which tracks its cases. |
+| [`number-claims/`](number-claims/README.md) | One file per to-do or flake number, so two branches that take the same number conflict in Git. |
 | [`todo/`](#todo) | All outstanding work in numbered files, grouped into folders by area. [`todo/0000-index.md`](todo/0000-index.md) points to each folder's index, which ranks its files by criticality. Pick work from here. |
+
+`number-claims/` holds no prose; it backs the numbering of `todo/` and
+`tests/flaky-tests/`.
 
 There are no other plan, review or dated-note folders, and nothing else
 belongs at the top of `docs/`. Durable content goes into `architecture/`,
@@ -143,8 +147,10 @@ a whole, never its individual items. Pick work from the top of a folder index.
 Every file is named `NNNN-kebab-case-name.md`. The four-digit number is the
 file's permanent ID, unique across all folders: it is an identifier, not a
 rank, and the folder index carries the ranking. A new file takes the next
-number after the highest one in use under `todo/`. Numbers are never reused,
-and a file keeps its number if it moves to another folder.
+number after the highest one in use under `todo/` or
+[`number-claims/todo/`](number-claims/README.md), and adds its claim there.
+Numbers are never reused, and a file keeps its number if it moves to another
+folder.
 
 ### Rating a file
 
@@ -211,11 +217,13 @@ Rules of thumb:
   every area folder to be linked from the top-level index. Two numbers were
   already shared when it was added and stay allowlisted: 0054 (three files) and
   0723 (two). Neither may gain another file.
-- Two open pull requests can each pick the same next number and each pass CI,
-  so the guard may first fire on `main` after the second merges. Fix forward:
-  rename the newer file to the next free number, update every link to it,
-  and record the old number in its "Replaces" section. A file that only just
-  merged has few links, so this does not undo a number anyone relies on.
+- Two open pull requests can each pick the same next number and each pass CI.
+  The claim file each adds under `number-claims/todo/` then conflicts, so the
+  second cannot merge until it renumbers (`tests/unit/number-claims.test.ts`
+  requires a claim for every number from 7500). If a clash still reaches
+  `main`, fix forward: the file that merged first keeps the number, the newer
+  one moves to the next free number with its claim, every link to it is
+  updated, and its "Replaces" section records the old number.
 
 Live-provider and platform runs (macOS, Docker Desktop, Electron, Safari and
 iOS, two machines) are the most common open gate. They are batched in

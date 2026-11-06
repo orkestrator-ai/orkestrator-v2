@@ -166,7 +166,7 @@ describe("AgentSignInCard", () => {
     statuses.cursor = fixture("cursor", "signed-in");
     const { container } = render(<AgentSignInCard platform="cursor" />);
     expect(await screen.findByText("cursor@example.test · pro")).toBeTruthy();
-    expect(container.querySelector("[data-sign-in-expiry]")).toBeNull();
+    expect(container.querySelector("[data-sign-in-expiry]") === null).toBe(true);
   });
 
   test.each([

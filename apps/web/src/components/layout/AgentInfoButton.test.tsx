@@ -4859,7 +4859,7 @@ describe("AgentInfoButton ACP agents", () => {
         state !== "signed-in",
       );
       // No reported end, no line.
-      expect(document.querySelector("[data-sign-in-expiry]")).toBeNull();
+      expect(document.querySelector("[data-sign-in-expiry]") === null).toBe(true);
     },
   );
 

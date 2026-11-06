@@ -164,7 +164,7 @@ test("spend that includes an estimate is marked as one everywhere it is shown", 
   expect(row("claude-opus-5-5").getByTitle("Estimated from token counts").textContent).toBe(
     "~$3.00, estimated",
   );
-  expect(row("cursor-1").getByText("$1.00").getAttribute("title")).toBeNull();
+  expect(row("cursor-1").getByText("$1.00").getAttribute("title") === null).toBe(true);
 
   // The platform list follows the same rule.
   const platforms = within(screen.getByRole("region", { name: "Platforms" }));
@@ -183,7 +183,7 @@ test("spend with no stated source reads as it always has", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Cost" }));
   const total = await screen.findByTestId("usage-total");
   await waitFor(() => expect(total.textContent).toBe("$4.00"));
-  expect(total.querySelector("[title]")).toBeNull();
+  expect(total.querySelector("[title]") === null).toBe(true);
 });
 
 test("changing the range re-reads and keeps the last report on screen", async () => {

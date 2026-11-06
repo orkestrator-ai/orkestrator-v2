@@ -281,10 +281,19 @@ export async function requestClaudeToolApproval(
         ? input.notebook_path
         : undefined;
   const networkHost = toolName === "WebFetch" ? webFetchHost(input) : undefined;
+  // The CLI marks an ask a person must answer: `suppressAlwaysAllowRule` (its
+  // rule would grant more than this call, or a plugin started the call, where
+  // the CLI saves no rule at all) and `matchedAskRule` (the user's own ask rule
+  // forced the prompt, including, since 2.1.319, under another name of the MCP
+  // server). A stored Orkestrator rule must neither answer it nor be offered.
+  const humanRequired =
+    permissionContext?.suppressAlwaysAllowRule === true ||
+    permissionContext?.matchedAskRule !== undefined;
   // Exact detail only: `bounded` marks a cut value with an ellipsis, which a
   // rule must never be matched against.
   const ruleEligible =
-    detail.kind === "command-approval"
+    !humanRequired &&
+    (detail.kind === "command-approval"
       ? rawCommand !== undefined &&
         rawCommand === command &&
         (input.dangerouslyDisableSandbox === undefined ||
@@ -304,7 +313,7 @@ export async function requestClaudeToolApproval(
             mcpServer !== undefined &&
             mcpServer.length <= AGENT_INTERACTION_LIMITS.maxSourceNameLength &&
             mcpServer === permissionContext?.mcpServer?.name) ||
-          networkHost !== undefined;
+          networkHost !== undefined);
   const proposedCommandPrefix =
     detail.kind === "command-approval"
       ? proposedBashPrefix(permissionContext?.suggestions)

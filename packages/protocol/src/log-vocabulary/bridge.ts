@@ -66,6 +66,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "context-usage.read-failed": "The detailed context usage read failed; the route falls back.",
       "dispatch.rollback-failed": "Rolling back a prompt dispatch claim failed.",
       "event-subscriber.failed": "An event subscriber threw; other subscribers still ran.",
+      "hook.boundary-failed-closed":
+        "A PreToolUse hook that holds a boundary threw, so the tool call was denied.",
       "http.request-failed": "An HTTP route threw; it answered 500.",
       "mcp.config-ignored": "An MCP server configuration of an unsupported shape was ignored.",
       "mcp.read-failed": "Listing MCP servers failed; the route answered 500.",

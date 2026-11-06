@@ -855,6 +855,23 @@ the pinned binary's parser over the production argument shape.
    `codexNetworkDeniedConfig` and `codexHostedNetworkLockGaps` together;
    until then coordinator threads are refused, which is the intended failure.
 
+   Then run the project-resources canaries, which also spend no credits:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-project-trust.test.ts
+   ```
+
+   A trusted checkout carries a config layer, AGENTS.md, two skills, an MCP
+   server and two command hooks (which the throwaway user config trusts by
+   hash). The control case must see every one; with project resources off
+   none may reach the model or run, after a reload and in a linked worktree
+   too. AGENTS.md still reaches such a thread once, through the bridge's own
+   copy in the developer instructions. A failure means the untrusted pin no
+   longer covers something the checkout can declare: treat it as a release
+   blocker and report the resource as on until it is closed.
+
    Since 0.164.0 a turn opens with a `generate: false` prewarm frame, which
    the fakes skip. `features.incremental_tools`, on by default since 0.164.0,
    writes each turn's tool declarations into the thread history, so a resumed

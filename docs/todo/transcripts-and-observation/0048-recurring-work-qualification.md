@@ -1,5 +1,9 @@
 # Recurring work qualification
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
 Checked against `main` at `00a0cb82` (2026-10-25); tasks 3 and 4 rechecked
 against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 2026-10-22 and 2026-10-25, and from Linux on 2026-11-01; see
@@ -7,10 +11,6 @@ against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 [Live soak](#live-soak-2026-10-25-macos),
 [Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux)
 and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
-
-## Task analysis
-
-Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
@@ -29,12 +29,18 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (on tasks 1, 5 and 10).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (one stale comment left).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
+16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines).
+17. **View PR stale marker with a real PR**: a failed PR read shows the stale marker and last-check tooltip, which clear on the next good read. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs GitHub credentials).
+18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open.
+19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: open.
+20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: open.
+21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: open.
 
 ### 1. Busy live profile
 
 **Problem.** Recurring work is on by default, but the only live evidence is an idle, credential-free profile. None of the obligations the keyed drivers must keep (result consumption, prompt dispatch, PR terminal effects) has run live, so a missed wakeup under load would show as a stale workflow or a stuck queue for every user.
 
-**Context.** The idle A/B and a 10-cycle soak ran on macOS (Live evidence, Live soak). The file says each busy step needs credentials, a scripted UI or a fault injector that `scripts/recurring-live-ab.ts` lacks. Outage and resume overlap with the live outage workload in [0051](0051-client-reconnect-and-freshness.md). The run is batched for macOS and Docker Desktop in 0031.
+**Context.** The idle A/B and a 10-cycle soak ran on macOS (Live evidence, Live soak). The file says each busy step needs credentials, a scripted UI or a fault injector that `scripts/recurring-live-ab.ts` lacks. Outage and resume overlap with the live outage workload in 0051. The run is batched for macOS and Docker Desktop in 0031.
 
 **Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline-context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `multi-review-service.ts:625`, `native-agent-service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
 
@@ -389,6 +395,180 @@ after a restart. Follow-ups needing a decision are in
     - Pros: clean, and many sit in code that removal deletes anyway.
     - Cons: collides with parallel work.
 
+### 16. Client reconnect over a real two-machine link drop
+
+**Problem.** Reconnect and freshness were qualified on 2026-10-31 through a
+proxy inside the test, which resets connections or goes silent. A real tailnet
+may behave differently, for example in how soon the OS gives up on a socket or
+fails a connect.
+
+**Context.** Moved from to-do 0051 (deleted 2026-11-06); its recorded run is
+summarised in
+[`agent-testing.md`](../../development/agent-testing.md#live-client-outage). The
+client backoff is `packages/protocol/src/reconnect-backoff.ts`; the gateway
+client drops a silent stream after missed keepalives (`dropSilentStreams` in
+`web-gateway.ts`), and the banner is `ConnectionStatusBanner.tsx`. Batch it with
+task 11 and the two-machine runs of 0052 (0031).
+
+**Investigation.** Steps:
+
+1. Run a `dev:test` profile on host A and serve it to host B through
+   Tailscale Serve.
+2. On B, open 3 tabs with terminals, once over HTTP/SSE and once over the
+   terminal WebSocket.
+3. Silently drop only the test connection's packets with a scoped firewall
+   rule. Keep the drop active until the banner and at least two retry attempts
+   per tab are observed. Allow up to 180 s: the silence watchdog takes 60 s
+   and the banner adds about 4 s, so restoring at 45 s cannot qualify this path.
+   If the observations are absent at 180 s, remove the rule for cleanup and
+   record a failed qualification; do not count an early restoration as a pass.
+4. Before restoring, confirm reads pause and retry times differ across tabs.
+   Then restore connectivity and check terminals recover exactly with the main
+   stream. Separately repeat with an immediate socket/interface error, such as
+   `tailscale down` on B; record its detection/retry timing independently.
+
+**Decisions.**
+
+- **How to drop the link?**
+  - **A scoped firewall rule that drops test packets (recommended).**
+    - Pros: exercises silence through the watchdog and retry observations.
+    - Cons: requires host access and guaranteed removal on failure.
+  - **`tailscale down` on the client machine.**
+    - Pros: the real interface goes away, as when a laptop leaves the network.
+    - Cons: an error rather than silence on some OSes, so it may not test the
+      silent case.
+
+### 17. View PR stale marker with a real PR
+
+**Problem.** The credential-free outage profile recorded a PR URL and the View
+PR action rendered, but no PR state ever arrived from GitHub, so only the
+absence of flicker on quiet `unchanged` reads was shown, not the stale marker
+appearing and clearing.
+
+**Context.** Moved from to-do 0051 (deleted 2026-11-06). Task 5 is the other
+live GitHub run.
+
+**Investigation.** Steps:
+
+1. Use a profile with GitHub credentials and an environment with a real open PR.
+2. Force a failed PR read, for example by blocking `api.github.com` for the
+   profile or briefly revoking the token.
+3. Check that the stale marker and last-check tooltip appear on the View PR
+   action, then clear on the next successful read, with no flicker on quiet
+   `unchanged` reads.
+
+**Decisions.**
+
+- **Run it with task 5?**
+  - **Yes, on task 5's live GitHub profile (recommended).**
+    - Pros: the same credentials and PR.
+    - Cons: blocking GitHub mid-run interrupts task 5's own cadence readings.
+  - **Alone.**
+    - Pros: independent.
+    - Cons: a second credentialed setup.
+
+### 18. Reconnect timing in a real background tab
+
+**Problem.** Headless Chromium keeps a page `visible`, so the 2026-10-31 runs
+never measured reconnect timing in a background tab, where the browser
+throttles timers.
+
+**Context.** Moved from to-do 0051 (deleted 2026-11-06). The gateway client
+retries waiting streams when the document becomes visible
+(`retryWaitingStreams` in `web-gateway.ts`). Task 4 covers a hidden document in
+other workflows.
+
+**Investigation.** Steps:
+
+1. In a headed browser, open the app on a `dev:test` profile, then put the tab
+   in the background.
+2. Cause an outage (stop the profile's backend or drop the link) and restore it
+   while the tab is hidden.
+3. Check the reconnect timing while hidden, and that making the tab visible
+   retries the main stream and the terminal fallbacks at once.
+
+**Decisions.**
+
+- **Which browser?**
+  - **Headed Chromium through Playwright (recommended).**
+    - Pros: scriptable; the same engine as the desktop app.
+    - Cons: needs a display.
+  - **Safari.**
+    - Pros: the strictest throttling.
+    - Cons: manual.
+
+### 19. Changes-tab remote freshness
+
+**Problem.** 0020 still owed a real-browser check of the remote snapshot state;
+retiring 0051 did not supply that result.
+
+**Context.** The Files panel's Changes tab renders `WorktreeSnapshotState.remote`,
+including "Base may be behind remote". This is separate from task 17's PR marker.
+
+**Investigation.** On an isolated `dev:test --fixture` profile, prepare an
+environment with a known fetched base and advance its disposable remote from a
+second fixture checkout. Open Changes, exercise refresh and a safely injected
+remote-read failure, and compare the warning/freshness state with the backend
+snapshot. Switch away while the backend updates, return, and reload; verify the
+same state rehydrates. Restore remote reads, refresh, and confirm the warning
+clears after bringing the fixture base current. Record expected/observed states,
+commit and viewports without repository contents, then stop/reset the profile.
+
+**Decisions.** Add a dedicated browser check here (recommended): keeps snapshot
+freshness separate from PR freshness, but needs fixture Git setup. Treating task
+17 as coverage is cheaper but exercises a different state source.
+
+### 20. Other event-stream readers
+
+**Problem.** Retired 0051 said its silent-drop and lock-step reconnect fixes
+were applied only to the browser gateway and Electron client; other readers
+were not assessed.
+
+**Context.** That scope limit remains unverified. A successful task 16 run
+does not establish every stream consumer has a silence watchdog and retry jitter.
+
+**Investigation.** Inventory event-stream readers and reconnect owners outside
+those two clients. For each, record its silence detection, bounded backoff and
+retry spread, or the evidence that another layer owns those guarantees. Exercise
+silent-drop and immediate-error paths in isolated fixtures. Create code-allowed
+follow-ups for missing guarantees; close only with a per-reader disposition.
+
+**Decisions.** Inventory before changing readers (recommended): identifies real
+gaps without assuming identical transports, but requires tracing ownership.
+Applying the same patch everywhere is quicker but may duplicate existing logic.
+
+### 21. Retired to-do pointers in source comments
+
+**Problem.** Four source comments point to files retired on 2026-11-06, and a fifth to a task number removed when 0241 was rewritten that day.
+
+**Context.** The retirement ticket is docs-only, so the source edits are tracked
+here for the next code-allowed change. This records the review's requested
+follow-up rather than silently dropping the references.
+
+**Investigation.** Replace these exact pointers, then search source for the
+retired paths and run the checks required for the files changed:
+
+1. `e2e/agent-testing/client-outage.spec.ts:35`: deleted
+   `0051-client-reconnect-and-freshness.md` →
+   `docs/development/agent-testing.md#live-client-outage` and this file's tasks 16–20.
+2. `e2e/agent-testing/connection-outage-electron.spec.ts:21`: the same 0051
+   replacement.
+3. `apps/backend/src/core/preview-verification-window.test.ts:11`: deleted
+   `3230-restart-inside-verification-window.md` →
+   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3.
+4. `apps/desktop/electron/native-dialogs.ts:19`: deleted
+   `0880-desktop-main-thread-held-by-modal-dialog.md` →
+   `docs/todo/cross-cutting/0741-backend-responsiveness-under-load.md` task 7.
+5. `scripts/probe-network-sweep.ts:5`: `todo 0241 task 5`, a task removed
+   when 0241 was rewritten to hold only its live check →
+   `docs/development/disk-usage.md` (the sweep's rules); its live run is
+   0241 task 1.
+
+**Decisions.** Record a concrete code-allowed follow-up (recommended): respects
+the ticket's boundary and preserves every destination, but the comments stay
+stale until that work lands. Editing source now fixes navigation immediately but
+breaks the docs-only constraint.
+
 #852 changed how often the app collects and reads facts: shared worktree
 snapshots, a container fetch policy, lifecycle-aware PR monitoring, the client
 read coordinator, the native observation broker and keyed workflow
@@ -691,7 +871,7 @@ container, so every fetch was a real `git fetch`.
   `fixtures/test-project`. The first start's container kept a bind to the
   deleted origin (empty inside, `does not appear to be a git repository`),
   and its local worktree's `.git` pointed at a deleted repository. Recorded as
-  [2180](../cross-cutting/2180-fixture-restart-orphans-earlier-environments.md);
+  2180 (deleted 2026-11-06; its live check is task 7 of [0019](../containers-and-environments/0019-container-platform-qualification.md));
   the run above used the second start's container.
 
 Real-browser QA, on a fresh profile after `dev:reset` (headless Chromium, run
@@ -1088,6 +1268,13 @@ Both questions were answered on 2026-10-25; see "Assumptions and decisions".
 
 ## Assumptions and decisions
 
+### Tasks 16 and 19–21: review repair (2026-11-06)
+
+Keep the omitted qualifications explicitly open; no live results are inferred
+from their migration. Task 16 now requires silence through watchdog expiry and
+retry observations. Task 21 preserves the docs-only boundary by naming all four
+source-comment replacements as follow-up work.
+
 Recorded 2026-10-25 by the worker that implemented this file's code items.
 
 1. **Rollback driver retirement.** Options: retire now on about three weeks
@@ -1240,7 +1427,7 @@ Recorded 2026-11-01 by the worker that ran tasks 3 and 4 live on Linux.
 17. **The two harness problems this run hit.** A `--fixture` restart orphans
     the previous start's environments, and `dev:test` opens Electron on the
     Linux desktop. Options: fix them here; or record them. Chosen: record them
-    as [2180](../cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)
+    as 2180
     and [2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
     Why: both change behaviour every browser suite relies on and are outside
     this file's scope. The workarounds used here are in those files.
@@ -1442,7 +1629,8 @@ with other tasks' decisions.
 - [7120-multi-client-restart-follow-ups.md](7120-multi-client-restart-follow-ups.md):
   what task 11's run left for a decision.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
-  [0051-client-reconnect-and-freshness.md](0051-client-reconnect-and-freshness.md) and
+  retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
+  remaining checks are tasks 16–20 here) and
   [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): the client and
   observation halves of #852.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the

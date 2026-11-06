@@ -362,7 +362,12 @@ test("a running reviewer restarts alone from its context menu", async ({ page })
 test("a reviewer's focus, findings so far and a moved worktree are shown", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=live-findings");
   await expect(node(page, "Reviewer 1")).toContainText("Focus: Security");
-  await expect(page.getByTestId("pipeline-review-stale")).toContainText("worktree changed");
+  // A phone shows the notice as a pill until it is opened.
+  const stale = page.getByTestId("pipeline-review-stale");
+  const stalePill = page.getByRole("button", { name: /^Review may be out of date:/ });
+  await expect(stale.or(stalePill)).toBeVisible();
+  if (await stalePill.isVisible()) await stalePill.click();
+  await expect(stale).toContainText("worktree changed");
   await node(page, "Reviewer 1").click();
   const findings = page.getByTestId("pipeline-reviewer-provisional");
   await expect(findings).toContainText("1 finding reported so far");

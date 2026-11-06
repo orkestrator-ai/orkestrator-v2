@@ -45,7 +45,11 @@ export type ValidationFailureVerdict = (typeof VALIDATION_FAILURE_VERDICTS)[numb
 export const VALIDATION_FAILURE_REASONS = [
   /** The runner retried the test and it passed (Playwright's "flaky"). */
   "passed-on-retry",
-  /** An open row in the repository's flake registry names the test. */
+  /**
+   * An open row in the repository's flake registry names the test. Context
+   * only: it never changes the verdict, so a registry row cannot excuse a
+   * failure in code the branch changed.
+   */
   "known-flaky",
   /** The target branch's CI failed the same test on the merge-base commit. */
   "failed-on-target-ci",
@@ -55,7 +59,11 @@ export const VALIDATION_FAILURE_REASONS = [
   "test-file-changed",
   /** The test's static import graph reaches a file the branch changed. */
   "imports-changed-file",
-  /** The test or a test helper it imports names a path the branch changed. */
+  /**
+   * The test or a test helper it imports names, in code, a changed file, its
+   * basename or a directory above it; or another module it loads names a
+   * changed file's full path in code. Comments never count.
+   */
   "references-changed-path",
   /** The import graph is complete and reaches no changed file. */
   "no-changed-dependency",
@@ -82,7 +90,10 @@ export interface TriagedValidationFailure {
   outcome: "failed" | "flaky";
   verdict: ValidationFailureVerdict;
   reasons: ValidationFailureReason[];
-  /** For `imports-changed-file`/`references-changed-path`: the changed path. */
+  /**
+   * For `imports-changed-file`/`references-changed-path`: the changed file, or
+   * the changed directory a test or helper named.
+   */
   changedPath?: string;
 }
 

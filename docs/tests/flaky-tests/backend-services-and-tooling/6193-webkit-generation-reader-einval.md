@@ -53,3 +53,29 @@ Aggregate evidence: `orkestrator-test-run.dmrQu6/root-and-agent-support-tests.lo
 under the macOS temporary root recorded above. The isolated sidebar evidence
 is `orkestrator-test-run.QkzK4Z/merge-sidebar-rerun.log.gz`. No test assertion,
 implementation, timeout or skip was changed.
+
+
+## Launch override review recurrence — 2026-11-05
+
+Preparation at `2c3a5e7e7a1d8d37d6c95486ac5ee3f2b0cdda73` repeated the same
+`EINVAL` at line 651 (44.33 ms), also reported as an unhandled error between
+tests. The root group used one worker; the retained aggregate output has no
+complete closing root summary, so per-group totals cannot be established.
+The original command was
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+Evidence is preserved in
+`.orkestrator/review-artifacts/review-validation-da7187d5-86f1-423c-aa0c-4b906bd32d12/validation-04.stderr.txt`
+(lines 478–519). The preparation package marked this failure `undetermined`
+(`known-flaky`, `global-change`), because this branch adds a protocol package
+export. No WebKit publication, pruning, or owner test code changes in the
+branch diff against `origin/main`.
+
+The unchanged complete owner passed alone (exit 0, 2.2 s):
+
+```sh
+mise run test:logged -- --name recorded-webkit -- bun test ./tests/unit/playwright-webkit-host-libs.test.ts --parallel=1 --only-failures
+```
+
+Passing output was deleted by the logged runner; no per-test totals were
+retained. This is another observation of the existing flake, not a root-cause
+fix. No assertions, skips, timing budgets, or WebKit implementation changed.

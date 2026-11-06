@@ -40,6 +40,7 @@ and with an interactive artifact.
 4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: done (2026-10-31: [workflow run 41220321295](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295) passed five menu and five cleanup iterations on each platform, with native input and no retries).
 5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: partly done (2026-10-31: sidebar, terminal, Monaco and the menu bar pass on packaged X11; composer, previews, artifact, design frame, realm and Wayland not run).
 6. **Packaged macOS native qualification**: the matrix below, including the Cyrillic input source, on a packaged macOS build. Status: open (needs a macOS host).
+7. **Packaged About panel on macOS and Windows**: the panel reads "Orkestrator AI" with the right version and icon. Moved from to-do 1150 (deleted 2026-11-06). Status: open (needs a packaged macOS build; no Windows build is configured).
 
 ### 1. Windows/Linux menu layout
 
@@ -193,6 +194,39 @@ Update 2026-10-31: run on a packaged build of `931e5541`; results and setup are 
     - Pros: unattended once set up.
     - Cons: failed to start on 2026-10-27; window activation was not granted.
 - **What counts as a pass?** The same record as task 5, with the macOS version and input source per row.
+
+### 7. Packaged About panel on macOS and Windows
+
+**Problem.** The fixture's About panel showed "About electron" with no
+version, because the app set no About panel options. It now sets them, and a
+packaged Linux build was checked on 2026-11-01; macOS and Windows have not been
+looked at.
+
+**Context.** Moved from to-do 1150 (deleted 2026-11-06).
+`app.setAboutPanelOptions(aboutPanelOptions(...))` is called in
+`apps/desktop/electron/main.ts`, built in `about-panel.ts` from the profile title
+or product name, the version and `<resources>/icon.png`, which packaging copies
+(`package.json`). `apps/desktop/tests/about-panel.test.ts` pins the options.
+
+**Investigation.** Steps:
+
+1. On a packaged macOS build (`mise run package:mac`), open the app menu's
+   About and check that it reads "Orkestrator AI", not "OrkestratorV2", with
+   the right version and icon. Do it during task 6's run.
+2. On a Windows Electron build, open Help › About and check the name, version
+   and icon. No Windows build is configured (`build.win` is unset), so this
+   waits for one.
+3. Record a screenshot of each.
+
+**Decisions.**
+
+- **Wait for Windows?**
+  - **Close the task on macOS alone and note Windows as unconfigured (recommended).**
+    - Pros: macOS is a shipped platform; Windows has no build to check.
+    - Cons: the Windows panel stays unseen.
+  - **Keep it open until a Windows build exists.**
+    - Pros: covers every platform the options name.
+    - Cons: may never close.
 
 ## Current state
 
@@ -404,7 +438,7 @@ Updates… is absent from an unpacked build that cannot update itself. The About
 panel was titled **About orkestrator-v2**. It showed the executable name, a
 missing-image icon, Credits, License and Close, with no product name and no
 version, even though the runtime profile had renamed the app; follow-up
-[1150](1150-linux-about-panel-metadata.md).
+1150 (deleted 2026-11-06; task 7).
 
 **The user's Ctrl+Shift+K report.** Ctrl+Shift+K no longer opens the dialog on
 any platform, by design: `f32615aff` (#1449) moved the shortcut to
@@ -451,8 +485,8 @@ is open in full.
   toggles exactly once. The bar shows File, Edit, View, Window and Help, with
   no Hide, Hide Others, Show All or Zoom item. File › Close Tab has no key, and
   Super+H does nothing in Orkestrator. File › Quit (Ctrl+Q) quits, and Help ›
-  About opens Electron's about panel. The app sets no `setAboutPanelOptions`,
-  so record what the panel shows.
+  About opens the about panel, which shows the app name, version and icon from
+  `about-panel.ts` (task 7).
 - ⌘K with focus in the sidebar, composer, Monaco, an interactive artifact, a
   design frame and a workspace realm opens the window's search, which takes
   typing. Ctrl+K does the same on Linux. On macOS, Ctrl+K stays with a focused
@@ -684,5 +718,5 @@ isolated X11 session" below; it still holds for macOS.
   (the branch's aggregate validation run).
 - [1510](../../tests/flaky-tests/electron-and-desktop/1510-native-menu-keys-before-focus-moves.md)
   (the native menu spec's focus race).
-- [1150](1150-linux-about-panel-metadata.md) (the Linux About panel's missing
+- `1150-linux-about-panel-metadata.md` (deleted 2026-11-06) (the Linux About panel's missing
   name, version and icon).

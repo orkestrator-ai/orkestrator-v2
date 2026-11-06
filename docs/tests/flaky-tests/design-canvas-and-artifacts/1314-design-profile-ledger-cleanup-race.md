@@ -185,7 +185,7 @@ in the host temporary directory.
 
 ## Failed-turn restart validation observation
 
-On 2026-10-31, while validating [0940](../../../todo/cross-cutting/0940-failed-turn-reads-as-completed.md)
+On 2026-10-31, while validating 0940
 task 3, `mise run test` failed this case in 100.81 ms: the JSON ledger entry was
 still present at line 505 after the profile had gone. The backend reported
 11,713 passed, 103 skipped and this one failure across 804 files (109.36 s), on a

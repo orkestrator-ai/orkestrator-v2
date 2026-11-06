@@ -1,6 +1,6 @@
 # Pi session list: what a large history costs each read
 
-Found while measuring [5480 task 3](5480-pi-resume-list-timeout-leftovers.md#3-measure-how-large-a-pi-history-reaches-the-30-s-timeout).
+Found while measuring 5480 task 3.
 
 ## Task analysis
 
@@ -39,5 +39,5 @@ Review correction (2026-11-05): describe the crossing estimates by measured thro
 
 ## Related
 
-- [5480](5480-pi-resume-list-timeout-leftovers.md): the measurement and the reason shown in the dialog.
+- `5480-pi-resume-list-timeout-leftovers.md` (deleted 2026-11-06): the measurement and the reason shown in the dialog.
 - [1202 task 6](../cross-cutting/1202-efficiency-review-follow-ups.md#6-bridge-hot-paths): the cache and the ceiling.

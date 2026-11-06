@@ -28,6 +28,7 @@ import {
   type CoordinatorWorkBucket,
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
+import { coordinatorTabLaunchRequest } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type { MultiReviewPhase, MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
@@ -494,7 +495,7 @@ function workerItem(
     ...(summary ? { summary } : {}),
     ...(selection?.agent ? { agent: selection.agent } : {}),
     ...(selection?.model ? { model: selection.model } : {}),
-    ...(selection?.source === "requested" ? { overridden: true } : {}),
+    ...(launchOverridden(delegations) ? { overridden: true } : {}),
     ...(stoppable.length > 0
       ? {
           stop: {
@@ -511,6 +512,15 @@ function workerItem(
     prOpen,
     sortAt: finishedAt ?? latest(...delegations.map((d) => time(d.requestedAt))) ?? createdAt,
   };
+}
+
+/** The latest tab's launch, by the same rule its marker on the tab uses. */
+function launchOverridden(delegations: readonly CoordinatorDelegation[]): boolean {
+  const latestTab = delegations.at(-1)?.workerTabId;
+  return (
+    coordinatorTabLaunchRequest(delegations.filter((item) => item.workerTabId === latestTab))
+      ?.source === "requested"
+  );
 }
 
 /** Never carry a selection across tabs, agents, or an explicit model reset. */

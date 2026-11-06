@@ -153,7 +153,7 @@ identity, without sending another coordinator notice.
 | Where | What |
 | --- | --- |
 | The command's own card (`!` commands) | Headline, Open link, the code (click to copy), Press ENTER; masked input for a password |
-| The agent tab (agent commands) | `HumanPromptBanner` above the composer |
+| The agent tab (agent commands) | `HumanPromptBanner`, a floating notice at the top right of the tab (above the composer where the tab has no notice layer) |
 | The coordinator panel | `HumanPromptBanner` with an Open action, for every local worker environment the coordinator launched or delegated to, from any source, and for workers on other nodes while a request to them is open (read per node; see [the Work panel](coordinator.md#work-panel)) |
 | The coordinator model | One workflow notice per prompt (`CoordinatorService.noteWorkerHumanPrompt`), for agent commands only, sent to the main conversation with the link and code; tone `attention`, state `waiting` |
 

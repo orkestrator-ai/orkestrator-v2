@@ -333,6 +333,44 @@ describe("database upkeep (reports 0760 and 0910)", () => {
     }
   });
 
+  test("upkeep logs its finished outcome when the database closes after optimize", async () => {
+    const main = opened(openBackendDatabase(await dataDir()));
+    const logs = captureLogs();
+    const freePages = spyOn(main, "releasableFreePages");
+    const release = spyOn({ release: releaseFreePagesInChildProcess }, "release");
+    let clock = 0;
+    try {
+      await runDatabaseUpkeep(main, {
+        now: () => {
+          clock += 10;
+          if (clock === 20) main.close();
+          return clock;
+        },
+        release,
+      });
+      expect(main.isClosed()).toBe(true);
+      expect(freePages).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      expect(logs.records().filter((row) => row.event === "upkeep.finished")).toEqual([
+        expect.objectContaining({
+          fields: {
+            durationMs: 20,
+            optimizeMs: 10,
+            releasable: 0,
+            released: null,
+            left: null,
+            releaseMs: null,
+            stop: "closed",
+          },
+        }),
+      ]);
+    } finally {
+      freePages.mockRestore();
+      release.mockRestore();
+      logs.restore();
+    }
+  });
+
   test("a failed release is logged without its message", async () => {
     const main = opened(openBackendDatabase(await dataDir()));
     wastePages(main);

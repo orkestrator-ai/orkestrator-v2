@@ -1149,7 +1149,8 @@ try {
  * Each pass that runs writes one `upkeep.finished` line: how long `optimize`
  * held the event loop, and what the release returned and why it stopped
  * (`stop`: a {@link FreePageReleaseStop}, `no-free-pages` when there was
- * nothing to release, `failed` when the release threw).
+ * nothing to release, `closed` when the connection closed after optimize,
+ * `failed` when the release threw).
  */
 export async function runDatabaseUpkeep(
   database: StorageDatabase,
@@ -1175,8 +1176,11 @@ export async function runDatabaseUpkeep(
   };
   let releaseMs: number | null = null;
   try {
-    if (database.isClosed()) return;
-    releasable = database.releasableFreePages();
+    if (database.isClosed()) {
+      outcome.stop = "closed";
+    } else {
+      releasable = database.releasableFreePages();
+    }
     if (releasable > 0) {
       const releaseStartedAt = now();
       try {

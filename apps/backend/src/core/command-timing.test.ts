@@ -80,6 +80,71 @@ describe("command timings", () => {
     expect(timings.stallContext({ fromMs: 500, toMs: 900 }).blockingCommand).toBeUndefined();
   });
 
+  for (const outcome of ["ok", "failed"] as const) {
+    test(`a blocking async command is attributed before ${outcome} settlement and recorded once`, async () => {
+      const { timings, advance, lines } = harness();
+      const deferred = Promise.withResolvers<string>();
+      const pending = timings.time("get_projects", () => {
+        advance(400);
+        return deferred.promise;
+      });
+      const window = { fromMs: 100, toMs: 900 };
+      expect(timings.stallContext(window)).toEqual({
+        commandsInFlight: 1,
+        commands: "get_projects",
+        blockingCommand: "get_projects",
+        blockingCommandMs: 400,
+      });
+      expect(lines()).toEqual([]);
+      advance(1_000);
+      if (outcome === "ok") {
+        deferred.resolve("done");
+        expect(await pending).toBe("done");
+      } else {
+        deferred.reject(new Error("rejected"));
+        await expect(pending).rejects.toThrow("rejected");
+      }
+      expect(timings.inFlightCount()).toBe(0);
+      expect(timings.stallContext(window)).toMatchObject({
+        commandsInFlight: 0,
+        commands: undefined,
+        blockingCommand: "get_projects",
+        blockingCommandMs: 400,
+      });
+      expect(lines().map((line) => [line.level, line.fields])).toEqual([
+        ["warn", { command: "get_projects", durationMs: 1_400, syncMs: 400, outcome }],
+      ]);
+
+      // The interval remains in the bounded history until 16 newer blockers arrive.
+      for (let index = 0; index < 15; index++) {
+        timings.time("get_config", () => advance(300));
+      }
+      expect(timings.stallContext(window).blockingCommand).toBe("get_projects");
+      timings.time("get_config", () => advance(300));
+      expect(timings.stallContext(window).blockingCommand).toBeUndefined();
+      expect(lines().filter((line) => line.fields?.command === "get_projects")).toHaveLength(1);
+    });
+  }
+
+  test("settling a command does not reinsert an evicted blocking interval", async () => {
+    const { timings, advance } = harness();
+    const deferred = Promise.withResolvers<void>();
+    const pending = timings.time("get_projects", () => {
+      advance(400);
+      return deferred.promise;
+    });
+    advance(1_000);
+    for (let index = 0; index < 16; index++) {
+      timings.time("get_config", () => advance(300));
+    }
+    const window = { fromMs: 100, toMs: 900 };
+    expect(timings.stallContext(window).blockingCommand).toBeUndefined();
+    deferred.resolve();
+    await pending;
+    expect(timings.stallContext(window).blockingCommand).toBeUndefined();
+    expect(timings.inFlightCount()).toBe(0);
+  });
+
   test("a rejection still reaches the caller, and a throw is timed as a failure", async () => {
     const { timings, advance, lines } = harness();
     const rejected = timings.time("create_client_grant", async () => {

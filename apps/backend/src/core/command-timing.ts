@@ -76,10 +76,12 @@ export class CommandTimings {
       result = run();
     } catch (error) {
       const syncMs = this.now() - startedAtMs;
+      this.recordBlocking(name, startedAtMs, syncMs);
       this.finish(id, name, startedAtMs, syncMs, syncMs, "failed");
       throw error;
     }
     const syncMs = this.now() - startedAtMs;
+    this.recordBlocking(name, startedAtMs, syncMs);
     if (!isThenable(result)) {
       this.finish(id, name, startedAtMs, syncMs, syncMs, "ok");
       return result;
@@ -98,6 +100,13 @@ export class CommandTimings {
     ) as T;
   }
 
+  private recordBlocking(name: string, startedAtMs: number, syncMs: number): void {
+    if (syncMs < (this.options.slowSyncMs ?? SLOW_COMMAND_SYNC_MS)) return;
+    // The overdue stall timer runs before an asynchronous command may settle.
+    this.blocking.push({ name, startedAtMs, syncMs });
+    if (this.blocking.length > RECENT_BLOCKING_COMMANDS) this.blocking.shift();
+  }
+
   private finish(
     id: number,
     name: string,
@@ -109,10 +118,6 @@ export class CommandTimings {
     if (id === -1) this.untracked -= 1;
     else this.inFlight.delete(id);
     const blocked = syncMs >= (this.options.slowSyncMs ?? SLOW_COMMAND_SYNC_MS);
-    if (blocked) {
-      this.blocking.push({ name, startedAtMs, syncMs });
-      if (this.blocking.length > RECENT_BLOCKING_COMMANDS) this.blocking.shift();
-    }
     if (!blocked && durationMs < (this.options.slowMs ?? SLOW_COMMAND_MS)) return;
     const endedAtMs = startedAtMs + durationMs;
     let spacing = this.spacing.get(name);

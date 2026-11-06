@@ -245,6 +245,10 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
     const db = new Database(":memory:");
     open.push(db);
     db.exec("CREATE TABLE stores (name TEXT)");
+    db.function("timed_value", (ms: number) => {
+      clock += ms;
+      return "PRIVATE-VALUE";
+    });
     const timing = instrumentSqliteConnection(db, "main", { recorder, now: () => clock });
     return {
       db,
@@ -256,15 +260,15 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
     };
   }
 
-  test("an outermost transaction splits its time into begin, statements and commit", () => {
+  test("an outermost transaction accumulates slow statements and nested savepoints once", () => {
     const { db, timing, recorder, advance } = connection();
     logs();
     timing.store = "native-agent-sessions/0123456789abcdef0123456789abcdef";
     db.transaction(() => {
-      db.query("INSERT INTO stores (name) VALUES (?)").run("PRIVATE-VALUE");
-      advance(400);
+      db.query("INSERT INTO stores (name) VALUES (timed_value(?))").run(300);
+      advance(100);
       // A nested transaction is a savepoint of the same one, never a second record.
-      db.transaction(() => db.query("SELECT name FROM stores").get())();
+      db.transaction(() => db.query("SELECT timed_value(50) FROM stores").get())();
     }).immediate();
     expect(recorder.snapshot().recent).toEqual([
       expect.objectContaining({
@@ -273,9 +277,9 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
         table: "stores",
         // A store is kept by family: ids are folded away.
         store: "native-agent-sessions",
-        durationMs: 400,
+        durationMs: 450,
         beginMs: 0,
-        sqlMs: 0,
+        sqlMs: 350,
         commitMs: 0,
         busy: false,
       }),
@@ -283,6 +287,99 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
     // The store applies to one transaction only.
     expect(timing.store).toBeNull();
     expect(JSON.stringify(logs().records())).not.toContain("PRIVATE-VALUE");
+  });
+
+  for (const throws of [false, true]) {
+    test(`transaction phases include begin, multiple statements and ${throws ? "rollback" : "commit"}`, () => {
+      let clock = 0;
+      const recorder = new SlowStorageOperations();
+      // Controlled driver boundaries: the clock advances inside the begin,
+      // statement and commit/rollback calls, rather than between statements.
+      const driver = {
+        query: (_sql: string) => ({ run: (ms: number) => (clock += ms) }),
+        prepare: (_sql: string) => ({ run: (ms: number) => (clock += ms) }),
+        transaction: (body: () => unknown) => {
+          const invoke = () => {
+            clock += 30;
+            try {
+              return body();
+            } finally {
+              clock += throws ? 80 : 60;
+            }
+          };
+          return Object.assign(invoke, {
+            deferred: invoke,
+            immediate: invoke,
+            exclusive: invoke,
+          });
+        },
+      };
+      const db = driver as unknown as Database;
+      const timing = instrumentSqliteConnection(db, "main", { recorder, now: () => clock });
+      logs();
+      timing.store = "kanban";
+      const failure = new Error("PRIVATE-REASON");
+      const run = db.transaction(() => {
+        db.query("UPDATE stores SET name = ?").run(70);
+        db.prepare("INSERT INTO store_rows (value) VALUES (?)").run(300);
+        clock += 40;
+        if (throws) throw failure;
+        return "done";
+      });
+      if (throws) expect(() => run.immediate()).toThrow(failure);
+      else expect(run.immediate()).toBe("done");
+      expect(recorder.snapshot().recent).toEqual([
+        expect.objectContaining({
+          op: "transaction",
+          mode: "immediate",
+          table: "store_rows",
+          store: "kanban",
+          durationMs: throws ? 520 : 500,
+          beginMs: 30,
+          sqlMs: 370,
+          commitMs: throws ? 80 : 60,
+          busy: false,
+        }),
+      ]);
+      // No per-statement double recording, and throwing resets transaction state.
+      expect(slowLines()).toHaveLength(1);
+      expect(timing.store).toBeNull();
+      db.query("UPDATE stores SET name = ?").run(350);
+      expect(recorder.snapshot().recent.at(-1)).toMatchObject({
+        op: "update",
+        table: "stores",
+        durationMs: 350,
+        mode: null,
+        store: null,
+        sqlMs: null,
+      });
+      expect(JSON.stringify(logs().records())).not.toContain("PRIVATE-REASON");
+    });
+  }
+
+  test("a throwing transaction rolls back its writes and retains slow-statement attribution", () => {
+    const { db, timing, recorder } = connection();
+    logs();
+    timing.store = "kanban";
+    expect(() =>
+      db
+        .transaction(() => {
+          db.query("INSERT INTO stores (name) VALUES (timed_value(?))").run(400);
+          throw new Error("rollback");
+        })
+        .immediate(),
+    ).toThrow("rollback");
+    expect(db.query("SELECT * FROM stores").all()).toEqual([]);
+    expect(recorder.snapshot().recent).toEqual([
+      expect.objectContaining({
+        op: "transaction",
+        table: "stores",
+        store: "kanban",
+        durationMs: 400,
+        sqlMs: 400,
+        busy: false,
+      }),
+    ]);
   });
 
   test("calls under the threshold record nothing", () => {
@@ -356,5 +453,25 @@ describe("SlowStorageOperations", () => {
       storageBusy: false,
     });
     expect(recorder.stallContext({ fromMs: 6_000, toMs: 7_000 })).toBeUndefined();
+  });
+
+  test("a stall counts only storage time inside either edge of its window", () => {
+    const recorder = new SlowStorageOperations();
+    logs();
+    recorder.record(sample({ endedAtMs: 1_000, durationMs: 600 })); // 400–1,000
+    recorder.record(sample({ endedAtMs: 1_400, durationMs: 300 })); // 1,100–1,400
+    recorder.record(sample({ endedAtMs: 2_000, durationMs: 500 })); // 1,500–2,000
+    expect(recorder.stallContext({ fromMs: 800, toMs: 1_700 })).toMatchObject({
+      storageMs: 700, // 200 + 300 + 200
+      storageLongestMs: 600,
+    });
+    expect(recorder.stallContext({ fromMs: 500, toMs: 700 })).toMatchObject({
+      storageMs: 200,
+      storageLongestMs: 600,
+    });
+    expect(recorder.stallContext({ fromMs: 1_000, toMs: 1_100 })).toMatchObject({
+      storageMs: 0,
+    });
+    expect(recorder.stallContext({ fromMs: 2_100, toMs: 2_500 })).toBeUndefined();
   });
 });

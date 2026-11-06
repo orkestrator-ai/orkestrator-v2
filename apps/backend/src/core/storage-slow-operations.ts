@@ -227,7 +227,7 @@ export class SlowStorageOperations {
     for (const operation of this.recent) {
       const startedAtMs = operation.endedAtMs - operation.durationMs;
       if (operation.endedAtMs < fromMs || startedAtMs > toMs) continue;
-      totalMs += operation.durationMs;
+      totalMs += Math.min(operation.endedAtMs, toMs) - Math.max(startedAtMs, fromMs);
       if (!longest || operation.durationMs > longest.durationMs) longest = operation;
     }
     if (!longest) return undefined;

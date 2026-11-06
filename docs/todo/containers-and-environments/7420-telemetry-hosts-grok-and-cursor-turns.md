@@ -10,16 +10,16 @@ turns against a fake provider without them
 
 ### Tasks
 
-1. **Run a Grok turn without the telemetry hosts**: a Grok Build turn in a restricted container with the three hosts refused, against a fake provider. Status: open.
+1. **Run a Grok turn without the telemetry hosts**: a Grok Build turn in a restricted container with the three hosts refused, against a fake provider. Status: done. (Review follow-up, 2026-11-06.)
 2. **Settle Cursor without a turn or with a real one**: decide whether the static evidence is enough for the Cursor SDK, or run one real turn. Status: open.
 3. **Say so in the next release notes**: new installs no longer allow the three hosts; stored lists keep them. Status: open.
+4. **Record native arm64 qualification**: capture the telemetry-host suite result on the workflow's linux-arm64 runner. Status: open.
 
 ### 1. Run a Grok turn without the telemetry hosts
 
 **Problem.** `apps/backend/tests/container-live-telemetry-hosts.test.ts`
-runs Claude Code, Codex, OpenCode and Pi, but not Grok: Grok Build has no
-documented way to point a turn at a local provider, and the suite does not
-use real logins.
+initially ran Claude Code, Codex, OpenCode and Pi, but not Grok. A local
+provider route had not been qualified, and the suite does not use real logins.
 
 **Context.** Grok 1.0.70's binary reads `GROK_XAI_API_BASE_URL`,
 `GROK_CLI_CHAT_PROXY_BASE_URL`, `GROK_MODELS_BASE_URL` and
@@ -32,10 +32,13 @@ container: removing it changes nothing for Grok there. Only a container
 without name checks (an older image, or `ORKESTRATOR_EGRESS_FILTER=off`)
 matched by address.
 
-**Investigation.** Not run. The suite's fake provider already serves OpenAI
-Chat Completions and Responses on the runtime's loopback, which the xAI API
-resembles, but whether `grok agent` accepts an API key from the environment
-and these base URLs without a login was not tried.
+**Investigation.** The review follow-up inspected Grok 1.0.70's help, which
+exposes `--xai-api-base-url` and `--cli-chat-proxy-base-url` on `grok agent`.
+An isolated, network-disabled preflight then completed `grok -p` using fake
+keys and the four loopback URL variables above. The extended real-gateway
+suite passed with a trace on x86_64: Grok returned `ok`, exit 0 in 542 ms,
+and its response/chat request counts increased. No outside DNS or TCP
+activity was recorded during that turn. No login was staged.
 
 **Decisions.**
 
@@ -86,12 +89,55 @@ written when a release is cut; this repository keeps no unreleased-notes file.
 **Decisions.**
 
 - **What do existing installs get?**
-  - **A release-note line only (recommended).** "New installs no longer allow `sentry.io`, `statsig.anthropic.com` and `statsig.com` in restricted containers; no agent needs them. Existing allowlists keep them; remove them in Settings to close the channel."
+  - **A release-note line only (recommended).** "New installs no longer allow `sentry.io`, `statsig.anthropic.com` and `statsig.com` in restricted containers; Claude Code, Codex, OpenCode, Pi and Grok completed fake-provider turns without them. Existing allowlists keep them; remove them in Settings to close the channel."
     - Pros: matches the rule that a stored list is never narrowed behind the user.
     - Cons: the channel stays open on installs whose users do not read the notes.
   - **Remove them from stored lists on upgrade.**
     - Pros: closes the channel everywhere.
     - Cons: edits the user's own list, which nothing else does; a user who added them on purpose loses them.
+
+### 4. Record native arm64 qualification
+
+**Problem.** The telemetry-host suite is scheduled on both Linux architectures,
+but the recorded run establishes only amd64 execution. Wiring a CI step does
+not establish an arm64 pass.
+
+**Context.** The address-findings host reports `x86_64`, and the available
+qualification image `orkestrator-v2:dev-2462db30da8c` reports `amd64`.
+The Container live qualification workflow already schedules this suite on
+linux-x64 and linux-arm64.
+
+**Investigation.** No native arm64 run is recorded for this suite. Retain the
+workflow's run URL, image architecture and suite result when it executes;
+if it fails, inspect and repair the failure before claiming qualification.
+
+**Decisions.**
+
+- **How to obtain arm64 evidence?**
+  - **Use the existing native linux-arm64 CI job (recommended).**
+    - Pros: exercises the architecture the workflow actually ships and keeps the suite repeatable.
+    - Cons: evidence remains pending until that job runs.
+  - **Run an arm64 image under emulation on this amd64 host.**
+    - Pros: could provide an additional compatibility signal.
+    - Cons: does not establish native runner behavior and needs an arm64 image and emulator.
+
+## Assumptions and decisions
+
+### Tasks 1 and 2: retain the live qualification gaps
+
+The review fix names Claude Code, Codex, OpenCode, Pi and Grok after the
+extended suite passed. Grok uses its loopback API and model-discovery URL
+variables with fake keys and an isolated home; the count assertion establishes
+that it reached the provider. The Cursor SDK has no fake-provider route in
+this suite and is not claimed as a live pass. The original no-real-logins and no-billed-turns constraints still apply;
+this review request does not waive them. Static evidence stays recorded above,
+and Cursor live coverage remains open.
+
+### Task 4: require observed native execution
+
+Keep arm64 qualification open until the existing native CI job supplies a
+result. The current host and image are amd64; neither the previous amd64 pass
+nor CI configuration is substituted for an observed arm64 pass.
 
 ## Related
 

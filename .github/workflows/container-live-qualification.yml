@@ -179,8 +179,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-filter.test.ts --parallel=1
 
-      # Every agent CLI finishes a turn on a fake provider with the telemetry
-      # hosts refused (to-do 6100).
+      # Claude Code, Codex, OpenCode, Pi and Grok finish fake-provider turns with the
+      # telemetry hosts refused (6100); Cursor remains unqualified (7420).
       - name: Live agent CLIs without telemetry hosts
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-telemetry-hosts.test.ts --parallel=1

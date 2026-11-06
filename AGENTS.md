@@ -1249,9 +1249,11 @@ else is rejected outright. `full` mode skips the firewall entirely.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, mise, the
   Anthropic API, the VS Code marketplace, Context7, and Playwright's CDN. It
-  carries no telemetry hosts: the agent CLIs run without Sentry and Statsig
-  (to-do 6100, `container-live-telemetry-hosts.test.ts`), and an entry for a
-  service that takes events for any project is only a way out. It is the only
+  omits `sentry.io`, `statsig.anthropic.com` and `statsig.com`: Claude Code,
+  Codex, OpenCode, Pi and Grok completed fake-provider turns with those hosts refused
+  (`container-live-telemetry-hosts.test.ts`, to-do 6100). Cursor live
+  qualification remains outstanding (to-do 7420). Allowing a service that takes
+  events for any project creates a channel out. It is the only
   default list. The renderer seeds its
   unloaded config from the same constant, and the firewall's fallback for a
   container with no `ALLOWED_DOMAINS`, `docker/default-allowed-domains`, is

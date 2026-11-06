@@ -178,8 +178,27 @@ each carry one ingest DSN; OpenCode and Pi name none. The Cursor SDK's Statsig c
 three. Under name checks an entry allows exactly its own name, so `sentry.io`
 never let a client reach an ingest host there anyway.
 
-Not run as a turn: Grok and Cursor, which have no fake-provider route this
-suite could use. They are [7420](../todo/containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md).
+At the initial qualification, Grok and Cursor were not run as turns. They were tracked in [7420](../todo/containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md).
+Native linux-arm64 execution of this suite also remains unverified (7420 task 4);
+the workflow schedules it, but the recorded runs above are x86_64 only.
+
+### Review follow-up: Grok fake-provider turn (2026-11-06)
+
+The extended suite passed on the same x86_64 host and amd64 qualification
+image in 21.3 s, with the test-only network shim described above. Grok 1.0.70
+completed `grok -p` in 542 ms, returned `ok` and exited 0 without a login.
+Its isolated home receives fake keys only; `GROK_XAI_API_BASE_URL`,
+`GROK_CLI_CHAT_PROXY_BASE_URL`, `GROK_MODELS_BASE_URL` and
+`GROK_MODELS_LIST_URL` all point at the loopback fake provider. The test
+checks that response/chat request counts increase across Grok's turn.
+The other seven turns also passed (235–5589 ms). Cleanup assertions passed.
+
+The opt-in packet trace recorded no outside DNS or TCP activity during Grok's
+turn, and no removed telemetry or ingest name during any turn. This is a
+trace observation; the test asserts DNS refusal and bounded turn completion.
+The local trace is `output/agent-testing/telemetry-review/trace-with-grok.json`.
+Cursor still has no live turn in this suite, and native arm64 execution
+remains unverified (7420 tasks 2 and 4).
 
 ## Egress name checks on rootful Linux Engine (2026-11-06)
 

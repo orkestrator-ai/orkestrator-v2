@@ -9,7 +9,7 @@
  * fake one on the runtime's own loopback, so no provider is called and nothing
  * is billed: Claude Code in print mode, in the stream-json mode the Agent SDK
  * drives (the native tab) and on a provider error, Codex on a reply and on a
- * provider error, OpenCode and Pi. Grok and Cursor are not covered (to-do
+ * provider error, OpenCode, Pi and Grok. Cursor is not covered (to-do
  * 7420). Claude's nonessential traffic is left on, as the backend leaves it in
  * a real container. A turn has to finish as expected and within a bound, so a
  * CLI that stalls on a refused host fails.
@@ -538,6 +538,26 @@ async function probe(
     }),
   );
   expect(await turn("pi", "pi -p --model fake/fake-model 'Reply with ok.'")).toMatch(/^ok\nrc=0$/);
+
+  // Grok discovers its fake model from the loopback catalogue. No login is
+  // staged; all provider and model-discovery URLs point to the fake server.
+  const beforeGrok = await counts();
+  expect(
+    await turn("grok", "grok -p 'Reply with ok.' --no-subagents --no-plan --max-turns 1", {
+      HOME: `${PROBE}/grok-home`,
+      XDG_CONFIG_HOME: `${PROBE}/grok-home`,
+      XAI_API_KEY: "fake-not-a-key",
+      GROK_API_KEY: "fake-not-a-key",
+      GROK_XAI_API_BASE_URL: openai,
+      GROK_CLI_CHAT_PROXY_BASE_URL: openai,
+      GROK_MODELS_BASE_URL: openai,
+      GROK_MODELS_LIST_URL: `${openai}/models`,
+    }),
+  ).toMatch(/^ok\nrc=0$/);
+  const afterGrok = await counts();
+  expect((afterGrok.responses ?? 0) + (afterGrok.chat ?? 0)).toBeGreaterThan(
+    (beforeGrok.responses ?? 0) + (beforeGrok.chat ?? 0),
+  );
 
   // Every turn reached the fake provider rather than finishing locally.
   await mark("end");

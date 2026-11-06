@@ -1518,13 +1518,17 @@ export { deleteEnvironment, deleteEnvironmentTask } from "./environment-delete.j
  * without the export the CLI would read the host's `~/.claude` while the
  * backend looks for the transcript in the profile's directory
  * (`localClaudeHome`).
+ * Profiles explicitly granted host Claude credentials keep the host tmux
+ * environment: changing their config directory would also change the CLI's
+ * Keychain namespace without supplying the bridge's host-token injection.
  */
 export async function tmuxLocalClaudeConfigDirectory(
   context: CommandContext,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | undefined> {
   const active = (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR;
-  if (active || context.runtimeFlavor !== "agent-test") return active;
+  if (active || context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude"))
+    return active;
   return env.CLAUDE_CONFIG_DIR?.trim() || undefined;
 }
 

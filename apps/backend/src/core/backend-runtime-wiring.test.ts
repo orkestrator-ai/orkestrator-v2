@@ -16,6 +16,7 @@ import type { Environment } from "./models.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { claudeStateSignalInstaller } from "./claude-state-signal.js";
+import { localClaudeAccountPrefix } from "./tmux-session-manager.js";
 import { tmuxLocalClaudeConfigDirectory } from "./commands-servers.js";
 import { deferred, flushMicrotasks } from "./recurring-test-support.js";
 
@@ -87,8 +88,27 @@ test("the production backend wires tmux account configuration, signal installati
         "/profile/agent-credentials/claude",
       );
       expect(await tmuxLocalClaudeConfigDirectory(agentTest, {})).toBeUndefined();
+      // A host-credential grant retains the host's usable CLI login/environment.
+      const credentialed = { ...agentTest, credentialSources: new Set(["claude" as const]) };
+      expect(await tmuxLocalClaudeConfigDirectory(credentialed, profileEnv)).toBeUndefined();
+      expect(
+        localClaudeAccountPrefix(await tmuxLocalClaudeConfigDirectory(credentialed, profileEnv)),
+      ).toBe("");
+      expect(
+        await tmuxLocalClaudeConfigDirectory(
+          { ...agentTest, credentialSources: new Set(["codex" as const]) },
+          profileEnv,
+        ),
+      ).toBe(profileEnv.CLAUDE_CONFIG_DIR);
       // An added account still wins in an agent-test profile.
       loadAccounts.mockResolvedValue({ version: 1, accounts: [], active: { claude: "account-a" } });
+      expect(await tmuxLocalClaudeConfigDirectory(credentialed, profileEnv)).toBe(
+        path.join(
+          owner.context.storage.agentAccounts.agentAccountsDirectory(),
+          "claude",
+          "account-a",
+        ),
+      );
       expect(await tmuxLocalClaudeConfigDirectory(agentTest, profileEnv)).toBe(
         path.join(
           owner.context.storage.agentAccounts.agentAccountsDirectory(),

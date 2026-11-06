@@ -9,7 +9,7 @@ import {
   type FakeAnthropicModel,
 } from "../e2e/agent-testing/fake-anthropic-model";
 import { pickKindCounters, type KindCounters } from "./recurring-live-ab-summary";
-import { checkoutEnv } from "./recurring-live-ab";
+import { checkoutEnv, withTerminationSignals } from "./recurring-live-ab";
 
 /**
  * Agent mail into a real claude-tmux tab on a loopback fake model: the live
@@ -117,7 +117,11 @@ function profileStatus(options: Options): Status {
 }
 
 /** Backend commands over the profile's gateway; the token stays in here. */
-function gatewayFor(status: Status) {
+export function gatewayFor(
+  status: Status,
+  signal?: AbortSignal,
+  request: (url: URL, init: RequestInit) => Promise<Response> = fetch,
+) {
   if (!status.browserUrl || !status.authFile) throw new Error("Profile has no browser gateway");
   const origin = new URL(status.browserUrl);
   if (origin.hostname !== "127.0.0.1" && origin.hostname !== "localhost") {
@@ -127,13 +131,20 @@ function gatewayFor(status: Status) {
   if (typeof token !== "string" || !token) throw new Error("Gateway auth file has no token");
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
   return {
-    async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-      const response = await fetch(new URL("/__orkestrator/invoke", origin), {
+    async invoke<T>(
+      command: string,
+      args: Record<string, unknown> = {},
+      cleanup = false,
+    ): Promise<T> {
+      const response = await request(new URL("/__orkestrator/invoke", origin), {
         method: "POST",
         headers,
         body: JSON.stringify({ command, args }),
         redirect: "error",
-        signal: AbortSignal.timeout(60_000),
+        signal:
+          !cleanup && signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+            : AbortSignal.timeout(60_000),
       });
       const payload = (await response.json()) as { result?: T; error?: string };
       if (!response.ok || payload.error)
@@ -141,15 +152,32 @@ function gatewayFor(status: Status) {
       return payload.result as T;
     },
     async kinds(): Promise<Record<string, KindCounters>> {
-      const response = await fetch(new URL("/__orkestrator/metrics", origin), {
+      const response = await request(new URL("/__orkestrator/metrics", origin), {
         headers,
         redirect: "error",
-        signal: AbortSignal.timeout(10_000),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+          : AbortSignal.timeout(10_000),
       });
+      if (!response.ok) throw new Error(`Metrics request failed: HTTP ${response.status}`);
       const metrics = (await response.json()) as {
         recurringWork?: { metrics?: { kinds?: unknown } };
       };
-      return pickKindCounters(metrics.recurringWork?.metrics?.kinds);
+      const raw = metrics.recurringWork?.metrics?.kinds as Record<string, KindCounters> | undefined;
+      const mail = raw?.["mail-injection"];
+      const counts = mail && [
+        mail.started,
+        mail.changed,
+        mail.failed,
+        mail.bytes,
+        mail.workUnits?.["storage-read"],
+      ];
+      if (
+        !counts ||
+        !counts.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)
+      )
+        throw new Error("Mail-injection measurement counters unavailable or invalid");
+      return pickKindCounters(raw);
     },
   };
 }
@@ -161,6 +189,8 @@ export function kindDelta(
   before: Record<string, KindCounters>,
   after: Record<string, KindCounters>,
 ): Record<string, { started: number; storageReads: number; bytes: number }> {
+  if (!before["mail-injection"] || !after["mail-injection"])
+    throw new Error("Mail-injection measurement counters unavailable");
   const delta: Record<string, { started: number; storageReads: number; bytes: number }> = {};
   for (const [kind, counters] of Object.entries(after)) {
     const prior = before[kind];
@@ -168,6 +198,8 @@ export function kindDelta(
     const storageReads =
       (counters.workUnits["storage-read"] ?? 0) - (prior?.workUnits["storage-read"] ?? 0);
     const bytes = counters.bytes - (prior?.bytes ?? 0);
+    if (![started, storageReads, bytes].every((value) => Number.isFinite(value) && value >= 0))
+      throw new Error(`Measurement counters reset or invalid: ${kind}`);
     if (started || storageReads || bytes) delta[kind] = { started, storageReads, bytes };
   }
   return delta;
@@ -181,22 +213,33 @@ export function kindDelta(
 export function deliveryReads(
   delta: { started: number; storageReads: number } | undefined,
   idleReadsPerPass: number,
-): number | null {
-  if (!delta || delta.started < 1) return null;
+): number {
+  if (
+    !delta ||
+    delta.started < 1 ||
+    ![delta.started, delta.storageReads, idleReadsPerPass].every(
+      (value) => Number.isFinite(value) && value >= 0,
+    )
+  )
+    throw new Error("No valid measured mail-injection pass");
   return Math.round((delta.storageReads - delta.started * idleReadsPerPass) * 100) / 100;
 }
 
-async function waitFor<T>(
+async function pollFor<T>(
   label: string,
   timeoutMs: number,
   probe: () => Promise<T | null | undefined | false>,
+  signal?: AbortSignal,
+  sleep = abortableSleep,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    signal?.throwIfAborted();
     const value = await probe().catch(() => null);
+    signal?.throwIfAborted();
     if (value) return value;
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${label}`);
-    await delay(250);
+    await sleep(250, signal);
   }
 }
 
@@ -299,11 +342,26 @@ async function localEnvironment(gateway: Gateway): Promise<Environment> {
   throw new Error("The profile has no local fixture environment (start it with --fixture)");
 }
 
-async function main(): Promise<number> {
-  const options = parseOptions(process.argv.slice(2));
-  const status = profileStatus(options);
+const abortableSleep = async (ms: number, signal?: AbortSignal) => {
+  await delay(ms, undefined, { signal });
+};
+const mailRuntime = {
+  profileStatus,
+  gatewayFor,
+  startFakeAnthropicModel,
+  claudeFixture,
+  sleep: abortableSleep,
+};
+export const __testing = { mailRuntime };
+
+export async function runMailBenchmark(
+  options: Options,
+  signal?: AbortSignal,
+  runtime = mailRuntime,
+): Promise<number> {
+  const status = runtime.profileStatus(options);
   if (status.status !== "ready" || !status.dataDir) throw new Error("Profile is not ready");
-  const gateway = gatewayFor(status);
+  const gateway = runtime.gatewayFor(status, signal);
   const environment = await localEnvironment(gateway);
   const tabId = `bg15-${randomUUID().slice(0, 8)}`;
   const run = randomUUID().slice(0, 8);
@@ -321,15 +379,24 @@ async function main(): Promise<number> {
     model: "loopback fake (e2e/agent-testing/fake-anthropic-model.ts); no provider was called",
     at: new Date().toISOString(),
   };
+  const sleep = (ms: number) => runtime.sleep(ms, signal);
+  const waitFor = <T>(
+    label: string,
+    timeout: number,
+    probe: () => Promise<T | null | undefined | false>,
+  ) => pollFor(label, timeout, probe, signal, runtime.sleep);
   try {
-    fake = await startFakeAnthropicModel();
-    restore = claudeFixture(
+    signal?.throwIfAborted();
+    fake = await runtime.startFakeAnthropicModel();
+    signal?.throwIfAborted();
+    restore = runtime.claudeFixture(
       profileClaudeDirectory(status.dataDir, options.profile),
       fake.origin,
       environment.worktreePath!,
     );
     log(`opening a claude-tmux tab on the local fixture environment`);
     const launchAt = Date.now();
+    started = true; // An interrupted launch may already have reached the backend.
     await gateway.invoke("launch_terminal_job", {
       environmentId: environment.id,
       requestId: `bg15-${run}`,
@@ -337,7 +404,6 @@ async function main(): Promise<number> {
       tabType: "claude-tmux",
       title: "BG-15 live",
     });
-    started = true;
     const tab = () =>
       gateway.invoke<TmuxStatus | null>("claude_tmux_status", {
         environmentId: environment.id,
@@ -376,7 +442,7 @@ async function main(): Promise<number> {
     // A settle after the first idle report. On 2026-11-06 one pass's prompt,
     // queued the moment the tab first reported idle, never reached the model;
     // the cause was not established.
-    await delay(10_000);
+    await sleep(10_000);
     const primeMarker = `bg15-${run}-prime`;
     await gateway.invoke("enqueue_prompt_queue_message", {
       queueKey,
@@ -405,10 +471,12 @@ async function main(): Promise<number> {
 
     log(`idle window, ${options.quietMs} ms`);
     const quietBefore = await gateway.kinds();
-    await delay(options.quietMs);
+    await sleep(options.quietMs);
     const quiet = kindDelta(quietBefore, await gateway.kinds());
     const idle = quiet["mail-injection"];
-    const idleReadsPerPass = idle && idle.started > 0 ? idle.storageReads / idle.started : 0;
+    if (!idle || idle.started <= 0)
+      throw new Error("Idle window contains no measured mail-injection passes");
+    const idleReadsPerPass = idle.storageReads / idle.started;
     result.idle = {
       windowMs: options.quietMs,
       kinds: quiet,
@@ -445,7 +513,7 @@ async function main(): Promise<number> {
         return current?.running && current.busy !== true;
       });
       // Let the turn's own follow-up drains finish inside this window.
-      await delay(3_000);
+      await sleep(3_000);
       return { typedMs, modelCalls: fake!.callsWith(marker).length };
     };
 
@@ -473,7 +541,7 @@ async function main(): Promise<number> {
     const heldMarker = `bg15-${run}-held`;
     const heldSentAt = Date.now();
     const heldId = await send(heldMarker);
-    await delay(15_000);
+    await sleep(15_000);
     const held = await mailStatus(heldId);
     const heldResult: Record<string, unknown> = {
       typedWhileDraft: Boolean(held.injectedAt),
@@ -486,24 +554,43 @@ async function main(): Promise<number> {
     heldResult.afterDraftDeleted = released;
     result.draftHold = heldResult;
     result.modelCallsTotal = fake.calls().length;
+    signal?.throwIfAborted();
     result.ok =
       deliveries.every((entry) => (entry as { modelCalls: number }).modelCalls === 1) &&
       heldResult.typedWhileDraft === false &&
       heldResult.modelCallsWhileDraft === 0 &&
       released.modelCalls === 1;
   } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
+    result.ok = false;
+    const failure = signal?.aborted ? signal.reason : error;
+    result.error = failure instanceof Error ? failure.message : String(failure);
     log(String(result.error));
   } finally {
+    const cleanupErrors: string[] = [];
     if (started) {
       await gateway
-        .invoke("claude_tmux_stop", { environmentId: environment.id, tabId })
-        .catch((error) =>
-          log(`tab stop failed: ${error instanceof Error ? error.message : error}`),
-        );
+        .invoke("claude_tmux_stop", { environmentId: environment.id, tabId }, true)
+        .catch(() => cleanupErrors.push("tab stop failed"));
     }
-    restore?.();
-    await fake?.stop();
+    try {
+      restore?.();
+    } catch {
+      cleanupErrors.push("fixture restore failed");
+    }
+    try {
+      await fake?.stop();
+    } catch {
+      cleanupErrors.push("fake model stop failed");
+    }
+    if (cleanupErrors.length) {
+      result.ok = false;
+      result.cleanupErrors = cleanupErrors;
+    }
+  }
+  if (signal?.aborted) {
+    result.ok = false;
+    result.interrupted = true;
+    result.error = signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
   }
   const out = path.resolve(options.out);
   mkdirSync(path.dirname(out), { recursive: true });
@@ -513,5 +600,7 @@ async function main(): Promise<number> {
 }
 
 if (import.meta.main) {
-  process.exitCode = await main();
+  process.exitCode = await withTerminationSignals((signal) =>
+    runMailBenchmark(parseOptions(process.argv.slice(2)), signal),
+  );
 }

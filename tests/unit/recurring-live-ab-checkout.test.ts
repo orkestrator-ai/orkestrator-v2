@@ -9,7 +9,7 @@ import {
   parseOptions as parseMailOptions,
   profileClaudeDirectory,
 } from "../../scripts/tmux-mail-inject-live";
-import type { WindowSummary } from "../../scripts/recurring-live-ab-summary";
+import { summarizeWindow, type WindowSummary } from "../../scripts/recurring-live-ab-summary";
 
 describe("before-and-after runs from another checkout", () => {
   test("parses the checkout, label and window", () => {
@@ -82,18 +82,27 @@ describe("comparing labelled artifacts", () => {
         commit: "aaa",
         label: "base",
         results: [
-          { summary: summary({ "diff-scan": { started: 0.5, units: { "git-spawn": 4 } } }, 240) },
+          {
+            arm: "candidate",
+            summary: summary({ "diff-scan": { started: 0.5, units: { "git-spawn": 4 } } }, 240),
+          },
         ],
       },
       {
         commit: "aaa",
         label: "base",
         results: [
-          { summary: summary({ "diff-scan": { started: 0.5, units: { "git-spawn": 3.5 } } }, 260) },
-          { summary: null, error: "profile did not become ready in time" },
+          {
+            arm: "candidate",
+            summary: summary({ "diff-scan": { started: 0.5, units: { "git-spawn": 3.5 } } }, 260),
+          },
+          { arm: "candidate", summary: null, error: "profile did not become ready in time" },
         ],
       },
-      { commit: "bbb", results: [{ summary: summary({ "tab-cleanup": { started: 2 } }, 250) }] },
+      {
+        commit: "bbb",
+        results: [{ arm: "candidate", summary: summary({ "tab-cleanup": { started: 2 } }, 250) }],
+      },
     ]);
     expect(sides.map((side) => [side.label, side.runs.length])).toEqual([
       ["base", 2],
@@ -104,6 +113,56 @@ describe("comparing labelled artifacts", () => {
     expect(table).toContain("| tab-cleanup | starts | 0 | 2 |");
     expect(table).toContain("| process | backend CPU ms/min | 240–260 | 250 |");
     expect(table).toContain("| process | backend RSS MiB, median | 200 | 200 |");
+  });
+
+  test("separates every arm and refuses missing arms or reused labels across commits", () => {
+    const results = ["candidate", "rollback", "metrics-off"].map((arm, index) => ({
+      arm,
+      summary: summary({ scan: { started: index + 1 } }, 10),
+    }));
+    const sides = collectSides([{ label: "base", commit: "a", results }]);
+    expect(sides.map((side) => side.arm)).toEqual(["candidate", "rollback", "metrics-off"]);
+    expect(compareTable(sides)).toContain("base/candidate");
+    expect(compareTable(sides)).toContain("| scan | starts | 1 | 2 | — |");
+    expect(() => collectSides([{ results: [{ summary: summary({}, 10) }] }])).toThrow(
+      "Missing experiment arm",
+    );
+    expect(() =>
+      collectSides([
+        { label: "base", commit: "a" },
+        { label: "base", commit: "b" },
+      ]),
+    ).toThrow("Conflicting commits");
+  });
+
+  test("serialized resets, single observations and unmeasured windows never become zero", () => {
+    const counters = (started: number) => ({
+      started,
+      changed: 0,
+      failed: 0,
+      bytes: 0,
+      workUnits: { read: started },
+    });
+    const invalid = summarizeWindow([
+      { atMs: 0, kinds: { reset: counters(4), once: counters(1) }, processes: {} },
+      { atMs: 60_000, kinds: { reset: counters(2) }, processes: {} },
+    ]);
+    const unmeasured = summarizeWindow([{ atMs: 0, kinds: null, processes: {} }]);
+    const table = compareTable(
+      collectSides(
+        JSON.parse(
+          JSON.stringify([
+            { commit: "a", results: [{ arm: "candidate", summary: invalid }] },
+            { commit: "b", results: [{ arm: "candidate", summary: unmeasured }] },
+          ]),
+        ),
+      ),
+    );
+    expect(table).toContain("| reset | starts | — | — |");
+    expect(table).toContain("| reset | read | — | — |");
+    expect(table).toContain("| once | starts | — | — |");
+    expect(range([1, null])).toBe("—");
+    expect(range([Number.NaN])).toBe("—");
   });
 
   test("prints a dash for no values", () => {
@@ -150,8 +209,8 @@ describe("mail into a real claude-tmux tab", () => {
       "tmux-queue-drain": { started: 2, storageReads: 0, bytes: 0 },
     });
     expect(deliveryReads(delta["mail-injection"], 1.0667)).toBe(21.8);
-    expect(deliveryReads(undefined, 1)).toBeNull();
-    expect(deliveryReads({ started: 0, storageReads: 4 }, 1)).toBeNull();
+    expect(() => deliveryReads(undefined, 1)).toThrow();
+    expect(() => deliveryReads({ started: 0, storageReads: 4 }, 1)).toThrow();
   });
 
   test("writes only the profile's own Claude directory", () => {

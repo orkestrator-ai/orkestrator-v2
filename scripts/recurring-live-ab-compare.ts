@@ -4,43 +4,54 @@ import type { WindowSummary } from "./recurring-live-ab-summary";
 
 /**
  * Merges `scripts/recurring-live-ab.ts` artifacts into one before-and-after
- * table: per label (`--label`, else the commit), each kind's starts and work
+ * table: per label (`--label`, else the commit) and arm, each kind's starts and work
  * units per minute as the range over every run, then the process totals.
  *
  *   mise exec -- bun scripts/recurring-live-ab-compare.ts output/benchmarks/task1/idle-*.json
  *
- * Only runs without an error count. A kind missing from a run counts as 0 for
- * that run, so a kind one side never starts shows as `0` there.
+ * Only runs without an error count. Missing kinds count as zero only in a
+ * measured window; invalid or partial rates are unavailable, never zero.
  */
 
 type Artifact = {
   commit?: string;
   label?: string;
-  results?: Array<{ summary: WindowSummary | null; error?: string }>;
+  results?: Array<{ arm?: string; summary: WindowSummary | null; error?: string }>;
 };
 
-export type Side = { label: string; commit: string; runs: WindowSummary[] };
+export type Side = { label: string; commit: string; arm: string; runs: WindowSummary[] };
 
 export function collectSides(artifacts: Artifact[]): Side[] {
   const sides = new Map<string, Side>();
+  const commits = new Map<string, string>();
   for (const artifact of artifacts) {
     const commit = artifact.commit ?? "unknown";
     const label = artifact.label ?? commit;
-    const side = sides.get(label) ?? { label, commit, runs: [] };
+    if (commits.has(label) && commits.get(label) !== commit)
+      throw new Error(`Conflicting commits for label ${label}`);
+    commits.set(label, commit);
     for (const result of artifact.results ?? []) {
-      if (!result.error && result.summary) side.runs.push(result.summary);
+      if (result.error || !result.summary) continue;
+      if (!result.arm) throw new Error(`Missing experiment arm for ${label}`);
+      const key = JSON.stringify([label, result.arm]);
+      const side = sides.get(key) ?? { label, commit, arm: result.arm, runs: [] };
+      side.runs.push(result.summary);
+      sides.set(key, side);
     }
-    sides.set(label, side);
   }
   return [...sides.values()];
 }
 
 /** `a` or `a–b` over the values, rounded to two places. */
-export function range(values: number[]): string {
-  if (values.length === 0) return "—";
+export function range(values: Array<number | null | undefined>): string {
+  if (
+    values.length === 0 ||
+    values.some((value) => typeof value !== "number" || !Number.isFinite(value))
+  )
+    return "—";
   const round = (value: number) => Math.round(value * 100) / 100;
-  const low = round(Math.min(...values));
-  const high = round(Math.max(...values));
+  const low = round(Math.min(...(values as number[])));
+  const high = round(Math.max(...(values as number[])));
   return low === high ? String(low) : `${low}–${high}`;
 }
 
@@ -55,27 +66,39 @@ export function compareTable(sides: Side[]): string {
         for (const unit of Object.keys(rates.workUnitsPerMinute)) set.add(unit);
         units.set(kind, set);
       }
-  const header = sides.map((side) => `${side.label} (${side.commit}, ${side.runs.length} runs)`);
+  const header = sides.map(
+    (side) => `${side.label}/${side.arm} (${side.commit}, ${side.runs.length} runs)`,
+  );
   const lines = [
     `| Kind | Per minute | ${header.join(" | ")} |`,
     `| --- | --- | ${sides.map(() => "---").join(" | ")} |`,
   ];
   for (const kind of [...kinds].sort()) {
-    const rows: Array<[string, (summary: WindowSummary) => number]> = [
-      ["starts", (summary) => summary.kinds[kind]?.startedPerMinute ?? 0],
+    const rate = (summary: WindowSummary, unit?: string): number | undefined => {
+      if (!Number.isFinite(summary.windowMs) || summary.windowMs <= 0 || summary.samples < 2)
+        return undefined;
+      const rates = summary.kinds[kind];
+      if (!rates) return 0;
+      if (rates.partial || !Number.isFinite(rates.observedMs) || rates.observedMs <= 0)
+        return undefined;
+      if (!unit) return rates.startedPerMinute;
+      return Object.hasOwn(rates.workUnitsPerMinute, unit) ? rates.workUnitsPerMinute[unit] : 0;
+    };
+    const rows: Array<[string, (summary: WindowSummary) => number | undefined]> = [
+      ["starts", (summary) => rate(summary)],
       ...[...(units.get(kind) ?? [])]
         .sort()
         .map(
           (unit) =>
-            [
-              unit,
-              (summary: WindowSummary) => summary.kinds[kind]?.workUnitsPerMinute[unit] ?? 0,
-            ] as [string, (summary: WindowSummary) => number],
+            [unit, (summary: WindowSummary) => rate(summary, unit)] as [
+              string,
+              (summary: WindowSummary) => number | undefined,
+            ],
         ),
     ];
     for (const [name, value] of rows) {
       lines.push(
-        `| ${kind} | ${name} | ${sides.map((side) => range(side.runs.map(value))).join(" | ")} |`,
+        `| ${kind} | ${name} | ${sides.map((side) => range(side.runs.map((run) => (side.arm === "metrics-off" ? undefined : value(run))))).join(" | ")} |`,
       );
     }
   }
@@ -90,11 +113,7 @@ export function compareTable(sides: Side[]): string {
   ];
   for (const [name, value] of processRows) {
     lines.push(
-      `| process | ${name} | ${sides
-        .map((side) =>
-          range(side.runs.map(value).filter((entry): entry is number => entry !== undefined)),
-        )
-        .join(" | ")} |`,
+      `| process | ${name} | ${sides.map((side) => range(side.runs.map(value))).join(" | ")} |`,
     );
   }
   return lines.join("\n");

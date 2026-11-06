@@ -254,8 +254,10 @@ export function checkoutEnv(
   return checkout ? { ...env, MISE_TRUSTED_CONFIG_PATHS: checkout } : env;
 }
 
+const commandProcesses = { spawn, spawnSync };
+
 function mise(args: string[], checkout?: string) {
-  return spawnSync("mise", ["run", ...args], {
+  return commandProcesses.spawnSync("mise", ["run", ...args], {
     encoding: "utf8",
     env: checkoutEnv(checkout),
     ...(checkout ? { cwd: checkout } : {}),
@@ -347,12 +349,16 @@ type FixtureEnvironment = {
 /** `configDir` is the run's CLI config directory, which `runArm` owns and removes. */
 function cliRunner(profile: string, configDir: string, checkout?: string) {
   return (args: string[]) =>
-    spawnSync("bun", ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args], {
-      encoding: "utf8",
-      env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: configDir },
-      ...(checkout ? { cwd: checkout } : {}),
-      maxBuffer: 16 * 1024 * 1024,
-    });
+    commandProcesses.spawnSync(
+      "bun",
+      ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args],
+      {
+        encoding: "utf8",
+        env: { ...checkoutEnv(checkout), ORKESTRATOR_CLI_CONFIG_DIR: configDir },
+        ...(checkout ? { cwd: checkout } : {}),
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
 }
 
 type CliResult = { status: number | null; stdout: string };
@@ -363,11 +369,11 @@ function asyncCliRunner(profile: string, configDir: string, checkout?: string): 
   return (args, signal) => {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
-      const child = spawn(
+      const child = commandProcesses.spawn(
         "bun",
         ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args],
         {
-          env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: configDir },
+          env: { ...checkoutEnv(checkout), ORKESTRATOR_CLI_CONFIG_DIR: configDir },
           ...(checkout ? { cwd: checkout } : {}),
           stdio: ["ignore", "pipe", "ignore"],
         },
@@ -900,7 +906,7 @@ function startProfile(
   try {
     // Spawn the launcher directly so its manifest PID is the child we own,
     // rather than a descendant of an opaque mise wrapper.
-    return spawn("bun", profileArguments(profile, options), {
+    return commandProcesses.spawn("bun", profileArguments(profile, options), {
       env: checkoutEnv(options.checkout, env),
       ...(options.checkout ? { cwd: options.checkout } : {}),
       stdio: ["ignore", output, output],
@@ -1312,6 +1318,7 @@ function resultExitCode(results: Array<Pick<RunResult, "error" | "soak" | "guard
 }
 
 export const __testing = {
+  commandProcesses,
   armRuntime,
   freshnessRuntime,
   soakRuntime,

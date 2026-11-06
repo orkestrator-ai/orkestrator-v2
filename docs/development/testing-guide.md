@@ -976,6 +976,10 @@ was still a file on an older commit is charged as `storage-stat` there and as
 `storage-read` once it moved into SQLite, so compare work units only where
 both sides define them the same way.
 
+Comparison columns keep the experiment arm beside the label and commit. Reusing
+one label for different commits is rejected. Missing, reset, partial or
+unmeasured rates display as unavailable (`—`), rather than zero.
+
 #### Mail into a real claude-tmux tab
 
 `scripts/tmux-mail-inject-live.ts` delivers agent mail to a real claude-tmux
@@ -992,7 +996,17 @@ over a quiet window, then sends messages one at a time and checks each is
 typed once and reaches the model once. Last it checks that mail is held while
 a draft is saved and delivered once the draft is gone. It stops the tab and
 restores the two Claude files on the way out. Start a fresh profile for each
-pass: what earlier passes left in the stores changes the counts.
+pass: what earlier passes left in the stores changes the counts. Missing or
+invalid counters, counter resets and an idle window with no observed drain pass
+fail the run and produce an error artifact. SIGINT/SIGTERM unwind the run,
+stop its owned tab, restore the files and close the fake server before exiting.
+
+The isolated-directory fallback applies to profiles without a host Claude
+credential grant. Credentialed profiles retain the existing host tmux environment
+and login, unless an added account selects a directory. This avoids changing the
+CLI's Keychain namespace without supplying a token. Such profiles retain the
+prior mismatch with the backend's isolated transcript directory; use the
+credential-free profile above for this benchmark.
 
 ```bash
 mise run dev:test --profile bg15 --fixture --fixture-environments local \

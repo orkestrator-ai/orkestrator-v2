@@ -22,7 +22,7 @@ repeated as tasks; their live checks are. The open questions and the
 5. **Live Claude tmux pause**: a paused PermissionRequest outliving Claude Code's 600 s hook limit (item 9). Status: open.
 6. **Live Claude question preview**: whether Claude emits previews and the card shows them verbatim (item 3). Status: open.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: open.
-8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: open (the suite has no Cursor or Pi case).
+8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
 9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: open.
 
 ### 1. Grok project resources off
@@ -185,12 +185,14 @@ repeated as tasks; their live checks are. The open questions and the
 
 **Context.** The item names `mise run test:agent:docker`, which needs a profile started with `--fixture-environments container` and Cursor and Pi logins.
 
-**Investigation.** That task only runs tests whose title contains "Docker fixture" (`mise.toml:243-246`). None of those specs (`browser-gateway.spec.ts`, `container-*.spec.ts`, `grok-container-login.spec.ts` and others) has a Cursor or Pi execution-policy case, so running the suite as written would not qualify these cells.
+**Investigation.** That task only runs tests whose title contains "Docker fixture" (`mise.toml:275-279`). None of those specs (`browser-gateway.spec.ts`, `container-*.spec.ts`, `grok-container-login.spec.ts` and others) has a Cursor or Pi execution-policy case, so running the suite as written would not qualify these cells.
+
+Done on 2026-11-06 without logins. `e2e/agent-testing/container-fake-engines.spec.ts` adds two "Docker fixture" cases. Each puts a bundle of the bridge's `src/testing/container-fake-engine-server.ts` (the real bridge over Cursor's fake SDK or Pi's faux model) in place of `/opt/<platform>-bridge/dist/index.js` in the fixture container, so the backend's production `start_<platform>_server` launch runs it. The case opens a native tab and drives it from the composer. It checks the reported policy (`interactive-container`, sandbox `container`, approvals `auto-approve`, network `restricted`) and Cursor's SDK options (cwd `/workspace`, SDK sandbox off). It checks that `https://example.com/` is refused from where the agent runs while `https://api.github.com/zen` answers. For Cursor, the fake requests the URL from the bridge process. For Pi, the faux model calls Pi's own `bash` tool, which runs `curl`. Pi also has an `ask` case: the call parks a card, nothing runs until the card is approved, then the command runs. The fakes gained `FETCH <url>` (Cursor) and `BASH: <command>` (Pi), with bridge unit tests. `test:agent:docker:isolated` now enables Cursor and Pi. Both cases passed on beelink (Linux, Docker 29.9.2, image `orkestrator-v2:dev-f199d298c1eb`). No container-specific defect showed up. What a real Cursor SDK or a real Pi provider does in the container is [7040](7040-container-cells-on-real-cursor-and-pi.md).
 
 **Decisions.**
 
 - **How to qualify them?**
-  - **Add a "Docker fixture" case per platform that starts a Cursor and a Pi session in the container and checks the reported policy and one refused off-allowlist request (recommended).**
+  - **Add a "Docker fixture" case per platform that starts a Cursor and a Pi session in the container and checks the reported policy and one refused off-allowlist request (recommended; done with fake engines).**
     - Pros: makes the item runnable and repeatable.
     - Cons: new spec work and two credentials in a container profile.
   - **Manual run in a container environment.**
@@ -1026,6 +1028,12 @@ Decisions made on 2026-10-25 while working through the file.
     permanently changes the user's Grok settings. Pro: nothing breaks. Con:
     the host default still loads a trusted checkout's resources, which Agent
     Info states.
+
+### Task 8: container cells on fake engines (2026-11-06)
+
+- **Engine.** Chose the bridges' own fake engines (Cursor's fake SDK, Pi's faux model) over real logins, as the ticket requires: no billed turns and no credentials in the container. Pros: repeatable on any Docker host, and the bridge, the backend launch, the token and the firewall are all real. Cons: a real Cursor SDK's tools and a real Pi provider are not exercised ([7040](7040-container-cells-on-real-cursor-and-pi.md)).
+- **How the fake gets into the container.** Chose to swap the image's bridge entry inside the disposable fixture container for the case, keeping the real file beside it and restoring it in `finally`. The other option was a test-only launch override in `start_<platform>_server`. Pros of the swap: production launch code is unchanged and nothing in it knows about the fake. Cons: the case writes to `/opt` as root in the fixture container. Cleanup leaves the page first, stops the bridge, restores the entry and stops again, because a mounted tab could restart the fake between the stop and the restore (seen on the first run).
+- **Network probe.** Chose an off-allowlist URL (`example.com`) with GitHub as the allowed control, so a container with no network at all cannot pass as "refused".
 
 ## Related
 

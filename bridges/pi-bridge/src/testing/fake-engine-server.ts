@@ -15,7 +15,8 @@
  * vendor's truth for "the next prompt continued the same conversation": the
  * call after a resume sees the earlier prompt once, followed by the new one.
  *
- * Every prompt is answered `Answer to: <prompt>`.
+ * Every prompt is answered `Answer to: <prompt>`, except the scripted ones in
+ * `fake-engine-responses.ts` (`BASH: <command>` runs Pi's bash tool).
  *
  * Startup: while the file `FAKE_PI_STARTUP_GATE` exists, `AgentSession.prompt`
  * does not reach Pi, standing in for a prompt Pi has not accepted yet (its
@@ -38,32 +39,19 @@ const agentDirectory = process.env.PI_AGENT_DIR;
 if (!callsPath || !agentDirectory) throw new Error("FAKE_PI_CALLS and PI_AGENT_DIR are required");
 
 const { AgentSession, ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-const { fauxAssistantMessage, fauxProvider } = await import("@earendil-works/pi-ai");
+const { fauxAssistantMessage, fauxProvider, fauxToolCall } = await import("@earendil-works/pi-ai");
 type FauxResponseFactory = import("@earendil-works/pi-ai").FauxResponseFactory;
+const { fakePiResponse, userPrompts } = await import("./fake-engine-responses.js");
 const bridge = await import("../index.js");
-
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((block) =>
-      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-        ? String((block as { text?: unknown }).text ?? "")
-        : "",
-    )
-    .join("");
-}
 
 const faux = fauxProvider({ provider: "faux", models: [{ id: "faux-1", name: "Faux 1" }] });
 const respond: FauxResponseFactory = (context, options) => {
   // One scripted step per call; queue the next before answering this one.
   faux.appendResponses([respond]);
-  const prompts = context.messages
-    .filter((message) => message.role === "user")
-    .map((message) => textOf(message.content));
+  const prompts = userPrompts(context.messages);
   const aborted = options?.signal?.aborted === true;
   appendFileSync(callsPath, `${JSON.stringify({ prompts, aborted })}\n`);
-  return fauxAssistantMessage(`Answer to: ${prompts.at(-1) ?? ""}`);
+  return fakePiResponse(context, { fauxAssistantMessage, fauxToolCall });
 };
 faux.setResponses([respond]);
 

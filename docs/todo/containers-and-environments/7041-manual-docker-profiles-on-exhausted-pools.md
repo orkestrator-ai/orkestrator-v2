@@ -25,6 +25,8 @@ Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an
 - The fixture container and its egress gateway were `Up`, and the environment network `ork-<owner>-<hash>-net` had subnet `172.16.240.0/29`, a range only the shim's fallback hands out.
 - `dev:stop` and `dev:reset` then removed the profile's 2 containers, 2 volumes and 1 network.
 
+The CLI container matrix fails the same way (2026-11-06, to-do [0014](../cli-and-slash-commands/0014-cli-qualification.md) task 5): `mise run test:cli:scenarios -- --environment-type container` passed 3/8, with every scenario that starts an environment failing with `resource-exhausted`. With the same two variables it passed 8/8 and left nothing behind. The invocation is now documented beside that command in `docs/development/testing-guide.md`; the manual `dev:test` workflow is documented in `agent-testing.md` as recorded above.
+
 **Decisions.**
 
 - **How should a manual profile get the fallback?**
@@ -60,6 +62,8 @@ Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an
   - None of the reruns left a probe network behind.
 - **Still unruled out.** A failed or timed-out Docker network-create command may leave a daemon-side network even when the backend later shuts down normally. The successful create/destroy pairs in these reruns do not exercise that failure path. Follow-up [7470](7470-electron-spec-backends-run-the-boot-probe.md) retains it as a candidate, without attributing the historical clusters to it.
 - **Not rerun.** The Electron specs other than the design journey need a display, which this host may not use (headless only, no Xvfb), so the specs of the 2026-10-31 and 2026-11-01 builds could not be repeated here. Their timing at the time (backends stopped while host load stalled Docker commands) cannot be recreated either.
+
+Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattached probe networks, created 2026-10-31 (13), 2026-11-01 (9) and 2026-11-02 (7), and none newer, so the leak has not recurred since 2026-11-02. They still fill both default pools (172.18–31/16 and 192.168.0.0/16 in /20s). The owner namespaces are one-off (one network each), which fits backends started on temporary data directories, as in 0241 task 1.
 
 **Decisions.**
 
@@ -115,3 +119,4 @@ Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an
 - [3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md), the same 29 networks; its task 2 is clearing them.
 - [7470-electron-spec-backends-run-the-boot-probe.md](7470-electron-spec-backends-run-the-boot-probe.md), the follow-up from task 2.
 - [7040-container-cells-on-real-cursor-and-pi.md](../agent-engines/7040-container-cells-on-real-cursor-and-pi.md)
+- [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md) (task 5's container matrix ran through the shim)

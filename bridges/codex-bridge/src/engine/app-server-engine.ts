@@ -21,6 +21,7 @@
  *     `clientUserMessageId`; after an ambiguous failure the engine reconciles
  *     against persisted turns rather than retrying blind.
  */
+import type { InteractionDeadlineClock } from "@orkestrator/protocol/agent-interaction-deadline";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
@@ -476,6 +477,11 @@ export interface AppServerEngineOptions {
   interruptTimeoutMs?: number;
   /** How long a human has to answer an approval before it auto-denies. */
   approvalTimeoutMs?: number;
+  /**
+   * Time and timers for parked approval and question deadlines. Defaults to the
+   * system clock; tests pass a manual one to hold a request past its window.
+   */
+  interactionClock?: InteractionDeadlineClock;
   now?: () => number;
   /**
    * Whether a thread's inherited history still declares tools
@@ -1020,6 +1026,7 @@ export class AppServerEngine implements CodexEngine {
       ...(options.approvalTimeoutMs === undefined
         ? {}
         : { approvalTimeoutMs: options.approvalTimeoutMs }),
+      ...(options.interactionClock === undefined ? {} : { clock: options.interactionClock }),
       /**
        * Only claims the approval when a handler is installed *and* it accepts.
        * With no handler the router falls through to its auto-decline, which is the

@@ -681,6 +681,14 @@ ORKESTRATOR_SCENARIO_MODEL=gpt-5.6-sol \
 mise run docker:build:dev
 mise run test:cli:scenarios -- --environment-type container \
   --docker-image orkestrator-v2:dev-<worktree hash>
+
+# The same, on a host whose Docker address pools are full (every start fails
+# with resource-exhausted): the test-only shim retries only owner-labelled
+# network creates on an unrouted /29 in 172.16.240.0/22
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run test:cli:scenarios -- --environment-type container \
+  --docker-image orkestrator-v2:dev-<worktree hash>
 ```
 
 `live-session` installs the selected provider's pinned binary into the

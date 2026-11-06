@@ -526,6 +526,11 @@ export function EnvironmentRow({
               would hide any control nested inside it from assistive tech. */}
           <div
             ref={tooltipAnchorRef}
+            // Shift-click extends the multi-select; without this the browser
+            // also extends a text selection across the rows it passes.
+            onMouseDown={(event) => {
+              if (event.shiftKey) event.preventDefault();
+            }}
             className={cn(
               "group flex w-full items-center gap-2 py-1 pr-2 text-[13px] transition-colors",
               // Stops a long-press from starting a text selection on touch.

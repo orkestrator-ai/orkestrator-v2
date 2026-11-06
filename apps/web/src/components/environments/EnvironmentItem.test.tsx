@@ -242,6 +242,24 @@ describe("EnvironmentItem project home", () => {
   });
 });
 
+describe("EnvironmentItem shift-click", () => {
+  test("a shift mouse-down does not start a text selection, a plain one still does", () => {
+    renderItem();
+    const row = screen.getByRole("button", { name: /Pulsing icon/ });
+
+    expect(fireEvent.mouseDown(row, { shiftKey: true })).toBe(false);
+    expect(fireEvent.mouseDown(row)).toBe(true);
+  });
+
+  test("a shift-click still reaches the selection handler", () => {
+    callbacks.onSelect.mockClear();
+    renderItem();
+
+    fireEvent.click(screen.getByRole("button", { name: /Pulsing icon/ }), { shiftKey: true });
+    expect(callbacks.onSelect).toHaveBeenCalledWith("env-1", { shiftKey: true, metaKey: false });
+  });
+});
+
 describe("EnvironmentItem auto-merge", () => {
   test("shows a white merge icon to the right of the name while auto-merge is on", () => {
     renderItem(environmentFixture({ name: "feature-work", autoMerge: true }));

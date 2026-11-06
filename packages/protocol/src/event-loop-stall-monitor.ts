@@ -15,8 +15,13 @@
  *
  * Cost: one timer callback every `intervalMs` and a few arithmetic updates.
  * Log lines are rate-limited; stalls between lines are folded into the next.
+ *
+ * A stall line names what ran during it when a process registers a context
+ * source ({@link addEventLoopStallContext}): the backend names its slowest
+ * SQLite call and the commands in flight. Sources run only for a stall that is
+ * reported, never on an ordinary tick.
  */
-import { createLogger, type LogLevel } from "./logger.js";
+import { createLogger, type LogLevel, type LogScalar } from "./logger.js";
 
 const log = createLogger("event-loop");
 
@@ -62,6 +67,44 @@ export interface EventLoopStallMonitorOptions {
   clearTimer?: (timer: { unref?: () => unknown }) => void;
 }
 
+/** Content-free fields a context source adds to a stall line. */
+export type EventLoopStallContext = Readonly<Record<string, LogScalar>>;
+
+/**
+ * Says what ran between `fromMs` and `toMs`, in `performance.now()`
+ * milliseconds: the last on-time tick and the late one. Must be cheap, must
+ * not throw (a throw is ignored) and must return content-free scalars only.
+ */
+export type EventLoopStallContextSource = (window: {
+  fromMs: number;
+  toMs: number;
+}) => EventLoopStallContext | undefined;
+
+const contextSources = new Set<EventLoopStallContextSource>();
+
+/** Adds a source to every later stall line; returns its removal. */
+export function addEventLoopStallContext(source: EventLoopStallContextSource): () => void {
+  contextSources.add(source);
+  return () => {
+    contextSources.delete(source);
+  };
+}
+
+function stallContext(fromMs: number, toMs: number): EventLoopStallContext | undefined {
+  if (contextSources.size === 0) return undefined;
+  let merged: Record<string, LogScalar> | undefined;
+  for (const source of contextSources) {
+    let fields: EventLoopStallContext | undefined;
+    try {
+      fields = source({ fromMs, toMs });
+    } catch {
+      continue;
+    }
+    if (fields) merged = { ...merged, ...fields };
+  }
+  return merged;
+}
+
 export interface EventLoopStallReport {
   lagMs: number;
   /** Wall-clock end of the stall, as an ISO string. */
@@ -74,6 +117,8 @@ export interface EventLoopStallReport {
    * can filter `error`: such a stall is written whatever the threshold.
    */
   level: Extract<LogLevel, "warn" | "error">;
+  /** What the registered context sources say ran during the stall. */
+  context?: EventLoopStallContext;
 }
 
 export interface EventLoopStallMonitor {
@@ -88,12 +133,20 @@ export function eventLoopDiagnostics(): EventLoopSnapshot | null {
   return running?.snapshot() ?? null;
 }
 
-function reportStall({ lagMs, endedAt, intervalMs, folded, level }: EventLoopStallReport): void {
+function reportStall({
+  lagMs,
+  endedAt,
+  intervalMs,
+  folded,
+  level,
+  context,
+}: EventLoopStallReport): void {
   log[level]("stalled", {
     lagMs,
     endedAt,
     intervalMs,
     folded: folded.replace(/^; /, "") || undefined,
+    ...context,
   });
 }
 
@@ -125,7 +178,7 @@ export function startEventLoopStallMonitor(
   let expected = now() + intervalMs;
   let timer: { unref?: () => unknown } | null = null;
 
-  const record = (lagMs: number) => {
+  const record = (lagMs: number, fromMs: number, toMs: number) => {
     ticks += 1;
     maxLagMs = Math.max(maxLagMs, lagMs);
     LAG_BUCKETS_MS.forEach((bound, index) => {
@@ -155,6 +208,7 @@ export function startEventLoopStallMonitor(
       intervalMs,
       folded,
       level: lagMs >= alwaysLogMs ? "error" : "warn",
+      context: stallContext(fromMs, toMs),
     });
   };
 
@@ -166,7 +220,7 @@ export function startEventLoopStallMonitor(
   const tick = () => {
     if (stopped) return;
     const at = now();
-    record(Math.max(0, Math.round(at - expected)));
+    record(Math.max(0, Math.round(at - expected)), expected - intervalMs, at);
     expected = at + intervalMs;
     schedule();
   };

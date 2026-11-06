@@ -117,7 +117,7 @@ describe("free-page release with live backend writes", () => {
         main.writeStore("kanban", [{ id: "live", projectId: "p1", title: `update-${step}` }]);
         await gate.resume(step);
       }
-      expect(await release).toEqual({ released: 12, left: before - 12 });
+      expect(await release).toEqual({ released: 12, left: before - 12, stop: "budget" });
       checkRetainedData(main.path, "update-3");
     } finally {
       await gate.unblock();
@@ -148,13 +148,14 @@ describe("free-page release with live backend writes", () => {
       await gate.resume(1);
       // Keep the writer lock until the child returns: its second vacuum must
       // encounter SQLITE_BUSY, rather than merely finding the lock released.
-      expect(await release).toEqual({ released: 4, left: before - 4 });
+      expect(await release).toEqual({ released: 4, left: before - 4, stop: "busy" });
       main.db.exec("COMMIT");
       locked = false;
       expect(main.releasableFreePages()).toBe(before - 4);
       await expect(releaseFreePagesInChildProcess(main.path)).resolves.toEqual({
         released: before - 4,
         left: 0,
+        stop: "done",
       });
       checkRetainedData(main.path, "original");
     } finally {

@@ -11,6 +11,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { leaseFamily, leaseLogName, leaseWaitMetrics } from "./storage-lease-metrics.js";
+import {
+  instrumentSqliteConnection,
+  storageDatabaseName,
+  type SlowStorageOperations,
+  type SqliteConnectionTiming,
+} from "./storage-slow-operations.js";
 import type { CacheGaugeName, CacheGaugeSource } from "./recurring-diagnostics.js";
 
 const log = createLogger("storage");
@@ -277,6 +283,11 @@ export interface StorageDatabaseOptions {
   cacheGaugeRegistry?: {
     addCacheSource(name: CacheGaugeName, source: CacheGaugeSource): () => void;
   };
+  /**
+   * Where this connection reports its slow SQLite calls; the process-wide
+   * `slowStorageOperations` by default. Tests pass their own.
+   */
+  slowOperations?: SlowStorageOperations;
 }
 
 /** Content-free size of one connection's row cache. */
@@ -337,6 +348,8 @@ export class StorageDatabase {
   private readonly observe: ((event: StorageReadEvent) => void) | undefined;
   private readonly observeFetch: ((length: number) => void) | undefined;
   private readonly busyTimeoutMs: number;
+  /** Times this connection's calls (`storage-slow-operations.ts`). */
+  private readonly timing: SqliteConnectionTiming;
   /** The timer of a deferred scrub, while one is pending. */
   private scrubRetry: ReturnType<typeof setTimeout> | null = null;
   private scrubRetryDelayMs = SCRUB_RETRY_FIRST_MS;
@@ -352,6 +365,12 @@ export class StorageDatabase {
     this.observe = options.observe;
     this.observeFetch = options.observeFetch;
     this.db = new Database(this.path, { create: true, strict: true });
+    // Before the first statement, so a slow migration is recorded too.
+    this.timing = instrumentSqliteConnection(
+      this.db,
+      storageDatabaseName(options.file ?? STORAGE_DATABASE_FILE),
+      { recorder: options.slowOperations },
+    );
     try {
       // Sensitive stores (agent mail, prompt queues, credentials) share this
       // file. SQLite creates -wal/-shm with the database file's mode, but keeps
@@ -496,14 +515,17 @@ export class StorageDatabase {
     return (this.db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
   }
 
-  /** Runs `fn` in one IMMEDIATE transaction. `fn` must be synchronous. */
-  transaction<T>(fn: () => T): T {
+  /**
+   * Runs `fn` in one IMMEDIATE transaction. `fn` must be synchronous. `store`
+   * names the store it works on for the slow-operation record, never more.
+   */
+  transaction<T>(fn: () => T, store?: string): T {
     if (this.pendingCache) {
       // Nested: bun:sqlite turns this into a savepoint; the outermost call
       // owns the pending cache.
       const saved = new Map(this.pendingCache);
       try {
-        return this.runTransaction(fn);
+        return this.runTransaction(fn, store);
       } catch (error) {
         this.pendingCache = saved;
         throw error;
@@ -512,7 +534,7 @@ export class StorageDatabase {
     this.pendingCache = new Map();
     let pending: Map<string, CachedStore | null>;
     try {
-      const result = this.runTransaction(fn);
+      const result = this.runTransaction(fn, store);
       pending = this.pendingCache;
       return result;
     } catch (error) {
@@ -528,9 +550,10 @@ export class StorageDatabase {
     }
   }
 
-  private runTransaction<T>(fn: () => T): T {
+  private runTransaction<T>(fn: () => T, store: string | undefined): T {
     let result: T;
     try {
+      this.timing.store = store ?? null;
       result = this.db.transaction(fn).immediate();
     } catch (error) {
       if ((error as { code?: unknown }).code === "SQLITE_BUSY") leaseWaitMetrics.transactionBusy();
@@ -653,6 +676,7 @@ export class StorageDatabase {
    * Returns the items as an array in stored order (record keys are dropped).
    */
   readStoreRowsByOwner(store: string, owner: string): unknown[] | null {
+    this.timing.store = store;
     return this.db
       .transaction(() => {
         const header = this.readStoreHeader(store);
@@ -698,6 +722,7 @@ export class StorageDatabase {
    * representation retains the legacy fallback.
    */
   readStoreRow(store: string, key: string, collection = ""): unknown | undefined {
+    this.timing.store = store;
     return this.db
       .transaction(() => {
         const header = this.readStoreHeader(store);
@@ -748,7 +773,7 @@ export class StorageDatabase {
    */
   writeStore(store: string, value: unknown, options: StoreWriteOptions = {}) {
     if (value === undefined) throw new Error(`Cannot persist undefined to ${store}`);
-    return this.transaction(() => this.writeStoreInTransaction(store, value, options));
+    return this.transaction(() => this.writeStoreInTransaction(store, value, options), store);
   }
 
   /** {@link writeStore} for use inside an existing {@link transaction}. */
@@ -832,7 +857,7 @@ export class StorageDatabase {
         .value as T[];
       mutate(current);
       this.writeStoreInTransaction(store, current);
-    });
+    }, store);
   }
 
   /**
@@ -854,7 +879,7 @@ export class StorageDatabase {
       const result = mutate(current);
       this.writeStoreInTransaction(store, current);
       return result;
-    });
+    }, store);
   }
 
   /**
@@ -1011,7 +1036,7 @@ export class StorageDatabase {
         this.setCache(store, null);
       }
       return update.result;
-    });
+    }, store);
   }
 
   /**
@@ -1059,7 +1084,7 @@ export class StorageDatabase {
 
   /** Removes a store entirely; the next read sees it as absent. */
   deleteStore(store: string): void {
-    this.transaction(() => this.deleteStoreInTransaction(store));
+    this.transaction(() => this.deleteStoreInTransaction(store), store);
   }
 
   deleteStoreInTransaction(store: string): void {
@@ -1259,6 +1284,7 @@ export class StorageDatabase {
   }
 
   private loadCached(store: string, use: StorageReadEvent): CachedStore | null {
+    this.timing.store = store;
     return this.db
       .transaction(() => {
         const committed = this.storeRevision(store);

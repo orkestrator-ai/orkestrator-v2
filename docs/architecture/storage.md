@@ -735,6 +735,10 @@ returns at most 1 GiB per check, 1 MiB per transaction, checkpoints its own
 frames after each one (so the backend's next commit does not pay for them),
 pauses 5 ms between them and stops when the database is busy. In-process,
 those steps had held the event loop 30–190 ms each (to-do 1202 task 7).
+Each pass writes one `storage` `upkeep.finished` line with how long
+`optimize` held the event loop, the pages released and left, and why the
+release stopped; slow SQLite calls on either file write `operation.slow`
+([what ran during a stall](logging.md#what-ran-during-a-stall)).
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

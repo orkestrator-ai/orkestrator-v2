@@ -43,6 +43,8 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
         "An interrupted environment deletion stays pending. Its owning step logged the detail.",
       "startup.looped-review-pending": "Cleanup of the retired Looped Review stays pending.",
       "notice.failed": "A background notice after a turn or prompt failed; `step` says which.",
+      "command.slow":
+        "A registered command took at least 2 s to settle, or its synchronous part held the event loop for at least 250 ms (then at warn): `command`, `durationMs`, `syncMs` and `outcome`. Repeats of one command within a minute are folded into the next line.",
       "artifacts.live-unavailable": "Live interactive artifacts are unavailable.",
       "previous-run": {
         description:

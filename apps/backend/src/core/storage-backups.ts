@@ -1003,10 +1003,26 @@ export const UPKEEP_RELEASE_PAUSE_MS = 5;
 /** A release still running after this long is killed; checks come every five minutes. */
 const UPKEEP_RELEASE_TIMEOUT_MS = 10 * 60 * 1000;
 
+/**
+ * Why a free-page release stopped: nothing left (`done`), the page budget
+ * (`budget`), another connection held the database (`busy`), a step freed
+ * nothing (`no-progress`), or the database cannot release pages at all
+ * (`not-incremental`, no incremental auto-vacuum).
+ */
+export const FREE_PAGE_RELEASE_STOPS = [
+  "done",
+  "budget",
+  "busy",
+  "no-progress",
+  "not-incremental",
+] as const;
+export type FreePageReleaseStop = (typeof FREE_PAGE_RELEASE_STOPS)[number];
+
 /** What the free-page release reported. */
 export interface FreePageRelease {
   released: number;
   left: number;
+  stop: FreePageReleaseStop;
 }
 
 /**
@@ -1042,9 +1058,16 @@ export function releaseFreePagesInChildProcess(
     ],
     { timeoutMs: options.timeoutMs ?? UPKEEP_RELEASE_TIMEOUT_MS, spawn: options.spawn },
   ).then(({ code, signal, stdout, stderr }) => {
-    const [released, left] = stdout.trim().split(" ").map(Number);
-    if (code === 0 && Number.isSafeInteger(released) && Number.isSafeInteger(left)) {
-      return { released: released!, left: left! };
+    const [releasedText, leftText, stop] = stdout.trim().split(" ");
+    const released = Number(releasedText);
+    const left = Number(leftText);
+    if (
+      code === 0 &&
+      Number.isSafeInteger(released) &&
+      Number.isSafeInteger(left) &&
+      (FREE_PAGE_RELEASE_STOPS as readonly string[]).includes(stop ?? "")
+    ) {
+      return { released, left, stop: stop as FreePageReleaseStop };
     }
     throw new Error(`Free-page release failed: ${childFailureReason(code, signal, stderr)}`);
   });
@@ -1052,7 +1075,8 @@ export function releaseFreePagesInChildProcess(
 
 /**
  * Run by {@link releaseFreePagesInChildProcess}:
- * `-- <file> <maxPages> <stepPages> <pauseMs>`. Prints `<released> <left>`.
+ * `-- <file> <maxPages> <stepPages> <pauseMs>`. Prints `<released> <left> <stop>`
+ * ({@link FreePageReleaseStop}).
  * Sets what the backend's connection sets (`storage-database.ts`), so a step
  * here is as durable and as scrubbing as one there. A busy database ends the
  * run without an error: the backend's writers come first.
@@ -1064,6 +1088,7 @@ try {
   const db = new Database(file);
   let released = 0;
   let left = 0;
+  let stop = "done";
   try {
     db.exec("PRAGMA busy_timeout = 1000");
     db.exec("PRAGMA synchronous = FULL");
@@ -1072,19 +1097,32 @@ try {
     const freePages = () => db.query("PRAGMA freelist_count").get().freelist_count;
     left = freePages();
     // Without incremental auto-vacuum free pages are only reused, never released.
-    if (db.query("PRAGMA auto_vacuum").get().auto_vacuum !== 2) left = 0;
-    while (left > 0 && released < maxPages) {
+    if (db.query("PRAGMA auto_vacuum").get().auto_vacuum !== 2) {
+      left = 0;
+      stop = "not-incremental";
+    }
+    while (left > 0) {
+      if (released >= maxPages) {
+        stop = "budget";
+        break;
+      }
       const pages = Math.max(1, Math.min(stepPages, maxPages - released));
       try {
         db.exec("PRAGMA incremental_vacuum(" + pages + ")");
       } catch (error) {
-        if (error && (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED")) break;
+        if (error && (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED")) {
+          stop = "busy";
+          break;
+        }
         throw error;
       }
       // This step's frames, so the backend's next commit never checkpoints them.
       db.query("PRAGMA wal_checkpoint(PASSIVE)").get();
       const now = freePages();
-      if (now >= left) break;
+      if (now >= left) {
+        stop = "no-progress";
+        break;
+      }
       released += left - now;
       left = now;
       if (pauseMs > 0) Bun.sleepSync(pauseMs);
@@ -1092,7 +1130,7 @@ try {
   } finally {
     db.close();
   }
-  process.stdout.write(released + " " + left);
+  process.stdout.write(released + " " + left + " " + stop);
 } catch (error) {
   process.stderr.write(String(error && error.code ? error.code : "error"));
   process.exit(1);
@@ -1107,21 +1145,61 @@ try {
  * ({@link releaseFreePagesInChildProcess}). Moving the ledger out (storage
  * migration 7) leaves its old pages free in `orkestrator.sqlite`; this is
  * what gives that space back. Never throws.
+ *
+ * Each pass that runs writes one `upkeep.finished` line: how long `optimize`
+ * held the event loop, and what the release returned and why it stopped
+ * (`stop`: a {@link FreePageReleaseStop}, `no-free-pages` when there was
+ * nothing to release, `closed` when the connection closed after optimize,
+ * `failed` when the release threw).
  */
 export async function runDatabaseUpkeep(
   database: StorageDatabase,
-  options: { release?: (file: string) => Promise<FreePageRelease> } = {},
+  options: {
+    release?: (file: string) => Promise<FreePageRelease>;
+    now?: () => number;
+  } = {},
 ): Promise<void> {
+  const now = options.now ?? (() => performance.now());
+  if (database.isClosed()) return;
+  const startedAt = now();
   try {
-    if (database.isClosed()) return;
-    try {
-      database.optimize();
-    } catch (error) {
-      log.warn("optimize.failed", { error: formatLogError(error, { message: false }) });
-    }
-    if (database.isClosed() || database.releasableFreePages() <= 0) return;
-    await (options.release ?? releaseFreePagesInChildProcess)(database.path);
+    database.optimize();
   } catch (error) {
+    log.warn("optimize.failed", { error: formatLogError(error, { message: false }) });
+  }
+  const optimizeMs = Math.round(now() - startedAt);
+  let releasable = 0;
+  let outcome: { released: number | null; left: number | null; stop: string } = {
+    released: null,
+    left: null,
+    stop: "no-free-pages",
+  };
+  let releaseMs: number | null = null;
+  try {
+    if (database.isClosed()) {
+      outcome.stop = "closed";
+    } else {
+      releasable = database.releasableFreePages();
+    }
+    if (releasable > 0) {
+      const releaseStartedAt = now();
+      try {
+        outcome = await (options.release ?? releaseFreePagesInChildProcess)(database.path);
+      } finally {
+        releaseMs = Math.round(now() - releaseStartedAt);
+      }
+    }
+  } catch (error) {
+    outcome = { released: null, left: null, stop: "failed" };
     log.warn("upkeep.vacuum-failed", { error: formatLogError(error, { message: false }) });
   }
+  log.info("upkeep.finished", {
+    durationMs: Math.round(now() - startedAt),
+    optimizeMs,
+    releasable,
+    released: outcome.released,
+    left: outcome.left,
+    releaseMs,
+    stop: outcome.stop,
+  });
 }

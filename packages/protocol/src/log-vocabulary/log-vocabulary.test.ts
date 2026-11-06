@@ -46,6 +46,7 @@ const CURATED_ESSENTIAL_EVENTS = [
   "process uncaught-exception",
   "renderer-errors error.recorded",
   "storage migration.failed",
+  "storage operation.slow",
   "storage snapshot.failed",
   "storage snapshot.integrity-failed",
 ];

@@ -270,12 +270,18 @@ that event; the retry's "Port 34122 is free again" sentence is likewise now
 service bound to `127.0.0.1`, while the next line listed that same listener.
 The descriptor omits `browserUrl` when it equals the loopback primary URL, so
 the CLI had no remote address to show and fell back to a message that read as
-a failure. The line now says `(loopback only; see local listeners)` when
-there are local listeners, and keeps the old text when there are none
-(`packages/cli/src/client/commands/service.ts`; test "a loopback-only service
-is not reported as having no browser listener" in
-`packages/cli/tests/service-install.test.ts`, which fails on the old code).
-Re-checked in the container with the rebuilt client.
+a failure. The line now says
+`(no remote browser listener; see local listeners and the log)` when there are
+local listeners, and keeps the old text when there are none
+(`packages/cli/src/client/commands/service.ts`). The log pointer stays because
+the descriptor cannot tell an intentionally loopback-only service from one
+whose remote browser listener failed to bind; a review of the first wording,
+`(loopback only; see local listeners)`, found it labelled that failure as
+intentional. Tests "a loopback-only service is not reported as having no
+browser listener" (fails on the original code) and "a degraded remote browser
+listener keeps the log hint alongside local listeners" in
+`packages/cli/tests/service-install.test.ts`. The container re-check ran the
+first wording's client; the final wording is covered by those tests only.
 
 ### Tasks 1 to 3: how the behaviour was proved
 

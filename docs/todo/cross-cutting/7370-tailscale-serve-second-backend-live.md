@@ -82,10 +82,11 @@ state). This file takes over what 0996 left open; 0996 is deleted.
   loopback client port (`fallbackSkippedPorts`,
   `apps/backend/src/gateway-lifecycle.ts`). Both were proved live on loopback
   on 2026-11-06 (below).
-- `service install` prints the loopback client listeners; a loopback-only
-  service now says `address (loopback only; see local listeners)` instead of
-  "no browser listener" (fixed 2026-11-06, see 0244's "Task 5: the loopback
-  address line").
+- `service install` prints the loopback client listeners; a service with
+  local listeners but no remote browser address now says
+  `address (no remote browser listener; see local listeners and the log)`
+  instead of "no browser listener" (fixed 2026-11-06, see 0244's "Task 5: the
+  loopback address line").
 - The Serve recovery and the migration note are unproved live (tasks 1 to 3).
 
 ### 0996 task 3 record (2026-11-06)

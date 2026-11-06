@@ -717,6 +717,12 @@ export class DiffStatsService {
     return this.entries.has(environmentId);
   }
 
+  /** The container a tracked environment scans, if it is a container target. */
+  trackedContainerId(environmentId: string): string | undefined {
+    const target = this.entries.get(environmentId)?.target;
+    return target?.kind === "container" ? target.containerId : undefined;
+  }
+
   /** Releases every watcher and timer; used on backend shutdown. */
   shutdown(): void {
     let publishedCounts = false;

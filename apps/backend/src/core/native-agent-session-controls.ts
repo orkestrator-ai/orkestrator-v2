@@ -13,6 +13,7 @@ export function nativeAgentSessionWithControls(
   // model changes. Claude's settings-backed values are session defaults:
   // unsupported models ignore context1m, and switching back must restore
   // the value the session started with rather than losing it permanently.
+  // Pi's auto-compaction toggle is a session setting every Pi model offers.
   // A retired value (Claude's pre-approval-mode `permissionMode`, Codex's
   // reasoning `summary`) has no descriptor any more, so any control update
   // drops it.
@@ -20,8 +21,9 @@ export function nativeAgentSessionWithControls(
     ? Object.fromEntries(
         Object.entries(existing.controls?.parameterValues ?? {}).filter(
           ([id]) =>
-            existing.agent === "claude" &&
-            (id === "thinking" || id === "context1m" || id === "chrome"),
+            (existing.agent === "claude" &&
+              (id === "thinking" || id === "context1m" || id === "chrome")) ||
+            (existing.agent === "pi" && id === "autoCompaction"),
         ),
       )
     : Object.fromEntries(

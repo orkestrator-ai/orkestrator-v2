@@ -250,6 +250,7 @@ function toPersisted(state: SessionState): PersistedSession {
         : entry,
     ),
     composer: state.composer,
+    ...(state.autoCompaction === undefined ? {} : { autoCompaction: state.autoCompaction }),
     ...(state.usage ? { usage: state.usage } : {}),
     // Public descriptors only — ids and fingerprints, never a path. They let a
     // restarted bridge answer a catalogue read (as `stale`) and validate a
@@ -318,6 +319,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.transcriptTruncated = entry.transcriptTruncated === true;
   state.revision = readCount(entry.revision);
   state.composer = restoreComposer(entry.composer);
+  if (typeof entry.autoCompaction === "boolean") state.autoCompaction = entry.autoCompaction;
   const usage = restoreUsage(entry.usage);
   if (usage) state.usage = usage;
   // Stale until this process reads the list from an attached session: the

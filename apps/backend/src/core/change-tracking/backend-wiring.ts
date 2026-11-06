@@ -7,6 +7,7 @@
 import type { StorageDatabase } from "../storage-database.js";
 import { openBackendDatabase } from "../storage-stores.js";
 import type { StorageService } from "../storage.js";
+import type { DiffStatsTracking } from "../diff-stats-tracking.js";
 import { baselineTargetBranch } from "../diff-baseline.js";
 import { importOpenCodeCommandJournals } from "./legacy-import.js";
 import { openChangeLedgerDatabase } from "./ledger-schema.js";
@@ -20,7 +21,10 @@ export function createBackendChangeTracking(input: {
   dataDir: string;
   storage: Pick<StorageService, "getEnvironment" | "loadConfig">;
   emit: (event: string, payload: unknown) => void;
-  refreshEnvironment: (environmentId: string) => void;
+  /** Pass the scan owner so production cannot omit the explicit-refresh path. */
+  diffStats: Pick<DiffStatsTracking, "refreshExplicitly"> & {
+    service: Pick<DiffStatsTracking["service"], "refresh">;
+  };
 }): ChangeTrackingService {
   // The ledger has its own file, change-tracking.sqlite, opened on first use,
   // after storage init.
@@ -50,7 +54,8 @@ export function createBackendChangeTracking(input: {
         ? { kind: "container", containerId: environment.containerId }
         : null;
     },
-    requestEnvironmentRefresh: input.refreshEnvironment,
+    requestEnvironmentRefresh: (id) => input.diffStats.service.refresh(id),
+    requestExplicitEnvironmentRefresh: (id) => input.diffStats.refreshExplicitly(id),
     prBaseBranch: async (environmentId) => {
       const environment = await input.storage.getEnvironment(environmentId).catch(() => null);
       if (!environment) return null;

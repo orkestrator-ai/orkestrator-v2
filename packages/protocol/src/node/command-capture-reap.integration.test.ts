@@ -95,6 +95,34 @@ describe.skipIf(process.platform !== "darwin")("a child whose exit Bun lost", ()
     }, 20_000);
   }
 
+  for (const reason of ["abort", "timeout", "overflow"] as const) {
+    test(`termination-waiting capture confirms a lost exit after ${reason}`, async () => {
+      lost = loseBunExitsEntirely();
+      const controller = new AbortController();
+      const pending = runCommand(
+        "sh",
+        ["-c", reason === "overflow" ? "printf 123456789; exec sleep 30" : "exec sleep 30"],
+        {
+          waitForTermination: true,
+          waitForDescendants: true,
+          signal: controller.signal,
+          timeoutMs: reason === "timeout" ? 50 : 5_000,
+          maxOutputBytes: reason === "overflow" ? 4 : 1_024,
+        },
+      ).catch((error: CommandFailedError) => error);
+      if (reason === "abort") controller.abort();
+      const failure = await pending;
+      expect(failure).toBeInstanceOf(CommandFailedError);
+      const error = failure as CommandFailedError;
+      expect(error.aborted).toBe(reason === "abort");
+      expect(error.timedOut).toBe(reason !== "overflow");
+      expect(error.outputLimitExceeded).toBe(reason === "overflow");
+      // The fallback accepted a zombie, never a running process.
+      expect(processState(lost.pids[0]!)?.state.startsWith("Z")).toBe(true);
+      await untilGone(lost.pids[0]!, 10_000);
+    }, 20_000);
+  }
+
   test("real Bun late ECHILD after manual reaping cannot change an aborted capture or another child", async () => {
     const child = Bun.spawn(
       [

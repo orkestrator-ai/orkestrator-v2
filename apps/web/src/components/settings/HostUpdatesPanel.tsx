@@ -212,7 +212,7 @@ const UPDATE_CHANNELS: Record<HostUpdateChannel, { label: string; description: s
   },
 };
 
-const IDLE_WAITS = [
+export const IDLE_WAITS = [
   { seconds: 1_800, label: "30 minutes" },
   { seconds: 3_600, label: "1 hour" },
   { seconds: 14_400, label: "4 hours" },

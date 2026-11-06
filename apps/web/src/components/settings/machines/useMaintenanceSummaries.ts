@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   HOST_MAINTENANCE_EVENT,
+  isActiveHostUpdateJob,
   type HostMaintenanceSnapshot,
 } from "@orkestrator/protocol/host-maintenance";
 import { portalListen } from "@/lib/portal/portal-transport";
@@ -10,6 +11,8 @@ import { mergeMaintenanceSnapshot } from "./useMachineMaintenance";
 
 /** How often the list reads every machine's maintenance again while it is shown. */
 const SUMMARY_REFRESH_MS = 5 * 60_000;
+/** How often a machine with an update in progress is read again. */
+const UPDATING_REFRESH_MS = 3_000;
 
 export interface MaintenanceSummary {
   snapshot: HostMaintenanceSnapshot | null;
@@ -77,6 +80,40 @@ export function useMaintenanceSummaries(entries: MachineEntry[]) {
       clearInterval(timer);
     };
   }, [record, signature]);
+
+  // A machine updating reports its progress only when read, so it is read
+  // often until its job settles. The command node's own events cover it.
+  const updating = reachable
+    .filter(
+      (entry) =>
+        entry.role !== "self" &&
+        (isActiveHostUpdateJob(summaries[entry.key]?.snapshot?.job ?? null) ||
+          summaries[entry.key]?.snapshot?.checkRequest),
+    )
+    .map((entry) => entry.key)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!updating) return;
+    const keys = new Set(updating.split(","));
+    let cancelled = false;
+    const timer = setInterval(() => {
+      for (const entry of targets.current) {
+        if (!keys.has(entry.key)) continue;
+        machineMaintenanceClient(entry)
+          ?.getHostMaintenance()
+          .then(
+            (snapshot) => !cancelled && record(entry.key, snapshot),
+            // A restarting machine does not answer for a while; the next read tries again.
+            () => undefined,
+          );
+      }
+    }, UPDATING_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [record, updating]);
 
   // The command node's own events reach this client.
   const selfKey = reachable.find((entry) => entry.role === "self")?.key ?? null;

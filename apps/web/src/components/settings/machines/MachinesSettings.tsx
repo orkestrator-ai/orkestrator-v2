@@ -34,14 +34,21 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
+import { isActiveHostUpdateJob } from "@orkestrator/protocol/host-maintenance";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { discardNodeDetach, nodeErrorText } from "@/lib/backend/command-nodes";
 import { requestCommandHandover } from "@/lib/command-handover";
 import { arrangeMachines } from "@/lib/federation/sidebar-layout";
 import { updatePortalLayout } from "@/lib/portal/portal-layout";
 import { onMachineUpdatesRequest, takeMachineUpdatesRequest } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
+import { useMachineBulkUpdateStore, type BulkUpdateOutcome } from "@/stores/machineBulkUpdateStore";
+import { describeHostUpdateJob } from "../HostUpdatesPanel";
 import { AddMachineDialog } from "./AddMachineDialog";
+import { BulkUpdateDialog, type BulkUpdateChoice } from "./BulkUpdateDialog";
+import { summarizeBulkUpdate, updateMachinesToLatest } from "./bulk-update";
+import { machineMaintenanceClient } from "./machine-access";
 import { ClientOptions } from "./ClientOptions";
 import { MachineSettingsDialog } from "./MachineSettingsDialog";
 import { MachineUpdatesDialog } from "./MachineUpdatesDialog";
@@ -75,6 +82,10 @@ export function MachinesSettings() {
   const [updatesKey, setUpdatesKey] = useState<string | null>(null);
   const [wantsCurrentUpdates, setWantsCurrentUpdates] = useState(takeMachineUpdatesRequest);
   const [openingWindow, setOpeningWindow] = useState<string | null>(null);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [confirmingBulk, setConfirmingBulk] = useState(false);
+  const bulkOutcomes = useMachineBulkUpdateStore((state) => state.outcomes);
+  const bulkRunning = useMachineBulkUpdateStore((state) => state.running);
 
   useEffect(
     () =>
@@ -126,6 +137,47 @@ export function MachinesSettings() {
     updatePortalLayout({ machineOrder }).catch((error: unknown) =>
       toast.error("Could not save the machine order", { description: errorText(error) }),
     );
+  };
+
+  // A machine that stops being updatable drops out of the selection.
+  const updatable = entries.filter((entry) => updateBlocker(entry, summaries[entry.key]) === null);
+  const selectedMachines = updatable.filter((entry) => selected.has(entry.key));
+  const toggleSelected = (key: string, checked: boolean) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  const allSelected = updatable.length > 0 && selectedMachines.length === updatable.length;
+
+  const startBulkUpdate = (choice: BulkUpdateChoice) => {
+    setConfirmingBulk(false);
+    const targets = selectedMachines.flatMap((entry) => {
+      const client = machineMaintenanceClient(entry);
+      return client ? [{ key: entry.key, client, last: entry.role === "self" }] : [];
+    });
+    if (targets.length === 0) return;
+    const store = useMachineBulkUpdateStore.getState();
+    store.start(targets.map((target) => target.key));
+    setSelected(new Set());
+    // Not tied to this page: closing Settings does not stop the requests.
+    void updateMachinesToLatest(
+      targets,
+      choice.whenIdle ? { drain: "when-idle", maxWaitSeconds: choice.maxWaitSeconds } : {},
+      (key, outcome, snapshot) => {
+        useMachineBulkUpdateStore.getState().report(key, outcome);
+        if (snapshot) record(key, snapshot);
+      },
+    )
+      .then((outcomes) => {
+        const results = [...outcomes.values()];
+        const summary = summarizeBulkUpdate(results);
+        if (results.every((outcome) => outcome.state === "failed")) toast.error(summary);
+        else if (results.some((outcome) => outcome.state === "failed")) toast.warning(summary);
+        else toast.success(summary);
+      })
+      .finally(() => useMachineBulkUpdateStore.getState().finish());
   };
 
   const openWindow = async (entry: MachineEntry) => {
@@ -229,68 +281,123 @@ export function MachinesSettings() {
           </div>
         ) : (
           // The context sits outside the table: it renders its live region as a <div>.
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            modifiers={[verticalOnly]}
-            onDragEnd={moveMachine}
-          >
-            <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
-              <table className="w-full table-fixed text-sm" data-testid="machine-list">
-                <thead className="border-b border-zinc-800 bg-zinc-900/55 text-left text-xs text-zinc-500">
-                  <tr>
-                    <th className="px-4 py-2.5 font-medium">Machine</th>
-                    <th className="hidden w-28 px-4 py-2.5 font-medium md:table-cell">
-                      Orkestrator
-                    </th>
-                    <th className="w-[8.5rem] px-3 py-2.5 text-right font-medium sm:w-[15rem] sm:px-4">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-800/80">
-                  <SortableContext
-                    items={movable.map((machine) => machine.connectionId)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    {entries.map((entry) => {
-                      const row: MachineRowProps = {
-                        entry,
-                        api,
-                        summary: summaries[entry.key],
-                        openingWindow: openingWindow === entry.key,
-                        onSettings: () => setSettingsKey(entry.key),
-                        onUpdates: () => setUpdatesKey(entry.key),
-                        onOpenWindow: () => void openWindow(entry),
-                        leaf,
-                      };
-                      return reorderable && entry.role === "node" && entry.nodeId ? (
-                        <SortableMachineRow key={entry.key} sortableId={entry.nodeId} {...row} />
-                      ) : (
-                        <MachineRow
-                          key={entry.key}
-                          {...row}
-                          // Reserves the grip's width so the dots line up.
-                          grip={
-                            reorderable ? (
-                              <span aria-hidden="true" className={MACHINE_GRIP_SLOT_CLASS} />
-                            ) : null
+          <>
+            <div
+              className="flex flex-wrap items-center justify-between gap-2"
+              data-testid="bulk-update-bar"
+            >
+              <p className="text-xs text-zinc-500" aria-live="polite">
+                {bulkRunning
+                  ? "Updating the machines you picked…"
+                  : selectedMachines.length > 0
+                    ? `${selectedMachines.length} of ${updatable.length} selected`
+                    : "Tick machines to update them together"}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={selectedMachines.length === 0 || bulkRunning}
+                onClick={() => setConfirmingBulk(true)}
+              >
+                {bulkRunning ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                Update app to latest
+              </Button>
+            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              modifiers={[verticalOnly]}
+              onDragEnd={moveMachine}
+            >
+              <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
+                <table className="w-full table-fixed text-sm" data-testid="machine-list">
+                  <thead className="border-b border-zinc-800 bg-zinc-900/55 text-left text-xs text-zinc-500">
+                    <tr>
+                      <th className="w-10 py-2.5 pr-0 pl-4 font-medium">
+                        <Checkbox
+                          aria-label="Select every machine that can update"
+                          className="align-middle"
+                          checked={
+                            allSelected
+                              ? true
+                              : selectedMachines.length > 0
+                                ? "indeterminate"
+                                : false
+                          }
+                          disabled={updatable.length === 0 || bulkRunning}
+                          onCheckedChange={(checked) =>
+                            setSelected(
+                              new Set(checked === true ? updatable.map((entry) => entry.key) : []),
+                            )
                           }
                         />
-                      );
-                    })}
-                  </SortableContext>
-                  {entries.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="px-4 py-8 text-center text-sm text-zinc-500">
-                        No machines yet.
-                      </td>
+                      </th>
+                      <th className="py-2.5 pr-4 pl-3 font-medium">Machine</th>
+                      <th className="hidden w-28 px-4 py-2.5 font-medium md:table-cell">
+                        Orkestrator
+                      </th>
+                      <th className="w-[8.5rem] px-3 py-2.5 text-right font-medium sm:w-[15rem] sm:px-4">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </DndContext>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/80">
+                    <SortableContext
+                      items={movable.map((machine) => machine.connectionId)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {entries.map((entry) => {
+                        const row: MachineRowProps = {
+                          entry,
+                          api,
+                          summary: summaries[entry.key],
+                          openingWindow: openingWindow === entry.key,
+                          onSettings: () => setSettingsKey(entry.key),
+                          onUpdates: () => setUpdatesKey(entry.key),
+                          onOpenWindow: () => void openWindow(entry),
+                          leaf,
+                          selection: {
+                            checked: selected.has(entry.key),
+                            blocker: updateBlocker(entry, summaries[entry.key]),
+                            locked: bulkRunning,
+                            onChange: (checked) => toggleSelected(entry.key, checked),
+                          },
+                          bulkOutcome: bulkOutcomes[entry.key],
+                        };
+                        return reorderable && entry.role === "node" && entry.nodeId ? (
+                          <SortableMachineRow key={entry.key} sortableId={entry.nodeId} {...row} />
+                        ) : (
+                          <MachineRow
+                            key={entry.key}
+                            {...row}
+                            // Reserves the grip's width so the dots line up.
+                            grip={
+                              reorderable ? (
+                                <span aria-hidden="true" className={MACHINE_GRIP_SLOT_CLASS} />
+                              ) : null
+                            }
+                          />
+                        );
+                      })}
+                    </SortableContext>
+                    {entries.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-8 text-center text-sm text-zinc-500">
+                          No machines yet.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </DndContext>
+          </>
         )}
 
         {leaf ? (
@@ -314,6 +421,14 @@ export function MachinesSettings() {
 
         {api && connections ? <ClientOptions list={connections} /> : null}
 
+        {confirmingBulk ? (
+          <BulkUpdateDialog
+            machines={selectedMachines}
+            open
+            onOpenChange={setConfirmingBulk}
+            onConfirm={startBulkUpdate}
+          />
+        ) : null}
         <AddMachineDialog
           open={adding}
           onOpenChange={setAdding}
@@ -365,7 +480,78 @@ interface MachineRowProps {
   onOpenWindow: () => void;
   /** The connected machine is controlled by another, so it is not the command node. */
   leaf: boolean;
+  selection: {
+    checked: boolean;
+    /** Why it cannot be ticked, or null. */
+    blocker: string | null;
+    /** A bulk update is running. */
+    locked: boolean;
+    onChange: (checked: boolean) => void;
+  };
+  bulkOutcome: BulkUpdateOutcome | undefined;
 }
+
+/** Why "Update app to latest" cannot include this machine, or null when it can. */
+function updateBlocker(
+  entry: MachineEntry,
+  summary: MaintenanceSummary | undefined,
+): string | null {
+  if (!entry.maintenance) {
+    return entry.role === "device"
+      ? "Only machines the command node controls can be updated from here"
+      : "Connect to this machine to update it";
+  }
+  const updater = summary?.snapshot?.updater;
+  if (updater && !updater.available) {
+    return updater.reason ?? "This machine cannot update Orkestrator itself";
+  }
+  return null;
+}
+
+/** What the row says about an update: the host's own job, else where the bulk update got to. */
+function updateStatusText(
+  snapshot: MaintenanceSummary["snapshot"],
+  outcome: BulkUpdateOutcome | undefined,
+): { text: string; tone: "muted" | "active" | "good" | "bad" } | null {
+  const job = snapshot?.job ?? null;
+  if (job && isActiveHostUpdateJob(job)) {
+    const secondsLeft =
+      job.state === "awaiting-restart" && job.restartAt
+        ? Math.max(0, Math.ceil((Date.parse(job.restartAt) - Date.now()) / 1000))
+        : null;
+    return { text: describeHostUpdateJob(job, secondsLeft), tone: "active" };
+  }
+  switch (outcome?.state) {
+    case undefined:
+      return null;
+    case "checking":
+      return { text: "Checking for the newest release…", tone: "active" };
+    case "requested":
+      // The job has settled since: report how it ended.
+      if (job && (outcome.version === null || job.requestedVersion === outcome.version)) {
+        return {
+          text: describeHostUpdateJob(job, null),
+          tone: job.state === "succeeded" ? "good" : job.state === "failed" ? "bad" : "muted",
+        };
+      }
+      return { text: "Update requested", tone: "active" };
+    case "current":
+      return { text: `Already on the newest release (${outcome.version})`, tone: "good" };
+    case "busy":
+      return { text: "An update was already in progress", tone: "muted" };
+    case "skipped":
+      return { text: outcome.reason, tone: "muted" };
+    case "failed":
+      return { text: `Could not update: ${outcome.error}`, tone: "bad" };
+  }
+}
+
+const STATUS_TONE_CLASS = {
+  muted: "text-zinc-500",
+  active: "text-sky-300",
+  good: "text-emerald-300",
+  bad: "text-red-300",
+} as const;
 
 /** A machine the command node controls, moved by its grip. */
 function SortableMachineRow({ sortableId, ...row }: MachineRowProps & { sortableId: string }) {
@@ -413,6 +599,8 @@ function MachineRow({
   onUpdates,
   onOpenWindow,
   leaf,
+  selection,
+  bulkOutcome,
   grip,
   rowRef,
   rowStyle,
@@ -426,6 +614,7 @@ function MachineRow({
   const snapshot = summary?.snapshot ?? null;
   const issues = snapshot ? maintenanceIssues(snapshot) : [];
   const outdated = issues.length > 0;
+  const updateStatus = updateStatusText(snapshot, bulkOutcome);
   const lastConnected = formatMachineTime(entry.lastConnectedAt);
   const windowReason = !api?.openWindow
     ? "Only the desktop app opens machines in their own windows"
@@ -455,7 +644,17 @@ function MachineRow({
         dragging && "relative z-10 bg-zinc-900 shadow-lg",
       )}
     >
-      <td className="py-3.5 pr-2 pl-3 align-top sm:px-4">
+      <td className="py-3.5 pr-0 pl-4 align-top">
+        <Checkbox
+          aria-label={`Select ${entry.name}`}
+          title={selection.blocker ?? `Include ${entry.name} in Update app to latest`}
+          className="mt-[3px]"
+          checked={selection.checked && selection.blocker === null}
+          disabled={selection.blocker !== null || selection.locked}
+          onCheckedChange={(checked) => selection.onChange(checked === true)}
+        />
+      </td>
+      <td className="py-3.5 pr-2 pl-3 align-top sm:pr-4">
         <div className="flex min-w-0 gap-3">
           {grip}
           <MachineStatusDot
@@ -498,6 +697,21 @@ function MachineRow({
                   ? `Last connected ${lastConnected}`
                   : "Never connected"}
             </p>
+            {updateStatus ? (
+              <p
+                role="status"
+                data-testid="machine-update-status"
+                className={cn("mt-1 text-xs", STATUS_TONE_CLASS[updateStatus.tone])}
+              >
+                {updateStatus.tone === "active" ? (
+                  <Loader2
+                    className="mr-1 inline h-3 w-3 animate-spin align-[-2px]"
+                    aria-hidden="true"
+                  />
+                ) : null}
+                {updateStatus.text}
+              </p>
+            ) : null}
           </div>
         </div>
       </td>

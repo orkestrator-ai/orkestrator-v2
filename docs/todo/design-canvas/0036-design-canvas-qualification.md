@@ -24,13 +24,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: done (2026-11-01): passed on Docker Engine 29.9.2 (Linux x64), both the backend file and the Docker fixture spec, and the backend file now runs in the Linux Engine CI workflow on amd64 and arm64.
 3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open. The packaged renderer is done for Linux (2026-11-02): `design-canvas-packaged-electron.spec.ts` passed 3 of 3 against a `mise run package:linux:unpacked` build. Still open: the macOS menu-key pass, the Save dialog decision, the Ctrl/⌘+0 item and a run of the macOS bundle.
 4. **Human screen-reader pass**: VoiceOver and NVDA over the layer tree, frame list, inspector and status regions. Status: open.
-5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, now to-do [2140](2140-design-frame-bridge-growth-under-culling.md). A slower machine and the Electron decision stay open: the 2026-11-01 host is not a slow laptop.
+5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. A slower machine and the Electron decision stay open: the 2026-11-01 host is not a slow laptop.
 6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open (published desktop builds exist).
 7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: deferred (unreachable from outside the process; unit-covered).
 8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: done (2026-11-01): 0208 was a picker race, fixed in the product; 0174 was the journey's page loads spending its budget under parallel load, fixed in the test. Both are resolved in the registry, and a host cause that hits any browser suite on a Linux host with Docker churn is recorded as [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
 9. **Deferred optimisations**: thumbnails, capture cache, second render worker, warm context pool, storage redesign, plus the open question on whether thumbnails are wanted. Status: deferred.
 10. **Shared live-provider harness (open question)**: whether design joins a shared live harness. Status: done in practice (own specs with a shared support module).
 11. **Cross-environment transfer UI (open question)**: whether to build one. Status: open (question only).
+12. **Full 64-frame retention run after the bridge fix**: the `--frames 1,64 --cycles 100` harness converges on Linux and on the Apple M5 Max at current `main`. Moved from to-do 2140 (deleted 2026-11-06). Status: open.
 
 ### 1. Opening prompt without the tab mounted
 
@@ -189,7 +190,7 @@ No screen-reader automation (for example Guidepup) is a dependency, and Orca is 
     - Pros: measures the shipped desktop path, including the transport.
     - Cons: a sizeable harness change; Electron cannot run headless, so it needs a display.
 
-**Outcome (2026-11-01).** The run happened on beelink, not on the Ryzen laptop above: an Intel Core Ultra 9 285H with no Google Chrome, so the harness gained `--browser chromium` (Playwright's Chromium 156) and its `--rev` build was repaired. The host was shared with other builds throughout, so the figures are a busy host's, not reference numbers. See [Client performance on Linux](#client-performance-on-linux). The structural results matched the M5 Max; the 100-cycle leak check did not converge at 64 frames (window listeners and frames grew one for one), which is new to-do [2140](2140-design-frame-bridge-growth-under-culling.md). Still open: a slower machine, and the Electron question above (not decided here). On Linux, `_electron.launch` can now run without a display: Electron 45 starts on `--ozone-platform=headless --disable-gpu` (see decision 11).
+**Outcome (2026-11-01).** The run happened on beelink, not on the Ryzen laptop above: an Intel Core Ultra 9 285H with no Google Chrome, so the harness gained `--browser chromium` (Playwright's Chromium 156) and its `--rev` build was repaired. The host was shared with other builds throughout, so the figures are a busy host's, not reference numbers. See [Client performance on Linux](#client-performance-on-linux). The structural results matched the M5 Max; the 100-cycle leak check did not converge at 64 frames (window listeners and frames grew one for one), which is new to-do 2140. Still open: a slower machine, and the Electron question above (not decided here). On Linux, `_electron.launch` can now run without a display: Electron 45 starts on `--ozone-platform=headless --disable-gpu` (see decision 11).
 
 ### 6. Old renderer with new backend, and the reverse
 
@@ -344,6 +345,38 @@ No measurement since 2026-09-24 has touched repeated captures, worker contention
   - **Yes: add "Copy to environment…" with a two-canvas lock order.**
     - Pros: one step.
     - Cons: a new class of concurrent operation across two canvases' lanes, which this file warns needs design first.
+
+### 12. Full 64-frame retention run after the bridge fix
+
+**Problem.** Task 5's leak check found window listeners and CDP frames growing
+at 64 frames under culling. The cause, a frame bridge that registered its
+listener on construction, is fixed and unit-tested, but the full harness has
+not been rerun to show the growth is gone.
+
+**Context.** Moved from to-do 2140 (deleted 2026-11-06). `DesignFrameBridge`
+now registers its listener in `open()` and is opened and closed in one effect
+(`apps/web/src/components/design/frame-bridge.ts`, `DesignFrameView.tsx`,
+`DesignCheckpointPreview.tsx`), tested in `DesignFrameView.bridge.test.tsx`.
+
+**Investigation.** Steps:
+
+1. On the Linux host, run
+   `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames 1,64 --cycles 100 --skip-library`.
+2. Keep the final JSON report under `output/benchmarks/design-canvas/`.
+3. Check that all three runs report `converged true`, with `windowListeners`
+   and `cdpFrames` settled at 64 frames and at most 8 iframes.
+4. Repeat on the Apple M5 Max at current `main` and compare with the
+   2026-10-22 run on `60a75b73`.
+
+**Decisions.**
+
+- **Which host first?**
+  - **The Linux host where the growth was found (recommended).**
+    - Pros: same machine as the failing run, so a pass is directly comparable.
+    - Cons: a busy shared host, so timings are host evidence only.
+  - **The Apple M5 Max only.**
+    - Pros: a quiet machine.
+    - Cons: the growth was never measured there at 64 frames.
 
 The design canvas ([`design-canvas.md`](../../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
@@ -1267,7 +1300,7 @@ phase alone then passed).
   The M5 Max converged at 64 frames on `60a75b73`. A frame bridge that is
   created but never committed would explain it; that is unverified and is
   new to-do
-  [2140](2140-design-frame-bridge-growth-under-culling.md).
+  2140.
 - **Decision.** Unchanged apart from 2140: nothing here argues for a client optimisation,
   and the backend items under [Deferred until measured](#deferred-until-measured)
   stay deferred. Not covered: a slower machine, and the Electron renderer.
@@ -1651,7 +1684,7 @@ Made on 2026-11-02 while working task 3 (packaged renderer only).
 ## Related
 
 - [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md).
-- [2140-design-frame-bridge-growth-under-culling.md](2140-design-frame-bridge-growth-under-culling.md):
+- `2140-design-frame-bridge-growth-under-culling.md` (deleted 2026-11-06):
   the window listener and frame growth the 2026-11-01 Linux leak check found
   at 64 frames.
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Operations" and

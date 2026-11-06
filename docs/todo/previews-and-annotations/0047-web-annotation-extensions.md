@@ -1,12 +1,12 @@
 # Web annotation extensions
 
-Checked against `main` at `2459b05c` (2026-10-15).
-
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; statuses rechecked
 2026-10-30 against `main` at `cd7bbe3e`, and task 5 on 2026-11-02 against
 `main` at `38d55ee1`.
+
+Checked against `main` at `2459b05c` (2026-10-15).
 
 ### Tasks
 
@@ -345,12 +345,20 @@ its own instead of failing the whole capture (`parseSourceHints`). The page is
 untrusted and could patch the anchor kit, so main does not rely on the page's
 own filtering.
 
-### Task 4: follow-ups moved to a new todo
+### Task 4: follow-ups completed; remaining qualification moved
 
-No reference emitter ships, and the thread view does not show hints. Both, and
-a live desktop capture, are in
-[0950-source-hint-producer-plugin.md](0950-source-hint-producer-plugin.md),
-because the README rule is not to add new items to an existing file.
+The documented reference emitter and thread source-candidate display shipped
+through to-do 0950 (deleted 2026-11-06; evidence remains in git history).
+macOS local/container captures ran there. Remaining Linux captures, a real
+Vite dev-pipeline capture and the disposition of other Babel integrations are
+open in [0044 task 8](0044-web-annotation-qualification.md#8-source-hint-capture-off-macos-and-on-a-real-dev-server).
+Windows remains unrun and out of the current support scope under 0042 D18,
+as recorded in that task.
+
+### Task 4: retirement review correction (2026-11-06)
+
+Point to the living qualification task instead of the deleted implementation
+file. Shipping the emitter and display does not close the remaining captures.
 
 ### Tasks 2, 3, 5, 6 and 7: statuses rechecked, nothing built
 
@@ -504,7 +512,7 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
    or form state cannot be reproduced.
 3. Development source hints: done (task 4). The documented emitter, the thread
    view list and the live captures are done in
-   [0950](0950-source-hint-producer-plugin.md).
+   0950.
 4. Open shadow roots and same-origin iframes. Open shadow roots are done
    (task 5); the follow-ups are in
    [2580](2580-shadow-root-annotation-follow-ups.md). Same-origin iframes

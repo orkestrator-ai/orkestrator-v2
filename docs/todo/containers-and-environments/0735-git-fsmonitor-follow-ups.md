@@ -369,7 +369,7 @@ daemon. Nothing here could produce that evidence.
 ## Related
 
 - [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md)
-- [0247-test-temp-dir-leaks-from-full-sweep.md](0247-test-temp-dir-leaks-from-full-sweep.md)
+- `0247-test-temp-dir-leaks-from-full-sweep.md` (deleted 2026-11-06)
   (the orphan in task 1 sits in a leaked `/tmp/ork-cli-setup-failure-*`
   directory)
 

@@ -311,7 +311,7 @@ A restart with `--fixture` reuses the fixture the first start seeded: it keeps
 `test-project` and `origin.git`, reuses the `fixture-local` and
 `fixture-container` environments (starting any that are stopped) and creates
 only requested ones that do not exist yet
-([2180](../todo/cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)).
+(2180).
 Fixture environment IDs are stored in `test-project/.git/orkestrator-fixture-environments.json`.
 If the repository must be recreated, the new generation records new IDs and later
 restarts reuse those replacements even when the backend gives them suffixed names.
@@ -955,6 +955,66 @@ Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
 
+### Measuring Electron main's CPU
+
+Anything attached to a page over the DevTools protocol makes Electron main do
+that page's DevTools work. Playwright holds a session on every page with its
+network domain enabled, and a development window (`ELECTRON_DEV=1`) also opens
+a detached DevTools window (`window.ts`). Every load, response and stream chunk
+the page receives then becomes a DevTools event that main's `CrBrowserMain`
+receives (`blink.mojom.DevToolsSessionHost`) and its
+`Chrome_DevToolsHandlerThread` writes to the client. A page that gets its data
+over the network, such as a window on the direct local transport, pays this.
+One that gets it over IPC, as on the relay, hardly does. So the main-process
+CPU that `local-gateway-transport-electron.spec.ts` records is good for
+comparing runs of that spec, not for comparing the two transports. It closes the
+development DevTools windows before it measures, but it cannot detach
+Playwright.
+
+`local-gateway-transport-cpu-electron.spec.ts` measures main with no DevTools
+client. It starts Electron with only main's Node inspector (`--inspect=0`,
+which sees main's JavaScript and none of the pages). It then closes the
+development DevTools windows, drives the pages with `executeJavaScript`, and
+mounts the real terminal view in both windows. Each load verifies its marker
+in each xterm buffer after measuring delivery. A resource `PerformanceObserver`
+tracks activity beyond the browser timing buffer and requires three quiet
+seconds before sampling; direct terminal listeners wait for stream readiness
+before applying their initial snapshot. Recovery snapshots are fetched only
+for a new desync, and results record per-window desync counts. It is opt-in and writes
+`output/agent-testing/local-transport-counts/no-devtools.json`, three
+alternating runs per transport by default (`ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS`,
+a positive integer from 1 to 10). Results identify the workload as
+`mounted-terminals`; the earlier 5760 figures used custom listeners without
+mounted terminal views. Failed startup stops Vite immediately, and profilers
+are stopped even when measured work fails:
+
+```bash
+ORKESTRATOR_LOCAL_TRANSPORT_CPU=1 bunx playwright test \
+  --config e2e/agent-testing/playwright.electron.config.ts \
+  local-gateway-transport-cpu-electron.spec.ts
+```
+
+`ORKESTRATOR_LOCAL_TRANSPORT_PROFILE=1` adds, in either spec, a V8 CPU profile
+of main (`.cpuprofile`) and a Chromium trace (`.perfetto-trace`) next to the
+counts. Electron 45 writes traces only as Perfetto protobuf. Read them with
+Perfetto's `trace_processor`, whose `thread_dur` gives each top-level task's
+own CPU time:
+
+```sql
+select p.name as process, t.name as thread, round(sum(s.thread_dur) / 1e6, 1) as cpu_ms
+from slice s
+join thread_track tt on s.track_id = tt.id
+join thread t using (utid)
+join process p using (upid)
+where s.depth = 0 and s.thread_dur is not null
+group by 1, 2 order by cpu_ms desc;
+```
+
+The profiled windows include the profilers' cost, so take figures from a run
+without it. Note the host's load average with the figures. Other worktrees'
+suites share the machine, and on a loaded host a page goes on loading modules
+for longer, so even an idle window costs main hundreds of milliseconds.
+
 ### Live transcript paging
 
 `e2e/agent-testing/transcript-paging-live.spec.ts` drives transcripts past the
@@ -1061,8 +1121,34 @@ CODEX_PROTOCOL_BINARY=<pinned codex> RUN_LIVE_CODEX_APP_SERVER=1 \
   bun test bridges/codex-bridge/src/app-server/live-circuit-breaker.test.ts --parallel=1
 ```
 
-The [recorded run](../todo/transcripts-and-observation/0051-client-reconnect-and-freshness.md#live-qualification-record-2026-10-31)
-is in 0051.
+#### Recorded run (2026-10-31)
+
+On `main` at `931e5541` plus the reconnect change, on a
+`--no-agent-credentials --agent-platforms codex` profile at load averages above
+40. The full record, with every table, is in to-do 0051 (deleted 2026-11-06;
+git history keeps it). The runs found four bugs, all fixed:
+
+- Same-origin streams retried in lock-step for the whole outage, because
+  Chromium owns the retry of an `EventSource` left CONNECTING: across 3 tabs
+  the first attempts landed within 3 ms of each other. After the fix the rungs
+  span up to 8.4 s and back off.
+- A silently dropped link was never noticed. It is now noticed after 63.6 s on
+  HTTP/SSE and on the WebSocket, and after 63.5 s on an Electron remote.
+- The terminal WebSocket announced a desync on every failed attempt. It now
+  announces one per drop.
+- A refused credential looked like an outage, so a lapsed session showed
+  "Reconnecting" for 52 s. It now reaches the login page 5.9 to 7.9 s after
+  the backend listens.
+
+Banners on a dropped link appeared after 4005 to 4009 ms, reads paused within
+100 ms, and quiet `unchanged` safety reads changed no indicator. Under
+backpressure, after 4,000,000 printed lines, both transports rendered an
+unbroken sequence equal to the snapshot. Over 40 quick restarts, the first
+reconnect landed after 1021 to 1981 ms, so the 4 s banner delay stays. The
+real Codex breaker cases passed in 39.6 s on 0.166.0. Still open: a real
+two-machine link drop, a real PR's stale marker and a background tab's timer
+throttling. These are tasks 16 to 18 of
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 
 ### Live cold restart
 

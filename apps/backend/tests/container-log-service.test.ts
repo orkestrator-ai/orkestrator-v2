@@ -216,12 +216,14 @@ describe("container log service", () => {
         }
       };
       let follower = 0;
+      let backend: Bun.Subprocess<"ignore", "pipe", "ignore"> | undefined;
+      let readinessTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         writeFileSync(path.join(root, "docker"), '#!/bin/sh\necho "$$"\nexec sleep 30\n', {
           mode: 0o755,
         });
         const modulePath = path.join(import.meta.dir, "../src/core/container-log-service.ts");
-        const backend = Bun.spawn(
+        backend = Bun.spawn(
           [
             process.execPath,
             "-e",
@@ -237,6 +239,9 @@ setInterval(() => {}, 1_000);`,
           ],
           { env: { PATH: `${root}:/usr/bin:/bin` }, stdout: "pipe", stderr: "ignore" },
         );
+        // Bound a silent startup so cleanup runs before the test timeout.
+        const ownedBackend = backend;
+        readinessTimer = setTimeout(() => ownedBackend.kill("SIGKILL"), 5_000);
         const reader = backend.stdout.getReader();
         let line = "";
         while (!line.includes("\n")) {
@@ -244,6 +249,7 @@ setInterval(() => {}, 1_000);`,
           if (done) break;
           line += new TextDecoder().decode(value);
         }
+        clearTimeout(readinessTimer);
         follower = Number(line.trim());
         expect(follower).toBeGreaterThan(0);
         expect(isAlive(follower)).toBe(true);
@@ -253,11 +259,17 @@ setInterval(() => {}, 1_000);`,
         while (isAlive(follower) && Date.now() < deadline) await Bun.sleep(25);
         expect(isAlive(follower)).toBe(false);
       } finally {
+        clearTimeout(readinessTimer);
+        if (backend) {
+          if (backend.exitCode === null && backend.signalCode === null) backend.kill("SIGKILL");
+          await backend.exited;
+        }
         // Our own grandchild, recorded from its own output above.
         if (follower > 0 && isAlive(follower)) process.kill(follower, "SIGKILL");
         rmSync(root, { recursive: true, force: true });
       }
     },
+    15_000,
   );
 });
 

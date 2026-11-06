@@ -12,8 +12,9 @@ here, checked against `main` at `abc3eea16`.
 [Status of every finding](#status-of-every-finding) is the index's section as
 it stood, with the same heading, so an anchor that pointed into the index names
 the same section here. Links were adjusted for the new location, and the status
-counts were recounted. The index's **Parallel running** tables were already
-empty and are not kept; [batches.md](batches.md) records the group as closed.
+counts were recounted. [Parallel running](#parallel-running) keeps the
+index's run-order section under its original headings, now that nothing is left
+to run; [batches.md](batches.md) records the group as closed.
 
 A deleted batch file's last version, which ends with its outcome table, is the
 parent of the commit that deleted it. The **Closed in** column below names that
@@ -66,6 +67,23 @@ task 3), B5 and the delegation decision
 tasks 1 and 2) and U3 ([4880](../todo/coordinator-and-multi-review/4880-c6-live-checks.md)).
 C3's per-wake repair is [6660](../todo/coordinator-and-multi-review/6660-c3-sweep-and-reads-follow-ups.md)
 task 2.
+
+## Parallel running
+
+The full plan, with every lane across all four folders, is in [batches.md](batches.md),
+which now lists this group under its closed groups.
+
+Batches in the same lane ran one at a time, in the order shown. Batches in different lanes could run together unless **Not at the same time as** named the other one. A batch with no lane only had to respect that column.
+
+The index only changed when a branch merged, so it could not show what was running. Before a batch started, the running environments and open PRs for its lane and its **Not at the same time as** list were checked, which is why each batch ID was put in its environment and branch name. The group is closed, so nothing is left to check.
+
+### Batches
+
+None. C3 (Sweep and reads) was the last, and is closed; every batch is in the [batch record](#batch-record).
+
+### Files built on their own
+
+None. C-0390 (Panel re-render cost) was the last, and is closed; every file built on its own is in the [batch record](#batch-record).
 
 ## Status of every finding
 

@@ -15,11 +15,11 @@ folder `docs/reports/efficiency-logging-database/` holding only its index, so on
 2026-11-06 the folder was retired and the index's record moved here, checked
 against `main` at `abc3eea16`.
 
-Everything from [Status of every efficiency finding](#status-of-every-efficiency-finding)
-down is the index as it stood, with the same section headings, so an anchor that
-pointed into the index names the same section here. Links were adjusted for the
-new location, and the status counts were recounted. The index's **Parallel
-running** tables were already empty and are not kept; [batches.md](batches.md)
+Everything from [Parallel running](#parallel-running) down is the index as it
+stood, with the same section headings, so an anchor that pointed into the index
+names the same section here. Links were adjusted for the new location, the
+status counts were recounted, and the run-order text under Parallel running is
+in the past tense now that nothing is left to run. [batches.md](batches.md)
 records the group as closed.
 
 A deleted batch file's last version, which usually ends with its outcome table,
@@ -78,8 +78,6 @@ of baseline tasks inside other batch files and had no file; it ended with E10.
 | 0693 | Second Claude binary (DK-10) | `0693-dk-10-second-claude-binary.md` | #1875 (`e6c3da899`) | [Closing note for 0693](#closing-note-for-0693-dk-10-second-claude-binary); the decision is in [6780](../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md). |
 | 0694 | Attention follow polling (DK-16) | `0694-dk-16-attention-follow-polling.md` | #1814 (`d59f49b01`) | DK-16 in [the efficiency status table](#status-of-every-efficiency-finding); the live part is in [5560](../todo/cli-and-slash-commands/5560-attention-follow-page-size.md). |
 
-`0390` (GW-7, WebSocket compression) left the index's **Not ready to start** table on 2026-11-05: its file is deleted and the work waits in [0052](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8, which starts only when the terminal WebSocket becomes the remote terminal transport; see [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression).
-
 ## Rows with work still open
 
 Every status row that is not done, checked on 2026-11-06 against the to-do it
@@ -107,6 +105,35 @@ decision (for example 5080, 5340, 5761, 6140 to 6144 and 6300). The closing
 checks' **Moved to a to-do** rows name theirs too; each named to-do exists. One
 link pointed at to-do 5100, which was finished on 2026-11-05 and deleted on
 2026-11-06; it is now plain text.
+
+## Parallel running
+
+The full plan, with every lane across all four folders, is in [batches.md](batches.md),
+which now lists this group under its closed groups.
+
+Batches in the same lane ran one at a time, in the order shown. Batches in different lanes could run together unless **Not at the same time as** named the other one. A batch with no lane only had to respect that column.
+
+The index only changed when a branch merged, so it could not show what was running. Before a batch started, the running environments and open PRs for its lane and its **Not at the same time as** list were checked, which is why each batch ID was put in its environment and branch name. The group is closed, so nothing is left to check.
+
+### Batches
+
+No remaining batches in this folder. Every batch is in the [batch record](#batch-record).
+
+### Files built on their own
+
+None. These followed the lane and conflict rules above; every one is in the [batch record](#batch-record). The table had these columns, and no rows were left in it:
+
+| Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
+| --- | --- | --- | --- | --- | --- |
+
+### Not ready to start
+
+None. When one of these became ready, it joined the lane shown. The table had these columns, and no rows were left in it:
+
+| File | Why it waits | Lane |
+| --- | --- | --- |
+
+`0390` (GW-7, WebSocket compression) left this table on 2026-11-05: its file is deleted and the work waits in [0052](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8, which starts only when the terminal WebSocket becomes the remote terminal transport; see [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression).
 
 ## Status of every efficiency finding
 

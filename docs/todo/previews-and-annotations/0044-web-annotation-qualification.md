@@ -33,9 +33,7 @@ against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink).
    disposition of other Babel integrations. Windows remains unqualified and
    outside the current platform scope (0042 D18). Moved from to-do 0950
    (deleted 2026-11-06).
-   Status: done (2026-11-06), except the two Electron captures in a container
-   environment on Linux, moved to
-   [7430](7430-electron-container-cases-under-docker-churn.md).
+   Status: done (2026-11-06).
 9. **Electron OS-focus assertions on a frontmost host**: the gated `nativeFocus`,
    `getFocusedWebContents()` and `isFocused()` polls run and pass when Electron
    is really frontmost. Moved from to-do 1170 (deleted 2026-11-06).
@@ -199,8 +197,9 @@ one is the user's desktop: the spec gained the
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` opt-in the design and preview
 specs already had. It then passed in full (16 passed, 2 container opt-ins
 skipped) inside a loopback-only network namespace, after a harness fix (the
-startup-dialog handler). `mise run test:agent:browser:isolated` result: see
-"Runs on 2026-11-06". Headless means no Wayland or X11 window was exercised;
+startup-dialog handler). `mise run test:agent:browser:isolated`: every
+annotation case passed; its three failures were two 2340 cases and one
+unrelated CLI case (to-do 7431). Headless means no Wayland or X11 window was exercised;
 OS-level focus stays task 9's. Details and decisions under "Runs on
 2026-11-06" and "Assumptions and decisions".
 
@@ -313,14 +312,13 @@ deferral, not a Windows pass.
     - Pros: smaller run.
     - Cons: a second Linux desktop session.
 
-**Outcome (2026-11-06).** Step 1: the local Electron case passes on Linux
-(`[verified, not verified]`); the container case is blocked on this host and
-moved to [7430](7430-electron-container-cases-under-docker-churn.md). Step 2:
+**Outcome (2026-11-06).** Step 1: the Electron case passes on Linux, locally
+and in a container environment (`[verified, not verified]` both times). Step 2:
 the gateway's Docker case passes on Linux (`[true, false, false]`). Step 3: a
 new Electron case serves an app built from the documented Vite 8 snippets with
 the real Vite CLI, captures its button through the desktop app and stores both
 candidates `verified: true` (`annotation-vite/web/src/ViteSave.tsx:2` and
-`ViteLayout.tsx:5`); its container variant is 7430's too. Step 4: other Babel
+`ViteLayout.tsx:5`), locally and in a container environment. Step 4: other Babel
 integrations (webpack, Next.js with a Babel config, and the rest) are
 documented as unqualified in
 [source-hint-emitter.md](../../development/source-hint-emitter.md#other-babel-build-setups-are-unqualified),
@@ -566,8 +564,8 @@ Test code the runs below depend on.
 - Done 2026-10-25: baselines recorded (below). No target is set yet.
 - Done 2026-11-06 on Linux (see "Runs on 2026-11-06"): the Electron spec
   (headless) and the isolated browser suite after #969 and #983, the gateway's
-  Docker cases, and source hints from a real Vite dev server. The Electron
-  container cases are [7430](7430-electron-container-cases-under-docker-churn.md).
+  Docker cases, the Electron container cases, and source hints from a real
+  Vite dev server.
 - Sign-off: records for milestones A, B and C are below ("Sign-off records,
   2026-10-25"), written by a worker agent and awaiting human review; the
   client capability matrix in
@@ -686,6 +684,83 @@ Capability matrix and known limitations: as milestone A
 Migration and rollback verification: not run
 Reviewer / date: Claude (worker agent), 2026-10-25; awaiting human review
 ```
+
+### Runs on 2026-11-06 (Linux, beelink)
+
+Linux 7.1.8 (Arch, x86_64, 16 logical CPUs), Docker Engine 29.9.2, Electron
+45.0.0, Playwright 1.64.0, Bun 1.4.4; branch
+`web-annotation-qualification-a80b5e3582bd-r1` from `main` at `c1724ab74`.
+Other pipelines were running throughout (load average 8–80) and starting and
+stopping containers. No display was used: every Electron run was headless
+(`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, display variables removed) and
+the browser profiles ran `--headless`. No provider turn ran and no host
+credential was used (credential-free Codex profiles only). Every command ran
+through `mise run test:logged`. Profiles `q0044-docker` and `q0044-cli` and the
+isolated runner's own profile were stopped and reset afterwards; the worktree's
+development image was built for the container runs and removed again.
+
+```text
+Milestone / PR / commit: Linux re-run after #969 and #983, gateway capture
+  parity, source hints on Linux and a real Vite dev server (tasks 5, 7, 8);
+  not a milestone sign-off
+Implemented scope and remaining deferrals: headless opt-in for the Electron
+  spec; startup-dialog handler fix; recorded desktop captures for the gateway;
+  Vite dev-server source-hint cases; startup recovery in the spec's launcher.
+  Deferred: a Linux Wayland/X11 window and OS focus (task 9)
+Platforms, providers, and client versions exercised: Linux headless Electron
+  45.0.0; gateway Chromium (Playwright 1.64.0); Docker Engine 29.9.2; no
+  provider turns
+Logged commands and results: table below
+Real workflow and inactive-environment evidence: capture without an agent tab
+  across renderer reload and backend restart (Electron spec, Linux)
+Fault-injection boundaries exercised: none new
+Capability matrix and known limitations: web-page-annotations.md, updated
+Migration and rollback verification: not run
+Reviewer / date: Claude (worker agent), 2026-11-06; awaiting human review
+```
+
+| Command (abbreviated) | Result |
+| --- | --- |
+| `web-annotations-electron.spec.ts`, headless, host namespace (before any change here except the opt-in) | Fail in `beforeAll`: title stayed `Orkestrator AI`, `net::ERR_NETWORK_CHANGED` in the diagnostics (2340) |
+| Same, in a loopback-only namespace | Fail in `beforeAll`: the "Continue Without GitHub CLI" handler's click waited 30 s for a button no longer in the role tree (fixed, below) |
+| Same, after the handler fix | Pass: 14 passed, 1 skipped (container opt-in), 175 s |
+| Same, with this branch's new cases | Pass: 16 passed, 2 skipped (container opt-ins), 105 s. Two earlier attempts failed on the new parity case and, once that was fixed, on the case after it (it had left the preview on `/pricing`; fixed) |
+| The two container cases, host namespace, pool shim on `PATH`, before the startup recovery | Fail twice in `beforeAll` (2340: 60–120 `ERR_NETWORK_CHANGED` lines); inside the namespace the environment could not be created (`resource-exhausted`: no free Docker address pool) |
+| The two container cases, host namespace, with the startup recovery | Pass: 2 passed, 50 s; each start reloaded once after `ERR_NETWORK_CHANGED`. Stored flags `[true, false]` (fixture HTML) and `[true, true]` (Vite app) |
+| Whole spec with the container opt-in, host namespace | Fail twice: once a descendant outlived a graceful quit (new flake [7432](../../tests/flaky-tests/previews-annotations-and-gateway/7432-annotation-restart-electron-child-outlives-quit.md), no `ERR_NETWORK_CHANGED`); once 2340 after a recovered startup (72 lines, 6 failed lazy imports when Kanban loaded) |
+| `mise run test:agent:browser:isolated` | 49 passed, 3 failed, 111 skipped (opt-in live, Docker and container cases), 1,057 s. Every annotation gateway case that runs there passed: overlapping batches, the count bound, evidence in the local worktree, web review of a desktop capture, the metrics baseline. Failures, none in annotation code: both `host maintenance rehydrates task completion while Settings is closed` cases (2340: 17 and 139 `ERR_NETWORK_CHANGED`; both passed rerun alone, 3.6 and 3.7 s) and `a CLI-initialized project and its cascade removal reach an open renderer` (failed again alone, deterministic: [to-do 7431](../cross-cutting/7431-cli-ui-cascade-removal-collapse-button.md)) |
+| `test:agent:docker` selection of `web-annotations-gateway.spec.ts`, profile `q0044-docker` (`--fixture-environments local,container`, credential-free, pool shim on `PATH`) | Pass: 2 passed, 1 skipped (live), 257 s. Evidence written as `node` at `/workspace/.orkestrator/annotations/<request>-<digest>.png`; container checks `exists,exists,missing,outside-workspace`; evidence removed 240 s after settlement; source hints `[true, false, false]` |
+| Focused unit tests | `web-annotations-native-captures.test.ts` 4 passed; `electron-startup-dialogs.test.ts` 2 passed, and fails against the old handler (negative control); `packaged-electron-app.test.ts` and `electron-display-setup.test.ts` pass; `source-hint-emitter-doc`, `source-hint-emitter-vite.integration` and `browser-preview-source-hints` pass |
+
+Electron, Linux headless (from the 16-passed run):
+
+| Check | Result |
+| --- | --- |
+| Gateway targets (three `/pricing` buttons) | Match the recording, which was taken in an earlier run of the same case |
+| Vite 8 dev server (documented config, real CLI) | Stamp `annotation-vite/web/src/ViteSave.tsx:2:<col>`; stored candidates `ViteSave.tsx:2 · ViteSave` and `ViteLayout.tsx:5 · ViteLayout`, both `verified: true` |
+| Fixture-HTML source hints | `[verified, not verified]`, shown in the thread as "path found in workspace at capture" and "path not confirmed" |
+| Keyboard create and send | Pass. `window-focused true` and `preview-focused-while-selecting true`: headless Ozone reports focus, so the gated OS-focus checks ran, but this is not evidence of real OS focus (task 9) |
+| Capture alignment | Natural scale factor 1, then forced DPR 1 and 2: every combination within the existing bounds |
+| Baselines (loaded host; no targets) | Selection → spool median 145 ms, p90 224 ms, max 291 ms (18); spool → saved median 46 ms, p90 77 ms, max 96 ms (17); backend `command_ms` create mean 2 / max 10 ms, asset stage 3 / 9 ms |
+
+Findings (fixed on this branch unless stated):
+
+- **The Electron spec could not run without a display (fixed).** It now
+  honours the headless opt-in and is in `HEADLESS_CAPABLE_ELECTRON_SPECS`;
+  the preflight still refuses a no-display run that includes any other spec.
+- **The startup-dialog handler could fail the action that triggered it
+  (fixed).** Its unbounded click waited out the action's timeout when the
+  button left the role tree under it. The click is now bounded (5 s) and its
+  failure ignored; Playwright re-runs the handler while the button is visible.
+- **The gateway's capture had drifted from the desktop's (fixed, task 7).**
+  Compared with a real capture of the same button, the hand-built record had
+  `role: null` instead of `button`, no `type` attribute, empty styles,
+  hierarchy and ancestors, an empty text prefix, and HTML without attributes.
+- **Docker churn on this host aborts the Vite-served renderer (2340).** The
+  local cases run in a loopback-only namespace; the container cases run in the
+  host namespace with the startup recovery.
+- **The CLI cascade-removal browser case fails deterministically here** (to-do
+  7431; not investigated).
 
 ### Runs on 2026-10-25 (macOS, arktech-mini)
 
@@ -1335,12 +1410,18 @@ asks for them, and qualifying each needs its own project, production-exclusion
 check and capture. The doc names the two checks that differ by tool (the
 development gate and the root).
 
-### Task 8: the Electron container captures move to 7430 (2026-11-06)
+### Task 8: run the Electron container cases in the host namespace with startup recovery (2026-11-06)
 
-Both container cases were tried three times, two ways, on beelink and could not run (see
-"Runs on 2026-11-06"). The backend's container check passed through the
-gateway the same day, so the remaining gap is narrow and has its own
-mechanism to fix; it moved to a new to-do rather than keeping task 8 open.
+The container cases cannot use the loopback-only namespace: Docker publishes
+container ports in the host's, and the pool-exhaustion shim needs a default
+route. In the host namespace they first failed twice at startup on 2340.
+Options: record them as blocked in a new to-do; adopt the existing
+`waitForRendererStart` recovery in this spec's launcher, which to-do 7062 task 1
+already proposes for it. Chose the recovery. Pros: the existing, unit-tested
+helper reloads only after a network-change module failure, so any other
+startup failure still fails. Cons: it covers startup only; a full host-namespace
+run still lost a later lazy load once, so the local cases stay in the namespace
+on this host. With it both container cases passed, each after one reload.
 
 ### Task 8: complete 0950's verification disposition (2026-11-06)
 

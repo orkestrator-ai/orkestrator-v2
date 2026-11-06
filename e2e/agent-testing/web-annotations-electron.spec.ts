@@ -85,6 +85,12 @@ import {
   withElectronDiagnostics,
 } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import {
+  NETWORK_CHANGED,
+  collectStartupConsole,
+  pageStartupWindow,
+  waitForRendererStart,
+} from "./electron-startup-recovery";
 import { VITE_APP } from "../../apps/desktop/tests/source-hint-emitter-vite-app";
 import {
   NATIVE_CAPTURE_TARGETS,
@@ -166,6 +172,7 @@ async function launchElectron(
     },
   });
   recordElectronDiagnostics(app);
+  const startupConsole = collectStartupConsole(app.context());
   dismissStartupDialogs(app);
   // Keep a bounded tail of main-process output for startup diagnostics only.
   let tail = "";
@@ -176,6 +183,7 @@ async function launchElectron(
   app.process().stderr?.on("data", keep);
   outputTails.set(app, () => tail);
   const window = await app.firstWindow({ timeout: 90_000 }).catch((error: Error) => {
+    startupConsole.dispose();
     const survivors = spawnSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
       .stdout.split("\n")
       .filter(
@@ -187,7 +195,23 @@ async function launchElectron(
       `${error.message}\nexitCode=${app.process().exitCode}\nprocesses:\n${survivors}\nElectron output tail:\n${tail}`,
     );
   });
-  await expect(window).toHaveTitle(current.profile.electronTitle, { timeout: 60_000 });
+  // Reloads only after Chromium aborted the renderer's Vite modules with
+  // ERR_NETWORK_CHANGED (flake 2340); any other startup failure still fails.
+  try {
+    const reloads = await waitForRendererStart(
+      pageStartupWindow(window, startupConsole),
+      current.profile.electronTitle,
+      { timeoutMs: 90_000 },
+    );
+    if (reloads > 0) {
+      test.info().annotations.push({
+        type: "startup-recovery",
+        description: `renderer start reloaded ${reloads}x after ${NETWORK_CHANGED}`,
+      });
+    }
+  } finally {
+    startupConsole.dispose();
+  }
   await waitForApi(window);
   await app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0]?.setSize(1440, 960);

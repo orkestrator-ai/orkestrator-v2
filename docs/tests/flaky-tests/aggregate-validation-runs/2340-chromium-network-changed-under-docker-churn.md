@@ -382,9 +382,13 @@ stopping.
   passed and 1 skipped (175 s) before that branch's new cases, then 16 passed
   and 2 skipped (105 s) with them. The two skips are the container opt-ins,
   which cannot use the namespace because container ports are published in the
-  host's; they are
-  [to-do 7430](../../../todo/previews-and-annotations/7430-electron-container-cases-under-docker-churn.md).
-  The command is in
+  host's. The command is in
   [agent-testing.md](../../../development/agent-testing.md#electron-specs-and-their-display).
-
-No test code was changed for this case.
+- The spec's launcher then adopted `waitForRendererStart` (to-do
+  [7062](../../../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)
+  task 1). In the host namespace both container cases passed (50 s), each
+  after one startup reload for `ERR_NETWORK_CHANGED`. The whole spec there
+  still failed once after a recovered startup: 72 `ERR_NETWORK_CHANGED` lines
+  and 6 failed module imports when the Kanban view loaded, so the Home
+  preview case's `visiblePreview` stayed `true`. Startup recovery does not
+  cover later lazy loads.

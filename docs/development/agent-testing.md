@@ -996,8 +996,14 @@ The double quotes matter: `$(id -u)` must expand in your shell, before the
 outer `unshare` maps you to root.
 
 Its container cases (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) cannot use
-the namespace, because container ports are published in the host's; see
-[7430](../todo/previews-and-annotations/7430-electron-container-cases-under-docker-churn.md).
+the namespace, because container ports are published in the host's. Run them
+in the host namespace: the spec's launcher reloads a startup that lost its
+modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, to-do
+[7062](../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)),
+which is enough for those two cases but not for the whole spec, whose later
+lazy loads can still be aborted. When automatic Docker pools are exhausted,
+put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the
+isolated Docker runner does.
 The spec's `desktop captures of the gateway spec's targets match the recording it
 replays` case checks `web-annotations-native-captures.json`, the desktop
 captures the gateway spec replays. After an intended change to what a capture

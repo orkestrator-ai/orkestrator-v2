@@ -36,7 +36,7 @@ export type EnvironmentCleanupContext = Pick<
 export type CleanupCommandRunner = (
   command: string,
   args: string[],
-  options: { timeoutMs: number },
+  options: { timeoutMs: number; signal?: AbortSignal },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export type CleanupStepOptions = {
@@ -49,6 +49,12 @@ export type CleanupStepOptions = {
    * never sets this: a retry runs long after that check.
    */
   containerOwnershipVerified?: boolean;
+  /**
+   * Fires at the delete's deadline for this step. Every command the step runs
+   * is killed, the confined-removal helper too, and no further command starts.
+   * The reconciler never sets it.
+   */
+  signal?: AbortSignal;
 };
 
 // Kept branches are state notices, not faults. Keep retry deduplication bounded
@@ -132,6 +138,11 @@ export function redactCleanupError(error: unknown): string {
 /** A refusal whose message is fixed text, so it is safe to persist verbatim. */
 class CleanupRefusedError extends Error {
   override name = "CleanupRefusedError";
+}
+
+/** Starts nothing more once the delete's deadline for this step has passed. */
+function throwIfStopped(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new CleanupRefusedError("deletion deadline passed");
 }
 
 /** Returns `root`-relative `target`, or null unless it is strictly inside. */
@@ -272,6 +283,7 @@ async function cleanupWorktree(
       throw new CleanupRefusedError("worktree is outside the workspaces root");
     }
   }
+  const signal = options.signal;
   const environments = await context.storage.loadEnvironments();
   if (
     environments.some(
@@ -284,6 +296,7 @@ async function cleanupWorktree(
     return;
   }
   await options.beforeWorktreeRemoval?.();
+  throwIfStopped(signal);
   const projectPath =
     entry.projectPath && (await pathExists(entry.projectPath)) ? entry.projectPath : null;
   // An fsmonitor daemon outlives its worktree and is never reaped, so stop it
@@ -294,12 +307,14 @@ async function cleanupWorktree(
       timeoutMs: 120_000,
     }).catch(() => undefined);
   }
+  throwIfStopped(signal);
   if (await directoryExists(worktreePath)) {
     // Git refuses to remove a directory it no longer registers, and a process
     // that outlived the terminals can re-create part of the tree after git
     // removed it. Only a path inside the workspaces root is ours to delete.
-    await removeConfinedDirectory(baseDir, relative);
+    await removeConfinedDirectory(baseDir, relative, undefined, { signal });
   }
+  throwIfStopped(signal);
   if (projectPath) {
     await run("git", ["-C", projectPath, "worktree", "prune"], {
       timeoutMs: GIT_TIMEOUT_MS,
@@ -503,8 +518,16 @@ export async function runEnvironmentCleanupStep(
   options: CleanupStepOptions = {},
 ): Promise<boolean> {
   const ledger = environmentCleanupLedger(context.storage.getDataDir());
-  const run = options.run ?? runCommand;
+  const baseRun = options.run ?? runCommand;
+  const signal = options.signal;
+  const run: CleanupCommandRunner = signal
+    ? async (command, args, runOptions) => {
+        throwIfStopped(signal);
+        return baseRun(command, args, { ...runOptions, signal });
+      }
+    : baseRun;
   try {
+    throwIfStopped(signal);
     if (step === "container") {
       await cleanupContainer(entry, context, run, options.containerOwnershipVerified === true);
     } else if (step === "volumes") {

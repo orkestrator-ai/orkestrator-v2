@@ -23,6 +23,7 @@ import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { deleteEnvironmentTask } from "./environment-delete.js";
 
 import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import { transcriptMediaPins, TRANSCRIPT_MEDIA_PINS_DIRECTORY } from "./transcript-media-pins.js";
@@ -429,6 +430,92 @@ describe("delete_environment host cleanup", () => {
         } finally {
           context.runtime.terminals.explicitlyCloseSession(id);
         }
+      },
+    );
+  });
+
+  test("records the step it is on as it reaches each one", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await seedWorktree(storage);
+      },
+      async (invokeDelete, storage) => {
+        const steps: unknown[] = [];
+        const update = storage.updateEnvironment.bind(storage);
+        spyOn(storage, "updateEnvironment").mockImplementation(
+          async (environmentId, updates, shouldUpdate) => {
+            if ("deletionStep" in updates) steps.push(updates.deletionStep);
+            return update(environmentId, updates, shouldUpdate);
+          },
+        );
+        await invokeDelete();
+        // No container, so no container step.
+        expect(steps).toEqual([
+          "stopping-work",
+          "terminals",
+          "workspace-files",
+          "local-servers",
+          "worktree",
+          "records",
+        ]);
+        expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
+  test("a hung worktree removal is stopped at its deadline, says why, and a retry finishes it", async () => {
+    if (process.platform === "win32") return;
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+      },
+      async (_invokeDelete, storage, context) => {
+        // The worktree step's first command is `git fsmonitor--daemon stop`.
+        // A git that never returns stands in for a child that hangs.
+        const bin = path.join(storage.getDataDir(), "hanging-bin");
+        const pidFile = path.join(storage.getDataDir(), "hanging-git.pid");
+        await fs.mkdir(bin);
+        await fs.writeFile(
+          path.join(bin, "git"),
+          `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 30\n`,
+          { mode: 0o755 },
+        );
+        const originalPath = process.env.PATH;
+        process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ""}`;
+        const startedAt = Date.now();
+        let error: unknown;
+        try {
+          error = await deleteEnvironmentTask("e1", context, {
+            stepDeadlinesMs: { worktree: 300 },
+          }).catch((caught: unknown) => caught);
+        } finally {
+          process.env.PATH = originalPath;
+        }
+        // Stopped at the deadline, well before the command's own 5 s timeout,
+        // and the child is gone by the time the delete reports it.
+        expect(Date.now() - startedAt).toBeLessThan(4_000);
+        expect((error as Error).message).toBe(
+          "Deletion stopped while removing the worktree: it took longer than 1 min. Retry to continue.",
+        );
+        const pid = Number((await fs.readFile(pidFile, "utf8")).trim());
+        expect(() => process.kill(pid, 0)).toThrow();
+        expect(await exists(worktreePath)).toBe(true);
+        expect(await storage.getEnvironment("e1")).toMatchObject({
+          lifecycleOperation: "deleting",
+          deletionStep: "worktree",
+          deletionError: (error as Error).message,
+        });
+        expect(await environmentCleanupLedger(storage.getDataDir()).get("e1")).toMatchObject({
+          pending: ["worktree", "state-dirs"],
+          lastError: "worktree: deletion deadline passed",
+        });
+
+        // The delete settled, so a retry is admitted, and finishes it.
+        await deleteEnvironmentTask("e1", context);
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await exists(worktreePath)).toBe(false);
+        expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
       },
     );
   });

@@ -309,6 +309,37 @@ describe("writeConfinedFile", () => {
 });
 
 describe("removeConfinedDirectory", () => {
+  test("a signal stops the removal, and it settles only after the helper has exited", async () => {
+    const root = await createWorktree();
+    await fs.mkdir(path.join(root, "tree/nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "tree/nested/file"), "kept");
+
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      removeConfinedDirectory(root, "tree", undefined, { signal: aborted.signal }),
+    ).rejects.toThrow("Confined directory cleanup stopped");
+
+    // Aborted the moment the helper is spawned: it is killed before it removes
+    // anything. Aborting from the listener registration, rather than a timer,
+    // keeps a loaded host from letting the helper finish first.
+    const late = new AbortController();
+    const register = late.signal.addEventListener.bind(late.signal);
+    late.signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+      register(...args);
+      queueMicrotask(() => late.abort());
+    }) as AbortSignal["addEventListener"];
+    const removal = removeConfinedDirectory(root, "tree", undefined, { signal: late.signal });
+    await expect(removal).rejects.toThrow("Confined directory cleanup stopped");
+    await expect(fs.readFile(path.join(root, "tree/nested/file"), "utf8")).resolves.toBe("kept");
+
+    // A signal that never fires changes nothing.
+    await removeConfinedDirectory(root, "tree", undefined, {
+      signal: new AbortController().signal,
+    });
+    await expect(fs.stat(path.join(root, "tree"))).rejects.toThrow();
+  });
+
   test("does not remove through a root replacement race", async () => {
     const root = await createWorktree();
     const external = await createWorktree();

@@ -7,7 +7,9 @@
  */
 import {
   environmentDeletionFailure,
+  environmentDeletionStep,
   environmentHasDeletionTombstone,
+  isEnvironmentDeletionStep,
   type AgentActivity,
 } from "@orkestrator/protocol/node-summaries";
 import { machineStatusText } from "@/components/federation/MachineDot";
@@ -57,6 +59,7 @@ export function localEnvironmentRowFacts(
     deletingSince: deleting
       ? (inputs.deletingStartedAt ?? environment.lifecycleOperationStartedAt ?? null)
       : null,
+    deletingStep: deleting ? environmentDeletionStep(environment) : null,
     deletionRetryable: inputs.deletionRetryable,
     buildPipeline: inputs.buildPipeline,
     prState: environment.prState ?? null,
@@ -107,6 +110,13 @@ export function nodeEnvironmentRowFacts(
     deletingSince:
       environment.deleting && !environment.deleteFailure
         ? (environment.deletingSince ?? null)
+        : null,
+    // Relayed by another machine: only a step this client knows is shown.
+    deletingStep:
+      environment.deleting &&
+      !environment.deleteFailure &&
+      isEnvironmentDeletionStep(environment.deletingStep)
+        ? environment.deletingStep
         : null,
     deletionRetryable: environment.deletionRetryable === true,
     buildPipeline: environment.buildPipeline === true,

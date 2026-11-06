@@ -131,6 +131,38 @@ test("a delete past two minutes says how long it has been running", () => {
   expect(screen.queryByText(/Still deleting/)).toBeNull();
 });
 
+test("a slow delete says which step it is on, when its machine reports one this client knows", () => {
+  const started = new Date(Date.now() - 5 * 60_000).toISOString();
+  const slow = environment("slow", {
+    deleting: true,
+    deletingSince: started,
+    deletingStep: "worktree",
+  });
+  render(<RemoteEnvironmentItem machine={machineView([slow])} environment={slow} />);
+  expect(screen.getByText("Still deleting after 5 min: removing the worktree")).toBeTruthy();
+  cleanup();
+
+  // A step a newer machine added is left out rather than shown raw.
+  const newer = environment("newer", {
+    deleting: true,
+    deletingSince: started,
+    deletingStep: "defragmenting" as never,
+  });
+  render(<RemoteEnvironmentItem machine={machineView([newer])} environment={newer} />);
+  expect(screen.getByText("Still deleting after 5 min")).toBeTruthy();
+  cleanup();
+
+  // A failed delete shows its failure, not a step.
+  const failed = environment("failed", {
+    deleting: true,
+    deletingSince: started,
+    deletingStep: "worktree",
+    deleteFailure: "Deletion failed. Retry on the owning machine.",
+  });
+  render(<RemoteEnvironmentItem machine={machineView([failed])} environment={failed} />);
+  expect(screen.queryByText(/Still deleting/)).toBeNull();
+});
+
 test("another machine's row shows its unread agent mail and a failed delivery", () => {
   const row = environment("feature", { agentMailUnread: 120, agentMailFailed: true });
   render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);

@@ -373,6 +373,55 @@ describe("environment cleanup steps", () => {
     expect(await environmentCleanupLedger(dataDir).get("e1")).toBeNull();
   });
 
+  test("a signalled step starts no command and stays pending", async () => {
+    const { context, dataDir, worktreeDir } = await cleanupContext();
+    const worktreePath = path.join(worktreeDir, "project-feature");
+    await fs.mkdir(worktreePath, { recursive: true });
+    const cleanup = entry({ worktreePath, pending: ["container", "worktree"], containerId: "c1" });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    const calls: string[][] = [];
+    const controller = new AbortController();
+    controller.abort();
+    for (const step of ["container", "worktree"] as const) {
+      expect(
+        await runEnvironmentCleanupStep(cleanup, step, context, {
+          containerOwnershipVerified: true,
+          run: async (command, args) => {
+            calls.push([command, ...args]);
+            return { stdout: "", stderr: "" };
+          },
+          signal: controller.signal,
+        }),
+      ).toBe(false);
+    }
+    expect(calls).toEqual([]);
+    expect(await fs.stat(worktreePath)).toBeTruthy();
+    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+      pending: ["container", "worktree"],
+    });
+  });
+
+  test("a step's signal reaches every command it runs", async () => {
+    const { context, dataDir, worktreeDir } = await cleanupContext();
+    const worktreePath = path.join(worktreeDir, "project-feature");
+    await fs.mkdir(worktreePath, { recursive: true });
+    const cleanup = entry({ worktreePath, pending: ["worktree"] });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    const controller = new AbortController();
+    const signals: (AbortSignal | undefined)[] = [];
+    expect(
+      await runEnvironmentCleanupStep(cleanup, "worktree", context, {
+        run: async (_command, _args, options) => {
+          signals.push(options.signal);
+          return { stdout: "", stderr: "" };
+        },
+        signal: controller.signal,
+      }),
+    ).toBe(true);
+    expect(signals.length).toBeGreaterThan(0);
+    expect(signals.every((signal) => signal === controller.signal)).toBe(true);
+  });
+
   test("stops the worktree's fsmonitor daemon before removing it", async () => {
     const { context, dataDir, worktreeDir } = await cleanupContext();
     const { projectPath, base } = await project();

@@ -3,14 +3,15 @@
 ## Task analysis
 
 Analysed 2026-11-05 against `main` at `50d4916ca`, with the delete fix on its branch.
+Re-analysed 2026-11-06 against `main` at `c1724ab74` (the fix merged as #1902); tasks 2-5 done then.
 
 ### Tasks
 
 1. **Confirm the fix on the machine that reported it**: repeat a Merge and Cleanup on `arktech-mini` with a release containing the fix and read the event-loop log. Status: open.
-2. **See a real failed delete in a real window**: drive one actual delete failure through the UI, across a reload. Status: open.
-3. **Per-step delete progress**: tell the user which step a slow delete is on. Status: open.
-4. **Bound a delete that hangs**: a delete that neither fails nor finishes spins with only its elapsed time. Status: open (depends on 3).
-5. **Watch readiness before `fseventsd` delivers**: a watch reports `established` before events are known to flow. Status: open.
+2. **See a real failed delete in a real window**: drive one actual delete failure through the UI, across a reload. Status: done (2026-11-06).
+3. **Per-step delete progress**: tell the user which step a slow delete is on. Status: done (2026-11-06).
+4. **Bound a delete that hangs**: a delete that neither fails nor finishes spins with only its elapsed time. Status: done (2026-11-06).
+5. **Watch readiness before `fseventsd` delivers**: a watch reports `established` before events are known to flow. Status: done (2026-11-06; decided to leave it, with evidence).
 6. **Store cleanup that holds the event loop**: a delete parses every native session and rewrites the whole agent-mail document without yielding. Status: open.
 
 ### 1. Confirm the fix on the machine that reported it
@@ -121,9 +122,27 @@ Analysed 2026-11-05 against `main` at `50d4916ca`, with the delete fix on its br
     - Pros: a few lines in `deleteEnvironment`.
     - Cons: concurrent deletes' yields are served together, so the gap still grows with the number of deletes, and the total work is unchanged.
 
+## Assumptions and decisions
+
+### Task 2: staging the failure
+
+Chose the recommended fixture. An agent-test backend (`ORKESTRATOR_AGENT_TEST_ISOLATED=1`) reads a per-environment marker file, `<data dir>/agent-test-fixtures/terminal-survives-terminate/<environment id>`; while it exists, `terminateSessionsForEnvironment` leaves that environment's terminals running and reports them as survivors (`agent-test-fixtures.ts`, `TerminalRuntime`'s `survivesTermination`). A marker file was chosen over an environment variable or a command so a spec can switch it per environment and remove it before the retry without restarting the profile, and so production never consults it (the option is `undefined` outside agent-test profiles). The spec deletes from the row's context menu, sees the reason and **Retry** after a reload, removes the marker and finishes the delete with **Retry**. #1902 had meanwhile added a second real failure (an unwritable seed directory) whose delete starts from a direct command; both specs now run in the same file.
+
+### Task 3: where progress comes from
+
+Chose the recommended option: the delete records its stage on the environment record (`deletionStep`), seven fixed stage names from `@orkestrator/protocol/node-summaries`, and node summaries relay it as `deletingStep`. The row appends the stage to the existing two-minute notice ("Still deleting after 5 min: removing the worktree") rather than adding a line, so a fast delete shows nothing new. Only a running, unfailed delete shows a stage, and only one this client knows. The record write is best-effort and costs one store update per stage. `deleteEnvironment` moved from `commands-servers.ts` to `environment-delete.ts` (the former was close to the 2,000-line limit); `commands-servers.ts` re-exports it.
+
+### Task 4: what bounds a hang
+
+Chose the recommended deadline per external stage: 10 minutes for `container` and 20 for `worktree`, the two stages whose work runs in child processes, so killing them proves they stopped. The stage's signal reaches every command (`runCommand` kills the process group and settles after exit), the drain and the confined-removal helper, and no further command starts. The delete fails only after the stage's work settles, with a fixed reason naming the stage, so the existing failure path, its row and **Retry** apply unchanged and a retry cannot overlap the abandoned work. Stages that run in the backend (terminal teardown, store writes) have no deadline, because nothing could prove them stopped; their child commands already carry their own timeouts.
+
+### Task 5: what readiness means
+
+Chose to leave `established` as "the helper's `fs.watch` returned", the recommended option, on this evidence. On 2026-11-06, on this 18-core Mac (macOS 27.2, load average about 14, `fseventsd` sampled at 3-58%), 20 watches through the real helper (`watchDirectory`), each writing one new file every 20 ms from the moment `established` resolved, 250 files each, received 4,999 of the 5,000 files. The one miss was the first file of one watch, written 22 ms after `established`; the first event reached the backend 38-102 ms after it. Ten watches were in the temporary directory and ten inside the checkout. So the gap a probe write would close is tens of milliseconds on an ordinary host, while under a saturated `fseventsd` (the 2026-11-05 run below) events are lost after the stream is running too, which only the safety scan (120 s for a local worktree) covers. The probe option would also leave every watch unqualified on a host that delivers nothing. Recorded in [environment-deletion.md](../../architecture/environment-deletion.md#watches-and-the-event-loop).
+
 ## Current state
 
-Directory watches on macOS run in a helper process, the worktree is no longer watched while it is removed, recovery stands aside while a delete runs, and a failed delete shows its reason with a retry.
+Directory watches on macOS run in a helper process, the worktree is no longer watched while it is removed, recovery stands aside while a delete runs, and a failed delete shows its reason with a retry. A slow delete names the stage it is on, the container and worktree stages stop and fail the delete at a deadline, and an agent-test profile can stage a real failed delete on demand. What remains is task 1 (live confirmation on `arktech-mini`, which needs a release containing the fix) and task 6 (store cleanup that holds the event loop, which overlaps the agent-mail storage work).
 
 ## Needs verification
 

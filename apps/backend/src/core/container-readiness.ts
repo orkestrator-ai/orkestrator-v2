@@ -376,6 +376,7 @@ export const DEFAULT_DRAIN_GRACE_SECONDS = 10;
 export async function drainContainerProcesses(
   containerId: string,
   graceSeconds = DEFAULT_DRAIN_GRACE_SECONDS,
+  options: { signal?: AbortSignal } = {},
 ): Promise<DrainResult | null> {
   try {
     const { stdout } = await runCommand(
@@ -387,7 +388,7 @@ export async function drainContainerProcesses(
         "/usr/local/bin/orkestrator-drain.sh",
         String(Math.max(0, Math.min(60, Math.floor(graceSeconds)))),
       ],
-      { timeoutMs: (graceSeconds + 15) * 1_000 },
+      { timeoutMs: (graceSeconds + 15) * 1_000, signal: options.signal },
     );
     const match = /ORKESTRATOR_DRAIN signalled=(\d+) remaining=(\d+)/.exec(stdout);
     return match ? { signalled: Number(match[1]), remaining: Number(match[2]) } : null;

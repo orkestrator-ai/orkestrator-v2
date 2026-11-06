@@ -41,13 +41,17 @@ export type SignalSourceName =
  *   image could not be inspected); the container is on its fallback timers.
  * - `arming`: the capability check or install is running.
  * - `armed`: a credential is installed and its probe ring has not arrived.
+ * - `unconfirmed`: armed for a whole retry window with no ring. The install's
+ *   probe ring is fire-and-forget, so this is the only sign that rings cannot
+ *   reach the backend (a host firewall, a proxy, the host alias); it cannot
+ *   say which. The container stays on its fallback timers.
  * - `confirmed`: the signal works; only the slow safety read runs.
  * - `demoted`: the signal stopped being trusted; fallback timers until the
  *   next attempt.
  * - `unsupported`: the image has no signal; fallback timers for its life.
  */
 export type SignalHealthState =
-  "unarmed" | "arming" | "armed" | "confirmed" | "demoted" | "unsupported";
+  "unarmed" | "arming" | "armed" | "unconfirmed" | "confirmed" | "demoted" | "unsupported";
 
 export type SignalDemotionReason =
   /** A safety read found a change no ring announced. */
@@ -75,7 +79,29 @@ export interface SignalHealthStatus {
 
 /** An all-zero state table, so every state is reported even when empty. */
 export function emptySignalHealthStates(): Record<SignalHealthState, number> {
-  return { unarmed: 0, arming: 0, armed: 0, confirmed: 0, demoted: 0, unsupported: 0 };
+  return {
+    unarmed: 0,
+    arming: 0,
+    armed: 0,
+    unconfirmed: 0,
+    confirmed: 0,
+    demoted: 0,
+    unsupported: 0,
+  };
+}
+
+/**
+ * The state of a lineage holding a credential that has not rung: `armed` until
+ * it has waited `retryWindowMs` since it was first armed without a ring, then
+ * `unconfirmed`. `armedAt` is when the first install of that unconfirmed
+ * stretch finished; re-arming on the retry window keeps it.
+ */
+export function armedSignalHealth(
+  armedAt: number | undefined,
+  nowMs: number,
+  retryWindowMs: number,
+): Extract<SignalHealthState, "armed" | "unconfirmed"> {
+  return armedAt !== undefined && nowMs - armedAt >= retryWindowMs ? "unconfirmed" : "armed";
 }
 
 /**

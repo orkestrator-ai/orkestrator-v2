@@ -336,6 +336,7 @@ export class OrkestratorBackend {
   private stopLogPolicyListener: (() => void) | null = null;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
+  private readonly agentToolsPort: number | undefined;
   /** Remote-initiated updates of this host; see host-maintenance.ts. */
   readonly hostMaintenance: HostMaintenanceService;
   /** Persists compatibility-path usage; see compatibility-path-usage.ts. */
@@ -437,6 +438,8 @@ export class OrkestratorBackend {
     dockerImage?: string;
     strictDockerOwner?: boolean;
     credentialSources?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
+    /** Exact agent tools port (`--agent-tools-port`); a busy one fails startup. */
+    agentToolsPort?: number;
     emit: BackendEmit;
     /** What applies remote update requests on this host (default: nothing). */
     hostUpdater?: import("@orkestrator/protocol/host-maintenance").HostUpdaterKind;
@@ -525,6 +528,7 @@ export class OrkestratorBackend {
     this.compatibilityPathSink = compatibilityPathUsageDatabaseSink(options.dataDir);
     compatibilityPathUsage.attach(this.compatibilityPathSink);
     this.workflowResults = new WorkflowResultService(options.dataDir);
+    this.agentToolsPort = options.agentToolsPort;
     this.hostMaintenance = new HostMaintenanceService({
       dataDir: options.dataDir,
       updater: options.hostUpdater ?? "none",
@@ -2063,7 +2067,7 @@ export class OrkestratorBackend {
     this.removeContainerLifecycleListener = this.runtime.onContainerLifecycle(
       (containerId, action) => lifecycleReactor.handle(containerId, action),
     );
-    await this.agentTools.start();
+    await this.agentTools.start(this.agentToolsPort);
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
     // snapshot belongs to a process that is gone. They cannot be retracted

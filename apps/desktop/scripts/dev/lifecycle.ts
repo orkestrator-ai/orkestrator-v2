@@ -19,6 +19,7 @@ import {
 import { bundleElectron, formatBuildLogs } from "../electron-bundle.js";
 import type { DevArguments } from "./arguments.js";
 import {
+  assertAgentToolsPortFree,
   atomicWriteJson,
   initializeProfile,
   liveness,
@@ -635,6 +636,7 @@ export async function startDevelopment(
     spawn?: typeof spawn;
     waitForUrl?: typeof waitForUrl;
     writeStatus?: typeof atomicWriteJson;
+    checkAgentToolsPort?: typeof assertAgentToolsPortFree;
   } = {},
 ): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
@@ -654,6 +656,15 @@ export async function startDevelopment(
   }
   await pruneOrphanedProfiles(existingProfile.id, dependencies.roots, dependencies.prune);
 
+  // Recorded in the profile, so a restart without the flag keeps the port the
+  // host firewall admits; `dev:reset` forgets it.
+  const agentToolsPort =
+    flavor === "agent-test" ? (args.agentToolsPort ?? existingProfile.agentToolsPort) : undefined;
+  if (agentToolsPort !== undefined) {
+    // Before the profile is written, so a busy port is never recorded.
+    await (dependencies.checkAgentToolsPort ?? assertAgentToolsPortFree)(agentToolsPort);
+  }
+
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const profile = resolveRuntimeProfile({
     repositoryRoot,
@@ -663,6 +674,7 @@ export async function startDevelopment(
     gatewayPort,
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
+    agentToolsPort,
     roots: dependencies.roots,
     ...(await profileWorktreeLocation(
       existingProfile,

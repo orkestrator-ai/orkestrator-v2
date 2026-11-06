@@ -155,6 +155,7 @@ import {
   resolveFocusedWindowContext,
 } from "./window-menu.js";
 import {
+  agentToolsPortForRuntime,
   chromiumSwitchesForRuntime,
   previewRetentionTimingForRuntime,
   runtimeProfileFromEnvironment,
@@ -1554,6 +1555,7 @@ async function startApplication(): Promise<void> {
       strictDockerOwner: runtimeFlavor === "agent-test",
       strictGatewayPort: runtimeFlavor === "agent-test",
       credentialSources: runtimeProfile?.credentialSources,
+      agentToolsPort: agentToolsPortForRuntime(runtimeFlavor, runtimeProfile),
       // Before any window exists, so a launch with the setting on never opens
       // the unfiltered stream only to replace it for the first window.
       relayTerminalOutput: !readLocalWindowGatewayTransport(dataDir),

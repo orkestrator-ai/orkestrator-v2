@@ -131,6 +131,18 @@ describe("standalone backend options", () => {
     );
   });
 
+  test("--agent-tools-port is an exact port, absent by default", () => {
+    expect(parseOptions([], {}).agentToolsPort).toBeUndefined();
+    expect(parseOptions(["--agent-tools-port", "31500"], {}).agentToolsPort).toBe(31500);
+    // 0 would hand the choice back to the OS, which is what the flag exists to stop.
+    expect(() => parseOptions(["--agent-tools-port", "0"], {})).toThrow(
+      "Invalid --agent-tools-port value: 0",
+    );
+    expect(() => parseOptions(["--agent-tools-port", "65536"], {})).toThrow(
+      "Invalid --agent-tools-port value",
+    );
+  });
+
   test("rejects malformed, out-of-range, and missing option values", () => {
     expect(() => parseOptions(["--port", "3oops"], {})).toThrow("Invalid --port value");
     expect(() => parseOptions(["--port", "65536"], {})).toThrow("Invalid --port value");

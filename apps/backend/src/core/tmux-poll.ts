@@ -9,6 +9,7 @@ import {
   type RecurringWorkSpan,
 } from "./recurring-work-metrics.js";
 import {
+  armedSignalHealth,
   emptySignalHealthStates,
   type SignalDemotionReason,
   type SignalHealthState,
@@ -85,6 +86,8 @@ export type ClaudeStatePoll = {
   /** The signal was demoted or failed to arm, and has not been confirmed since. */
   signalDemoted: boolean;
   lastSignalAttemptAt?: number;
+  /** When an install first finished with no ring since; cleared by a ring or a demotion. */
+  signalArmedAt?: number;
   /** Doorbells received, and the count when the previous read started. */
   rings: number;
   ringsAtPreviousRead: number;
@@ -338,12 +341,20 @@ export class ClaudeStatePollManager {
       await installer.install(containerId, credential, poll.context, () =>
         this.isCurrent(containerId, poll),
       );
+      if (
+        this.isCurrent(containerId, poll) &&
+        poll.signal === credential &&
+        !poll.signalConfirmed
+      ) {
+        poll.signalArmedAt ??= this.nowMs();
+      }
     })()
       .catch((error: unknown) => {
         // The poll is unchanged; the next attempt waits for the retry window.
         if (this.isCurrent(containerId, poll)) {
           poll.signalConfirmed = false;
           poll.signalDemoted = true;
+          poll.signalArmedAt = undefined;
           this.countDemotion("arm-failed");
           this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
         }
@@ -376,6 +387,7 @@ export class ClaudeStatePollManager {
     this.acceptedRings += 1;
     poll.signalConfirmed = true;
     poll.signalDemoted = false;
+    poll.signalArmedAt = undefined;
     this.requestPoll(containerId, poll);
   }
 
@@ -390,6 +402,7 @@ export class ClaudeStatePollManager {
   ): void {
     poll.signalConfirmed = false;
     poll.signalDemoted = true;
+    poll.signalArmedAt = undefined;
     this.countDemotion(reason);
     this.revokeSignal(poll);
     this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
@@ -423,7 +436,9 @@ export class ClaudeStatePollManager {
   private healthOf(poll: ClaudeStatePoll): SignalHealthState {
     if (poll.signalUnsupported) return "unsupported";
     if (poll.signalConfirmed) return "confirmed";
-    if (poll.signal) return "armed";
+    if (poll.signal) {
+      return armedSignalHealth(poll.signalArmedAt, this.nowMs(), CLAUDE_STATE_SIGNAL_RETRY_MS);
+    }
     if (poll.signalArming) return "arming";
     if (poll.signalDemoted) return "demoted";
     return "unarmed";

@@ -31,6 +31,11 @@ import {
 export type PreviewTunnelConnection = Duplex & { readonly openMs: number };
 
 const WINDOW = PREVIEW_TUNNEL_MUX.windowBytes;
+/**
+ * Unanswered pings after which a session is dead: about 30 s at the 15 s
+ * client ping, the same bound the server applies to a silent client.
+ */
+export const PREVIEW_TUNNEL_SESSION_MISSED_PINGS = 2;
 /** Credit is returned in quarter-window batches rather than per message. */
 const CREDIT_BATCH = WINDOW / 4;
 
@@ -213,6 +218,10 @@ export class PreviewTunnelSession {
   private failure: Error | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly heartbeat: ReturnType<typeof setInterval>;
+  /** Whether any frame (a pong included) arrived since the last ping. */
+  private heardSincePing = true;
+  /** Consecutive pings that nothing answered. */
+  private missedPings = 0;
   /** The WebSocket refused more bytes until it drains. */
   blocked = false;
 
@@ -220,9 +229,10 @@ export class PreviewTunnelSession {
     private readonly ws: PreviewWebSocket,
     private readonly options: PreviewTunnelSessionOptions,
   ) {
-    this.heartbeat = setInterval(() => {
-      if (this.ws.isOpen) this.ws.ping();
-    }, options.pingIntervalMs ?? PREVIEW_TUNNEL_CLIENT_PING_MS);
+    this.heartbeat = setInterval(
+      () => this.onHeartbeat(),
+      options.pingIntervalMs ?? PREVIEW_TUNNEL_CLIENT_PING_MS,
+    );
     this.heartbeat.unref?.();
     this.ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
@@ -238,7 +248,13 @@ export class PreviewTunnelSession {
     });
     // Observed so a refused HELLO never surfaces as an unhandled rejection.
     this.ready.catch(() => undefined);
-    ws.on("message", (data, binary) => this.onMessage(data, binary));
+    // The session never pauses its socket (each stream has its own credit
+    // window), so every pong and frame is read as it arrives.
+    ws.on("pong", () => this.heard());
+    ws.on("message", (data, binary) => {
+      this.heard();
+      this.onMessage(data, binary);
+    });
     ws.on("close", (code) => this.onClose(code));
     ws.on("drain", () => {
       this.blocked = false;
@@ -367,6 +383,32 @@ export class PreviewTunnelSession {
     for (const pending of Array.from(this.opening.values())) pending.reject(error);
     for (const stream of Array.from(this.streams.values())) stream.destroy(error);
     this.ws.close(code);
+  }
+
+  private heard(): void {
+    this.heardSincePing = true;
+    this.missedPings = 0;
+  }
+
+  /**
+   * Ping, and retire a session that answered none of its last
+   * {@link PREVIEW_TUNNEL_SESSION_MISSED_PINGS} pings: a half-open socket
+   * would otherwise stay selectable, and every stream opened on it would
+   * wait out its whole open timeout (todo 7200, task 3). The socket is
+   * destroyed rather than closed, since a dead peer never answers the close
+   * frame, so the connector drops the session and the next open connects a
+   * new one.
+   */
+  private onHeartbeat(): void {
+    if (!this.ws.isOpen) return;
+    if (!this.heardSincePing) this.missedPings += 1;
+    if (this.missedPings >= PREVIEW_TUNNEL_SESSION_MISSED_PINGS) {
+      this.fail(previewFailure("backend-unavailable"), PREVIEW_TUNNEL_CLOSE.timeout);
+      this.ws.terminate();
+      return;
+    }
+    this.heardSincePing = false;
+    this.ws.ping();
   }
 
   private becameIdle(): void {

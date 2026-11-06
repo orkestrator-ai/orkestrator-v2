@@ -291,8 +291,51 @@ export function copyDatabaseInChildProcess(
     settleGraceMs?: number;
   } = {},
 ): Promise<boolean> {
+  return runSqliteHelperInChildProcess("Database copy", DATABASE_COPY_HELPER, [source, target], {
+    timeoutMs: options.timeoutMs ?? COPY_TIMEOUT_MS,
+    spawn: options.spawn,
+    settleGraceMs: options.settleGraceMs,
+  }).then(({ code, signal, stdout, stderr }) => {
+    const [verdict, tables] = stdout.trim().split("\n", 2);
+    if (code === 0 && verdict === "sound") {
+      const parsed = parseTopTables(tables);
+      if (parsed) options.onTopTables?.(parsed);
+      return true;
+    }
+    if (code === 0 && verdict === "unsound") return false;
+    throw new Error(`Database copy failed: ${childFailureReason(code, signal, stderr)}`);
+  });
+}
+
+/** The helper's last line of stderr, or how it ended. Never content: helpers print only error names. */
+function childFailureReason(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderr: string,
+): string {
+  return stderr.trim().split("\n").at(-1) || (signal ? `killed by ${signal}` : `exit ${code}`);
+}
+
+/**
+ * Runs `helper` (a `bun -e` script) with `args` under
+ * {@link DATABASE_COPY_SUPERVISOR}, at low priority, and resolves with how it
+ * exited and its bounded output. Shared by the snapshot copy and the upkeep's
+ * free-page release, which both hold SQLite for longer than the event loop
+ * may wait. Rejects only when the child cannot be started or never reports an
+ * exit; reading the result is the caller's.
+ */
+function runSqliteHelperInChildProcess(
+  label: string,
+  helper: string,
+  args: string[],
+  options: {
+    timeoutMs: number;
+    spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+    settleGraceMs?: number;
+  },
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const timeoutMs = options.timeoutMs ?? COPY_TIMEOUT_MS;
+    const timeoutMs = options.timeoutMs;
     const captureFds: number[] = [];
     const releaseCapture = () => {
       for (const fd of captureFds.splice(0)) {
@@ -309,15 +352,7 @@ export function copyDatabaseInChildProcess(
       captureFds.push(openCaptureFile());
       child = (options.spawn ?? spawn)(
         process.execPath,
-        [
-          "-e",
-          DATABASE_COPY_SUPERVISOR,
-          "--",
-          source,
-          target,
-          String(timeoutMs),
-          DATABASE_COPY_HELPER,
-        ],
+        ["-e", DATABASE_COPY_SUPERVISOR, "--", String(timeoutMs), helper, ...args],
         {
           // Only this backend owns the write end. Abrupt death closes it too.
           stdio: ["pipe", captureFds[0]!, captureFds[1]!],
@@ -332,7 +367,7 @@ export function copyDatabaseInChildProcess(
     try {
       if (child.pid) os.setPriority(child.pid, 10);
     } catch {
-      // Best effort: priority only keeps the copy out of the way.
+      // Best effort: priority only keeps the child out of the way.
     }
     // Ask the responsive supervisor to kill and reap its synchronous worker.
     const kill = () => child.stdin?.destroy();
@@ -354,27 +389,17 @@ export function copyDatabaseInChildProcess(
     };
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       if (!settle()) return;
-      let stdout: string;
-      let stderr: string;
       try {
-        stdout = readCaptureFile(stdoutFd, MAX_COPY_OUTPUT_BYTES).toString();
-        stderr = readCaptureFile(stderrFd, MAX_COPY_OUTPUT_BYTES).toString();
+        resolve({
+          code,
+          signal,
+          stdout: readCaptureFile(stdoutFd, MAX_COPY_OUTPUT_BYTES).toString(),
+          stderr: readCaptureFile(stderrFd, MAX_COPY_OUTPUT_BYTES).toString(),
+        });
       } catch (error) {
         reject(error);
-        return;
       } finally {
         releaseCapture();
-      }
-      const [verdict, tables] = stdout.trim().split("\n", 2);
-      if (code === 0 && verdict === "sound") {
-        const parsed = parseTopTables(tables);
-        if (parsed) options.onTopTables?.(parsed);
-        resolve(true);
-      } else if (code === 0 && verdict === "unsound") resolve(false);
-      else {
-        const reason =
-          stderr.trim().split("\n").at(-1) || (signal ? `killed by ${signal}` : `exit ${code}`);
-        reject(new Error(`Database copy failed: ${reason}`));
       }
     };
     const deadline = setTimeout(
@@ -382,7 +407,7 @@ export function copyDatabaseInChildProcess(
         if (!settle()) return;
         child.kill("SIGKILL");
         releaseCapture();
-        reject(new Error("Database copy failed: its process never reported an exit"));
+        reject(new Error(`${label} failed: its process never reported an exit`));
       },
       timeoutMs + (options.settleGraceMs ?? COPY_SETTLE_GRACE_MS),
     );
@@ -405,8 +430,8 @@ export function copyDatabaseInChildProcess(
  */
 export const DATABASE_COPY_SUPERVISOR = String.raw`
 const { spawn } = require("node:child_process");
-const [source, target, timeoutMs, helper] = process.argv.slice(1);
-const worker = spawn(process.execPath, ["-e", helper, "--", source, target], {
+const [timeoutMs, helper, ...args] = process.argv.slice(1);
+const worker = spawn(process.execPath, ["-e", helper, "--", ...args], {
   stdio: ["ignore", "inherit", "inherit"],
 });
 let stopped = false;
@@ -966,23 +991,127 @@ export async function takeLedgerSnapshotIfDue(
   }
 }
 
+/** Pages one upkeep returns at most: 1 GiB of 4 KiB pages. */
+export const UPKEEP_RELEASE_PAGE_BUDGET = 262_144;
 /**
- * Free pages {@link runDatabaseUpkeep} returns per step (4 KiB pages: 4 MiB).
- * Measured at about 30 ms a step on a 666 MB database, so the event loop is
- * free between short steps.
+ * Pages the release child returns per transaction (1 MiB). Each step holds
+ * the write lock, so this bounds how long a backend writer waits behind it.
  */
-const UPKEEP_RELEASE_PAGES = 1024;
-/** Steps per check, so one check returns at most 1 GiB. */
-const UPKEEP_RELEASE_STEPS = 256;
+export const UPKEEP_RELEASE_STEP_PAGES = 256;
+/** The child's pause between steps, so the backend's writers get the lock. */
+export const UPKEEP_RELEASE_PAUSE_MS = 5;
+/** A release still running after this long is killed; checks come every five minutes. */
+const UPKEEP_RELEASE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** What the free-page release reported. */
+export interface FreePageRelease {
+  released: number;
+  left: number;
+}
+
+/**
+ * Returns up to `maxPages` free pages of the database at `file` to the
+ * filesystem, in a child process at low priority with its own connection
+ * (to-do 1202 task 7, report finding ST-13). In-process each step of
+ * `incremental_vacuum` and the checkpoint that followed it held the event loop
+ * for 30–190 ms, seconds under disk load. The child commits
+ * {@link UPKEEP_RELEASE_STEP_PAGES} at a time with the backend's durability
+ * settings, checkpoints its own frames after each step so the backend's next
+ * commit does not pay for them, and pauses between steps. It stops at the
+ * budget, when nothing is left, or when a step makes no progress or finds the
+ * database busy (the next check tries again). Rejects when the child fails.
+ */
+export function releaseFreePagesInChildProcess(
+  file: string,
+  options: {
+    maxPages?: number;
+    stepPages?: number;
+    pauseMs?: number;
+    timeoutMs?: number;
+    spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+  } = {},
+): Promise<FreePageRelease> {
+  return runSqliteHelperInChildProcess(
+    "Free-page release",
+    FREE_PAGE_RELEASE_HELPER,
+    [
+      file,
+      String(options.maxPages ?? UPKEEP_RELEASE_PAGE_BUDGET),
+      String(options.stepPages ?? UPKEEP_RELEASE_STEP_PAGES),
+      String(options.pauseMs ?? UPKEEP_RELEASE_PAUSE_MS),
+    ],
+    { timeoutMs: options.timeoutMs ?? UPKEEP_RELEASE_TIMEOUT_MS, spawn: options.spawn },
+  ).then(({ code, signal, stdout, stderr }) => {
+    const [released, left] = stdout.trim().split(" ").map(Number);
+    if (code === 0 && Number.isSafeInteger(released) && Number.isSafeInteger(left)) {
+      return { released: released!, left: left! };
+    }
+    throw new Error(`Free-page release failed: ${childFailureReason(code, signal, stderr)}`);
+  });
+}
+
+/**
+ * Run by {@link releaseFreePagesInChildProcess}:
+ * `-- <file> <maxPages> <stepPages> <pauseMs>`. Prints `<released> <left>`.
+ * Sets what the backend's connection sets (`storage-database.ts`), so a step
+ * here is as durable and as scrubbing as one there. A busy database ends the
+ * run without an error: the backend's writers come first.
+ */
+const FREE_PAGE_RELEASE_HELPER = String.raw`
+const { Database } = require("bun:sqlite");
+const [file, maxPages, stepPages, pauseMs] = process.argv.slice(1).map((v, i) => (i === 0 ? v : Number(v)));
+try {
+  const db = new Database(file);
+  let released = 0;
+  let left = 0;
+  try {
+    db.exec("PRAGMA busy_timeout = 1000");
+    db.exec("PRAGMA synchronous = FULL");
+    db.exec("PRAGMA secure_delete = ON");
+    db.exec("PRAGMA journal_size_limit = 8388608");
+    const freePages = () => db.query("PRAGMA freelist_count").get().freelist_count;
+    left = freePages();
+    // Without incremental auto-vacuum free pages are only reused, never released.
+    if (db.query("PRAGMA auto_vacuum").get().auto_vacuum !== 2) left = 0;
+    while (left > 0 && released < maxPages) {
+      const pages = Math.max(1, Math.min(stepPages, maxPages - released));
+      try {
+        db.exec("PRAGMA incremental_vacuum(" + pages + ")");
+      } catch (error) {
+        if (error && (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED")) break;
+        throw error;
+      }
+      // This step's frames, so the backend's next commit never checkpoints them.
+      db.query("PRAGMA wal_checkpoint(PASSIVE)").get();
+      const now = freePages();
+      if (now >= left) break;
+      released += left - now;
+      left = now;
+      if (pauseMs > 0) Bun.sleepSync(pauseMs);
+    }
+  } finally {
+    db.close();
+  }
+  process.stdout.write(released + " " + left);
+} catch (error) {
+  process.stderr.write(String(error && error.code ? error.code : "error"));
+  process.exit(1);
+}
+`;
 
 /**
  * Periodic upkeep of the main database, run by the snapshot check after its
- * copies: refreshes planner statistics ({@link StorageDatabase.optimize}) and
- * returns free pages to the filesystem in bounded steps, yielding between
- * them. Moving the ledger out (storage migration 7) leaves its old pages free
- * in `orkestrator.sqlite`; this is what gives that space back. Never throws.
+ * copies: refreshes planner statistics ({@link StorageDatabase.optimize}) on
+ * this connection, which is the one whose queries it reads, then, when there
+ * are free pages, returns them to the filesystem in a child process
+ * ({@link releaseFreePagesInChildProcess}). Moving the ledger out (storage
+ * migration 7) leaves its old pages free in `orkestrator.sqlite`; this is
+ * what gives that space back. Never throws.
  */
-export async function runDatabaseUpkeep(database: StorageDatabase): Promise<void> {
+export async function runDatabaseUpkeep(
+  database: StorageDatabase,
+  options: { release?: (file: string) => Promise<FreePageRelease> } = {},
+): Promise<void> {
   try {
     if (database.isClosed()) return;
     try {
@@ -990,15 +1119,8 @@ export async function runDatabaseUpkeep(database: StorageDatabase): Promise<void
     } catch (error) {
       log.warn("optimize.failed", { error: formatLogError(error, { message: false }) });
     }
-    let previous = Number.POSITIVE_INFINITY;
-    for (let step = 0; step < UPKEEP_RELEASE_STEPS; step += 1) {
-      if (database.isClosed()) return;
-      const left = database.releaseFreePages(UPKEEP_RELEASE_PAGES);
-      // Stop once nothing is left or a step makes no progress (a busy writer).
-      if (left <= 0 || left >= previous) return;
-      previous = left;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    if (database.isClosed() || database.releasableFreePages() <= 0) return;
+    await (options.release ?? releaseFreePagesInChildProcess)(database.path);
   } catch (error) {
     log.warn("upkeep.vacuum-failed", { error: formatLogError(error, { message: false }) });
   }

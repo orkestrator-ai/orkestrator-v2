@@ -512,10 +512,24 @@ function labelValue(raw: string | undefined): string | undefined {
  * decide ownership. The owner/status columns come first so the answer shares
  * its shape with `inspectDockerContainerIdentity`.
  */
-export async function probeContainer(containerId: string): Promise<ContainerProbe> {
+export type ContainerProbeRunner = (
+  command: string,
+  args: string[],
+  options: { timeoutMs: number },
+) => Promise<{ stdout: string; stderr: string }>;
+
+export type ContainerOwnershipOptions = {
+  trustExactAssociation?: boolean;
+  run?: ContainerProbeRunner;
+};
+
+export async function probeContainer(
+  containerId: string,
+  run: ContainerProbeRunner = runCommand,
+): Promise<ContainerProbe> {
   let stdout: string;
   try {
-    ({ stdout } = await runCommand(
+    ({ stdout } = await run(
       "docker",
       [
         "inspect",
@@ -648,7 +662,7 @@ function referencedByEnvironment(environments: Environment[], containerId: strin
 export async function resolveContainerOwnership(
   containerId: string,
   context: Pick<CommandContext, "storage"> & Partial<Pick<CommandContext, "strictDockerOwner">>,
-  options: { trustExactAssociation?: boolean } = {},
+  options: ContainerOwnershipOptions = {},
 ): Promise<ContainerOwnership> {
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
   if (ownedByLabel.get(containerId) === owner) return { verdict: "owned", labelled: true };
@@ -663,7 +677,7 @@ export async function resolveContainerOwnership(
       return { verdict: "owned", labelled: false };
     }
   }
-  const probe = await probeContainer(containerId);
+  const probe = await probeContainer(containerId, options.run);
   if (probe.kind === "missing") return { verdict: "missing" };
   if (probe.kind === "unreachable") return { verdict: "unknown", reason: "unreachable" };
   if (probe.kind === "malformed") return { verdict: "unknown", reason: "malformed" };

@@ -1,7 +1,9 @@
 import { MACHINE_LOAD_COMMAND } from "@orkestrator/protocol/machine-load";
+import { RECORD_RENDERER_ERRORS_COMMAND } from "@orkestrator/protocol/renderer-errors";
 import { APP_VERSION } from "./constants.js";
 import { asString, assertOnlyKeys } from "./commands-validation.js";
 import { diagnosticsSources } from "./diagnostics-sources.js";
+import { RendererErrorRecorder } from "./renderer-error-recorder.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   readEnvironmentProcessUsage as defaultReadEnvironmentProcessUsage,
@@ -27,6 +29,16 @@ export function registerSystemCommands(
 ): void {
   const readUsage = readSystemUsage ?? createSystemUsageReader({ ramReader: hostRamReader });
   const readProcesses = readEnvironmentProcessUsage ?? defaultReadEnvironmentProcessUsage;
+  const rendererErrors = new RendererErrorRecorder();
+  /**
+   * A desktop window's new renderer error counts, into the essential log. Only
+   * content-free fields are accepted, and the write is rate-bound. Refused to
+   * workspace clients (`workspace-grant-scope.ts`): this machine's log is its own.
+   */
+  register(RECORD_RENDERER_ERRORS_COMMAND, (args) => {
+    assertOnlyKeys(args, ["entries"], "arguments");
+    return rendererErrors.record(args.entries);
+  });
   register("get_app_version", (args) => {
     assertOnlyKeys(args, [], "arguments");
     return APP_VERSION;

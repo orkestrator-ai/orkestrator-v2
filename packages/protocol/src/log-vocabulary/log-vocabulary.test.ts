@@ -43,6 +43,7 @@ const CURATED_ESSENTIAL_EVENTS = [
   "logging essential.stopped",
   "process rejection.unhandled",
   "process uncaught-exception",
+  "renderer-errors error.recorded",
   "storage migration.failed",
   "storage snapshot.failed",
   "storage snapshot.integrity-failed",

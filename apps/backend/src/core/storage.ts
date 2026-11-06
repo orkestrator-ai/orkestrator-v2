@@ -727,6 +727,12 @@ export class StorageService {
     return this.repos.config.patchRepositorySettings(...args);
   }
 
+  reconcileLogDetailExpiry(
+    ...args: Parameters<ConfigRepository["reconcileLogDetailExpiry"]>
+  ): ReturnType<ConfigRepository["reconcileLogDetailExpiry"]> {
+    return this.repos.config.reconcileLogDetailExpiry(...args);
+  }
+
   updateWorktreeLocations(
     locations: import("@orkestrator/protocol/disk-usage").WorktreeLocationSettings,
   ): Promise<AppConfig> {

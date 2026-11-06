@@ -1,12 +1,13 @@
 import { boundedJson } from "./http-bridge-transport.js";
 import type { StorageService } from "./storage.js";
 import { createHash } from "node:crypto";
-import { createLogger, emitLogRecord } from "@orkestrator/protocol/logger";
+import { createLogger, emitLogRecord, formatLogError } from "@orkestrator/protocol/logger";
 import {
   BRIDGE_LOG_POLICY_ROUTE,
   formatLogAreaLevels,
   type BridgeLogPolicy,
   type LogDetail,
+  type LogDetailExpiryAction,
 } from "@orkestrator/protocol/log-policy";
 import {
   readApplicationLogPolicy,
@@ -32,6 +33,8 @@ const MAX_SEQUENCE_SKEW_MS = 24 * 60 * 60 * 1000;
 // A full push prunes these to the bridges still running; between pushes, each
 // replaced bridge adds an entry.
 const MAX_TRACKED_BRIDGES = 1_024;
+// Raised detail reverts within this much of its expiry.
+const EXPIRY_CHECK_INTERVAL_MS = 60_000;
 
 export interface BridgeLogPolicyTarget {
   /** The bridge's platform, for the log line. */
@@ -53,6 +56,12 @@ export interface LogPolicyServiceOptions {
   now?: () => number;
   sleep?: (delayMs: number) => Promise<void>;
   retryDelaysMs?: readonly number[];
+  /**
+   * The log detail expiry check (`StorageService.reconcileLogDetailExpiry`).
+   * Absent where nothing here owns the config, which leaves expiry off.
+   */
+  checkLogDetailExpiry?: (nowMs: number) => Promise<LogDetailExpiryAction["kind"]>;
+  expiryCheckIntervalMs?: number;
 }
 
 type PostOutcome =
@@ -120,6 +129,9 @@ export class LogPolicyService {
   private activeRequests = 0;
   private readonly requestWaiters: Array<() => void> = [];
   private readonly reportedFailures = new Map<string, number>();
+  private expiryTimer: ReturnType<typeof setInterval> | null = null;
+  private expiryCheck: Promise<void> | null = null;
+  private expiryFailureReported = false;
 
   constructor(private readonly options: LogPolicyServiceOptions) {
     this.env = options.env ?? process.env;
@@ -137,6 +149,44 @@ export class LogPolicyService {
     applyApplicationLogPolicy(policy, this.options.logging, undefined, this.env);
     // Container bridges outlive a backend restart and may hold an older policy.
     this.pushInBackground();
+    this.startExpiryChecks();
+  }
+
+  /**
+   * Raised log detail reverts at its expiry, through an ordinary config write
+   * that `configChanged` then applies. Checked now, so an expiry that passed
+   * while the backend was stopped is honoured at start, and every minute.
+   */
+  private startExpiryChecks(): void {
+    if (!this.options.checkLogDetailExpiry || this.expiryTimer) return;
+    void this.checkLogDetailExpiry();
+    this.expiryTimer = setInterval(
+      () => void this.checkLogDetailExpiry(),
+      this.options.expiryCheckIntervalMs ?? EXPIRY_CHECK_INTERVAL_MS,
+    );
+    this.expiryTimer.unref?.();
+  }
+
+  /** One expiry check; a check already running is shared. Never rejects. */
+  checkLogDetailExpiry(): Promise<void> {
+    const check = this.options.checkLogDetailExpiry;
+    if (!check || this.stopped) return Promise.resolve();
+    this.expiryCheck ??= (async () => {
+      try {
+        const kind = await check(this.now());
+        if (kind === "revert") log.info("policy.detail-expired");
+        this.expiryFailureReported = false;
+      } catch (error) {
+        // Once until a check works again: a broken config would repeat every minute.
+        if (!this.expiryFailureReported) {
+          this.expiryFailureReported = true;
+          log.warn("policy.expiry-failed", { error: formatLogError(error) });
+        }
+      } finally {
+        this.expiryCheck = null;
+      }
+    })();
+    return this.expiryCheck;
   }
 
   /** Call after any write to the config. Writes that leave logging alone do nothing. */
@@ -166,6 +216,8 @@ export class LogPolicyService {
 
   stop(): void {
     this.stopped = true;
+    if (this.expiryTimer) clearInterval(this.expiryTimer);
+    this.expiryTimer = null;
   }
 
   private setDetail(detail: LogDetail): void {
@@ -350,10 +402,16 @@ export class LogPolicyService {
 
 /** The backend lifecycle owns the config listener as well as the service. */
 export function startLogPolicyService(
-  storage: Pick<StorageService, "getDataDir" | "addResourceChangeListener">,
+  storage: Pick<StorageService, "getDataDir" | "addResourceChangeListener"> &
+    Partial<Pick<StorageService, "reconcileLogDetailExpiry">>,
   options: Omit<LogPolicyServiceOptions, "dataDir">,
 ): { service: LogPolicyService; stop: () => void } {
-  const service = new LogPolicyService({ ...options, dataDir: storage.getDataDir() });
+  const reconcile = storage.reconcileLogDetailExpiry?.bind(storage);
+  const service = new LogPolicyService({
+    ...(reconcile ? { checkLogDetailExpiry: reconcile } : {}),
+    ...options,
+    dataDir: storage.getDataDir(),
+  });
   const removeListener = storage.addResourceChangeListener((change) => {
     if (change.resource === "config") service.configChanged();
   });

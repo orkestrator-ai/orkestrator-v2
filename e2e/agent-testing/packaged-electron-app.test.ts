@@ -35,6 +35,21 @@ describe("packaged Electron app launch", () => {
     ).toBe("/opt/app/x");
   });
 
+  test("finds the inspectable macOS build under release/packaged-test/", () => {
+    expect(packagedAppExecutable(repositoryRoot, {}, "darwin", "arm64")).toBe(
+      path.join(
+        repositoryRoot,
+        "release/packaged-test/mac-arm64/OrkestratorV2.app/Contents/MacOS/OrkestratorV2",
+      ),
+    );
+    expect(packagedAppExecutable(repositoryRoot, {}, "darwin", "x64")).toBe(
+      path.join(
+        repositoryRoot,
+        "release/packaged-test/mac/OrkestratorV2.app/Contents/MacOS/OrkestratorV2",
+      ),
+    );
+  });
+
   test("passes on only allowlisted host variables and puts every home under the profile", () => {
     const env = packagedLaunchEnvironment(
       {
@@ -83,10 +98,12 @@ describe("packaged Electron app launch", () => {
   test("the packaged spec has its own config, outside the default Electron run", () => {
     expect(packaged.testMatch).toEqual([
       "design-canvas-packaged-electron.spec.ts",
+      "log-controls-packaged-electron.spec.ts",
       "packaged-security-electron.spec.ts",
     ]);
     expect(electron.testMatch).not.toContain("packaged-security-electron.spec.ts");
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
+    expect(electron.testMatch).not.toContain("log-controls-packaged-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });
 });

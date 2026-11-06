@@ -12,14 +12,7 @@ Work that is already built has no file; the status table below records it.
 
 A batch file combines several reports as numbered parts and takes the rating of its most serious part. A number such as `0720` in this index names a part or a file, and the table below shows where it lives.
 
-| Rank | File | Criticality | Finished | Covers | Why this rating |
-| --- | --- | --- | --- | --- | --- |
-| 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
-| 2 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
-| 3 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 4 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 5 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 6 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+No remaining report files; completed findings and their closing checks are recorded below.
 
 ## Parallel running
 
@@ -31,15 +24,7 @@ This index only changes when a branch merges, so it can't show what is running n
 
 ### Batches
 
-| Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
-| --- | --- | --- | --- | --- | --- |
-| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 3 of 3 | None | None |
-| E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 1 of 1 | None | None |
-
-Why these are grouped:
-
-- **E25:** `0500` depends on `0490`.
-- **E16:** Linked settings for log detail.
+No remaining batches in this folder.
 
 ### Files built on their own
 
@@ -54,14 +39,12 @@ When one of these becomes ready, it joins the lane shown.
 
 | File | Why it waits | Lane |
 | --- | --- | --- |
-| [`0385`](0385-tx-10-joined-history-pages.md) | Blocked on todo 0232 and the support window | Transcript |
-| [`0390`](0390-gw-7-websocket-compression.md) | Deferred by 0052 decision D6 | Gateway |
-| [`0693`](0693-dk-10-second-claude-binary.md) | Waits on a maintainer decision | Containers |
-| [`0560`](0560-st-9-agent-mail-store-remainder.md) | Needs a measurement to justify a stored-format change | Storage |
+
+`0390` (GW-7, WebSocket compression) left this table on 2026-11-05: its file is deleted and the work waits in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8, which starts only when the terminal WebSocket becomes the remote terminal transport; see [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression).
 
 ## Status of every efficiency finding
 
-107 done, 6 partly done, 7 open, 3 no action.
+109 done, 5 partly done, 6 open, 3 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -71,7 +54,7 @@ When one of these becomes ready, it joins the lane shown.
 | GW-4 | Done | `SseFrameDecoder` keeps a chunk list and searches only the new text (`packages/protocol/src/gateway-event-stream.ts:162`, #1548 `12289fc56`), though the report's minor `indexOf` sub-fix in `parseSseBlock` (`:96`) was not taken, which leaves that parse linear per frame. |
 | GW-5 | Done | One `Buffer` per frame is written to every client, with its byte count passed to the writer (`apps/backend/src/gateway-events.ts:30`, `apps/backend/src/gateway-support-extra.ts:653`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-6 | Done | `flush` pauses channel frames at a 256 KiB watermark and resumes on the send callback (`apps/backend/src/terminal-websocket-server.ts:945`, `:972`); see 1202 task 11. |
-| GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:193-198`), and 0052 D6 defers the work; see 0390. |
+| GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:220-229`), and the terminal WebSocket is still opt-in, so 0052 D6 still defers the work. The 0390 file is deleted; the work, its trigger and a Bun loopback probe are in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8. See [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression). |
 | GW-8 | Done | The private-origin proxy reuses pooled connections (`apps/backend/src/preview-http-proxy.ts:160`, `apps/backend/src/preview-upstream-pool.ts`, #1604 `b64242842`). |
 | GW-9 | Done | Compressed and rewritten bodies get a derived ETag that maps back upstream (`apps/backend/src/gateway-proxy.ts:188`, `:397`, `apps/backend/src/gateway-proxy-etag.ts`, #1604 `b64242842`). |
 | GW-10 | No action | Declined on first-load numbers: the rewrite is about 150–190 ms of a 1,754-module, 28 MB first load, a combined regex would save 46–93 ms of that, and a rewriter edit makes every module a full response once. The rewriter is unchanged (`apps/backend/src/gateway-support-extra.ts:569`). See the [E24 closing check](#closing-check-of-e24-gateway-static-and-preview). |
@@ -84,13 +67,13 @@ When one of these becomes ready, it joins the lane shown.
 | TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`). E10's `dev:test` baseline (a real Claude bridge streaming against a loopback model): every streaming answer was a delta, 40 of 40 for one viewer and for each of two, about 140 KB per viewer in 20 s. With the fake bridge and the ring disabled, 46 of 47 answers were snapshots, 1.86–6.63 MB per viewer in 10 s. See the [closing check of E10](#closing-check-of-e10-conditional-reads-and-deltas) and [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1. |
 | TX-2 | Done | Reads other than `sync-v1` pass a limit to `legacy` through `interactiveSnapshot`, and dropped refreshes read a 32-row tail (`refreshProjectionState` in `apps/backend/src/core/native-agent-transcript-projection.ts`); see 0150. |
 | TX-3 | Done | The legacy commit compares `digestWithMessages("legacy-commit", …)` through the row memo (`commitProjection`, `apps/backend/src/core/native-agent-transcript-projection.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
-| TX-4 | Done | Reads are keyed (`apps/backend/src/core/storage-native.ts`, `apps/backend/src/core/storage-prompt-queue-store.ts`, #1548 `12289fc56`), and every mutation holding a key's lease now reads one row (`readNativeAgentSessionUnderLease`); the prompt queue half of a steer is [5100](../../todo/cross-cutting/5100-prompt-queue-row-writes.md). |
+| TX-4 | Done | Reads are keyed (`apps/backend/src/core/storage-native.ts`, `apps/backend/src/core/storage-prompt-queue-store.ts`, #1548 `12289fc56`), and every mutation holding a key's lease now reads one row (`readNativeAgentSessionUnderLease`); the prompt queue half of a steer is 5100. |
 | TX-5 | Open | Measured in E10 and not built: state reads still have no condition (`readHttpBridgeSessionState`, `apps/backend/src/core/http-bridge-progressive.ts`) and the token hash still covers the composer (`getSessionStateUpdate`, `native-agent-transcript-projection.ts`). On the `dev:test` baseline each state poll made 5 bridge requests. Claude's state body (about 1 KB) repeated on 88–100% of polls, and the bridge answered it in under 0.25 ms. A revision would save that body and nothing else. The hash is 3–14 µs a poll, or 141–266 µs with 300 models (fake bridge). Decisions: [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) tasks 2 and 3; see the [closing check of E10](#closing-check-of-e10-conditional-reads-and-deltas). |
 | TX-6 | Open | Measured in E10 and not built: a bridge still answers `unchanged` or a whole snapshot (`readHttpBridgeSummaryTranscript`, `apps/backend/src/core/http-bridge-transcript-v2.ts`). On the `dev:test` baseline each viewer poll read the bridge transcript once. A snapshot was 38–114 KB decoded and cost the bridge 1.0–1.07 ms on average, gzip included. A delta would have been 7.5–8.2 KB, 5–15 times smaller. With the fake bridge, 517 KB windows would have shrunk 68 times. Decision: [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 4; see the [closing check of E10](#closing-check-of-e10-conditional-reads-and-deltas). |
 | TX-7 | Done | Exact head-row recovery starts at most once a second per view, at once for a quiet view, with a deadline a moving token cannot push back (`PROGRESSIVE_HYDRATION_SETTLE_MS`, `scheduleIncompleteProgressiveHydration`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). How often a trimmed head streams is [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md) task 3. |
 | TX-8 | Done | A miss on a remote reference (prefix `r`, `apps/backend/src/core/native-agent-remote-detail-recovery.ts`) re-registers it from a cached row or page, or runs one summary read, never a raw `sync-v1` refresh (`recoverRemoteToolDetails` in `apps/backend/src/core/native-agent-transcript-projection.ts`, E9); see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | TX-9 | Done | `valueFingerprint` is memoised per object beside `encodings` (`apps/backend/src/core/native-agent-projection-encoding.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
-| TX-10 | Open | Joined pages still refresh and scan with SHA-256 per row (`apps/backend/src/core/native-agent-transcript-projection.ts:3878`, `:3903-3909`), owned by 0232 task 4; see 0385. |
+| TX-10 | Open | Joined pages still refresh and scan with SHA-256 per row (`getMessagePage`, `apps/backend/src/core/native-agent-transcript-projection.ts:4091`, `:4116`, at `cbe0f9a5b`). The report file was closed into [0232](../../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md) task 4, which removes the path once the support window allows; see the [0385 closing check](#closing-check-of-0385-tx-10-joined-history-pages). |
 | TX-11 | Done | `nativeAgentPartsDigest` is fed from memoised part encodings with its value unchanged, parts compare field by field, and patch sizes come from the memo (`packages/protocol/src/native-agent-transcript-patch.ts`, `apps/backend/src/core/native-agent-transcript-patches.ts`); patch version unchanged; see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
 | TX-12 | Done | The gateway splices memoised rows into marked transcript results (`spliceEncodedJson`, `apps/backend/src/gateway-handlers.ts`), and `encodedBytesWithMessages` counts `revisedMessages` through the memo; see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
 | TX-13 | Done | The view token hashes each row's memoised fingerprint (`updateHashWithFingerprints` in `commitProgressiveTranscript`), `revisedMessages` included; see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
@@ -108,11 +91,11 @@ When one of these becomes ready, it joins the lane shown.
 | BR-7 | Done | `runningItemParts` keeps running parts by accumulator version and `content` is sent only when it changed (`bridges/codex-bridge/src/messages/render-turn.ts`, `bridges/codex-bridge/src/app-server-runtime-rows.ts`); see 1202 task 6. |
 | BR-8 | Done | `getToolWithCreatedAt` stamps the tracker entry once (`bridges/claude-bridge/src/services/session-manager-messages.ts:118`, `:994`, #1693 `9a878575d`). |
 | BR-9 | Done | `emitRow` returns whether it published, and the caller returns early otherwise (`bridges/claude-bridge/src/services/session-manager-prompt-stream.ts:431`, `:553`, #1693 `9a878575d`). |
-| BR-10 | Done | `session-list-cache.ts` keeps the list while no file changes, and a timeout answers 504 (`bridges/pi-bridge/src/agent-session.ts`); see 1202 task 6. The resume dialog shows a generic failure rather than the 504's reason, and the timeout's size is unmeasured: [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md). |
+| BR-10 | Done | `session-list-cache.ts` keeps the list while no file changes, and a timeout answers 504 (`bridges/pi-bridge/src/agent-session.ts`); see 1202 task 6. The resume dialog shows a generic failure rather than the 504's reason, and the timeout's size is unmeasured: 5480. |
 | BR-11 | Done | `readSessionIndex` caches the parsed index and reads only appended bytes (`bridges/codex-bridge/src/history/session-index-cache.ts`, `bridges/codex-bridge/src/history/rollout.ts:92`, #1683 `38ac30844`). |
 | BR-12 | Done | `JsonlLineFramer` searches only the new chunk (`bridges/acp-bridge/src/acp-jsonl-framer.ts`), and `acp-jsonl-framer.test.ts` covers the close at the real 4 MiB limit for terminated and unterminated lines; see 1202 task 6. Real frame sizes are still unread: [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) task 4. |
 | BR-13 | Done | `SerialQueue` drains an array per key with count and byte bounds, and overflow replaces the child (`bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`); see 1202 task 6. A real high-water mark is still to be read: [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md). |
-| BR-14 | Done | `encodeStateWithinBudget` encodes each record once (`bridges/pi-bridge/src/persistence.ts`); see 1202 task 6. A test that the durability barrier rejects state that cannot fit is [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 4. |
+| BR-14 | Done | `encodeStateWithinBudget` encodes each record once (`bridges/pi-bridge/src/persistence.ts`); see 1202 task 6. A test that the durability barrier rejects state that cannot fit is 5480 task 4. |
 | BR-15 | Done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), and both bridges now use one replay ring, `EventRing` (`packages/protocol/src/node/event-ring.ts`); Claude collapses superseded frames and reuses each frame's byte count (`bridges/claude-bridge/src/routes/events.ts`). See the closing check of E-0360 below. |
 | BR-16 | Done | The replay, its gates and what only it used are removed, and the harness and fake agent use `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
 | WEB-1 | Done | A background round is one request plus discovery when due, 3 requests per round to 1.04 (`useNativeAgentSession.ts`); the finding's note that Claude and Codex idle views never back off no longer held (`turn.quietObservation`, `native-session-read-policy.ts`); see [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
@@ -130,7 +113,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-13 | Done | `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `unchanged` with no contents, `commands-registry-terminal.ts`, `file-subtree-loads.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). Expanded-folder counts in real use: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-14 | Done | `setProjection` and `setProgressiveCache` copy each Map on its first write (`copyOnWrite`, `nativeAgentProjectionStore.ts`; #1754, `bfac1f577`); ceilings and untouched Maps pinned in `nativeAgentProjectionStore.test.ts`; see [Closing check of E12](#closing-check-of-e12-renderer-store). |
 | WEB-15 | Done | Memoised `readTranscriptTail`, `AgentNativeTab.controller.tsx:1152` (9c06cb7aa). |
-| WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is [5580](../../todo/cross-cutting/5580-agent-native-tab-environment-subscription.md). |
+| WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is 5580. |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
 | WEB-18 | Done | Every named poll runs through `startCoordinatedPoll` (`lib/coordinated-poll.ts`), which reads nothing while the window is hidden (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). A real Electron window: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-19 | Done | While a part streams, `MessageMarkdown` renders each completed segment once through `IncrementalMarkdownCache.render` (`incremental-parse.ts`) and reuses its elements, #1754 `bfac1f577`; Chromium Profiler numbers in the closing check of E22 below and in 1202 task 3. |
@@ -142,7 +125,7 @@ When one of these becomes ready, it joins the lane shown.
 | ST-6 | Done | Off-loop zlib from 16 KiB and `FileHandle.sync()` per object before its rename, in `ObjectBatch` (#1761); evidence-body follow-up 4761, done and deleted 2026-11-05. |
 | ST-7 | Done | One-row reads, `storage-projects.ts:654`, `storage-native.ts:424`, `storage-prompt-queue-store.ts:127`, `storage-drafts.ts:160`, `:731`, `storage-sessions.ts:262` (12289fc56); 1202 assigns the lease-held native mutations to TX-4. |
 | ST-8 | Done | `updateStoreRow` carries the cache forward, `storage-database.ts:830-838` (12289fc56). |
-| ST-9 | Partly done | Frozen read model and single serialisation, `storage-agent-mail-store.ts:364`, `:431-436` (6953e8df7); pending-inject collection and body-free list remain, see 0560. |
+| ST-9 | Done | Frozen read model and single serialisation, `storage-agent-mail-store.ts:367`, `:429-443` (6953e8df7). The rest, pending injects as their own collection and a body-free list, was measured and not built: at the largest known real store (1.2 MB) a write costs about 10 ms CPU and the list about 1 ms. Thresholds and what to build then are [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md); see the [E-0560 closing check](#closing-check-of-e-0560-agent-mail-store). |
 | ST-10 | Done | Compose drafts (`storage-drafts.ts`, 381b26f90), environments (#1736), sessions and projects (`updateStoreRow` in `storage-drafts.ts`, `storage-sessions.ts`, `storage-projects.ts`) write one row; numbers in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 2, live sizes and rates in [5101](../../todo/cross-cutting/5101-store-size-and-write-rate-live.md). |
 | ST-11 | Done | `store_rows_position` index, `storage-database.ts:361-365` (381b26f90). |
 | ST-12 | No action | Maintainer decided 2026-11-01 to leave pragmas unchanged unless fsync cost still shows (1202 task 2); still as described, `storage-database.ts:291-293`, `:1309`. |
@@ -179,11 +162,11 @@ When one of these becomes ready, it joins the lane shown.
 | DK-7 | Done | Order and split SDK layers, `docker/Dockerfile:40-65`, `:421-423` (fd679c0e2). |
 | DK-8 | Done | `mise link`, `docker/Dockerfile:399` (fd679c0e2). |
 | DK-9 | Done | `npm cache clean --force`, `docker/Dockerfile:218`, `:247`, `:321` (fd679c0e2). |
-| DK-10 | Open | Left for a maintainer, 1202 task 14; pins at `docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`; see 0693. |
+| DK-10 | Open | Waits on a maintainer decision, now [todo 6780](../../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md). Pins unchanged on 2026-11-05 (`docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`); both binaries still byte-identical; the container bridge never runs the SDK's copy. See the closing note for 0693 below. |
 | DK-11 | Done | One `apt-get update`, `docker/Dockerfile:82`; `util-linux` in that layer, `:111` (fd679c0e2). |
 | DK-12 | Done | `move_clone_into_workspace`, `docker/workspace-setup.sh:406`, `:500` (2525fc05c). |
-| DK-13 | Open | Direct clone only, `docker/workspace-setup.sh:385-397`; see 0500. |
-| DK-14 | Partly done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the per-environment staging copy remains, see 0490. |
+| DK-13 | Done | Per-project bare mirror bound read-only, `git clone --no-tags --reference-if-able <mirror> --dissociate`, `clone_from_git_mirror` in `docker/workspace-setup.sh:435` (26ff5925b, seeded from the host checkout by 0e8958f57); restricted containers that cannot reach the remote get no mount (`restrictedContainerReachesGitRemote`, E25). The mirror's credential is [6741](../../todo/containers-and-environments/6741-git-mirror-access.md); see the closing check of E25 below. |
+| DK-14 | Done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the staging copy reflinks on Linux where the filesystem can, `FileCloner` in `portable-inputs.ts` (E25). macOS and other filesystems still copy, [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md); see the closing check of E25 below. |
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
 | DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` stays unconditional on fixture measurements, with 32/80 KiB default/maximum-page fixture budgets in `public-api-attention.test.ts` (not universal bounds); a real follower's page size is left in [5560](../../todo/cli-and-slash-commands/5560-attention-follow-page-size.md). |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
@@ -191,7 +174,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every logging and database item
 
-27 done, 4 partly done, 5 open, 1 waiting on a maintainer decision, 1 no action.
+33 done, 3 partly done, 1 waiting on a maintainer decision, 1 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -202,7 +185,7 @@ When one of these becomes ready, it joins the lane shown.
 | R5 safe error formatter | Done | `formatLogError` and `CommandFailedError` print backstop (`apps/backend/src/core/shell.ts:75-80`), #1570; the stderr tail was dropped by the user's decision (`docs/architecture/logging.md:258-260`). |
 | R6 essential tier and silent gaps | Done | The silent failures log, and the user-facing notices are in: a Settings → Schedules notice when this backend does not fire schedules (`schedulerStatus`, `SchedulesSettings.tsx`) and a transcript note when a Pi or Cursor resume falls back (`appendResumeFallbackNotice`); see [the E13 closing check](#closing-check-of-e13-silent-failures), with live evidence in [5160](../../todo/cross-cutting/5160-silent-failures-live-evidence.md). The essential tier is built (0750, `docs/architecture/logging.md`) and the previous Docker bridge log is kept and readable through `previous: true` and `getContainerServerLog` (E14, see [its closing check](#closing-check-of-e14-docker-logs)). The bug report prompt now points at it; see [the E15 closing check](#closing-check-of-e15-health-and-diagnostics). |
 | R7 relay and file writer | Done | Level-carrying records and the updater logger landed in #1558 (`backend-process.ts:46-64`, `updater-log.ts:35`); batching landed with DK-18; the relay's lines are bounded by the shared `bounded-line-splitter.ts`, and the relay skip was measured and not added (2026-11-05, closing check of E26 below). Whether the writer's 4 MiB queue fills in real use is [5761](../../todo/cross-cutting/5761-log-writer-queue-bound-live.md). See [the file writer](../../architecture/logging.md#the-file-writer). |
-| R8 renderer diagnostics | Partly done | Lifecycle logs moved to `debug` (#1592) and keystroke warnings throttled (`useTerminal.ts:1125`); switch, DevTools and ring are open in 0790. |
+| R8 renderer diagnostics | Done | Lifecycle logs moved to `debug` (#1592) and keystroke warnings throttled (`useTerminal.ts:1125`); the switch, Help → Open Developer Tools and a content-free error ring in the essential log are in; see [the E16 closing check](#closing-check-of-e16-log-controls). Realms, web clients and iOS: [6300](../../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md); live evidence: [6301](../../todo/cross-cutting/6301-log-controls-live-evidence.md). |
 | R9 Codex raw event logging | Done | Removed rather than reconnected: the toggle, default, writer and `raw-log.write-failed` are gone, and a stored key is left alone; `CODEX_BRIDGE_RECORD_NOTIFICATIONS` remains for developers. See [the E17 closing check](#closing-check-of-e17-dead-code). |
 | R10 Docker log hygiene | Done | Inherited `DEBUG`, `RUST_LOG` and `DEBUG_CLAUDE_AGENT_SDK` no longer reach local bridges unless `ORKESTRATOR_KEEP_VENDOR_DEBUG=1` (`bridge-vendor-debug-env.ts`; E13 `0830`). The disk items are also done (E14, see [its closing check](#closing-check-of-e14-docker-logs)): the no-Perl fallback and an image without the writer are capped at 5 MiB, dropped lines are marked, and `json-file` with bounds replaces a missing `local` driver. |
 | R11 export diagnostics | Done | `plan_diagnostics_bundle` and `read_diagnostics_bundle` (`diagnostics-bundle.ts`), Settings → Debug, `orkestrator diagnostics export`; see [the E15 closing check](#closing-check-of-e15-health-and-diagnostics). Container server logs: [6143](../../todo/cross-cutting/6143-diagnostics-bundle-container-logs.md). |
@@ -220,14 +203,14 @@ When one of these becomes ready, it joins the lane shown.
 | Control: Keep detailed logs for | Done | Retention input with live sweep and size display (`GlobalSettings.sections.tsx:2213`, `docs/architecture/logging.md:514-519`). |
 | Control: Detail level | Done | **Log Detail** default level, `info` (`LogDetailSettings.tsx`, `logDetail` in `app-config-defaults.ts:93`). |
 | Control: Per-area overrides | Done | Levels by area, collapsible (`LogDetailSettings.tsx`), with `logDetailAreas` from `packages/protocol/src/log-policy.ts`. |
-| Control: Quick presets | Open | No preset in `LogDetailSettings.tsx`; 0890. |
-| Control: Auto-revert detail | Open | No expiry on `logDetail` (`packages/protocol/src/log-policy.ts`); 0890. |
-| Control: Renderer debug logging | Open | `orkestrator:debug` has no setting or UI (`docs/architecture/logging.md:755-761`); 0790. |
+| Control: Quick presets | Done | Six presets that write plain `level` and `areaLevels`, with the match shown (`log-detail-presets.ts`, `LogDetailSettings.tsx`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
+| Control: Auto-revert detail | Done | Backend-owned `logDetailExpiresAt`, 24 hours above `info`, checked at start and every minute, with **Keep raised detail on** (`log-policy.ts`, `storage-config.ts`, `log-policy-service.ts`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
+| Control: Renderer debug logging | Done | Settings → Debug → **Renderer Debug Logging** sets the key for this window and reloads (`RendererDebugSettings.tsx`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
 | Control: Export diagnostics | Done | **Export diagnostics** in Settings → Debug shows the manifest, then saves (`DiagnosticsExportCard.tsx`); see [the E15 closing check](#closing-check-of-e15-health-and-diagnostics). |
 | Control: Open log folder and clean up | Done | Both buttons exist in Settings → Debug (`GlobalSettings.sections.tsx`, near `:2293`). |
-| Control: `--log-level`, `--log-category` | Open | Neither is in `apps/backend/src/server-flags.ts` or `packages/cli/src/client/argv.ts`; recommended outcome is no flag; 0900. |
+| Control: `--log-level`, `--log-category` | Done | Decided against flags; `ORKESTRATOR_LOG_LEVEL` for `orkestrator serve` is documented ([public-cli.md](../../architecture/public-cli.md#log-levels-for-serve)); see [the E16 closing check](#closing-check-of-e16-log-controls). |
 | Control: `ORKESTRATOR_LOG` | Done | Built as `ORKESTRATOR_LOG_LEVEL` with the same syntax (`packages/protocol/src/node/logger-environment.ts:11`). |
-| Design note: privacy text in the UI | Open | Log Detail's copy does not state it (`LogDetailSettings.tsx`); 0890. |
+| Design note: privacy text in the UI | Done | Log Detail says logs are designed to leave out prompts, terminal output, file contents and credentials (`LogDetailSettings.tsx`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
 | Finding with no recommendation: D4 Kanban, notes, plans, comments after project removal | Waiting on a maintainer decision | `removeProject` does not touch them (`storage-projects.ts:480-507`); [5820](../../todo/cross-cutting/5820-removed-project-kanban-notes-plans.md). |
 | Finding with no recommendation: L4 backend `uncaughtException` | Done | A monitor writes one essential entry and the process dies as before (`process-failure-log.ts`), pinned against the runtime by `uncaught-exception.integration.test.ts`. |
 | Finding with no recommendation: L4 Electron `crashReporter` | No action | Nothing leaves the machine by design, and a minidump is not content-free; recorded in 0750. |
@@ -302,6 +285,26 @@ The outcome of every task in the E13 batch file, checked back against the code o
 | 0830 | 1. Filter vendor debug variables on local bridge launch | Done | `dropInheritedVendorDebug` (`bridge-vendor-debug-env.ts`), called in `commands-servers.ts`, documented under [the bridge hop](../../architecture/logging.md#the-bridge-hop). Tests: `bridge-vendor-debug-env.test.ts`, and "a Cursor coordinator launch carries the coordinator process policy" in `commands-servers-coordinator.test.ts`. |
 | 0830 | Needs verification: does any provider need these in normal use | Moved to a to-do | Nothing in the repository reads them; the vendor CLIs were not run. [5160](../../todo/cross-cutting/5160-silent-failures-live-evidence.md) task 2. |
 | 0830 | Needs verification: does a settings field pass user-set variables to local bridges | Answered: no | The local launch environment is `process.env` plus variables Orkestrator sets itself (`startLocalServerAttempt` in `commands-servers.ts`). |
+
+## Closing check of E16 (Log controls)
+
+The outcome of every task in the E16 batch file (parts `0790`, `0890` and `0900`), checked back against the code on 2026-11-05 before the file was deleted. Base commit `1a66d95c3`; the file's last version, ending in this table, is the parent of the commit that deleted it. R8 and the control rows in the table above summarise it. Every finding still held when re-checked.
+
+| Part | Task or item | Outcome | Code, tests, evidence or to-do |
+| --- | --- | --- | --- |
+| 0790 | 1. Settings switch for renderer debug | Done, recommended option | Settings → Debug → **Renderer Debug Logging** (`RendererDebugSettings.tsx`) calls `setRendererDebugPreference` (`apps/web/src/lib/debug-log.ts`), which sets or clears `localStorage["orkestrator:debug"]` for this window and reloads. Tests: `RendererDebugSettings.test.tsx`, `debug-log.test.ts`. Seen live: the switch stored the key and showed "On in this window" after the reload. |
+| 0790 | 2. Open Developer Tools from the menu | Done, recommended option | Help on every platform (the system Help menu on macOS) with **Open Developer Tools** only while a renderer reported debug logging on: `application-menu.ts`, `renderer-debug-tools.ts`, the trusted-sender IPC route `orkestrator:window:set-renderer-debug` (`ipc.ts`, `preload-api.ts`, `main.ts`), reported at start by `reportRendererDebugLogging`. The artifact host and previews are untouched. Tests: `application-menu.test.ts`, `renderer-debug-tools.test.ts`, `main-ipc.test.ts`, `preload-api.test.ts`. Added 2026-11-05: `log-controls-packaged-electron.spec.ts` drives the real switch and the item in the packaged Linux app (headless), and `application-menu-electron.spec.ts` covers the item on real Electron; `native-application-menu.yml` runs them on the other platforms. macOS, Windows and a drawn menu bar are not yet observed and stay in [6301](../../todo/cross-cutting/6301-log-controls-live-evidence.md) task 1; the repository has no Windows package target. |
+| 0790 | 3. A persisted, content-free error ring: what an entry holds | Done, recommended option | Error class, boundary, route (the renderer surface: the app has no router), count and fingerprint, 100 entries, no message or stack: `packages/protocol/src/renderer-errors.ts`, `apps/web/src/lib/renderer-error-ring.ts`, fed by React's root callbacks (`react-root-errors.ts`) and the window's error events (`renderer-bootstrap.ts`). Tests: `renderer-errors.test.ts`, `renderer-error-ring.test.ts` (a message or stack is never stored), `react-root-errors.test.ts`, `renderer-bootstrap.test.ts`. |
+| 0790 | 3. Where it is kept | Done, recommended option | Sent to the backend's essential log through the new `record_renderer_errors` (`renderer-error-recorder.ts`): every entry re-parsed, any other key refusing the write, 30 entries a minute, refused to workspace clients; the essential event `renderer-errors` `error.recorded` with label classifiers. Upload: `renderer-error-upload.ts`, a desktop window's own renderer only. Tests: `renderer-error-recorder.test.ts`, `log-essential.test.ts`, `log-vocabulary.test.ts`, `renderer-error-upload.test.ts`. Seen live: the command wrote the entry to a profile's `essential.jsonl`, and a write with a `message` was refused and stored nothing. The Electron leg end to end: [6301](../../todo/cross-cutting/6301-log-controls-live-evidence.md) task 2. |
+| 0790 | Constraint: never through the `desktop.startup` marker path | Done | The ring never writes to the console or uses the area. Tests: `renderer-bootstrap.test.ts` (no marker for a recorded failure) and the unchanged `renderer-diagnostics.test.ts`. |
+| 0790 | Current state: every renderer `console.*` raises a `console-message` in main | No longer a task | Recorded by the report as still true but minor; unchanged, and not a task. |
+| 0790 | Open question: the remote web client's ring and iOS | To-do | [6300](../../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md), with workspace realms. |
+| 0890 | 1. Quick presets | Done, recommended option | `log-detail-presets.ts`: Normal, Quiet, Agent sessions, Crashes and stopped processes, Updates, Everything, each written as ordinary `level` and `areaLevels`; the matching preset or **Custom** shown in `LogDetailSettings.tsx`. Test: `LogDetailSettings.test.tsx`. |
+| 0890 | 2. Auto-revert: where the timer lives | Done, recommended option | Backend-owned `logDetailExpiresAt` recomputed on every config write (`nextLogDetailExpiresAt`, `storage-config.ts`), checked at start and every minute (`LogPolicyService`, `reconcileLogDetailExpiry`), reverting through the normal config write; saving untouched; `logDetailKeepRaised` keeps it on, and an older client's save keeps the choice and still gets an expiry. Tests: `log-policy.test.ts`, `log-detail-expiry.test.ts`. Seen live: an expiry in the past at start reverted `bridge=debug` to `info`, left saving alone and wrote `policy.detail-expired`. The running one-minute check was seen reverting in the packaged Linux app on 2026-11-05 (`log-controls-packaged-electron.spec.ts`). |
+| 0890 | 2. Auto-revert: the default | Done, recommended option | 24 hours, only above `info`; the settings show when it goes back and offer **Keep raised detail on**. Test: `LogDetailSettings.test.tsx`. |
+| 0890 | 3. Privacy text | Done, recommended option | "Logs are designed to leave out prompts, terminal output, file contents and credentials." in the Log Detail header, with no "never". Test: `LogDetailSettings.test.tsx`. |
+| 0900 | 1. `--log-level` and `--log-category` | Done, recommended option | No flags. `ORKESTRATOR_LOG_LEVEL` for `orkestrator serve` documented in [public-cli.md](../../architecture/public-cli.md#log-levels-for-serve) and the logging guide. |
+| All | `logging.md` saying the renderer key has no setting | Done | The renderer section now describes the switch and the Help menu item. |
 
 ## Closing check of E15 (Health and diagnostics)
 
@@ -399,6 +402,16 @@ The outcome of every task in the E22 batch file, checked back against the code o
 | 0670 | Constraint: the final, non-live render always parses in full | Done | The non-live branch of `MessageMarkdown.tsx` renders the whole source and resets the cache. Test: `the final render updates the streamed blocks in place, without remounting`. |
 | 0670 | Needs verification: the real cost, with a Profiler run | Done | Playwright Chromium, React development build, `<Profiler>` around a rich `MessageMarkdown` streamed 100 characters per update, median over the last quarter of three runs, full render against the live path: 5 KB 4.8 → 1.3 ms; 10 KB 9.2 → 2.2 ms; 20 KB 18.2 → 3.9 ms; 30 KB 27.1 → 5.5 ms (wall 35.9 → 11.0 ms at 30 KB). The throwaway fixture was not committed. |
 
+## Closing check of E-0560 (Agent mail store)
+
+`0560-st-9-agent-mail-store-remainder.md` was checked back against the code on 2026-11-05 and deleted. Base commit `cbe0f9a5b`; its last version, ending with its outcome table, is the commit before the one that deleted it. Measurements used `apps/backend/scripts/agent-mail-store-size-bench.ts` on synthetic stores in the system temporary directory (600 mailboxes, 1.8 KB bodies) on Linux, Intel Core Ultra 9 285H, Bun 1.4.4, at load 46 to 57, five runs of 20 iterations; no backend, profile or provider turn. CPU milliseconds per call; ST-9 in the table above summarises this.
+
+| Part | Outcome | Numbers | Left over |
+| --- | --- | --- | --- |
+| Task 1: pending injects as their own collection | Still true; not built | Send 9.6–14.4 ms at a 1.85 MB store, 25–33 at 7.9 MB, 67–79 at 28.9 MB. A backoff reset, which changes only pending-inject entries, costs the same (4.1–8.3, 17–20, 44–53): the cost is the whole-store load and serialisation, which the report's option leaves in place. | [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md) task 2: revisit past 8 MB or mail-write stalls over 50 ms, then row writes |
+| Task 2: mailbox list without bodies | Still true; not built | List 0.8–1.7 ms at every size; 4–19 ms wall after a write; 5–50 ms after a restart. Read model 3.0–3.1 times the serialised store (5.4 MB to 91 MB); bodies 58–71% of the bytes. | [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md) task 3: revisit past 8 MB, then bodies in their own rows |
+| Needs verification: real sizes and write rates | Moved to a to-do | `mail-presence` is charged `storage-read` bytes only on a fetch from SQLite: 0 after an in-process write, the whole store after another connection's, so it cannot show list cost on a real host. | [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md) task 1 |
+
 ## Closing check of E26 (Local desktop transport)
 
 The outcome of every task in the E26 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `e1f4c875f`; the file's last version, ending in this table, is the parent of the commit that deleted it. Measurements ran on macOS (Apple Silicon), in the disposable agent-test profiles `local-gateway-transport-electron.spec.ts` creates, with no provider turn. DK-1, DK-2, DK-18 and R7 in the tables above summarise this.
@@ -424,7 +437,7 @@ These five files were marked Finished or Done, checked back against the code ite
 
 | File | Batch | Outcome | Left over |
 | --- | --- | --- | --- |
-| `0130-e21-pi-bridge.md` | E21 | Every task done. Not confirmed: the timeout's reason reaching the user (the resume dialog shows "Failed to load sessions"), both "Needs verification" items, and a test for the barrier constraint. | [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) |
+| `0130-e21-pi-bridge.md` | E21 | Every task done. Not confirmed: the timeout's reason reaching the user (the resume dialog shows "Failed to load sessions"), both "Needs verification" items, and a test for the barrier constraint. | 5480 |
 | `0140-br-13-serial-queue-bound.md` | E-0140 | Task done; the restart path's recovery is proven by `app-server-runtime-lifecycle.test.ts`. Not confirmed: a real high-water mark for the bound's value. | [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md) |
 | `0250-br-7-codex-running-tool-cards.md` | E-0250 | Both tasks done; no reader outside the bridge consumes full `message.patched` frames. | None |
 | `0520-web-9-startup-bundle.md` | E-0520 | All five tasks done; guarded by `startup-closure.test.ts`. | None |
@@ -685,3 +698,88 @@ Checked back on 2026-11-05 and 2026-11-06 on branch `conditional-reads-deltas-af
 | All | Found while measuring: the steer probe on every state poll | Moved to a to-do | One of the five state-poll requests is `steer/dispatch?requestId=orkestrator-steer-qualification`, once a poll on the profile too. 6680 task 5. |
 | All | Found on the profile: two bridge health probes per poll | Moved to a to-do | `GET /global/health` ran 84 times in 20 s for 42 polls (168 for 84). 6680 task 6. |
 | All | Report invariants | Held | No production cache, ring, queue or wire form added. The spec, the fake endpoint and the counter are test-only and opt-in. The counter bounds routes (256), sessions (64) and captured bodies (4 MiB). Both tools report counts, bytes and milliseconds only, to git-ignored output. |
+
+## Closing note for 0693 (DK-10, second Claude binary)
+
+`0693-dk-10-second-claude-binary.md` was checked back against the code on 2026-11-05, based on `main` at `cbe0f9a5b`, and deleted; its last version is in the commit before the one that deleted it. Its one task is a maintainer decision, so it moved to [todo 6780](../../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md), which holds the facts, the options and the recommendation. The Dockerfile is unchanged.
+
+| Item | Outcome | Evidence or to-do |
+| --- | --- | --- |
+| Pins | Unchanged since `a2bba9d8` | `CLAUDE_CLI_VERSION=2.1.314` (`docker/Dockerfile:207`), `@anthropic-ai/claude-agent-sdk` `0.3.314` (`bridges/claude-bridge/package.json:16`). The SDK layer `COPY` moved from `:423` to `:425` with the root-ownership change. |
+| Needs verification: still byte-identical at these pins | Yes, on both architectures | Registry tarballs, integrity checked (the SDK's also against `bun.lock`). amd64: 298,229,464 bytes each, SHA-256 `4487042b4c4f5d88d4568f68ae98aae0b1ffae58864cf57fb868641bc5f84594`. arm64: 297,067,016 bytes each, SHA-256 `a66c0a8f5d0c87a439953d797985192bbcbaefbce2e0d7b2eaa8df30ef0f3ef2`. A local amd64 image at the same pins shows the same two files and hash; its claude-bridge SDK layer is 303 MB and its Claude Code npm layer 301 MB. |
+| Found by the check | The container bridge never runs the SDK's copy | Every production SDK call passes `pathToClaudeCodeExecutable` from `CLAUDE_CLI_PATH` (`claudeExecutableOptions`, `session-manager-core.ts:169-173`), and the container bridge, started by `docker exec`, inherits the image's `ENV CLAUDE_CLI_PATH` (`docker/Dockerfile:219`). |
+| Task 1: maintainer decision | Moved to a to-do | 6780 task 1. It keeps 0693's two options (symlink while identical; keep both) and adds dropping the SDK's platform binary in the builder, which it recommends: the saving holds after the pins diverge and DK-7's layer order is untouched. |
+| Constraints: separate release trains, DK-7 layer order | Hold | No pin or layer changed; 6780 carries both constraints for whichever option is built. |
+
+## Closing check of E-0390 (WebSocket compression)
+
+`0390-gw-7-websocket-compression.md` was checked back against the code on 2026-11-05 and deleted. Base commit `cbe0f9a5b`; its last version is the parent of the commit that deleted it. GW-7 in the table above summarises this. No compression code was added, and no new to-do was needed: [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8 already owned the work and now carries the report's requirements.
+
+| Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- |
+| 1. Prototype `permessage-deflate` if the WebSocket becomes the bulk transport | Still deferred: the condition is not met | The finding holds: `TerminalWebSocketGateway` sets no `perMessageDeflate` (`terminal-websocket-server.ts:220-229`). The WebSocket is used only when `terminalTransport` or the `orkestrator-terminal-transport` key selects it (`web-gateway.ts:177-184`); the shared terminal stream (GW-3) is SSE and local windows pin `http-sse`. 0052 task 2 is open and task 5 left the terminal transport unchanged, so D6 is not reopened. Trigger and requirements: 0052 task 8. |
+| Decision: none here (0052 D6) | Not reopened | Recorded in 0052, "Task 8: GW-7 re-check from efficiency report 0390". |
+| Requirement: about 1 KB threshold, bounded memory, check under Bun's `ws` | Bun check done; the rest carried to 0052 task 8 | Under Bun the bare `ws` import is Bun's built-in module, not the 8.22.0 pin. A loopback probe on Bun 1.4.4 through `handleUpgrade` negotiated the extension, left 64 B and 900 B messages uncompressed at a 1,024 B threshold, cut synthetic build output 16 KiB to 1,650 B and 64 KiB to 6,159 B, grew random 64 KiB by 1 %, and cost about 30 ms of extra send CPU per MB (911–993 ms against 37–57 ms for 29.7 MB). Per-socket zlib memory under Bun was not measured, so the byte bound stays a requirement in task 8. |
+| Constraint: every compression buffer has byte and count bounds | Carried to 0052 task 8 | Task 8's requirement 2. |
+
+## Closing check of 0385 (TX-10, joined history pages)
+
+`0385-tx-10-joined-history-pages.md` was checked back against the code on 2026-11-05 and deleted. Base commit `cbe0f9a5b`; its last version is the commit before the one that deleted it. It was not in a batch: it sat in **Not ready to start**, blocked on todo 0232 and the support window, and leaves that table and the ranking with this change. TX-10 in the table above summarises this.
+
+| Task | Outcome | Left over |
+| --- | --- | --- |
+| 1. Retire joined paging, or add the interim map | The finding holds: a joined page records `history.joined-v1-page` or a cause id (`native-agent-transcript-projection.ts:4090`), runs a whole `sync-v1` `refreshProjection` (`:4091`) and SHA-256-hashes message ids in a `findIndex` (`:4116`). The support window has not passed: the floor is still v2.21.0, and v2.36.0 (2026-11-03), the first Stable release with 0232 tasks 1 to 3, enters the window on 2027-01-02; the `/messages` fallback row and direct recovery for the remaining no-cursor cases are also open. So joined paging stays, and the report's recommended option was taken: no interim map. No counter data was read (the split counters first shipped Stable on 2026-11-03, and no production instance was touched). | [0232](../../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md) task 4: the removal, plus the decision on the interim map, what counter use would justify it, and how to read the counters |
+
+## Closing check of E25 (Container start)
+
+Built and checked back on 2026-11-05 on branch `container-start-report-120411378c4f-r1`, based on `main` at `cbe0f9a5b` and rebased onto `585cf97d8`, item by item against the batch file `0490-e25-container-start.md` before it was deleted (its last version is in the parent of the commit that deletes it). The line numbers the file gave were from `a2bba9d8`; everything below was re-read against the branch. Part `0500` turned out to be built already by #1759 (`26ff5925b`) and #1804 (`0e8958f57`), after the file was analysed and before this batch; the file still listed it as open.
+
+| Part | Finding | Outcome |
+| --- | --- | --- |
+| `0490` | DK-14: agent-home inputs are copied in full per environment and again on every start | Done. Task 1 (stamps) was already done; task 2 is built, reflink where the filesystem can and copy otherwise; task 3 is not needed, on the numbers below. What is left is [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md). |
+| `0500` | DK-13: each environment clones from the remote again | Done (#1759, #1804). This batch withholds the mount from restricted containers that could not reach the remote. How the mirror is fetched for a private repository is decided but not built: [6741](../../todo/containers-and-environments/6741-git-mirror-access.md). |
+
+**Measurements.** Beelink, Linux 7.1.8, btrfs on dm-crypt for the data directory and `/home`, tmpfs `/tmp`, Bun 1.4.4, rootful Docker 29.9.2 with `overlayfs`, image `orkestrator-v2:dev-c7e9a71b6680` (`staged-inputs=5`, `git-mirror=1`). Other builds were running: the load average was 47–58 for the first staging run and 3–19 for the rest, so compare variants within a run, not across runs. Fixture homes only, since this batch was not to touch real agent homes, and this host's data directory had no staged revisions to read counts from. Staging is `apps/backend/scripts/portable-input-staging-costs.ts` (median of 5 rounds after a warm-up round; `btrfs filesystem du` after a sync for the new disk). "Before" is `stagePortableInputs` from `main`; "copy" is this branch with `cloneFiles: false`, the same code path as before.
+
+| Fixture (Claude, Codex and shared skills) | Staged | Filesystem | Before | After, copy | After, clone | New disk before | New disk after |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `small`: 10 skills per root, 50 plugin files of 16 KiB per provider | 162 files, 1.7 MiB | btrfs | 21–25 ms | 27 ms | 27 ms | 1.6 MiB | 0 MiB |
+| `medium`: 200 skills per root, 2,000 plugin files of 16 KiB per provider | 5,202 files, 65 MiB | btrfs | 725–734 ms | 684 ms | 654 ms | 62.5 MiB | 0 MiB |
+| `plugins`: 20 skills per root, 600 plugin files of 256 KiB per provider | 1,322 files, 300 MiB | btrfs | 544–558 ms | 549 ms | 162 ms | 300 MiB | 0 MiB |
+| `medium` | 5,202 files, 65 MiB | tmpfs | 1,752–1,783 ms (loaded) | 987 ms | 966 ms | n/a | n/a |
+| `plugins` | 1,322 files, 300 MiB | tmpfs | 1,546–1,647 ms (loaded) | 761 ms | 758 ms | n/a | n/a |
+
+On tmpfs nothing clones (`ENOTSUP`), so both variants copy. Small skill files are inlined or compressed by btrfs, which is why `small` shows little new disk either way. Credential-guarded skills (Claude's and the shared root's) are still read, so the 4,402 of 5,202 `medium` files that cloned are the 4,000 plugin files, Codex's 400 skill files and two plain files.
+
+Container starts, from a throwaway script (`output/efficiency/e25-container-starts.ts`, not committed): stage, `docker create --network none -e NETWORK_MODE=full` with `stagedInputMountArguments`, then `docker start` until `waitForContainerBoot`, three starts per container, two containers per cell. The script removed its containers by ID; it created no network, image or volume.
+
+| Fixture | Staging | Stage | First start | Restarts | Inputs (unchanged/copied) |
+| --- | --- | --- | --- | --- | --- |
+| `medium` | Copy | 1,366–1,466 ms | 5,430–5,468 ms | 508–570 ms | 0/7 first, then 7/0 |
+| `medium` | Clone | 1,030–1,256 ms | 5,661–5,707 ms | 515–569 ms | 0/7 first, then 7/0 |
+| `plugins` | Copy | 763–791 ms | 1,174–1,277 ms | 568–618 ms | 0/7 first, then 7/0 |
+| `plugins` | Clone | 213–320 ms | 1,701–1,747 ms | 568–635 ms | 0/7 first, then 7/0 |
+
+Creation plus first start comes out even (about 2.0 s for `plugins`, 6.7–6.8 s for `medium`): a fresh clone has no cached pages, so the first start reads from disk what a just-written copy still had in the page cache. The saving that holds is disk, a whole revision per environment and per kept revision. 6740 task 2 records this.
+
+The detailed outcome is retained here so it survives squash merges:
+
+| Part | Item | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0490 | Task 1: skip the start copy with a stamp | Already done | `import_agent_input` in `docker/entrypoint.sh:830` (`staged-inputs=5`, 1202 task 15). Confirmed in real containers above: every restart reported 7 inputs unchanged and 0 copied. |
+| 0490 | Task 1 decision: a content digest compared with the stamp and the home | Already done, as taken on 2026-11-04 | Same code; tests `apps/backend/tests/portable-inputs-stamps.test.ts` (passed on this branch). |
+| 0490 | Task 2: shared host cache for staging | Done, recommended option | `FileCloner` (`apps/backend/src/core/portable-inputs.ts:620`), called from `copyRegularFile` (`:709`) for a file with no filter and no guard, cloning `/proc/self/fd/<fd>` of the descriptor already opened `O_NOFOLLOW` and checked, with `COPYFILE_EXCL | COPYFILE_FICLONE_FORCE`. Tests in `apps/backend/tests/portable-inputs-clone.test.ts`: "clones only files staged byte for byte, from the checked descriptor", "a clone and a copy stage the same files with the same accounting", "a filesystem that cannot clone falls back to a copy, asked once", "a file that grew past the limit before its clone is not staged", "a staged file stays independent of its source in both directions". The existing staging suites passed on tmpfs and again with `TMPDIR` on btrfs, where real reflinks ran. |
+| 0490 | Task 2 decision: reflink, not hard links | Done | A reflink is a new inode with copy-on-write blocks, so isolation is unchanged: the independence test writes to the revision and to the source and neither sees the other, and checks the inodes differ. No content-addressed cache was added, so there is no new store to bound or remove. |
+| 0490 | Task 2 cost: no saving without reflinks | Accepted | tmpfs, ext4, another filesystem than the source, and every platform but Linux copy as before. macOS is [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 1. |
+| 0490 | Task 3: bounded parallel copy | Not needed | After task 1 a restart copies nothing (above). After task 2 the host staging that task 3 was about takes 162 ms for 300 MiB and 654 ms for 5,202 files on a quiet host, once per environment creation, beside a clone of 1.4–7 s (1202 task 15) and a first start of 1.2–5.7 s. What remains is per-file work, which a pool could only shave, and a pool would have to reserve budget before each copy to keep `aggregate-budget` outcomes exact. The first start's cost for many files is in the entrypoint, not the host copy: [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 3. |
+| 0490 | Constraint: container storage rules, staged-input isolation | Holds | Nothing is removed outside the existing staging and prune paths; revisions stay private (`0700`/`0600`, checked by the clone tests) and are bound only as staged subtrees. |
+| 0490 | Constraint: byte and count bounds for a new cache | Holds | No cache was added. The clone's size is checked against `fileBytes`, and budgets are charged with the same sizes as the copy ("the same accounting" test compares summaries and manifests). |
+| 0490 | Needs verification: input sizes on real hosts | Moved to a to-do | Fixture homes only, for the reason above. [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 4. |
+| 0490 | Needs verification: whether the image relies on the copy recreating a removed file | Already answered | The file itself recorded that the stamp restores one. |
+| 0500 | Task 1: per-project mirror | Already done (#1759, #1804) | `apps/backend/src/core/project-git-mirror.ts`; `clone_from_git_mirror` in `docker/workspace-setup.sh:435`. |
+| 0500 | Decision: read-only bare mirror with `--reference-if-able --dissociate` | Done (E25) | Bound `:ro` (`gitMirrorContainerArguments`, `project-git-mirror.ts:226`), `git clone --no-tags --reference-if-able "$mirror" --dissociate` at `workspace-setup.sh:449`. #1759 had used `--reference`; E25 switched it to the decided flag. A mirror removed between the script's check and the clone now leaves a full clone from the remote, which the script detects by checking the mirror again and reports as `vanished`, so the backend logs `git-mirror.clone-fallback` instead of `clone-used` (`docs/architecture/container-lifecycle.md`, "Project Git mirror"). Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, "a mirror removed between the check and the clone still leaves a whole clone" and "the mirror clone uses --reference-if-able with --dissociate". |
+| 0500 | Cost: a lifecycle to create, refresh, bound and clean up | Already done | Built and refreshed in the background (`refreshProjectGitMirror`, `:325`), bounded at 2 GiB with a free-disk floor (`GIT_MIRROR_MAX_BYTES`, `:71`), removed with its project (`removeProjectGitMirror`, `:805`) and by the orphan sweep (`sweepOrphanedProjectGitMirrors`, `:831`); nothing else removes one. `apps/backend/tests/project-git-mirror.integration.test.ts` passed on this branch. |
+| 0500 | Constraint: a mirror must not widen what a restricted container can read | Done for the network | A restricted container gets the mount only when its firewall would reach the remote itself: GitHub on TCP 443, or an allowlist entry for the clone's host and port (`restrictedContainerReachesGitRemote`, `project-git-mirror.ts:285`, called before the mount at `commands-containers.ts:352`). Tests: `apps/backend/src/core/project-git-mirror-reach.test.ts`, and in `apps/backend/tests/project-git-mirror-create.test.ts` "a restricted container that cannot reach the remote does not read it through the mirror" and its two counterparts. |
+| 0500 | Needs verification: how a host-side mirror fetches a private repository | Decided, not built | The mirror is fetched with the backend's credential, so a container given no GitHub credential (the default) can read a private repository's branches through it. Recommended fix: a mirror per kind of access, fetched with exactly what its readers hold, from an isolated Git configuration. [6741](../../todo/containers-and-environments/6741-git-mirror-access.md). |
+| 0500 | Needs verification: lazy round trips of blobless clones | Already answered | Yes, measured in 1202 task 15 (`git log -p -200`: 43 s against 0.1 s), which is why a mirror clone has no `--filter`. |
+| Both | Docker on this machine | Held | No prune, restart, firewall or network change. The only Docker resources made were the measurement containers (`--network none`, label `e25-measure`), each removed by ID; the image declares no volumes. |

@@ -311,7 +311,7 @@ A restart with `--fixture` reuses the fixture the first start seeded: it keeps
 `test-project` and `origin.git`, reuses the `fixture-local` and
 `fixture-container` environments (starting any that are stopped) and creates
 only requested ones that do not exist yet
-([2180](../todo/cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)).
+(2180).
 Fixture environment IDs are stored in `test-project/.git/orkestrator-fixture-environments.json`.
 If the repository must be recreated, the new generation records new IDs and later
 restarts reuse those replacements even when the backend gives them suffixed names.
@@ -913,6 +913,13 @@ stays "Orkestrator AI". A pass takes about 15 seconds on beelink, because
 nothing waits for Vite. Native menu key equivalents are still not exercised:
 Playwright sends keys through Chromium, not the OS (to-do 0036, task 3).
 
+`log-controls-packaged-electron.spec.ts` runs against the same build (macOS too:
+`mise run package:mac:unpacked:test`). It turns on the real Settings switch, reads
+Help from Electron's `Menu`, opens DevTools through the item, turns the switch off,
+and separately waits for the running backend's one-minute check to revert raised
+log detail. `.github/workflows/native-application-menu.yml` runs it on Linux and
+macOS. Headless on Linux means the native menu bar itself is not drawn or read.
+
 ### Electron specs and their display
 
 The specs in `playwright.electron.config.ts` (`mise run test:agent:electron`)
@@ -1054,8 +1061,34 @@ CODEX_PROTOCOL_BINARY=<pinned codex> RUN_LIVE_CODEX_APP_SERVER=1 \
   bun test bridges/codex-bridge/src/app-server/live-circuit-breaker.test.ts --parallel=1
 ```
 
-The [recorded run](../todo/transcripts-and-observation/0051-client-reconnect-and-freshness.md#live-qualification-record-2026-10-31)
-is in 0051.
+#### Recorded run (2026-10-31)
+
+On `main` at `931e5541` plus the reconnect change, on a
+`--no-agent-credentials --agent-platforms codex` profile at load averages above
+40. The full record, with every table, is in to-do 0051 (deleted 2026-11-06;
+git history keeps it). The runs found four bugs, all fixed:
+
+- Same-origin streams retried in lock-step for the whole outage, because
+  Chromium owns the retry of an `EventSource` left CONNECTING: across 3 tabs
+  the first attempts landed within 3 ms of each other. After the fix the rungs
+  span up to 8.4 s and back off.
+- A silently dropped link was never noticed. It is now noticed after 63.6 s on
+  HTTP/SSE and on the WebSocket, and after 63.5 s on an Electron remote.
+- The terminal WebSocket announced a desync on every failed attempt. It now
+  announces one per drop.
+- A refused credential looked like an outage, so a lapsed session showed
+  "Reconnecting" for 52 s. It now reaches the login page 5.9 to 7.9 s after
+  the backend listens.
+
+Banners on a dropped link appeared after 4005 to 4009 ms, reads paused within
+100 ms, and quiet `unchanged` safety reads changed no indicator. Under
+backpressure, after 4,000,000 printed lines, both transports rendered an
+unbroken sequence equal to the snapshot. Over 40 quick restarts, the first
+reconnect landed after 1021 to 1981 ms, so the 4 s banner delay stays. The
+real Codex breaker cases passed in 39.6 s on 0.166.0. Still open: a real
+two-machine link drop, a real PR's stale marker and a background tab's timer
+throttling. These are tasks 16 to 18 of
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 
 ### Live cold restart
 
@@ -1868,7 +1901,7 @@ command transport.
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
 `deliver-now`, `goal` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
-transcript shows that row as tiles only when the renderer's
+transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the
 renderer's own `createPeerMailNativeMessagesFromCarrier` over every echoed
 row and requires: no carrier row shown raw (a carrier only in the parts, or

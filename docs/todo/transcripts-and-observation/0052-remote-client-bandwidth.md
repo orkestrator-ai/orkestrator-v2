@@ -1,7 +1,8 @@
 # Remote client bandwidth
 
-Checked against `main` at `0bd214ee` (2026-11-01) for tasks 1, 2, 3, 5, 6 and 9;
-the other tasks were last checked at `863b5782` (2026-10-27).
+Checked against `main` at `0bd214ee` (2026-11-01) for tasks 1, 2, 3, 5, 6 and 9,
+and at `cbe0f9a5b` (2026-11-05) for task 8; the other tasks were last checked at
+`863b5782` (2026-10-27).
 
 ## Task analysis
 
@@ -13,11 +14,11 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 3 and 9 updated
 1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: done (route decided; the live run on 2026-11-01 found no buffering or re-encoding, see "Live probe" under Measurements).
 2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (no longer blocks the compression default, see D14; it still decides the terminal transport and the wider-matrix questions).
 3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: done (proved directly, through test proxies, in real browsers and through real Serve; two proxied-stream bugs fixed).
-4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: done (2026-11-03: every criterion mapped to its owning test, and the missing gauges-to-zero test after rotation and stop added; one gap found and filed as [3900](3900-terminal-operations-after-credential-rotation.md)).
+4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: done (2026-11-03: every criterion mapped to its owning test, and the missing gauges-to-zero test after rotation and stop added; one gap found and filed as 3900).
 5. **One default change**: compression mode or terminal transport. Status: done for compression (`on` since 2026-11-01, D14); terminal transport unchanged.
 6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: built, and left as it is (see task 6's recommendation); its real-browser byte measurement is owed with task 2.
 7. **Hidden terminal subscriptions**: reduce or detach hidden terminal presentation subscriptions where exact recovery exists. Status: deferred (waits on task 2).
-8. **WebSocket `permessage-deflate`**: prototype only if task 2 shows large terminal WebSocket payloads. Status: deferred (waits on task 2).
+8. **WebSocket `permessage-deflate`**: prototype only if task 2 shows large terminal WebSocket payloads and task 5 makes the WebSocket the terminal transport. Status: deferred (waits on tasks 2 and 5; re-checked 2026-11-05, the WebSocket is still opt-in, and the Bun check D6 asked for is done).
 9. **`remote-gateway.md` drift**: the doc omits `off`, the streaming gzip ceiling, the always-`off` control listener and the opt-in terminal WebSocket. Status: done.
 
 ### 1. Confirm the remote route
@@ -138,7 +139,7 @@ Before this work, compressor release after rotation and stop was asserted (`gate
 
 Each revocation must then leave every gauge at zero: compressor leases, event clients and their queued bytes, open and connecting streams, proxy requests, terminal sockets, upgrades and channels (state and metrics), queued terminal bytes, and the operation count, bytes and sessions. The per-socket authentication, credential-expiry and close timers must be cleared on the socket states the test held, and after stop the keepalive interval must be cleared too. The original test passed 25 consecutive runs. Review found that token persistence could yield to a normal terminal flush before rotation. The corrected test holds the flush scheduler latch, confirms real bytes remain after an event-loop turn, and passes the full gateway-events owner file. A rotation-specific negative control that removed the disposal byte reset failed with 8,208 retained bytes. Two original deliberate breaks made it fail: keeping a terminal socket's queued bytes on dispose, and not destroying event clients on rotation.
 
-The operation queue is the exception, and the test pins it. A terminal write the backend has already accepted is not cancelled by revocation: its bytes are released when the backend settles the write, not when the socket goes. That is bounded (`TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES`). While checking it, I found that a write queued *behind* that accepted write is also delivered to the backend after the rotation, because revocation does not clear the socket's `authenticated` flag. Filed as [3900](3900-terminal-operations-after-credential-rotation.md).
+The operation queue is the exception, and the test pins it. A terminal write the backend has already accepted is not cancelled by revocation: its bytes are released when the backend settles the write, not when the socket goes. That is bounded (`TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES`). While checking it, I found that a write queued *behind* that accepted write is also delivered to the backend after the rotation, because revocation does not clear the socket's `authenticated` flag. Filed as 3900.
 
 | Exit criterion | Owning tests |
 | --- | --- |
@@ -239,9 +240,29 @@ None of this is live evidence. Whether terminal output matches the exact snapsho
 
 **Problem.** Terminal WebSocket frames are uncompressed, which matters only if they turn out to be large on remote links.
 
-**Context.** Code item 6. Behind an explicit setting, bounded, and with fallback.
+**Context.** Code item 6. Behind an explicit setting, bounded, and with fallback. This task also owns efficiency finding GW-7, whose report (`docs/reports/efficiency-logging-database/0390-gw-7-websocket-compression.md`) was checked back and deleted on 2026-11-05; its requirements are carried below. The [efficiency report's invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep) apply: every compression buffer has byte and count bounds.
 
 **Investigation.** The backend pins `ws` 8.22.0 (`apps/backend/package.json:35`). No compression option is set on the terminal WebSocket server. The terminal WebSocket is still opt-in, so few users would be affected either way.
+
+Re-checked on 2026-11-05 against `cbe0f9a5b`:
+
+- **The finding still holds.** `TerminalWebSocketGateway` builds its `WebSocketServer` with `noServer`, `maxPayload` and `handleProtocols` only (`apps/backend/src/terminal-websocket-server.ts:220-229`), so no `perMessageDeflate` is set.
+- **D6's condition is not met.** A browser uses the WebSocket only when `terminalTransport` or the `orkestrator-terminal-transport` localStorage key says `websocket` (`terminalTransportEnabled`, `apps/web/src/lib/native/web-gateway.ts:177-184`); otherwise `startTerminalEventStream` takes the SSE fallback (`:1304-1307`). The shared terminal stream work (GW-3) put every web client's terminals on one filtered SSE stream (`openSharedTerminalConnection`, `:1116`), not on the WebSocket, and local desktop windows pin `terminalTransport: "http-sse"` (`installLocalDesktopGateway`, `:1671`). Task 2 is still open and task 5 left the terminal transport unchanged, so bulk terminal output still travels as `on`-mode gzip SSE.
+- **Bun's `ws` layer (D6's check), done.** Under Bun the bare `ws` import resolves to Bun's built-in module (`Bun.resolveSync("ws", "apps/backend/src")` returns `ws`, not a `node_modules` path), so the 8.22.0 pin is not the code the backend runs; any prototype must be measured under Bun. A loopback probe on Bun 1.4.4 (16 cores), with a `node:http` server handing upgrades to `WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, serverMaxWindowBits: 10, concurrencyLimit: 2 } })` through `handleUpgrade`, as the gateway does, and a raw RFC 6455 client offering `permessage-deflate; client_max_window_bits`:
+  - Negotiation works: the 101 answered `permessage-deflate; server_no_context_takeover; client_no_context_takeover; server_max_window_bits=10`, and `ws.extensions` read `permessage-deflate`.
+  - The threshold is honoured: 64 B and 900 B messages went out uncompressed (RSV1 clear, payload unchanged).
+  - Frame payloads: synthetic coloured test-runner output 16 KiB to 1,650 B and 64 KiB to 6,159 B (about 10 times, on repetitive text, so an upper bound); 64 KiB of random bytes grew to 66,182 B (1 % larger).
+  - CPU, 1,000 messages (200 of each of the five sizes, 29.7 MB of source): 911 to 993 ms of send CPU with deflate against 37 to 57 ms without, three runs each, so roughly 30 ms of extra CPU per MB sent. Wire bytes were 15.0 MB against 29.7 MB, most of the remainder being the random payloads.
+  - Not shown: whether Bun's built-in module honours `concurrencyLimit` or bounds per-socket zlib memory; the probe did not measure heap. The probe was a throwaway script under the git-ignored `output/benchmarks/` and was not committed.
+
+**When to start, and what the work must include.** Start only when task 2's baseline shows large terminal WebSocket payloads on the remote route *and* task 5 (or a later decision) makes the WebSocket the terminal transport for remote clients. Then:
+
+1. Set `perMessageDeflate` on `TerminalWebSocketGateway` with a threshold of about 1 KiB, so keystroke echoes and ACKs stay uncompressed, and with `serverNoContextTakeover`/`clientNoContextTakeover` and a small window, so no socket holds a long-lived zlib context.
+2. Bound compressor memory by bytes and count across all sockets: show under Bun, with a heap measurement at the socket limit, that per-socket zlib state is released, or add a process-wide ceiling with an uncompressed fallback, as SSE's `MAX_CONCURRENT_STREAMING_COMPRESSIONS` does.
+3. Keep compression off on the control listener, as `compressionModeForListener` does for HTTP, and off when the gateway compression mode is `off`.
+4. Measure frame sizes and CPU on loopback and through the remote route with `apps/backend/scripts/remote-bandwidth-baseline.ts` (its raw client must offer the extension), and keep it only if the encoded saving outweighs the CPU.
+5. Tests: negotiation, the threshold, a client that offers no extension, backpressure and the 256 KiB flush watermark (GW-6) counted on uncompressed bytes, and the gauges returning to zero after close, credential rotation and stop.
+6. A compatibility note: the extension is negotiated, so a client or proxy that does not offer it keeps uncompressed frames; record it in `docs/architecture/remote-gateway.md`.
 
 **Decisions.**
 
@@ -594,6 +615,8 @@ question to answer.
    Phase 3 chooses the WebSocket for bulk output; the in-process data says it
    would be required in that case (bulk output is about 7.5 times larger than
    `on` SSE). Decide the direction with the remote baseline first (D6).
+   Re-checked 2026-11-05: still opt-in, and Bun negotiates the extension
+   through `handleUpgrade`; the trigger and requirements are in task 8.
 
 ### Acceptance criteria
 
@@ -841,7 +864,7 @@ Decisions made on 2026-11-01 for tasks 1, 3 and 9.
   settles it. The test asserts exactly that, then that the bytes drain. The
   related bug (a write queued behind it still runs after rotation) is outside
   this task's files, so it is filed as
-  [3900](3900-terminal-operations-after-credential-rotation.md) instead of
+  3900 instead of
   being changed here.
 - **Keep the new test in `gateway-events.test.ts`.** It covers terminal
   sockets as well as SSE, and the ticket names that file.
@@ -867,6 +890,23 @@ reset makes the rotation assertion fail with 8,208 bytes; the production source
 was restored immediately after this negative control. Backend test-project
 checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
 
+### Task 8: GW-7 re-check from efficiency report 0390 (2026-11-05)
+
+- **Do not reopen D6; keep task 8 deferred.** The terminal WebSocket is still
+  opt-in and the shared terminal stream went to SSE, so the condition D6 waits
+  for is not met. No compression code was added. Options: (a) prototype and
+  keep `permessage-deflate` now, which would add an untested-in-use code path
+  and zlib memory for a transport no client uses by default; (b) record the
+  evidence and the trigger here (chosen), which keeps the work waiting on the
+  measurement that decides it.
+- **Run D6's Bun check now anyway.** It costs a throwaway loopback script and
+  no product change, and it removes the one open technical doubt D6 named: Bun's
+  built-in `ws` does negotiate and compress through `handleUpgrade`. Its memory
+  bound is still unproven, so it is a requirement of the work, not a finding.
+- **Carry 0390's requirements into task 8 rather than a new to-do.** Task 8
+  already owns the item, its constraints and its decision; a second file would
+  split one piece of work across two places.
+
 ## Needs verification
 
 - A browser through a real proxy. The browser check ran over loopback HTTP/1.1,
@@ -884,7 +924,7 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
 
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md):
   qualifying Claude and Codex for quiet backoff.
-- [0051-client-reconnect-and-freshness.md](0051-client-reconnect-and-freshness.md):
+- `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06):
   transport disconnect signals and jittered reconnect.
 - [0050-transcript-history-efficiency.md](0050-transcript-history-efficiency.md): source
   work and decoded byte reductions.
@@ -894,6 +934,8 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
   shared prerequisites for remote and iOS runs.
 - `../architecture/event-snapshot-recovery.md` (read coordinator, quiet
   backoff contract).
+- [Efficiency, logging and database index](../../reports/efficiency-logging-database/0000-index.md):
+  GW-7 and the closing note for report 0390, which task 8 now owns.
 
 ## Replaces
 

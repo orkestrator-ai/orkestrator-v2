@@ -180,6 +180,9 @@ const CoordinatorExplanationsFixture = lazy(async () => ({
 const CoordinatorActivityFixture = lazy(async () => ({
   default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
+const TabLaunchOverrideFixture = lazy(async () => ({
+  default: (await import("./TabLaunchOverrideFixture")).TabLaunchOverrideFixture,
+}));
 
 const PipelineWorkerMailFixture = lazy(async () => ({
   default: (await import("./PipelineWorkerMailFixture")).PipelineWorkerMailFixture,
@@ -205,6 +208,9 @@ const SetupRecoveryFixture = lazy(async () => ({
 
 const AutoMergeErrorFixture = lazy(async () => ({
   default: (await import("./AutoMergeErrorFixture")).AutoMergeErrorFixture,
+}));
+const EnvironmentNetworkPolicyFixture = lazy(async () => ({
+  default: (await import("./EnvironmentNetworkPolicyFixture")).EnvironmentNetworkPolicyFixture,
 }));
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
@@ -1893,6 +1899,13 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/tab-launch-override") {
+    return (
+      <Suspense fallback={null}>
+        <TabLaunchOverrideFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/project-navigation") {
     return (
       <Suspense fallback={null}>
@@ -2014,6 +2027,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <AutoMergeErrorFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/environment-network-policy") {
+    return (
+      <Suspense fallback={null}>
+        <EnvironmentNetworkPolicyFixture />
       </Suspense>
     );
   }

@@ -167,7 +167,8 @@ export function retryNavigationsOnNetworkChange(
 
 export const DIRECT_LOAD_ATTEMPTS = 4;
 export const DIRECT_LOAD_WAIT_MS = 30_000;
-export const DIRECT_LOAD_NAVIGATION_MS = 10_000;
+// Preserve Playwright's usual 30-second navigation allowance on a loaded host.
+export const DIRECT_LOAD_NAVIGATION_MS = 30_000;
 // Two navigations per load, each with three attempts, plus UI wait, setup and
 // 30 seconds of headroom for listener cleanup and final outcome classification.
 export const DIRECT_LOAD_TIMEOUT_MS =

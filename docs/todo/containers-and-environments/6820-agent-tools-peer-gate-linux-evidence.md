@@ -104,6 +104,30 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`.
 
 ## Assumptions and decisions
 
+### Tasks 1, 2 and 4: topology-aware admission repair (2026-11-06)
+
+The review identified that Desktop VM subnets could overlap host LAN/VPN
+addresses. Non-Linux hosts now use loopback only. On Linux each production
+refresh checks the daemon's operating system; Desktop returns no permitted
+subnets, while native Engine retains the owner-labelled/default-bridge list.
+Malformed or unavailable topology clears previous permissions. Tests exercise
+Desktop overlap refusal, loopback admission, native Engine membership, a
+native-to-Desktop transition, and topology failure revocation. This closes the
+Desktop overlap defect; it does not establish live Linux or rootless peers.
+
+A live rerun on Desktop for macOS passed explicit assertions: all three
+container sources arrived as loopback and received 405; the environment probe
+and host check were reachable; LAN and tailnet peers received no bytes;
+permitted subnets were empty; no created resources remained. Local evidence:
+`output/agent-testing/s0170-address/desktop-peer-evidence.json` (git-ignored).
+The assertion wrapper initially tried parsing diagnostic logs as JSON; it was
+corrected to parse the final evidence document, and the same check passed.
+
+Live tasks 1–4 remain open: this repair session again observed `uname -s` as
+`Darwin` and only default/Desktop Unix-socket Docker contexts. No native Linux
+or rootless daemon is available. No synthetic topology test or Desktop VM run
+is counted as native Linux evidence.
+
 ### Tasks 1 and 2: retain live topology checks as open work
 
 The review-fix session on 2026-11-06 confirmed `uname -s` is `Darwin` and
@@ -116,7 +140,7 @@ refresh timing and failure handling only.
 
 ## Current state
 
-Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS only. What is left needs a Linux host.
+Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS only. What is left needs a Linux host.
 
 The 2026-11-06 review fixes measure freshness and failure backoff from read
 completion. Null reads warn and clear permissions. Inspect failures other than

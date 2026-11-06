@@ -1320,16 +1320,23 @@ address `host.docker.internal` reaches differs per daemon and per environment
 network. Before anything is routed it decides on the peer address
 (`agent-tools-peer-filter.ts`):
 
-- **Admitted:** loopback (`127.0.0.0/8`, `::1`, mapped forms), and any address
-  inside an IPv4 subnet of the daemon's default `bridge` network or of a
-  network labelled `orkestrator-owner=<this data directory's owner>`
+- **Admitted:** loopback (`127.0.0.0/8`, `::1`, mapped forms). On native
+  Linux Engine only, also any address inside an IPv4 subnet of the daemon's
+  default `bridge` network or of a network labelled `orkestrator-owner=<this data directory's owner>`
   (environment networks and the reachability probe's network).
 - **Refused:** everything else, including the LAN and a tailnet. The
   connection is closed with no bytes written: no 405, 404 or 401, so an
   outside peer cannot tell a route from a closed port. A peer the current
   list already refuses is closed on accept, before its request is read.
 
-The subnet list is read with `docker network ls --filter
+Non-Linux hosts use loopback-only admission without consulting Docker. On
+Linux, each subnet refresh first reads `docker info`'s `OSType` and
+`OperatingSystem`. Docker Desktop uses loopback only; its VM-internal network
+ranges may overlap host LAN/VPN addresses and cannot identify container peers
+on the host. Unavailable or malformed topology revokes subnet permissions.
+Changing from native Engine to Desktop therefore clears any previous list.
+
+The native Engine subnet list is read with `docker network ls --filter
 label=orkestrator-owner=<owner>` and one `docker network inspect` per network
 (at most 256 networks and 512 subnets). It follows network creation and
 removal: `ensureEnvironmentNetwork`, `removeEnvironmentNetwork`, the probe
@@ -1359,10 +1366,18 @@ The peer address a container's call arrives from, by topology:
 | Linux Engine | The container's own address on its network (no NAT for traffic to a host address) | The network's subnet | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
 | Rootless (RootlessKit host loopback `10.0.2.2`) | Expected `127.0.0.1`: the port driver connects from the host's loopback | Loopback | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
 
-On Docker Desktop this means every container on the daemon, owned or not, and
-every local process can still reach the port, as before; the token remains
+On Docker Desktop no VM subnet grants admission. This means every container
+on the daemon, owned or not, and every local process can still reach the port, as before; the token remains
 the boundary there. What changed is that the host's LAN and tailnet addresses
-no longer answer. The C22 live qualification case passes its scene's owner
+no longer answer. A 2026-11-06 rerun with loopback-only Desktop admission
+confirmed all three container sources still received 405 as `127.0.0.1`, the
+environment probe and both host-check probes were reachable/405, and LAN and
+tailnet calls closed without bytes. The permitted subnet list stayed empty
+before and after removal, with zero leftover resources. The captured result
+is `output/agent-testing/s0170-address/desktop-peer-evidence.json` (local,
+git-ignored); it does not establish native Linux or rootless behavior.
+
+The C22 live qualification case passes its scene's owner
 to the filter, because its server's data directory differs from the one that
 owns its environment network.
 

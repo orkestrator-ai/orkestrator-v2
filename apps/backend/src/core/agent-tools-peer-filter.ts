@@ -14,10 +14,12 @@ const log = createLogger("docker.reachability");
  * environment network. A peer is admitted only when its address is loopback
  * (Docker Desktop and RootlessKit's host loopback deliver container traffic
  * from the host's own loopback) or inside a subnet of this backend's own
- * Docker networks: the default `bridge` and every network labelled with this
- * data directory's owner (environment networks, the reachability probe's
- * network). Anything else, the LAN and a tailnet included, is closed before
+ * Docker networks on native Linux Engine: the default `bridge` and every
+ * network labelled with this data directory's owner (environment networks,
+ * the reachability probe's network). Anything else, the LAN and a tailnet included, is closed before
  * the request is routed, so it learns neither a route nor a status code.
+ * Non-Linux hosts and Docker Desktop use loopback only: Desktop's VM-internal
+ * subnets can overlap host LAN/VPN addresses and do not identify host peers.
  *
  * The subnet list follows network creation and removal: the network code
  * reports each change ({@link subscribeDockerNetworkChanges}), which marks
@@ -292,12 +294,39 @@ export async function loadOwnedDockerSubnets(
 }
 
 /**
- * The production filter: loopback plus the Docker networks of one owner
- * namespace (`dockerOwnerNamespace` of the data directory whose environments
+ * The production filter: loopback plus, on native Linux Engine, Docker
+ * networks of one owner namespace (`dockerOwnerNamespace` of the data directory whose environments
  * call the server).
  */
-export function dockerPeerFilter(ownerNamespace: () => string): AgentToolsPeerFilter {
+export function dockerPeerFilter(
+  ownerNamespace: () => string,
+  options: { platform?: NodeJS.Platform; run?: typeof runCommand } = {},
+): AgentToolsPeerFilter {
+  if ((options.platform ?? process.platform) !== "linux")
+    return AgentToolsPeerFilter.loopbackOnly();
+  const run = options.run ?? runCommand;
   return new AgentToolsPeerFilter({
-    loadSubnets: () => loadOwnedDockerSubnets(ownerNamespace()),
+    loadSubnets: async () => {
+      // Recheck on every refresh, including after daemon/context changes. An
+      // unavailable or malformed topology must never retain subnet permission.
+      const { stdout } = await run(
+        "docker",
+        ["info", "--format", '{"os":{{json .OSType}},"name":{{json .OperatingSystem}}}'],
+        { timeoutMs: DOCKER_TIMEOUT_MS },
+      );
+      const info: unknown = JSON.parse(stdout);
+      if (
+        !info ||
+        typeof info !== "object" ||
+        !("os" in info) ||
+        info.os !== "linux" ||
+        !("name" in info) ||
+        typeof info.name !== "string" ||
+        !info.name.trim()
+      )
+        return null;
+      if (/docker desktop/i.test(info.name)) return [];
+      return loadOwnedDockerSubnets(ownerNamespace(), run);
+    },
   });
 }

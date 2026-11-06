@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   AgentToolsPeerFilter,
+  dockerPeerFilter,
   isLoopbackPeer,
   loadOwnedDockerSubnets,
   MISS_RELOAD_INTERVAL_MS,
@@ -464,6 +465,104 @@ describe("loadOwnedDockerSubnets", () => {
       expect(
         logs.records().filter((record) => record.event === "peers.subnets-load-failed"),
       ).toMatchObject([{ level: "warn" }]);
+    } finally {
+      logs.restore();
+    }
+  });
+});
+
+describe("production peer filter topology", () => {
+  function daemonRun(operatingSystem: () => string) {
+    const calls: string[][] = [];
+    const run = (async (_command: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "info") return { stdout: operatingSystem(), stderr: "" };
+      if (args[1] === "ls") return { stdout: "aaaaaaaaaaaa", stderr: "" };
+      return { stdout: "192.168.4.0/24", stderr: "" };
+    }) as unknown as typeof runCommand;
+    return { calls, run };
+  }
+
+  test("non-Linux hosts refuse overlapping LAN peers without consulting Docker", async () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      const { run, calls } = daemonRun(() => '{"os":"linux","name":"Docker Desktop"}');
+      const filter = dockerPeerFilter(() => "owner", { platform, run });
+      expect(filter.verdict("192.168.4.51")).toBe("refuse");
+      expect(await filter.admits("::ffff:192.168.4.51")).toBe(false);
+      expect(await filter.admits("127.0.0.1")).toBe(true);
+      await filter.reload();
+      filter.networksChanged();
+      expect(filter.allowedSubnets()).toEqual([]);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  test("Desktop on Linux never admits VM subnets even when they overlap the LAN", async () => {
+    const { run, calls } = daemonRun(() => '{"os":"linux","name":"Docker Desktop"}');
+    const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
+    expect(await filter.admits("192.168.4.51")).toBe(false);
+    expect(await filter.admits("127.0.0.1")).toBe(true);
+    expect(await filter.admits("::1")).toBe(true);
+    expect(filter.allowedSubnets()).toEqual([]);
+    expect(calls.map((args) => args[0])).toEqual(["info"]);
+  });
+
+  test("native Engine retains subnet admission and revokes it after switching to Desktop", async () => {
+    let system = '{"os":"linux","name":"Ubuntu 26.04"}';
+    const { run, calls } = daemonRun(() => system);
+    const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
+    expect(await filter.admits("192.168.4.51")).toBe(true);
+    expect(await filter.admits("192.168.5.51")).toBe(false);
+    expect(calls[1]).toContain("label=orkestrator-owner=owner");
+    system = '{"os":"linux","name":"Docker Desktop"}';
+    filter.networksChanged();
+    expect(await filter.admits("192.168.4.51")).toBe(false);
+    expect(filter.allowedSubnets()).toEqual([]);
+    expect(await filter.admits("127.0.0.1")).toBe(true);
+  });
+
+  for (const invalid of [
+    "not json",
+    "null",
+    "{}",
+    '{"os":"linux","name":""}',
+    '{"os":"windows","name":"Windows"}',
+  ]) {
+    test(`unusable topology revokes previous permissions: ${invalid}`, async () => {
+      const logs = captureLogs();
+      try {
+        let system = '{"os":"linux","name":"Ubuntu 26.04"}';
+        const { run } = daemonRun(() => system);
+        const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
+        expect(await filter.admits("192.168.4.51")).toBe(true);
+        system = invalid;
+        filter.networksChanged();
+        expect(await filter.admits("192.168.4.51")).toBe(false);
+        expect(filter.allowedSubnets()).toEqual([]);
+        expect(logs.records().some((record) => record.event === "peers.subnets-load-failed")).toBe(
+          true,
+        );
+      } finally {
+        logs.restore();
+      }
+    });
+  }
+
+  test("an unavailable daemon revokes previous permissions", async () => {
+    const logs = captureLogs();
+    try {
+      let fail = false;
+      const { run } = daemonRun(() => {
+        if (fail) throw new Error("daemon unavailable");
+        return '{"os":"linux","name":"Ubuntu 26.04"}';
+      });
+      const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
+      expect(await filter.admits("192.168.4.51")).toBe(true);
+      fail = true;
+      filter.networksChanged();
+      expect(await filter.admits("192.168.4.51")).toBe(false);
+      expect(await filter.admits("127.0.0.1")).toBe(true);
+      expect(filter.allowedSubnets()).toEqual([]);
     } finally {
       logs.restore();
     }

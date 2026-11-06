@@ -46,3 +46,29 @@ Artifact: `orkestrator-test-run.gk5LrU/backend-measurement-cap-alone.log.gz`
 under the same temporary root. This branch changes no measurement/capture code
 or tests. The failure remains unresolved; no timeout, assertion or skip changed,
 and no environmental exemption is claimed from the timeout alone.
+
+## Flow viewport review validation recurrence — 2026-11-06
+
+Observed on `d81fd21ed` in
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+This branch changes the shared flow viewport and its renderer tests, plus
+qualification documentation; it changes none of this owner's implementation.
+The aggregate finished in 1615.7 s. Backend used four isolated workers
+(16,358 pass, 134 skip, three failures); root used one worker
+(3,674 pass, three failures). Web passed with 13,101 pass and ten skips.
+Original evidence is under
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.fvkr6h/`;
+the outer wrapper is `orkestrator-test-run.OXNmsh` under the same temporary root.
+
+The exact restore-plan test timed out at 5532.95 ms against the 5000 ms
+deadline in `workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+Unchanged complete owner rerun:
+
+```sh
+mise run test:logged -- --name measurement-cap-isolated -- bun --cwd=apps/backend test src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures
+```
+
+Passed with exit 0 in 4.0 s. Passing output was deleted by the logged
+runner, so isolated totals are not inferred. The isolated pass establishes
+intermittence, not a cause or a repair. No assertion, timeout or skip changed.

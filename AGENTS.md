@@ -144,6 +144,19 @@ compression, or synchronization code, preserve these invariants:
     that leaves the live tail stays reachable through history paging. See
     `bridges/AGENTS.md` ("Transcript rows"); each bridge's `AGENTS.md` names
     its row boundary.
+15. Anything that schedules its own work (a timer, a retry or probe loop, a
+    watcher, a listener on a shared object) exposes a way to stop it that its
+    owner calls, and tests call it in `afterEach`. Unmount is not cancel
+    (invariant 2), so the stop is explicit: `disposeBrowserGatewayApi` is the
+    model. Without one, a gateway's cookie-session retry, the App's Docker
+    probe and a store's lock holder each outlived their test and were counted
+    by whichever test ran next.
+16. A process or component announces that it is ready only once it can handle
+    everything that may follow the announcement. Install signal handlers and
+    traps, register listeners and bind ports first, then print the ready line,
+    resolve the ready promise or post `ready`. Announcing first let an early
+    SIGTERM orphan a shell wrapper's command, kill a probe server with exit
+    143, and let a replaced frame's late `ready` be accepted.
 
 Test the inactive-environment path: start work, switch away, let it progress or
 finish, return, and verify status, messages, pending prompts and controls.
@@ -375,6 +388,14 @@ agent-run `mise run test` suites.
 - Never point a test or fixture at `~/.config/orkestrator-v2`, its toolchains,
   or its fixed ports; use a temporary data directory or an isolated `dev:test`
   profile.
+- A fake child process in a test gets a pid above every platform's `pid_max`
+  (`fakePid(n)` from `@orkestrator/protocol/testing/fake-pids`), never a
+  plausible one: code under test may signal the fake's whole process group.
+- Claude Code sessions in this repository run
+  `scripts/agent-hooks/block-broad-kill.ts` before every shell command
+  (`.claude/settings.json`), which refuses `pkill`, `killall`, `fuser -k`,
+  `kill` with computed targets and `kill 0`/`-1`. Other agents get no such
+  hook; the rule binds them all the same. Do not work around a refusal.
 
 [`testing-guide.md`](docs/development/testing-guide.md#production-orkestrator-shares-this-host)
 has the details.
@@ -1738,7 +1759,10 @@ rows at the end of the group table and change status in place, so parallel
 branches touch different lines. Record the exact test name and file, the
 original command and worker configuration, the failure message and duration when
 available, suite counts, the isolated rerun command and result, the observation
-date, and any evidence-backed hypothesis or reproduction notes.
+date, and any evidence-backed hypothesis or reproduction notes. Record the
+observing branch's base commit and run `mise run flaky:recurrence` before
+counting a recurrence, and prove a fix by reproducing the failure first
+([Reproduce before fixing](docs/development/testing-guide.md#reproduce-before-fixing)).
 
 Do not call a test flaky merely because it failed once: run the owning file alone
 first and preserve both results. Do not hide a flake by deleting, skipping, or
@@ -1746,6 +1770,14 @@ loosening the test. When a flake is fixed, update its existing case file with th
 root cause, fix reference, and stress or parallel verification, then mark it
 resolved in both the case file and the index instead of silently removing its
 history.
+
+Treat a flake as a possible product race before treating it as a slow test:
+ask whether a user on a slow machine would hit the same gap. Four of the 100
+flakes resolved on 2026-11-06 were product bugs (an early SIGTERM orphaning a
+command, a ready line printed before its handler, a frame listener registered
+a render late, a token check accepting four spellings). Raise a test's budget
+only for work that is genuinely heavy and has nothing to await, and say so
+beside the budget.
 
 ### Parallelism
 

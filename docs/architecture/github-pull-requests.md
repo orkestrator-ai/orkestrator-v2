@@ -322,10 +322,16 @@ explicit `false`, because renderers merge environment records field by field.
 The merging is done by the backend, not the renderer, so it keeps working with
 no window open and resumes after a restart. `PrAutoMergeController`
 (`apps/backend/src/core/pr-auto-merge.ts`) subscribes to the PR monitor's
-in-process events and re-evaluates an environment on each announced reading,
-and once more when the toggle is switched on (after asking the monitor for a
-fresh check). `decideAutoMerge` uses `evaluatePrMergeReadiness` with the same
-freshness rule as the green shimmer (`isPrReadingConfirmedByMonitor`):
+in-process events and re-evaluates an environment on each announced reading.
+Switching the toggle on asks the monitor for a fresh check, and only a reading
+that started after the switch can authorize the first action. A merge is
+pinned to the head the check rollup was read for, so a monitor check woken by a
+user refresh or an agent completion always reads the rollup, even inside the
+one-minute rollup throttle. Otherwise the refresh that turning auto-merge on
+requests would publish no head, and a PR that was already ready would wait up
+to a minute for the next throttled read. `decideAutoMerge` uses
+`evaluatePrMergeReadiness` with the same freshness rule as the green shimmer
+(`isPrReadingConfirmedByMonitor`):
 
 - **Ready**: it runs `merge_environment_pr` exactly as the Merge PR button does
   (squash, delete the branch). The key-information Integrate dialog also
@@ -349,6 +355,15 @@ freshness rule as the green shimmer (`isPrReadingConfirmedByMonitor`):
 - **Anything else** (stale, mergeability unknown, draft, blocked, behind,
   no merge permission, and checks pending or failing when checks are
   required): it waits for the next reading.
+
+The Integrate button names what auto-merge is waiting for, evaluated by the
+same rule (`describeAutoMergeHold` in `apps/web/src/lib/pr-merge-readiness.ts`):
+its tooltip always, and, when the wait will not end without someone acting
+(failed checks while checks are required, blocked, behind, draft, no merge
+permission), a warning icon on the button, a note in the Integrate dialog
+before the user chooses, and a warning toast instead of the success toast
+after. Waits that end on their own (checks running, GitHub still computing,
+Resolve fixing conflicts) stay in the tooltip.
 
 Settings → Version control → Auto-merge → **Require checks to pass**
 (`global.autoMergeRequireChecks`, on when absent) decides whether checks

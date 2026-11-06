@@ -16,8 +16,13 @@ import {
   isPrMonitorPolled,
   isPrReadingConfirmedByMonitor,
   type PrMergeReadiness,
+  type PrNotReadyReason,
 } from "@orkestrator/protocol/pr-merge-readiness";
-import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
+import {
+  prRequiredCheckFailures,
+  type PrCheckSummary,
+  type PrMonitorEnvironmentState,
+} from "@orkestrator/protocol/pr-monitor";
 import type { HydrationStatus } from "@/lib/bounded-hydration";
 import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
@@ -57,16 +62,111 @@ export function localEnvironmentPrMergeState(
   requireChecks: boolean,
 ): PrMergeState | null {
   return toPrMergeState(
-    evaluatePrMergeReadiness({
-      prState: environment.prState,
-      hasMergeConflicts: environment.hasMergeConflicts,
-      mergeability: environment.prMergeability,
-      checkSummary: monitor?.checkSummary ?? null,
-      viewerCanMerge: monitor?.viewerCanMerge ?? null,
-      requireChecks,
-      fresh: syncStatus === "current" && isPrReadingConfirmedByMonitor(environment, monitor),
-    }),
+    localEnvironmentPrMergeReadiness(environment, monitor, syncStatus, requireChecks),
   );
+}
+
+/**
+ * The whole readiness answer for this machine's environment, including why it
+ * is not ready. Auto-merge decides on the same rule (`decideAutoMerge`), so
+ * the reason is what an armed auto-merge is waiting for.
+ */
+export function localEnvironmentPrMergeReadiness(
+  environment: ReadyToMergeEnvironment,
+  monitor: PrMonitorEnvironmentState | null,
+  syncStatus: HydrationStatus,
+  requireChecks: boolean,
+): PrMergeReadiness {
+  return evaluatePrMergeReadiness({
+    prState: environment.prState,
+    hasMergeConflicts: environment.hasMergeConflicts,
+    mergeability: environment.prMergeability,
+    checkSummary: monitor?.checkSummary ?? null,
+    viewerCanMerge: monitor?.viewerCanMerge ?? null,
+    requireChecks,
+    fresh: syncStatus === "current" && isPrReadingConfirmedByMonitor(environment, monitor),
+  });
+}
+
+/** Why auto-merge has not merged a pull request yet, in words for the user. */
+export interface AutoMergeHold {
+  message: string;
+  /**
+   * Nobody needs to act: GitHub is still computing, checks are running, the
+   * reading is catching up, or Resolve is handling conflicts. Otherwise the
+   * hold lasts until the user (or GitHub's settings) changes something.
+   */
+  transient: boolean;
+}
+
+const REQUIRE_CHECKS_SETTING = "Settings → Version control → Auto-merge → Require checks to pass";
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * What auto-merge would wait for, or null when it would merge (or there is no
+ * open pull request to merge).
+ */
+export function describeAutoMergeHold(
+  reason: PrNotReadyReason | null,
+  checkSummary: PrCheckSummary | null,
+): AutoMergeHold | null {
+  const failed = checkSummary ? prRequiredCheckFailures(checkSummary).failed : 0;
+  const pending = checkSummary?.pending ?? 0;
+  const failing = (count: number) => ({
+    message: `${plural(count, "check")} failed, and every check has to pass first. Re-run ${count === 1 ? "it" : "them"}, merge with Merge PR, or turn off ${REQUIRE_CHECKS_SETTING}.`,
+    transient: false,
+  });
+  const running = (count: number) => ({
+    message: `Waiting for ${plural(count, "check")} to finish.`,
+    transient: true,
+  });
+  switch (reason) {
+    case null:
+    case "no-pull-request":
+    case "not-open":
+      return null;
+    case "stale":
+    case "mergeability-unknown":
+      return { message: "Waiting for GitHub to report whether it can merge.", transient: true };
+    case "conflicts":
+      return {
+        message: "Merge conflicts: Resolve fixes them, then the merge follows.",
+        transient: true,
+      };
+    case "checks-failing":
+      return failing(Math.max(failed, 1));
+    case "checks-pending":
+      return running(Math.max(pending, 1));
+    case "checks-not-passing":
+      // GitHub's `unstable`: a check it does not require has not passed. The
+      // rollup, when there is one, says whether it failed or is still running.
+      if (failed > 0) return failing(failed);
+      if (pending > 0) return running(pending);
+      return {
+        message: `GitHub reports a check that has not passed, and every check has to pass first unless ${REQUIRE_CHECKS_SETTING} is off.`,
+        transient: false,
+      };
+    case "blocked":
+      return {
+        message: "GitHub reports the merge as blocked, usually by a required review or check.",
+        transient: false,
+      };
+    case "behind":
+      return {
+        message: "The branch is behind its base branch and has to be updated first.",
+        transient: false,
+      };
+    case "draft":
+      return { message: "The pull request is a draft.", transient: false };
+    case "no-merge-permission":
+      return {
+        message: "The GitHub account Orkestrator merges with cannot merge this repository.",
+        transient: false,
+      };
+  }
 }
 
 export function isLocalEnvironmentReadyToMerge(

@@ -4,6 +4,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import {
+  describeAutoMergeHold,
   isLocalEnvironmentReadyToMerge,
   isNodeEnvironmentReadyToMerge,
   localEnvironmentPrMergeState,
@@ -303,4 +304,48 @@ test("leaf check counts survive summary projection and match local readiness acr
       checkSummary.passed === checkSummary.total,
     );
   }
+});
+
+describe("describeAutoMergeHold", () => {
+  test("says nothing when the pull request would merge or there is none", () => {
+    expect(describeAutoMergeHold(null, null)).toBeNull();
+    expect(describeAutoMergeHold("not-open", null)).toBeNull();
+    expect(describeAutoMergeHold("no-pull-request", null)).toBeNull();
+  });
+
+  test("failed checks need someone to act and point at the setting", () => {
+    const hold = describeAutoMergeHold("checks-failing", { passed: 18, total: 20, pending: 0 });
+    expect(hold?.transient).toBe(false);
+    expect(hold?.message).toStartWith("2 checks failed, ");
+    expect(hold?.message).toContain("Require checks to pass");
+  });
+
+  test("GitHub's unstable reading follows the rollup: failed, still running, or unknown", () => {
+    expect(
+      describeAutoMergeHold("checks-not-passing", { passed: 4, total: 5, pending: 0 }),
+    ).toMatchObject({ transient: false, message: expect.stringMatching(/^1 check failed, /) });
+    expect(
+      describeAutoMergeHold("checks-not-passing", { passed: 3, total: 5, pending: 2 }),
+    ).toEqual({ transient: true, message: "Waiting for 2 checks to finish." });
+    expect(describeAutoMergeHold("checks-not-passing", null)?.transient).toBe(false);
+  });
+
+  test("waits that end by themselves are transient", () => {
+    for (const reason of [
+      "stale",
+      "mergeability-unknown",
+      "conflicts",
+      "checks-pending",
+    ] as const) {
+      expect(describeAutoMergeHold(reason, { passed: 1, total: 2, pending: 1 })?.transient).toBe(
+        true,
+      );
+    }
+  });
+
+  test("blocked, behind, draft and missing permission need someone to act", () => {
+    for (const reason of ["blocked", "behind", "draft", "no-merge-permission"] as const) {
+      expect(describeAutoMergeHold(reason, null)?.transient).toBe(false);
+    }
+  });
 });

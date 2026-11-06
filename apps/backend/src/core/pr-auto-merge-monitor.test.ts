@@ -233,3 +233,119 @@ test("auto-merge turned on while mergeability is checking launches one Resolve p
     service.shutdown();
   }
 });
+
+test("turning auto-merge on for a ready PR merges on the refresh it requests, not a minute later", async () => {
+  let clock = Date.now() - 10_000;
+  const iso = () => new Date(clock).toISOString();
+  const prUrl = "https://github.com/o/r/pull/1";
+  let environment: Environment = {
+    ...createEnvironment("project"),
+    id: "env",
+    environmentType: "local",
+    worktreePath: "/tmp/feature",
+    status: "running",
+    setupPhase: "ready",
+    prUrl,
+    prState: "open",
+    hasMergeConflicts: false,
+    prMergeability: "clean",
+  };
+  const listeners = new Set<(event: PrMonitorEvent) => void>();
+  const timers: Array<() => void> = [];
+  const summaries: boolean[] = [];
+  let merges = 0;
+  let mergeArgs: Record<string, unknown> = {};
+  const service = new PrMonitorService({
+    now: iso,
+    monotonicNow: () => clock,
+    random: () => 0,
+    schedule: (callback) => {
+      timers.push(callback);
+      return callback;
+    },
+    cancel: () => undefined,
+    emit: (_name, event) => {
+      for (const listener of listeners) listener(event as PrMonitorEvent);
+    },
+    effects: {
+      detect: async (_target, options) => {
+        summaries.push(options?.includeCheckSummary === true);
+        return {
+          url: prUrl,
+          state: "open",
+          hasMergeConflicts: false,
+          mergeability: "clean",
+          headSha: "a".repeat(40),
+          checkSummary: options?.includeCheckSummary ? { passed: 2, total: 2, pending: 0 } : null,
+          checkSummaryStatus: options?.includeCheckSummary ? "succeeded" : "skipped",
+          viewerCanMerge: true,
+        };
+      },
+      persistPr: async () => undefined,
+      clearPr: async () => undefined,
+      findTaskForEnvironment: async () => null,
+      moveTaskToReview: async () => undefined,
+      addTaskComment: async () => undefined,
+      updateTaskPrMetadata: async () => undefined,
+    },
+  });
+  const controller = new PrAutoMergeController({
+    storage: {
+      getEnvironment: async () => environment,
+      loadEnvironments: async () => [environment],
+      loadConfig: async () => ({ global: {} }) as never,
+      getRepositoryConfig: async () => ({}) as never,
+      updateEnvironment: async () => environment,
+    },
+    invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+      if (command === "merge_environment_pr") {
+        merges++;
+        mergeArgs = args;
+      }
+      return {} as T;
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    monitorState: () => service.revisionedSnapshot().entries[0] ?? null,
+    schedule: () => 1,
+    cancel: () => undefined,
+  });
+  const settle = async () => {
+    for (let i = 0; i < 60; i++) await Promise.resolve();
+  };
+  try {
+    controller.start();
+    service.sync([environmentToPrMonitorTarget(environment)]);
+    timers.shift()!();
+    await settle();
+    expect(summaries).toEqual([true]);
+    clock += 20_000;
+    // The user turns integration on, then the command asks for a fresh check.
+    environment = {
+      ...environment,
+      autoMerge: true,
+      autoMergeCleanup: true,
+      autoMergePrUrl: prUrl,
+      autoMergeEnabledAt: iso(),
+    };
+    clock += 5;
+    service.sync([environmentToPrMonitorTarget(environment)]);
+    service.requestCheck("env", "interactive");
+    timers.pop()!();
+    await settle();
+    // The refresh read the rollup even though the last one is under a minute
+    // old, so it carries the head the merge is pinned to.
+    expect(summaries).toEqual([true, true]);
+    expect(merges).toBe(1);
+    expect(mergeArgs).toMatchObject({
+      cleanupAfterMerge: true,
+      expectedHeadSha: "a".repeat(40),
+      expectedPrUrl: prUrl,
+    });
+  } finally {
+    controller.dispose();
+    service.shutdown();
+  }
+});

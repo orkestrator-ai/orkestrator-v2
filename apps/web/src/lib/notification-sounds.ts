@@ -68,7 +68,22 @@ export async function playNotificationSound(kind: NotificationSoundKind): Promis
   try {
     const context = getAudioContext();
     if (!context) return false;
-    if (context.state === "suspended") await context.resume();
+    if (context.state === "suspended") {
+      // Autoplay policy may leave resume pending indefinitely. Do not delay an
+      // OS alert forever or schedule a late cue after its fallback has sounded.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const resumed = await Promise.race([
+          context.resume().then(() => true),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(false), 250);
+          }),
+        ]);
+        if (!resumed) return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     if (context.state !== "running") return false;
 
     const start = context.currentTime + 0.01;

@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   COORDINATOR_WAKE_ATTENTION_EVENT,
@@ -277,7 +277,9 @@ describe("from the backend's attention events", () => {
       useEnvironmentStore.setState({ environments: [environment("worker", true)] });
       await mounted();
       deliver(question("worker", "q1"));
+      await act(async () => {});
       deliver(question("worker", "q1"));
+      await act(async () => {});
       expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
       expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
       expect(shownNotifications).toHaveLength(1);
@@ -288,9 +290,18 @@ describe("from the backend's attention events", () => {
       expect(shownNotifications[0]!.options.body).toContain("worker");
     });
 
+    test("allows OS sound when app playback fails", async () => {
+      playConfiguredNotificationSound.mockResolvedValue(false);
+      await mounted();
+      deliver(question("worker", "failed-audio"));
+      await waitFor(() => expect(shownNotifications).toHaveLength(1));
+      expect(shownNotifications[0]!.options.silent).toBe(false);
+    });
+
     test("treats an agent waiting on approval the same way", async () => {
       await mounted();
       deliver(question("worker", "w1", "agent_waiting"));
+      await act(async () => {});
       expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
       expect(shownNotifications[0]?.title).toBe("Agent needs your input");
     });
@@ -300,11 +311,13 @@ describe("from the backend's attention events", () => {
       focus(true);
       await mounted();
       deliver(question("worker", "q1"));
+      await act(async () => {});
       expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
       expect(shownNotifications).toHaveLength(0);
 
       focus(false);
       deliver(question("worker", "q2"));
+      await act(async () => {});
       expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
       expect(shownNotifications).toHaveLength(1);
     });
@@ -313,12 +326,15 @@ describe("from the backend's attention events", () => {
       await mounted();
       deliver(attention("one", "a1"));
       deliver(question("two", "q1"));
+      await act(async () => {});
       deliver(question("three", "q2"));
+      await act(async () => {});
       expect(playConfiguredNotificationSound.mock.calls.map((call) => call[0])).toEqual([
         "agent-stopped",
         "agent-question",
       ]);
       // Each environment still gets its own notification.
+      await act(async () => {});
       expect(shownNotifications.map((shown) => shown.options.tag)).toEqual([
         "orkestrator-question:two",
         "orkestrator-question:three",
@@ -337,6 +353,7 @@ describe("from the backend's attention events", () => {
       });
       await mounted();
       deliver(question("worker", "q1"));
+      await act(async () => {});
       expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
       // With no app cue, the operating system may sound its own.
       expect(shownNotifications[0]?.options.silent).toBe(false);
@@ -351,6 +368,7 @@ describe("from the backend's attention events", () => {
         },
       });
       deliver(question("worker", "q2"));
+      await act(async () => {});
       expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
       expect(shownNotifications).toHaveLength(1);
     });
@@ -359,6 +377,7 @@ describe("from the backend's attention events", () => {
       FakeNotification.permission = "default";
       await mounted();
       deliver(question("worker", "q1"));
+      await act(async () => {});
       expect(shownNotifications).toHaveLength(0);
       expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
     });
@@ -366,6 +385,7 @@ describe("from the backend's attention events", () => {
     test("clicking the notification opens the environment", async () => {
       await mounted();
       deliver(question("worker", "q1"));
+      await act(async () => {});
       act(() => shownNotifications[0]!.listeners.get("click")!());
       expect(useUIStore.getState().selectedEnvironmentId).toBe("worker");
       expect(useUIStore.getState().selectedProjectId).toBe("project-1");
@@ -404,7 +424,7 @@ describe("useNotificationSoundService", () => {
     expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
   });
 
-  test("a question edge from an older backend plays the question cue and notifies", () => {
+  test("a question edge from an older backend plays the question cue and notifies", async () => {
     useEnvironmentStore.setState({
       environments: [environment("finished", false), environment("asking", false)],
     });
@@ -421,6 +441,7 @@ describe("useNotificationSoundService", () => {
       "agent-stopped",
       "agent-question",
     ]);
+    await act(async () => {});
     expect(shownNotifications.map((shown) => shown.options.tag)).toEqual([
       "orkestrator-question:asking",
     ]);

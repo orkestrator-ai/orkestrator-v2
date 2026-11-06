@@ -60,6 +60,13 @@ function openEnvironment(projectId: string, environmentId: string): void {
   const ui = useUIStore.getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
+  if (
+    useEnvironmentStore
+      .getState()
+      .environments.some((env) => env.id === environmentId && env.projectHome)
+  ) {
+    ui.setProjectBoardTab("home");
+  }
 }
 
 /**
@@ -88,7 +95,10 @@ export function showQuestionDesktopNotification(input: {
     });
     if (open.size >= MAX_OPEN_NOTIFICATIONS) {
       const oldest = open.values().next().value;
-      if (oldest) open.delete(oldest);
+      if (oldest) {
+        oldest.close();
+        open.delete(oldest);
+      }
     }
     open.add(notification);
     const release = () => open.delete(notification);

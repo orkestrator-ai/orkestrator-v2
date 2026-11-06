@@ -90,6 +90,30 @@ describe("environment attention events", () => {
     });
   });
 
+  for (const reason of [undefined, "marked_unread"] as const) {
+    for (const next of ["agent_waiting", "agent_question"] as const) {
+      test(`a manually unread badge (${reason}) escalates to ${next} once`, async () => {
+        await withTemporaryStorage(async (storage) => {
+          const events: EnvironmentAttentionEvent[] = [];
+          storage.addEnvironmentAttentionListener((event) => events.push(event));
+          const environment = createEnvironment("project-1");
+          environment.hasUnreadWork = true;
+          environment.unreadReason = reason;
+          await storage.addEnvironment(environment);
+          const at = new Date().toISOString();
+          if (next === "agent_question") {
+            await storage.recordEnvironmentAgentAttention(environment.id, ["q1"], at);
+            await storage.recordEnvironmentAgentAttention(environment.id, ["q2"], at);
+          } else {
+            await storage.recordEnvironmentSessionCompletion(environment.id, at, next);
+            await storage.recordEnvironmentSessionCompletion(environment.id, at, next);
+          }
+          expect(events.map((event) => event.reason)).toEqual([next]);
+        });
+      });
+    }
+  }
+
   test("an activity aggregate ending its work raises attention once", async () => {
     await withTemporaryStorage(async (storage) => {
       const events: EnvironmentAttentionEvent[] = [];

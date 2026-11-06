@@ -123,9 +123,28 @@ describe("question desktop notifications", () => {
     expect(__testing.openNotifications()).toBe(0);
   });
 
+  test("opens Project home from a coordinator tab", () => {
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          projectHome: true,
+          name: "project-home",
+        } as Environment,
+      ],
+    });
+    useUIStore.setState({ projectBoardTab: "coordinator" });
+    showQuestionDesktopNotification(question);
+    shown[0]!.listeners.get("click")!();
+    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+  });
+
   test("keeps a bounded number of notifications reachable", () => {
     for (let index = 0; index < 40; index += 1) showQuestionDesktopNotification(question);
     expect(__testing.openNotifications()).toBe(32);
+    expect(shown.filter((notification) => notification.closed)).toHaveLength(8);
     shown[39]!.listeners.get("close")!();
     expect(__testing.openNotifications()).toBe(31);
   });

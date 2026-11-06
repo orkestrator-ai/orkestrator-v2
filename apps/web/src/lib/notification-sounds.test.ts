@@ -33,6 +33,7 @@ function installAudioContext(
     state?: AudioContextState;
     resumeState?: AudioContextState;
     resumeError?: Error;
+    resumePending?: Promise<void>;
   } = {},
 ) {
   const contexts: FakeAudioContext[] = [];
@@ -51,6 +52,7 @@ function installAudioContext(
 
     async resume(): Promise<void> {
       this.resumeCalls += 1;
+      if (options.resumePending) await options.resumePending;
       if (options.resumeError) throw options.resumeError;
       this.state = options.resumeState ?? "running";
     }
@@ -217,4 +219,19 @@ describe("notification sounds", () => {
       true,
     );
   });
+});
+
+test("a pending resume returns false without playing a late cue", async () => {
+  let resume!: () => void;
+  const contexts = installAudioContext({
+    state: "suspended",
+    resumePending: new Promise<void>((resolve) => {
+      resume = resolve;
+    }),
+  });
+  expect(await playNotificationSound("agent-question")).toBe(false);
+  resume();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(contexts[0]!.oscillators).toHaveLength(0);
 });

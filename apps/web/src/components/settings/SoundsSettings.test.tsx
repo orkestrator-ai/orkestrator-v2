@@ -246,7 +246,7 @@ describe("question alerts", () => {
     });
     // Already granted: nothing to ask, nothing to warn about.
     expect(requestPermission).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Allow notifications" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow notifications" }) === null).toBe(true);
     update.mockRestore();
   });
 
@@ -257,9 +257,9 @@ describe("question alerts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Allow notifications" }));
     await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Allow notifications" })).toBeNull(),
+      expect(screen.queryByRole("button", { name: "Allow notifications" }) === null).toBe(true),
     );
-    expect(screen.queryByText(/not been allowed/)).toBeNull();
+    expect(screen.queryByText(/not been allowed/) === null).toBe(true);
   });
 
   test("turning the notification on asks an undecided browser", async () => {
@@ -285,7 +285,7 @@ describe("question alerts", () => {
     permission = "denied";
     render(<SoundsSettings />);
     expect(screen.getByText(/has blocked notifications/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Allow notifications" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow notifications" }) === null).toBe(true);
   });
 });
 

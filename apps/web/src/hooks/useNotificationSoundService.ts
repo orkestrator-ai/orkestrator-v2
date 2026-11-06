@@ -47,6 +47,7 @@ function coordinatorOnScreen(projectId: string): boolean {
 interface LastCue {
   at: number;
   kind: NotificationSoundKind | null;
+  playback?: Promise<boolean>;
 }
 
 /**
@@ -89,11 +90,19 @@ function alertInputNeeded(
 ): void {
   if (input.environmentId === visibleEnvironmentId && windowFocused()) return;
   const settings = soundSettings();
-  if (settings.questionDesktopNotification) {
-    showQuestionDesktopNotification({ ...input, silent: settings.agentQuestion });
+  let playback = Promise.resolve(false);
+  if (settings.agentQuestion) {
+    if (claimCue(lastCue, "agent-question")) {
+      lastCue.current.playback = playConfiguredNotificationSound("agent-question").catch(
+        () => false,
+      );
+    }
+    playback = lastCue.current.playback ?? playback;
   }
-  if (settings.agentQuestion && claimCue(lastCue, "agent-question")) {
-    void playConfiguredNotificationSound("agent-question");
+  if (settings.questionDesktopNotification) {
+    void playback.then((played) => {
+      showQuestionDesktopNotification({ ...input, silent: played });
+    });
   }
 }
 

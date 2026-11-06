@@ -348,7 +348,6 @@ function normalizeStoredEnvironment(environment: Environment): void {
   }
 }
 
-/** A project still owns environments; removal would orphan them. */
 /**
  * Whether lighting the badge with `reasonAfter` is an attention edge: the badge
  * was dark, or it was lit for work that needs no answer and an agent now needs
@@ -363,6 +362,7 @@ function raisesAttention(
   return isInputNeededAttentionReason(reasonAfter) && !isInputNeededAttentionReason(reasonBefore);
 }
 
+/** A project still owns environments; removal would orphan them. */
 export class ProjectHasEnvironmentsError extends Error {
   constructor(
     readonly projectId: string,

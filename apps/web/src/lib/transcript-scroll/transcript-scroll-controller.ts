@@ -327,6 +327,10 @@ export class TranscriptScrollController {
   private historyRecoveryPending = false;
   /** The scroller's last laid-out width; 0 until known (or while hidden). */
   private lastWidth = 0;
+  /** The offset last observed while the scroller had a box, kept across a hide. */
+  private shownTop: number | null = null;
+  /** A resize delivery measured the scroller at zero height (it, or an ancestor, is hidden). */
+  private hiddenByLayout = false;
 
   private rowIndexOf: ((key: string) => number) | null = null;
   private structuralHold = false;
@@ -561,9 +565,12 @@ export class TranscriptScrollController {
       this.counters.scrollerRetirements += 1;
       this.dispatch({ type: "user-navigation" }, "cancelled");
     }
+    this.hiddenByLayout = false;
+    this.shownTop = null;
     if (!element) return;
     this.lastObservedTop = element.scrollTop;
     this.lastObservedEnd = readScrollMetrics(element).maxScrollTop;
+    if (element.clientHeight > 0) this.shownTop = element.scrollTop;
     const detach = this.listen(element);
     Object.defineProperty(element, SCROLL_DIAGNOSTICS_PROPERTY, {
       configurable: true,
@@ -1461,12 +1468,51 @@ export class TranscriptScrollController {
     this.dispatch({ type: "user-navigation" }, "cancelled");
   }
 
+  /**
+   * Put back the offset a hide took. WebKit restores a re-shown scroller's
+   * offset during a layout that has not yet sized the contents of a container
+   * query container inside it (the review report in a pipeline transcript's
+   * footer), so the offset is clamped to a range short by that content: 466 px
+   * for the report in the long fixture, which put a reader that far up and a
+   * follower that far short of the end. It fires `scroll` at the clamped offset
+   * before the first frame's animation callbacks. Chromium keeps the offset,
+   * so there this writes nothing.
+   *
+   * Runs from that `scroll` or from the resize delivery that measures the
+   * scroller again, whichever comes first; both are before paint, and the
+   * `scroll` is before activation's frame. Returns true when the position is
+   * the browser's rather than the reader's: still hidden, or just put back.
+   */
+  private keepOffsetAcrossHide(el: HTMLElement): boolean {
+    if (!this.hiddenByLayout) return false;
+    if (el.clientHeight === 0) return true;
+    this.hiddenByLayout = false;
+    // A navigation started since the show (activation) owns the viewport and
+    // converges on its own target; the old offset would undo its write.
+    if (this.op) return false;
+    const kept = this.shownTop;
+    if (kept !== null) {
+      // Only upward: the engine's clamp (or reset) only lowers the offset,
+      // while the virtualizer following growth since the show raises it.
+      const top = Math.min(kept, readScrollMetrics(el).maxScrollTop);
+      if (top - el.scrollTop >= 1) this.adapter.writeScrollTop(top);
+    }
+    const metrics = readScrollMetrics(el);
+    this.lastObservedTop = metrics.scrollTop;
+    this.lastObservedEnd = metrics.maxScrollTop;
+    this.shownTop = metrics.scrollTop;
+    this.setAtBottom(metrics.distanceFromEnd < STICK_RELEASE_DISTANCE_PX);
+    return true;
+  }
+
   private handleScroll(el: HTMLElement): void {
+    if (this.keepOffsetAcrossHide(el)) return;
     const metrics = readScrollMetrics(el);
     const previous = this.lastObservedTop;
     const previousEnd = this.lastObservedEnd;
     this.lastObservedTop = metrics.scrollTop;
     this.lastObservedEnd = metrics.maxScrollTop;
+    this.shownTop = metrics.scrollTop;
     this.setAtBottom(metrics.distanceFromEnd < STICK_RELEASE_DISTANCE_PX);
     this.scheduleAnchorCapture();
     const written = this.adapter.lastWrittenTop;
@@ -1636,6 +1682,9 @@ export class TranscriptScrollController {
     let mutationObserver: MutationObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver((entries) => {
+        // Before anything measures from the offset: a hide may have taken it.
+        if (el.clientHeight === 0) this.hiddenByLayout = true;
+        else this.keepOffsetAcrossHide(el);
         this.notifyLayout("resize");
         // A reflow's restore starts after this delivery's reconcile: its first
         // correction runs in the operation frame, after Virtuoso has applied

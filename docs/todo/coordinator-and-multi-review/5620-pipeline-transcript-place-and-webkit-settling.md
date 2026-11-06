@@ -9,7 +9,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca`.
 ### Tasks
 
 1. **Decide what returning to a stage does with a reader's place**: the comments and the behaviour disagree, in both engines. Status: open.
-2. **Decide whether WebKit's brief offset with a review report needs work**: it settles by itself. Status: open.
+2. **Decide whether WebKit's brief offset with a review report needs work**: it settles by itself. Status: done (2026-11-06). Traced to WebKit clamping the restored offset before the report's `@container` contents are sized; the transcript controller now puts the offset back ([flake 6380](../../tests/flaky-tests/web-ui/6380-inspector-transcript-hide-webkit-offset.md)).
 
 ### 1. Decide what returning to a stage does with a reader's place
 
@@ -51,15 +51,20 @@ The first frame after returning was at the reader's old offset, then it moved to
 
 The first round of each layout started from a slightly higher measured height (13294 and 12973), and settled in the same time. An earlier run on a busier host took up to 119 ms.
 
+**Cause (2026-11-06).** Traced while fixing [flake 6380](../../tests/flaky-tests/web-ui/6380-inspector-transcript-hide-webkit-offset.md), which is the same offset seen by a reader. It is a clamp, but not to the range measured after the show. WebKit puts a re-shown scroller's offset back during a layout that has not yet sized the contents of a container query container inside it, so the range it clamps to is short by the report's content: 466 px on desktop, matching 12443 → 11977 above. It then fires `scroll` at the clamped offset before the frame's animation callbacks. An engine-only page (a scroller with a `container-type: inline-size` footer) reproduces it in WebKit and not in Chromium. When the scroller is, or wraps, the container, that range would be 0, which fits 0860's reset to 0 (inferred, not measured).
+
 **Decisions.**
 
-- **Does this need a fix?**
-  - **Leave it until real Safari shows the same thing (recommended).**
+- **Does this need a fix?** Decided 2026-11-06: fixed, because the same clamp failed the WebKit CI step for a reader (6380) on most runs.
+  - **Hold the offset through the show in the transcript controller (implemented).**
+    - Pros: one place for every native transcript; writes nothing in Chromium, which keeps the offset; the engine's `scroll` cannot release a follower.
+    - Cons: one more piece of state in the controller; relies on WebKit firing `scroll` (or the resize delivery) before paint, which it does.
+  - **Leave it until real Safari shows the same thing.**
     - Pros: the end state is right, and `e2e/InspectorTranscriptHide.spec.ts` guards it; no work for something only seen in one test engine.
     - Cons: if Safari does the same, a reader of a finished review sees a short jump on each pane switch.
-  - **Trace it now and hold the offset through the show.**
-    - Pros: removes the jump in WebKit.
-    - Cons: needs a cause first, and it would change code shared by every native transcript for a brief effect.
+  - **Avoid the engine behaviour in CSS, for example by dropping `@container` from the report.**
+    - Pros: no controller state.
+    - Cons: the report's responsive layout depends on it, `contain-intrinsic-size` on the container did not change the clamp, and any other container that a transcript row gains later would bring it back.
 
 ## Needs verification
 

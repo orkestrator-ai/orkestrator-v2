@@ -73,7 +73,7 @@ describe("Log Detail privacy and expiry", () => {
 
   test("detail at info says nothing about expiry", () => {
     render(<LogDetailSettings value={normal} onChange={() => {}} />);
-    expect(screen.queryByTestId("log-detail-expiry")).toBeNull();
+    expect(screen.queryByTestId("log-detail-expiry") === null).toBe(true);
   });
 
   test("saved raised detail shows when it goes back, and leaves saving alone", () => {
@@ -148,5 +148,5 @@ test("a backend without expiry metadata makes no automatic reversion promise", (
   );
   expect(screen.getByTestId("log-detail-expiry").textContent).toContain("not confirmed");
   expect(screen.getByTestId("log-detail-expiry").textContent).not.toContain("24 hours");
-  expect(screen.queryByRole("switch", { name: "Keep raised log detail on" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Keep raised log detail on" }) === null).toBe(true);
 });

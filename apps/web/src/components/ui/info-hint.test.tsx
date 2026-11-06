@@ -45,7 +45,7 @@ describe("InfoHint", () => {
     await screen.findByRole("tooltip");
     await pointerClick(button, type);
     await waitFor(() => expect(button.getAttribute("aria-expanded")).toBe("false"));
-    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.queryByRole("tooltip") === null).toBe(true);
   });
 
   test("Escape dismisses a focused hint until focus leaves", async () => {
@@ -53,7 +53,7 @@ describe("InfoHint", () => {
     fireEvent.focus(button);
     await screen.findByRole("tooltip");
     fireEvent.keyDown(button, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("tooltip") === null).toBe(true));
     expect(button.getAttribute("aria-expanded")).toBe("false");
     fireEvent.blur(button);
     fireEvent.focus(button);
@@ -66,14 +66,14 @@ describe("InfoHint", () => {
     await screen.findByRole("tooltip");
     await pointerClick(button);
     await pointerClick(button);
-    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.queryByRole("tooltip") === null).toBe(true);
     fireEvent.pointerMove(button, { pointerType: "mouse" });
-    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.queryByRole("tooltip") === null).toBe(true);
     fireEvent.pointerLeave(button);
     fireEvent.pointerMove(button, { pointerType: "mouse" });
     await screen.findByRole("tooltip");
     fireEvent.keyDown(button, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("tooltip") === null).toBe(true));
   });
 
   test("an outside pointer dismisses even while focus stays on the trigger", async () => {
@@ -85,7 +85,7 @@ describe("InfoHint", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
     await pointerClick(document.body);
-    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("tooltip") === null).toBe(true));
     expect(button.className).toContain("focus-hairline");
   });
 });

@@ -40,7 +40,7 @@ Main's CPU no longer argues against the flip. On 2026-11-05 `local-gateway-trans
 
 - **Main's JavaScript is nearly idle on the direct transport.** A V8 profile of main during the burst shows no time in the `webRequest` header hooks (`remote-gateway-request-auth.ts`). They run once per request, and a stream's chunks do not pass through them. Across a whole two-window load they took about 1 ms.
 - **The extra time is DevTools forwarding.** A Chromium trace puts it on two browser-process threads. `CrBrowserMain` handled 551 `blink.mojom.DevToolsSessionHost` messages (33 ms, against 171 messages and 1.5 ms on the relay), and `Chrome_DevToolsHandlerThread` spent 34.6 ms (0.8 ms on the relay). Playwright holds a DevTools session on every page with its network domain on, and a development window opens a detached DevTools window as well. So every load and stream chunk a direct page receives becomes a DevTools event that main forwards. Relay output arrives over IPC and makes none. With the development DevTools windows closed, Playwright's session alone still accounted for 56 ms of the direct burst's 116 ms (38.1 ms on the handler thread, 18.2 ms on `CrBrowserMain`).
-- **With no DevTools client, the direct transport costs main less on every load.** `local-gateway-transport-cpu-electron.spec.ts` starts Electron with only main's Node inspector and closes the development DevTools windows. Three alternating runs per transport, CPU in ms. The host was running other worktrees' browser suites (load average 46–64 when checked just after), so each `sleep 0.01` took longer than in the 2026-11-05 runs, and the 300-line loads lasted 14–24 s instead of about 5 s:
+- **With no DevTools client, the direct transport costs main less on every load.** `local-gateway-transport-cpu-electron.spec.ts` starts Electron with only main's Node inspector and closes the development DevTools windows. These original figures used custom page listeners without mounted terminal views; they isolate transport delivery and are not the visible-terminal workload. Three alternating runs per transport, CPU in ms. The host was running other worktrees' browser suites (load average 46–64 when checked just after), so each `sleep 0.01` took longer than in the 2026-11-05 runs, and the 300-line loads lasted 14–24 s instead of about 5 s:
 
   | Window | Relay, main | Direct, main | Relay, renderers | Direct, renderers |
   | --- | --- | --- | --- | --- |
@@ -52,6 +52,15 @@ Main's CPU no longer argues against the flip. On 2026-11-05 `local-gateway-trans
 
   The relay sent 190–240 terminal events to the two windows during that burst, and the direct transport none. The renderers spend more on the direct transport because each page parses its own stream. That is the work moving off main, which every window, menu and IPC call shares, and onto each window's own process.
 - **The Playwright spec on current `main` still shows the old pattern, but noisily.** Three runs of it unchanged at `585cf97d8`, on a host with a load average of 46–64, gave a two-window burst of 161–837 ms direct against 107–311 ms on the relay, and a one-window burst of 152–205 ms against 108–155 ms. The 300-line loads stretched to 13–55 s, so those ranges are wide. One run of the branch version, which closes the development DevTools windows before measuring (load average about 17), gave 78 ms direct against 67 ms on the relay for the two-window burst. Playwright's own session is what remains of the gap.
+
+Review repair qualification on 2026-11-06 added mounted xterm views in both
+windows and verified every load marker in each buffer, while keeping page
+DevTools detached. One alternating run per transport passed, with zero desyncs
+in every measured window. Main CPU in ms (relay / direct): idle 6.8 / 4.8,
+one-window 300 lines 111.5 / 9.0, one-window burst 29.0 / 1.7,
+two-window 300 lines 103.8 / 52.5, two-window burst 22.3 / 6.3.
+This is a single qualification run, not a replacement for the three-run ranges
+above. Output identifies the workload as `mounted-terminals`.
 
 What has not been measured is a packaged `file://` window (task 1) and any platform other than macOS.
 
@@ -101,6 +110,18 @@ Decisions made on 2026-11-06 while closing to-do 5760, which asked where Electro
 2. **No change to how a local window authenticates (5760 task 1).** Options: keep main's `webRequest` hooks adding the credential below the page, or give the page a per-window token and drop the hooks. Kept the hooks. They took no measurable time while output streamed, so removing them would have given the page a credential it does not hold today and gained nothing. Nothing in this change touches credential handling.
 3. **Fix the measurement, not the transport (5760 task 1).** Options: leave `local-gateway-transport-electron.spec.ts` as the main-CPU baseline, or add a measurement with no DevTools client. Added `local-gateway-transport-cpu-electron.spec.ts`, opt-in through `ORKESTRATOR_LOCAL_TRANSPORT_CPU=1`. The existing spec now also closes the development DevTools windows before it measures, and its header says why its main figures overstate the direct transport. Pros: the figures reflect a shipped window, and the drive is the same terminal load. Cons: one more spec to keep running, and Playwright's own session cannot be detached in the existing one, so its figures stay a regression check only.
 4. **What task 2 rests on (5760 task 2).** Chose task 1 and one release behind the setting, as recorded in task 2's Decisions. The higher renderer CPU is the intended trade: it is the parsing that main no longer does, spread over each window's own process.
+
+### Benchmark reliability and workload (task 2, review repair)
+
+Chose a resource observer over the bounded resource entry count: it observes later
+completions after the 250-entry buffer fills; merely increasing the buffer
+would retain a saturation threshold. Chose mounted terminal views with rendered
+marker checks over listener-only delivery for qualification: this includes the
+UI workload but costs more renderer CPU and setup time. Stream readiness,
+per-measurement desync recovery, validated run counts and unconditional cleanup
+make invalid or interrupted measurements fail explicitly. Seven focused regressions, a real-browser overflow check (301 completions
+with a 250-entry buffer), and enabled one-run-per-transport qualification
+passed.
 
 ## Related
 

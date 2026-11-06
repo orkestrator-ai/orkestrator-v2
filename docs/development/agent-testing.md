@@ -975,10 +975,18 @@ Playwright.
 client. It starts Electron with only main's Node inspector (`--inspect=0`,
 which sees main's JavaScript and none of the pages). It then closes the
 development DevTools windows, drives the pages with `executeJavaScript`, and
-waits until a page has stopped loading Vite modules before each measured
-window. It is opt-in and writes
+mounts the real terminal view in both windows. Each load verifies its marker
+in each xterm buffer after measuring delivery. A resource `PerformanceObserver`
+tracks activity beyond the browser timing buffer and requires three quiet
+seconds before sampling; direct terminal listeners wait for stream readiness
+before applying their initial snapshot. Recovery snapshots are fetched only
+for a new desync, and results record per-window desync counts. It is opt-in and writes
 `output/agent-testing/local-transport-counts/no-devtools.json`, three
-alternating runs per transport by default (`ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS`):
+alternating runs per transport by default (`ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS`,
+a positive integer from 1 to 10). Results identify the workload as
+`mounted-terminals`; the earlier 5760 figures used custom listeners without
+mounted terminal views. Failed startup stops Vite immediately, and profilers
+are stopped even when measured work fails:
 
 ```bash
 ORKESTRATOR_LOCAL_TRANSPORT_CPU=1 bunx playwright test \

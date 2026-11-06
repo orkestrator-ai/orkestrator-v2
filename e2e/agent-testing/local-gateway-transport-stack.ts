@@ -6,6 +6,7 @@ import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profi
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ownProcessGroup } from "../process-cleanup";
+import { withStartingProcess } from "./local-gateway-transport-lifecycle";
 import { recordProcessOutput } from "./electron-diagnostics";
 import { expect } from "./electron-fixtures";
 
@@ -102,21 +103,23 @@ export async function startTransportStack(
     },
   });
   ownProcessGroup(vite);
-  recordProcessOutput("vite", vite);
-  await waitForUrl(rendererUrl);
-  return {
-    profile,
-    profilePath,
-    projectPath,
-    rendererUrl,
-    vite,
-    electronEnv: {
-      ...(Object.fromEntries(
-        Object.entries(process.env).filter((entry) => entry[1] !== undefined),
-      ) as Record<string, string>),
-      ELECTRON_DEV: "1",
-      VITE_DEV_SERVER_URL: rendererUrl,
-      ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-    },
-  };
+  return withStartingProcess(vite, async () => {
+    recordProcessOutput("vite", vite);
+    await waitForUrl(rendererUrl);
+    return {
+      profile,
+      profilePath,
+      projectPath,
+      rendererUrl,
+      vite,
+      electronEnv: {
+        ...(Object.fromEntries(
+          Object.entries(process.env).filter((entry) => entry[1] !== undefined),
+        ) as Record<string, string>),
+        ELECTRON_DEV: "1",
+        VITE_DEV_SERVER_URL: rendererUrl,
+        ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+      },
+    };
+  });
 }

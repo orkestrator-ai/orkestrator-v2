@@ -1,3 +1,12 @@
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  listenCode,
+  waitCode,
+  resourceActivityCode,
+  resourceQuietCode,
+  parseRunCount,
+} from "./local-gateway-transport-cpu-page";
+import { withProfilers } from "./local-gateway-transport-lifecycle";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -39,7 +48,6 @@ import {
  * nothing polls.
  */
 
-const RUNS = Number(process.env.ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS ?? 3);
 const LINE_COUNT = 300;
 const BURST_LINES = 200_000;
 const IDLE_MS = 5_000;
@@ -53,10 +61,17 @@ const IDLE_MS = 5_000;
 const PROFILE = process.env.ORKESTRATOR_LOCAL_TRANSPORT_PROFILE === "1";
 const TRACE_CATEGORIES = ["toplevel", "toplevel.flow", "mojom", "ipc", "net", "loading"];
 
-type CpuWindow = { wallMs: number; mainCpuMs: number; rendererCpuMs: number; relayed: number };
+type CpuWindow = {
+  wallMs: number;
+  mainCpuMs: number;
+  rendererCpuMs: number;
+  relayed: number;
+  desyncs?: number[];
+};
 type RunResult = {
   mode: TransportMode;
   run: number;
+  workload: "mounted-terminals";
   idle: CpuWindow;
   load: CpuWindow;
   burst: CpuWindow;
@@ -135,62 +150,6 @@ class MainInspector {
 /** Runs `code` in window `windowId`'s page and returns its (awaited) value. */
 function inPage(windowId: number, code: string): string {
   return `globalThis.__electron.BrowserWindow.fromId(${windowId}).webContents.executeJavaScript(${JSON.stringify(code)}, true)`;
-}
-
-/** Page code: count and keep the tail of one terminal session's frames. */
-function listenCode(sessionId: string): string {
-  return `(async () => {
-    const state = { tail: "", count: 0, desynced: 0, keys: "", waiters: [] };
-    globalThis.__cpuTerminal = state;
-    await window.orkestrator.listen(${JSON.stringify(`terminal-output-${sessionId}`)}, (payload) => {
-      state.count += 1;
-      if (payload && typeof payload === "object") {
-        state.keys = Object.keys(payload).sort().join(",");
-        if (payload.desynced) state.desynced += 1;
-        if (typeof payload.text === "string") state.tail = (state.tail + payload.text).slice(-4096);
-      }
-      for (const waiter of state.waiters.splice(0)) waiter();
-    });
-    // As a terminal view does: the direct transport's terminal socket holds a
-    // channel's frames until the page has applied a snapshot.
-    if ("orkestratorDesktopHost" in window) {
-      const snapshot = await window.orkestrator.invoke("get_terminal_output_snapshot", {
-        sessionId: ${JSON.stringify(sessionId)},
-      });
-      await window.orkestrator.invoke("terminal_snapshot_applied", {
-        sessionId: ${JSON.stringify(sessionId)},
-        generation: snapshot.generation,
-        revision: snapshot.revision,
-      });
-    }
-    return true;
-  })()`;
-}
-
-/**
- * Page code: resolve once `marker` has arrived in this window, from its own
- * frames or, after a desync dropped some, the authoritative snapshot.
- */
-function waitCode(sessionId: string, marker: string): string {
-  return `new Promise((resolve) => {
-    const state = globalThis.__cpuTerminal;
-    const visible = (text) => text
-      .replace(/\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)/g, "")
-      .replace(/\\x1b\\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-      .replace(/[\\x00-\\x08\\x0b-\\x1f\\x7f]/g, "");
-    const check = async () => {
-      if (visible(state.tail).includes(${JSON.stringify(marker)})) return resolve(state.count);
-      if (state.desynced > 0) {
-        const snapshot = await window.orkestrator.invoke("get_terminal_output_snapshot", {
-          sessionId: ${JSON.stringify(sessionId)},
-        });
-        if (visible(snapshot.output).includes(${JSON.stringify(marker)})) return resolve(state.count);
-        return setTimeout(check, 100);
-      }
-      state.waiters.push(check);
-    };
-    check();
-  })`;
 }
 
 /** `work`, or a failure naming `what` once `ms` pass, so a stalled load fails instead of hanging. */
@@ -290,6 +249,7 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
       return windowId;
     };
     const first = await awaitWindow([]);
+    await main.evaluate(inPage(first, resourceActivityCode));
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       main.evaluate<T>(
         inPage(
@@ -298,11 +258,11 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
         ),
       );
 
-    const project = await invoke<{ id: string }>("add_project", {
+    const project = await invoke<{ id: string; name: string }>("add_project", {
       gitUrl: path.join(stack.profile.fixtureDir, "origin.git"),
       localPath: stack.projectPath,
     });
-    const environment = await invoke<{ id: string }>("create_environment", {
+    const environment = await invoke<{ id: string; name: string }>("create_environment", {
       projectId: project.id,
       name: `transport-cpu-${Date.now()}`,
       networkAccessMode: "restricted",
@@ -313,9 +273,65 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
       environmentId: environment.id,
       cols: 120,
       rows: 30,
-      terminalKey: "transport-cpu",
+      terminalKey: "tab-shell",
     });
     await invoke("start_local_terminal_session", { sessionId });
+    const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+      environmentId: environment.id,
+    });
+    await invoke("save_pane_layout", {
+      environmentId: environment.id,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane-shell",
+        root: {
+          kind: "leaf",
+          id: "pane-shell",
+          activeTabId: "tab-shell",
+          tabs: [{ id: "tab-shell", type: "plain" }],
+        },
+      },
+    });
+    const mountTerminal = async (id: number) => {
+      // Select through the same store action as the sidebar. This keeps setup
+      // independent of labels and needs no page DevTools connection.
+      await main.evaluate(
+        inPage(
+          id,
+          `(async () => {
+        const { useUIStore } = await import("/src/stores/uiStore.ts");
+        useUIStore.getState().selectProjectAndEnvironment(${JSON.stringify(project.id)}, ${JSON.stringify(environment.id)});
+      })()`,
+        ),
+      );
+      await expect
+        .poll(
+          () =>
+            main.evaluate<boolean>(
+              inPage(
+                id,
+                `Boolean(Array.from(document.querySelectorAll(".xterm")).find(element => element.getBoundingClientRect().height > 0))`,
+              ),
+            ),
+          { timeout: 60_000 },
+        )
+        .toBe(true);
+      await main.evaluate(
+        inPage(
+          id,
+          `(async () => {
+        const module = await import("/src/stores/terminalPortalStore.ts");
+        globalThis.__cpuRendered = () => {
+          const buffer = module.useTerminalPortalStore.getState().getTerminal(${JSON.stringify(environment.id)}, "tab-shell")?.terminal.buffer.active;
+          return buffer ? Array.from({ length: buffer.length }, (_, i) => buffer.getLine(i)?.translateToString(true) ?? "").join("\\n") : "";
+        };
+      })()`,
+        ),
+      );
+    };
+    await mountTerminal(first);
     await main.evaluate(inPage(first, listenCode(sessionId)));
 
     // Counts the terminal events main relays to the windows, as the other spec does.
@@ -359,27 +375,39 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
     /** One command, measured from its write until every listening window has its marker. */
     const profiled = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
       if (!PROFILE || run !== 1) return work();
-      await main.send("Profiler.enable");
-      await main.send("Profiler.setSamplingInterval", { interval: 200 });
       const base = path.join(countsDir, `no-devtools-${mode}-${name}`);
       await mkdir(countsDir, { recursive: true });
-      await main.evaluate(
-        `globalThis.__electron.contentTracing.startRecording(${JSON.stringify({
-          included_categories: TRACE_CATEGORIES,
-          excluded_categories: ["*"],
-          trace_buffer_size_in_kb: 256 * 1024,
-        })})`,
+      return withProfilers(
+        {
+          startTrace: () =>
+            main.evaluate(
+              `globalThis.__electron.contentTracing.startRecording(${JSON.stringify({ included_categories: TRACE_CATEGORIES, excluded_categories: ["*"], trace_buffer_size_in_kb: 256 * 1024 })})`,
+            ),
+          stopTrace: () =>
+            main.evaluate(
+              `globalThis.__electron.contentTracing.stopRecording(${JSON.stringify(`${base}.perfetto-trace`)})`,
+            ),
+          startCpu: async () => {
+            await main.send("Profiler.enable");
+            await main.send("Profiler.setSamplingInterval", { interval: 200 });
+            await main.send("Profiler.start");
+          },
+          stopCpu: async () => {
+            const { profile } = await main.send<{ profile: unknown }>("Profiler.stop");
+            await writeFile(`${base}.cpuprofile`, JSON.stringify(profile));
+          },
+        },
+        work,
       );
-      await main.send("Profiler.start");
-      const result = await work();
-      const { profile } = await main.send<{ profile: unknown }>("Profiler.stop");
-      await main.evaluate(
-        `globalThis.__electron.contentTracing.stopRecording(${JSON.stringify(`${base}.perfetto-trace`)})`,
-      );
-      await writeFile(`${base}.cpuprofile`, JSON.stringify(profile));
-      return result;
     };
     const measure = async (line: string, marker: string): Promise<CpuWindow> => {
+      const desyncs = () =>
+        Promise.all(
+          listening.map((id) =>
+            main.evaluate<number>(inPage(id, "globalThis.__cpuTerminal.desynced")),
+          ),
+        );
+      const beforeDesyncs = await desyncs();
       const wait = JSON.stringify(waitCode(sessionId, marker));
       await main.evaluate(
         `globalThis.__done = Promise.all(${JSON.stringify(listening)}.map((id) =>
@@ -408,8 +436,25 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
         );
         throw new Error(`${error.message}: ${JSON.stringify(seen)}`);
       });
+      const measured = cpuWindow(start, await sample());
+      // Verify the actual xterm buffers outside the measured interval. Every
+      // window must finish rendering the same marker its transport received.
+      for (const id of listening) {
+        await expect
+          .poll(
+            () =>
+              main.evaluate<boolean>(
+                inPage(id, `globalThis.__cpuRendered().includes(${JSON.stringify(marker)})`),
+              ),
+            { timeout: 30_000 },
+          )
+          .toBe(true);
+      }
       console.log(`[transport-cpu] ${mode} run ${run}: ${marker}`);
-      return cpuWindow(start, await sample());
+      return {
+        ...measured,
+        desyncs: (await desyncs()).map((count, i) => count - beforeDesyncs[i]!),
+      };
     };
 
     /**
@@ -418,23 +463,13 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
      * answers, and that loading is main's work too.
      */
     const settle = async () => {
-      let last = "";
-      let quiet = 0;
       await expect
         .poll(
           async () => {
-            const counts = JSON.stringify(
-              await Promise.all(
-                listening.map((id) =>
-                  main.evaluate<number>(
-                    inPage(id, `performance.getEntriesByType("resource").length`),
-                  ),
-                ),
-              ),
+            const quiet = await Promise.all(
+              listening.map((id) => main.evaluate<boolean>(inPage(id, resourceQuietCode))),
             );
-            quiet = counts === last ? quiet + 1 : 0;
-            last = counts;
-            return quiet >= 3;
+            return quiet.every(Boolean);
           },
           { timeout: 120_000, intervals: [1_000] },
         )
@@ -467,6 +502,8 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
       return true;
     })()`);
     const second = await awaitWindow([first]);
+    await main.evaluate(inPage(second, resourceActivityCode));
+    await mountTerminal(second);
     await main.evaluate(inPage(second, listenCode(sessionId)));
     listening.push(second);
     await countRelay();
@@ -486,7 +523,15 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
     else expect(twoBurst.relayed, "main relays no terminal output").toBe(0);
 
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
-    return { mode, run, idle, load, burst, twoWindows: { load: twoLoad, burst: twoBurst } };
+    return {
+      mode,
+      run,
+      workload: "mounted-terminals",
+      idle,
+      load,
+      burst,
+      twoWindows: { load: twoLoad, burst: twoBurst },
+    };
   } finally {
     if (inspector) {
       // Quitting can drop the connection before the answer arrives.
@@ -513,12 +558,43 @@ test.beforeAll(() => {
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
 });
 
+test("resource warm-up observes completions beyond the browser timing buffer", async ({ page }) => {
+  await page.route("http://resource-warmup.test/**", async (route) => {
+    if (route.request().url().endsWith("/delayed"))
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>Resource warm-up</title>",
+    });
+  });
+  await page.goto("http://resource-warmup.test/");
+  await page.evaluate(() => performance.setResourceTimingBufferSize(250));
+  await page.evaluate(resourceActivityCode);
+  await page.evaluate(async () => {
+    await Promise.all(
+      Array.from({ length: 300 }, (_, i) =>
+        fetch(`/resource-${i}`).then((response) => response.text()),
+      ),
+    );
+    await fetch("/delayed").then((response) => response.text());
+  });
+  await expect
+    .poll(() => page.evaluate(() => performance.getEntriesByType("resource").length))
+    .toBe(250);
+  await expect
+    .poll(() => page.evaluate("globalThis.__cpuResources.activity.count"))
+    .toBeGreaterThanOrEqual(301);
+  expect(await page.evaluate(resourceQuietCode)).toBe(false);
+  await expect.poll(() => page.evaluate(resourceQuietCode), { timeout: 10_000 }).toBe(true);
+});
+
 test("Electron main's CPU on each local transport, with no DevTools client", async () => {
   test.skip(
     process.env.ORKESTRATOR_LOCAL_TRANSPORT_CPU !== "1",
     "an opt-in measurement: set ORKESTRATOR_LOCAL_TRANSPORT_CPU=1",
   );
-  test.setTimeout(RUNS * 2 * 240_000);
+  const RUNS = parseRunCount(process.env.ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS);
+  test.setTimeout(RUNS * 2 * 360_000);
   const results: RunResult[] = [];
   for (let run = 1; run <= RUNS; run++) {
     for (const mode of ["relay", "gateway"] as const) {

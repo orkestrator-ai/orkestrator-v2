@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -43,7 +44,7 @@ function harness(overrides: Partial<typeof __testing.armRuntime> = {}) {
   let now = 0;
   let status: Status = { status: "missing" };
   const child = Object.assign(new EventEmitter(), {
-    pid: 123_456,
+    pid: fakePid(123_456),
     kill: mock(() => {
       child.emit("exit", 143);
       return true;
@@ -586,7 +587,7 @@ test.each(["SIGTERM", "SIGINT"] as const)(
     import { __testing, parseOptions, runArm, withTerminationSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "../../scripts/recurring-live-ab.ts"))};
     const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");
     let status = { status: "missing" };
-    const child = Object.assign(new EventEmitter(), { pid: 123456, kill: () => true });
+    const child = Object.assign(new EventEmitter(), { pid: ${fakePid(123456)}, kill: () => true });
     const runtime = { ...__testing.armRuntime,
       readStatus: () => status,
       startProfile: () => { status = { status: "ready", startedAt: "owned", processStartTimes: { launcher: 100 }, pids: { launcher: child.pid }, live: { launcher: true } }; return child; },
@@ -664,7 +665,7 @@ test.each(["SIGTERM", "SIGINT"] as const)(
       import { __testing, measureSoak, parseOptions, runArm, withTerminationSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "../../scripts/recurring-live-ab.ts"))};
       const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");
       let status = { status: "missing" };
-      const child = Object.assign(new EventEmitter(), { pid: 123456, kill: () => true });
+      const child = Object.assign(new EventEmitter(), { pid: ${fakePid(123456)}, kill: () => true });
       const runtime = { ...__testing.armRuntime,
         readStatus: () => status,
         startProfile: () => { status = { status: "ready", startedAt: "owned", processStartTimes: { launcher: 100 }, pids: { launcher: child.pid }, live: { launcher: true } }; return child; },

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -60,7 +61,7 @@ afterEach(() => {
 function fakePty(): PtyProcess & { writes: string[] } {
   const writes: string[] = [];
   return {
-    pid: 4242,
+    pid: fakePid(4242),
     writes,
     write: (data: string) => writes.push(data),
     resize: () => undefined,
@@ -71,7 +72,7 @@ function fakePty(): PtyProcess & { writes: string[] } {
 
 function fakeChild(): ChildProcessWithoutNullStreams {
   return Object.assign(new EventEmitter(), {
-    pid: 5151,
+    pid: fakePid(5151),
     killed: false,
     exitCode: null,
     signalCode: null,
@@ -171,7 +172,7 @@ describe("two BackendRuntimes in one process", () => {
     expect(first.localServers.process("codex:env-1")).toBe(child);
 
     await first.localServers.shutdown();
-    expect(terminated).toEqual(["5151"]);
+    expect(terminated).toEqual([String(fakePid(5151))]);
     expect(first.localServers.processCount()).toBe(0);
     expect(first.localServers.bridgeToken("codex", "env-1")).toBeUndefined();
   });

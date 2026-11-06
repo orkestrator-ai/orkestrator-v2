@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -1411,10 +1412,22 @@ describe("native-agent activity reconciliation lifecycle", () => {
         backend as unknown as { nodeCoordination: { ticketSyncTimer: unknown } }
       ).nodeCoordination.ticketSyncTimer;
       expect(ticketSyncTimer).toBeDefined();
+      // The log-detail expiry check is the log policy service's own 60 s
+      // timer; a second `init` must not start a second service beside it.
+      const logPolicyExpiryTimer = (
+        backend as unknown as { runtime: { logPolicy?: { expiryTimer: unknown } } }
+      ).runtime.logPolicy?.expiryTimer;
+      expect(logPolicyExpiryTimer).toBeDefined();
+      expect(intervals.filter((interval) => interval.handle === logPolicyExpiryTimer)).toHaveLength(
+        1,
+      );
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
       expect(
         intervals.filter(
-          (interval) => interval.delay === 60_000 && interval.handle !== ticketSyncTimer,
+          (interval) =>
+            interval.delay === 60_000 &&
+            interval.handle !== ticketSyncTimer &&
+            interval.handle !== logPolicyExpiryTimer,
         ),
       ).toHaveLength(0);
       const startup = {
@@ -1909,7 +1922,7 @@ test("startup re-admits interrupted deletion while its tombstone continues block
       },
     },
   });
-  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(96001));
+  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(fakePid(96001)));
   const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",
@@ -1990,7 +2003,7 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
       },
     },
   });
-  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(96002));
+  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(fakePid(96002)));
   const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",

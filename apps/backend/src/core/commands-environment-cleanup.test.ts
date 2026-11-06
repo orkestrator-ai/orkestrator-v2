@@ -1,5 +1,6 @@
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -381,7 +382,7 @@ describe("delete_environment host cleanup", () => {
       async (invokeDelete, storage, context) => {
         let exited = false;
         const process = {
-          pid: 1,
+          pid: fakePid(1),
           onData: () => ({ dispose: () => undefined }),
           onExit: () => ({ dispose: () => undefined }),
           write: () => undefined,
@@ -593,7 +594,7 @@ describe("delete_environment host cleanup", () => {
           terminating = resolve;
         });
         const process = {
-          pid: 1,
+          pid: fakePid(1),
           onData: () => ({ dispose: () => undefined }),
           onExit: () => ({ dispose: () => undefined }),
           write: () => undefined,

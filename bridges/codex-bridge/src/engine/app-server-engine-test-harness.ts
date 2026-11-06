@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { AppServerEngine } from "./app-server-engine.js";
 import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
@@ -111,14 +112,6 @@ class ScriptedChild extends EventEmitter {
   }
 }
 
-/**
- * Fake children run through the real supervisor, whose stop path signals the
- * child's whole process group (`process.kill(-pid)`). A plausible pid there
- * would SIGTERM and then SIGKILL a real group on the host, so every fake pid
- * sits above any platform's `pid_max` and the signal can only fail.
- */
-const FAKE_PID_BASE = 2_100_000_000;
-
 const INITIALIZE = () => ({
   userAgent: "orkestrator/0.145.0 (test)",
   codexHome: "/tmp/codex-home",
@@ -179,7 +172,8 @@ export function harness(
       refreshEnvironment: async () => undefined,
       spawnProcess: (() => {
         index += 1;
-        const child = new ScriptedChild(FAKE_PID_BASE + index, merged);
+        // The real supervisor's stop path signals `-pid`; a fake pid can never name a real group.
+        const child = new ScriptedChild(fakePid(index), merged);
         children.push(child);
         return child;
       }) as unknown as AppServerSupervisorOptions["spawnProcess"],

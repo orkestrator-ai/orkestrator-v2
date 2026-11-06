@@ -27,6 +27,7 @@ import {
   AppServerUnavailableError,
   classifyDispatchFailure,
 } from "./errors.js";
+import { UNMAPPED_PID, fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { FakeReadable, FakeWritable } from "./testing/fake-app-server.js";
 import type { EngineState } from "../engine/types.js";
 import type { InboundNotification, InboundServerRequest } from "./envelope-validation.js";
@@ -130,13 +131,12 @@ afterEach(() => {
 });
 
 /**
- * Above every platform's `pid_max`, so `process.kill` on it is guaranteed to
- * fail rather than reach a real process group. Tests that let the supervisor
- * run its termination path must never hand it a plausible PID.
+ * Tests that let the supervisor run its termination path must never hand it a
+ * plausible PID: it signals the child's whole group. `UNMAPPED_PID` and every
+ * `fakePid` lie above any platform's `pid_max`, so the signal can only fail.
  */
-const UNMAPPED_PID = 2_147_483_646;
-/** A fake child's pid; above `pid_max` for the same reason as `UNMAPPED_PID`. */
-const FAKE_CHILD_PID = 2_147_483_645;
+/** A fake child's pid. */
+const FAKE_CHILD_PID = fakePid(0);
 /** chmod-based permission tests are meaningless as root. */
 const RUNNING_AS_ROOT = process.getuid?.() === 0;
 
@@ -235,7 +235,7 @@ function harness(
       const behaviour = options.behaviours?.[spawnIndex] ?? {};
       spawnIndex += 1;
       spawnEnvironments.push({ ...spawnOptions.env });
-      const child = new FakeChild(behaviour.pid ?? UNMAPPED_PID - 1_000 - spawnIndex, behaviour);
+      const child = new FakeChild(behaviour.pid ?? fakePid(1_000 + spawnIndex), behaviour);
       children.push(child);
       return child;
     }) as unknown as AppServerSupervisorOptions["spawnProcess"],

@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 
 import { join } from "node:path";
 
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { AppServerRuntime, type RuntimeSseEvent } from "./app-server-runtime.js";
 
 import type { WatchRolloutFile } from "./sessions/refused-cell-tail.js";
@@ -245,14 +246,6 @@ export let previousCodexHome: string | undefined;
 
 export let previousCwd: string | undefined;
 
-/**
- * Fake children run through the real supervisor, whose stop path signals the
- * child's whole process group (`process.kill(-pid)`). A plausible pid there
- * would SIGTERM and then SIGKILL a real group on the host, so every fake pid
- * sits above any platform's `pid_max` and the signal can only fail.
- */
-const FAKE_PID_BASE = 2_100_000_000;
-
 /** Runtimes built for the current test, stopped before its `codexHome` goes. */
 const runtimes = new Set<AppServerRuntime>();
 
@@ -335,7 +328,8 @@ export async function harness(
         : {}),
       spawnProcess: (() => {
         index += 1;
-        const child = new ScriptedChild(FAKE_PID_BASE + index, merged);
+        // The real supervisor's stop path signals `-pid`; a fake pid can never name a real group.
+        const child = new ScriptedChild(fakePid(index), merged);
         children.push(child);
         return child;
       }) as unknown as AppServerSupervisorOptions["spawnProcess"],

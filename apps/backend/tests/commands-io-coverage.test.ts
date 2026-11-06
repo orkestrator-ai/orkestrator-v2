@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -1365,7 +1366,7 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
   test("reports OpenCode agent-tool readiness only for a live server with agent tools", async () => {
     // No `worktreePath`, so the status read reports readiness without
     // scheduling reconciliation — this test asserts the surface, not the POST.
-    const environment = { id: "env-tools", localOpencodePort: 4201, opencodePid: 5201 };
+    const environment = { id: "env-tools", localOpencodePort: 4201, opencodePid: fakePid(5201) };
     const commands = createCommandRegistry();
     const agentTools = {
       connection: mock(() => ({ url: "http://127.0.0.1:1/mcp", token: "t" })),
@@ -1382,17 +1383,17 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
         { environmentId: "env-tools" },
         withAgentTools,
       ),
-    ).resolves.toEqual({ running: false, port: 4201, pid: 5201 });
+    ).resolves.toEqual({ running: false, port: 4201, pid: fakePid(5201) });
 
     const { localServers } = withAgentTools.runtime;
     const openCodeChild = {
-      pid: 5201,
+      pid: fakePid(5201),
       exitCode: null,
       signalCode: null,
       kill: mock(() => true),
     } as unknown as ChildProcessWithoutNullStreams;
     const claudeChild = {
-      pid: 5202,
+      pid: fakePid(5202),
       exitCode: null,
       signalCode: null,
       kill: mock(() => true),
@@ -1409,7 +1410,7 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
       ).resolves.toEqual({
         running: true,
         port: 4201,
-        pid: 5201,
+        pid: fakePid(5201),
         agentTools: "pending",
       });
 
@@ -1421,13 +1422,13 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
           { environmentId: "env-tools" },
           withAgentTools,
         ),
-      ).resolves.toEqual({ running: true, port: null, pid: 5202 });
+      ).resolves.toEqual({ running: true, port: null, pid: fakePid(5202) });
       await expect(
         commands.get("get_local_opencode_server_status")?.({ environmentId: "env-tools" }, {
           ...createContext(environment),
           runtime: withAgentTools.runtime,
         } as CommandContext),
-      ).resolves.toEqual({ running: true, port: 4201, pid: 5201 });
+      ).resolves.toEqual({ running: true, port: 4201, pid: fakePid(5201) });
       expect(agentTools.connection).not.toHaveBeenCalled();
     } finally {
       localServers.releaseOwnership("opencode:env-tools", openCodeChild);

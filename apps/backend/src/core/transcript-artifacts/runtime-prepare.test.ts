@@ -17,6 +17,8 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { retryOnAddressInUse } from "@orkestrator/protocol/testing/ports";
+
 import type { PreviewRunner } from "./contracts.js";
 import { WORKER_CONTEXT_LABEL, workerContextDigest } from "./preview-worker-context-digest.js";
 import { localWorkerPinFile, prepareWorkerImage } from "./preview-worker-prepare.js";
@@ -206,28 +208,21 @@ describe("content listener configuration", () => {
     // it in between; that EADDRINUSE says nothing about the runtime, so try a
     // fresh port (a bounded number of times) rather than fail.
     let port: number | undefined;
-    let runtime: Awaited<ReturnType<typeof createTranscriptArtifactRuntime>> | undefined;
-    for (let attempt = 1; runtime === undefined; attempt += 1) {
+    const started = await retryOnAddressInUse(() => {
       const probe = Bun.serve({ port: 0, fetch: () => new Response("x") });
       port = probe.port;
       probe.stop(true);
-      try {
-        runtime = await createTranscriptArtifactRuntime({
-          dataDir: scratch("ork-runtime-bind-"),
-          env: {
-            ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "disabled",
-            ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN: "https://artifacts.example-content.net",
-            ORKESTRATOR_ARTIFACT_CONTENT_PORT: String(port),
-            ORKESTRATOR_ARTIFACT_CONTENT_BIND: "127.0.0.1",
-          },
-          applicationOrigins: ["https://ork.tailnet-name.ts.net"],
-        });
-      } catch (error) {
-        if ((error as { code?: string }).code !== "EADDRINUSE" || attempt >= 5) throw error;
-      }
-    }
-    if (!runtime) throw new Error("unreachable: the loop ends only with a runtime");
-    const started = runtime;
+      return createTranscriptArtifactRuntime({
+        dataDir: scratch("ork-runtime-bind-"),
+        env: {
+          ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "disabled",
+          ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN: "https://artifacts.example-content.net",
+          ORKESTRATOR_ARTIFACT_CONTENT_PORT: String(port),
+          ORKESTRATOR_ARTIFACT_CONTENT_BIND: "127.0.0.1",
+        },
+        applicationOrigins: ["https://ork.tailnet-name.ts.net"],
+      });
+    });
     cleanups.push(() => started.close());
     expect(started.contentServer.origin()).toBe("https://artifacts.example-content.net");
     // Bound where configured; a request naming another host is misdirected.

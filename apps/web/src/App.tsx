@@ -29,6 +29,7 @@ import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBann
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
+import { startBuildPipelineCompletionNotes } from "@/lib/build-pipeline-completion-notes";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
@@ -360,6 +361,8 @@ function ConnectedApp() {
   useEffect(() => startTransportConnectivity(), []);
   useEffect(() => startDataSavingReadPolicy(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
+  // A run that finishes while this window watches opens its notes in a tab.
+  useEffect(() => startBuildPipelineCompletionNotes(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
       // Keep the legacy key intact so the next launch can retry after a

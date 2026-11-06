@@ -1316,6 +1316,48 @@ while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
 gateway runtimes snapshot their host address at gateway boot and need a
 rebuild after host loopback is enabled.
 
+### Port selection and the loopback address (`agent-tools-listen.ts`)
+
+The server asks first for the port it used last time (saved by
+`recordCapabilityPort`, so workflow-result capabilities and container
+firewall rules survive a restart) and takes an ephemeral port when that one
+is in use. Host agents are handed `http://127.0.0.1:<port>/mcp`, so the port
+is only usable if `127.0.0.1:<port>` reaches this backend.
+
+A wildcard bind does not prove that on macOS. BSD socket rules let
+`0.0.0.0:<port>` succeed beside another process's `127.0.0.1:<port>`
+listener, and the kernel then gives every loopback connection to the more
+specific bind: host agents sent their bearer token to the other process and
+got 401 (todo 7220, closed 2026-11-06; seen with a second `dev:test` backend that had taken the
+saved port). `listenAgentTools` therefore:
+
+- After a wildcard bind, also binds `127.0.0.1:<port>` with the same handler
+  and peer gate, for the server's lifetime. On macOS that succeeds when the
+  address is free and then stops any later process from taking it.
+- When that bind is refused on Linux, keeps the wildcard listener: Linux's
+  exclusive wildcard bind already owns loopback and prevents later takeover.
+  Every other platform must acquire both listeners. A runtime overlap probe
+  cannot safely establish exclusivity, because a competing process can win
+  the probe's loopback port and produce the same `EADDRINUSE` as Linux.
+  The port is released, `[docker.reachability] port.loopback-taken` is logged,
+  and an ephemeral port is tried (up to three). The new port is saved, and
+  containers follow it through the `host-service-ports` repair above.
+- Treats an explicit `start(port)` as exact: a held loopback address fails the
+  start with `EADDRINUSE` instead of moving.
+
+Nothing is ever sent to the other process, and container reach
+(`host.docker.internal`, the same port) and the peer gate below are
+unchanged. A bind address that is not a wildcard (tests bind `127.0.0.1`)
+gets one listener. Tests: `agent-tools-listen.test.ts` (both rule sets, and
+the real kernel of whichever OS runs it; it also passed in a Linux container)
+and `agent-tools-loopback-port.test.ts` (the saved-port clash through
+`AgentToolsServer`).
+
+Platform coverage: macOS and Linux were checked by those tests against the
+real kernel (Linux in a container). Windows was not checked; the backend
+refuses to start on `win32`, so the non-Linux branch is what would apply if
+that ever changed, and its bind rules would need measuring first.
+
 ### Who may connect
 
 The server listens on every host interface (`0.0.0.0`), because the host-side

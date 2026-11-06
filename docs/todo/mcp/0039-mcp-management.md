@@ -20,7 +20,7 @@ closed and task 8 worked on 2026-10-31 from `931e5541` (branch
 Codex and Grok parity guards added, agent-account copies kept in step.
 Tasks 14 and 11 closed and task 5's harness half done on 2026-11-06 from
 `c1724ab7` (branch `mcp-management-0c257de34897-r1`; follow-ups
-[7220](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md)
+7220 (closed 2026-11-06; see [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents))
 and [7221](7221-live-panel-stale-after-probe-reconnect.md)).
 
 ### Tasks
@@ -500,7 +500,7 @@ no Claude credential).
     server had re-bound its saved port on `0.0.0.0` while another worktree's
     backend held the same port on `127.0.0.1`, so the CLI's requests reached
     that backend. A product defect, recorded as
-    [7220](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md);
+    7220 (closed 2026-11-06; see [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents));
     resetting the profile (a fresh port) cleared it. This case only requires
     `orkestrator` to be present and not `connecting`, so it passed either
     way.
@@ -1359,7 +1359,7 @@ expand, click and compare the panel the same way.
 Two faults found during the runs are outside this ticket and touch other
 areas (the agent tools server, the renderer's projection refresh), so they
 are recorded rather than fixed:
-[7220](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md)
+7220 (closed 2026-11-06; see [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents))
 (High: a scoped bearer token reaches another process) and
 [7221](7221-live-panel-stale-after-probe-reconnect.md) (Medium). Task 8's
 spec case is left as it is, red until 7221 is fixed, rather than loosened.
@@ -1582,8 +1582,9 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
-- [7220-agent-tools-port-shadowed-by-loopback-listener.md](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md):
-  the agent tools port clash found under task 14.
+- [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
+  in `container-lifecycle.md`: the fix for the agent tools port clash found
+  under task 14 (todo 7220, closed 2026-11-06).
 - [7221-live-panel-stale-after-probe-reconnect.md](7221-live-panel-stale-after-probe-reconnect.md):
   task 8's reconnect case, red since 2026-11-06.
 - [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md) for a

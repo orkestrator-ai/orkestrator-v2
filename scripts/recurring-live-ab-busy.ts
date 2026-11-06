@@ -589,349 +589,359 @@ export async function measureBusy(
             ...(detail ? { detail } : {}),
           });
         const tag = `r${roundIndex}`;
-        clients =
-          clientCount > 0
-            ? await runtime.openClients({
-                count: clientCount,
-                openEnvironment: askEnvironment.name,
-                ...(signal ? { signal } : {}),
-              })
-            : [];
-        /** Clients whose link is cut or whose document is hidden are not expected to follow. */
-        const cut = new Set<BusyClient>();
-        const connected = () => clients.filter((client) => !cut.has(client));
-        const allClients = async (
-          row: BusyRow | null,
-          since: number,
-          done: (client: BusyClient) => Promise<boolean>,
-          targets = connected(),
-          timeoutMs = CLIENT_WAIT_MS,
-        ) => {
-          const values = await Promise.all(
-            targets.map((client) => until(row, since, () => done(client), timeoutMs)),
-          );
-          if (row) for (const value of values) record(row, value);
-          return values;
-        };
-
-        // 1. Burst: every environment at once.
-        const burstPath = path.join("busy-burst", tag);
-        const worktrees = environments.map((entry) => entry.worktree);
-        const baselines = await Promise.all(clients.map((client) => client.badges()));
-        /** One reader per client; each environment's first match is one sample. */
-        const watchBadges = async (
-          row: BusyRow,
-          since: number,
-          reached: (additions: number | null, base: number) => boolean,
-        ) =>
-          Promise.all(
-            clients.map(async (client, index) => {
-              const pending = new Set(environments.map((entry) => entry.name));
-              for (;;) {
-                signal?.throwIfAborted();
-                const badges = await client.badges();
-                for (const name of Array.from(pending)) {
-                  if (!reached(badges[name] ?? null, baselines[index]?.[name] ?? 0)) continue;
-                  record(row, Math.round(runtime.now() - since));
-                  pending.delete(name);
-                }
-                if (pending.size === 0) return;
-                if (runtime.now() - since > CLIENT_WAIT_MS) {
-                  result.timeouts[row] = (result.timeouts[row] ?? 0) + pending.size;
-                  return;
-                }
-                await runtime.sleep(POLL_MS, signal);
-              }
-            }),
-          );
-        const changedBefore = diffChanged(await readMetrics());
-        const burstAt = runtime.now();
-        runtime.writeBurst(worktrees, burstPath, options.busyBurstFiles);
-        const backendBurst =
-          changedBefore === null
-            ? Promise.resolve(null)
-            : until(
-                "burst-backend",
-                burstAt,
-                async () =>
-                  (diffChanged(await readMetrics()) ?? 0) >= changedBefore + environments.length,
-                BACKEND_WAIT_MS,
-              );
-        await watchBadges(
-          "burst-badge",
-          burstAt,
-          (additions, base) => additions !== null && additions >= base + options.busyBurstFiles,
-        );
-        record("burst-backend", await backendBurst);
-        const clearAt = runtime.now();
-        runtime.removeBurst(worktrees, burstPath);
-        await watchBadges("burst-clear", clearAt, (additions, base) => (additions ?? 0) <= base);
-
-        // 2. An active turn held at the model, and a prompt queued behind it.
         const held = `t-${tag}`;
         const queued = `q-${tag}`;
         const approval = `a-${tag}`;
-        fakeModel.release(queued);
-        if (
-          (
-            await step([
-              "session",
-              "prompt",
-              turnSession.sessionId,
-              "--prompt",
-              `Busy turn ${tag} [hold:${held}]`,
-            ])
-          ).status !== 0
-        )
-          fail("turn");
-        const dispatched = await until(
-          null,
-          runtime.now(),
-          () => fakeModel.marker(held) !== null,
-          BACKEND_WAIT_MS,
-        );
-        if (dispatched === null) fail("turn", "the held turn never reached the model");
-        const heldAt = fakeModel.marker(held)?.firstAt ?? runtime.now();
-        await allClients(
-          "activity-working",
-          heldAt,
-          async (client) => (await client.markerState(turnEnvironment.name)) === "working",
-        );
-        const enqueued = await step([
-          "session",
-          "prompt",
-          turnSession.sessionId,
-          "--enqueue",
-          "--prompt",
-          `Busy queued ${tag} [hold:${queued}]`,
-        ]);
-        if (enqueued.status !== 0) fail("queue");
+        // A round that throws (a client that cannot open its view, a refused
+        // command) is recorded and the next round still runs.
+        try {
+          clients =
+            clientCount > 0
+              ? await runtime.openClients({
+                  count: clientCount,
+                  openEnvironment: askEnvironment.name,
+                  ...(signal ? { signal } : {}),
+                })
+              : [];
+          /** Clients whose link is cut or whose document is hidden are not expected to follow. */
+          const cut = new Set<BusyClient>();
+          const connected = () => clients.filter((client) => !cut.has(client));
+          const allClients = async (
+            row: BusyRow | null,
+            since: number,
+            done: (client: BusyClient) => Promise<boolean>,
+            targets = connected(),
+            timeoutMs = CLIENT_WAIT_MS,
+          ) => {
+            const values = await Promise.all(
+              targets.map((client) => until(row, since, () => done(client), timeoutMs)),
+            );
+            if (row) for (const value of values) record(row, value);
+            return values;
+          };
 
-        // 3. A parked approval, and mail to the same tab.
-        if (
-          (
-            await step([
-              "session",
-              "prompt",
-              askSession.sessionId,
-              "--prompt",
-              `Busy approval ${tag} [tool:${approval}]`,
-            ])
-          ).status !== 0
-        )
-          fail("approval-prompt");
-        await until(
-          null,
-          runtime.now(),
-          () => fakeModel.marker(approval) !== null,
-          BACKEND_WAIT_MS,
-        );
-        const toolCallAt = fakeModel.marker(approval)?.firstAt ?? runtime.now();
-        let interaction: { id: string; revision: number } | null = null;
-        const listedAfter = await until(
-          "approval-backend",
-          toolCallAt,
-          async () => {
-            const listing = await publicAction("session.interactions", {
-              sessionId: askSession.sessionId,
-            });
-            const items = (listing.result as { items?: unknown[] } | undefined)?.items ?? [];
-            for (const raw of items) {
-              const item = raw as {
-                id?: unknown;
-                revision?: unknown;
-                state?: unknown;
-                kind?: unknown;
-              };
-              if (
-                item.state === "pending" &&
-                item.kind === "command-approval" &&
-                typeof item.id === "string" &&
-                typeof item.revision === "number"
-              ) {
-                interaction = { id: item.id, revision: item.revision };
-                return true;
-              }
-            }
-            return false;
-          },
-          BACKEND_WAIT_MS,
-        );
-        record("approval-backend", listedAfter);
-        await allClients("approval-visible", toolCallAt, (client) => client.approvalVisible());
-        const mailBaseline = await Promise.all(clients.map((client) => client.mailCount()));
-        const mailed = await step([
-          "mail",
-          "send",
-          askEnvironment.id,
-          askSession.tabId,
-          "--subject",
-          `Busy ${tag}`,
-          "--body",
-          `Busy-profile mail ${tag}.`,
-        ]);
-        if (mailed.status !== 0) fail("mail");
-        else result.obligations.mails += 1;
-        const mailedAt = runtime.now();
-        await allClients(
-          "mail-visible",
-          mailedAt,
-          async (client) =>
-            (await client.mailCount()) > (mailBaseline[clients.indexOf(client)] ?? 0),
-        );
-
-        // 4. The outage (two clients) or a hidden document (one client).
-        const outageClient =
-          clientCount === 2 ? clients.find((client) => client.linked) : undefined;
-        const hiddenClient = clientCount === 1 ? clients[0] : undefined;
-        if (outageClient) {
-          outageClient.setLinkUp(false);
-          cut.add(outageClient);
-        }
-        if (hiddenClient) {
-          await hiddenClient.setHidden(true);
-          cut.add(hiddenClient);
-        }
-
-        // 5. Answer the approval, release the held turn, let the queue go.
-        const pending = interaction as { id: string; revision: number } | null;
-        if (!pending) fail("approval", "no pending approval was listed");
-        else {
-          const answered = await publicAction(
-            "session.interaction.resolve",
-            {
-              sessionId: askSession.sessionId,
-              interactionId: pending.id,
-              expectedRevision: pending.revision,
-              action: "answer",
-            },
-            true,
+          // 1. Burst: every environment at once.
+          const burstPath = path.join("busy-burst", tag);
+          const worktrees = environments.map((entry) => entry.worktree);
+          const baselines = await Promise.all(clients.map((client) => client.badges()));
+          /** One reader per client; each environment's first match is one sample. */
+          const watchBadges = async (
+            row: BusyRow,
+            since: number,
+            reached: (additions: number | null, base: number) => boolean,
+          ) =>
+            Promise.all(
+              clients.map(async (client, index) => {
+                const pending = new Set(environments.map((entry) => entry.name));
+                for (;;) {
+                  signal?.throwIfAborted();
+                  const badges = await client.badges();
+                  for (const name of Array.from(pending)) {
+                    if (!reached(badges[name] ?? null, baselines[index]?.[name] ?? 0)) continue;
+                    record(row, Math.round(runtime.now() - since));
+                    pending.delete(name);
+                  }
+                  if (pending.size === 0) return;
+                  if (runtime.now() - since > CLIENT_WAIT_MS) {
+                    result.timeouts[row] = (result.timeouts[row] ?? 0) + pending.size;
+                    return;
+                  }
+                  await runtime.sleep(POLL_MS, signal);
+                }
+              }),
+            );
+          const changedBefore = diffChanged(await readMetrics());
+          const burstAt = runtime.now();
+          runtime.writeBurst(worktrees, burstPath, options.busyBurstFiles);
+          const backendBurst =
+            changedBefore === null
+              ? Promise.resolve(null)
+              : until(
+                  "burst-backend",
+                  burstAt,
+                  async () =>
+                    (diffChanged(await readMetrics()) ?? 0) >= changedBefore + environments.length,
+                  BACKEND_WAIT_MS,
+                );
+          await watchBadges(
+            "burst-badge",
+            burstAt,
+            (additions, base) => additions !== null && additions >= base + options.busyBurstFiles,
           );
-          if (!answered.ok) fail("approval", "the approval was not applied");
-          const replied = await until(
+          record("burst-backend", await backendBurst);
+          const clearAt = runtime.now();
+          runtime.removeBurst(worktrees, burstPath);
+          await watchBadges("burst-clear", clearAt, (additions, base) => (additions ?? 0) <= base);
+
+          // 2. An active turn held at the model, and a prompt queued behind it.
+          fakeModel.release(queued);
+          if (
+            (
+              await step([
+                "session",
+                "prompt",
+                turnSession.sessionId,
+                "--prompt",
+                `Busy turn ${tag} [hold:${held}]`,
+              ])
+            ).status !== 0
+          )
+            fail("turn");
+          const dispatched = await until(
             null,
             runtime.now(),
-            () => (fakeModel.marker(approval)?.toolResults ?? 0) >= 1,
+            () => fakeModel.marker(held) !== null,
             BACKEND_WAIT_MS,
           );
-          if (replied === null)
-            fail("approval", "the approved command's result never reached the model");
-          else {
-            result.obligations.approvals += 1;
-            const answerAt = fakeModel.marker(approval)?.lastAt ?? runtime.now();
-            await allClients(
-              "approved-turn-visible",
-              answerAt,
-              async (client) => (await client.markerState(askEnvironment.name)) === "idle",
-            );
-          }
-        }
-        await readMetrics();
-        const releasedAt = runtime.now();
-        fakeModel.release(held);
-        const queuedAfter = await until(
-          "queued-dispatch",
-          releasedAt,
-          () => fakeModel.marker(queued) !== null,
-          BACKEND_WAIT_MS,
-        );
-        if (queuedAfter === null) fail("queue", "the queued prompt was never dispatched");
-        else {
-          record(
-            "queued-dispatch",
-            Math.round((fakeModel.marker(queued)?.firstAt ?? releasedAt) - releasedAt),
-          );
-          result.obligations.queued += 1;
-          const queuedAt = fakeModel.marker(queued)?.firstAt ?? runtime.now();
+          if (dispatched === null) fail("turn", "the held turn never reached the model");
+          const heldAt = fakeModel.marker(held)?.firstAt ?? runtime.now();
           await allClients(
-            "queued-turn-visible",
-            queuedAt,
-            async (client) => (await client.markerState(turnEnvironment.name)) === "idle",
+            "activity-working",
+            heldAt,
+            async (client) => (await client.markerState(turnEnvironment.name)) === "working",
           );
-        }
-        if (fakeModel.marker(held)) result.obligations.turns += 1;
+          const enqueued = await step([
+            "session",
+            "prompt",
+            turnSession.sessionId,
+            "--enqueue",
+            "--prompt",
+            `Busy queued ${tag} [hold:${queued}]`,
+          ]);
+          if (enqueued.status !== 0) fail("queue");
 
-        // 6. A Multi Review to completion, every slot on the fake model.
-        if (reviewId) await step(["review", "cancel", reviewId]);
-        const validationsBefore = runtime.validationRuns(reviewEnvironment.worktree);
-        const launchAt = runtime.now();
-        const workflowsBefore = fakeModel.workflow();
-        const launched = cliJson(
-          await step([
-            "review",
-            "launch",
-            reviewEnvironment.id,
-            "--reviewer",
-            `pi=${FAKE_PI_MODEL_REF}`,
-            "--review-model",
-            `pi=${FAKE_PI_MODEL_REF}`,
-            "--no-auto-address-findings",
-            "--no-auto-pr",
-          ]),
-        ) as { workflowId?: unknown; phase?: unknown } | null;
-        if (typeof launched?.workflowId !== "string") fail("workflow", "the review did not launch");
-        else {
-          reviewId = launched.workflowId;
-          const transitions: Array<{ phase: string; at: number }> = [];
-          let phase = typeof launched.phase === "string" ? launched.phase : "";
-          const completed = await until(
-            "workflow-complete",
-            launchAt,
-            async () => {
-              const read = await publicAction("review.get", { workflowId: reviewId });
-              const next = (read.result as { phase?: unknown } | undefined)?.phase;
-              if (typeof next === "string" && next !== phase) {
-                phase = next;
-                transitions.push({ phase: next, at: runtime.now() });
-              }
-              if (transitions.length > 0 && runtime.now() - transitions.at(-1)!.at < POLL_MS * 2)
-                await readMetrics();
-              return REVIEW_TERMINAL.has(phase);
-            },
-            WORKFLOW_WAIT_MS,
+          // 3. A parked approval, and mail to the same tab.
+          if (
+            (
+              await step([
+                "session",
+                "prompt",
+                askSession.sessionId,
+                "--prompt",
+                `Busy approval ${tag} [tool:${approval}]`,
+              ])
+            ).status !== 0
+          )
+            fail("approval-prompt");
+          await until(
+            null,
+            runtime.now(),
+            () => fakeModel.marker(approval) !== null,
+            BACKEND_WAIT_MS,
           );
-          record("workflow-complete", completed);
-          if (phase !== "ready") fail("workflow", `the review ended ${phase || "unread"}`);
-          else result.obligations.workflows += 1;
-          for (const [id, timing] of runtime.validationRuns(reviewEnvironment.worktree))
-            if (!validationsBefore.has(id)) result.validationRuns.push(timing);
-          // Each accepted result is followed by the phase that consumed it.
-          const after = fakeModel.workflow();
-          for (const [tool, entry] of Object.entries(after)) {
-            const earlier = workflowsBefore[tool]?.resultsAt.length ?? 0;
-            for (const resultAt of entry.resultsAt.slice(earlier)) {
-              const next = transitions.find((transition) => transition.at >= resultAt);
-              if (next)
-                record(
-                  tool === "submit_validation_plan" ? "workflow-validation" : "workflow-progress",
-                  Math.round(next.at - resultAt),
-                );
+          const toolCallAt = fakeModel.marker(approval)?.firstAt ?? runtime.now();
+          let interaction: { id: string; revision: number } | null = null;
+          const listedAfter = await until(
+            "approval-backend",
+            toolCallAt,
+            async () => {
+              const listing = await publicAction("session.interactions", {
+                sessionId: askSession.sessionId,
+              });
+              const items = (listing.result as { items?: unknown[] } | undefined)?.items ?? [];
+              for (const raw of items) {
+                const item = raw as {
+                  id?: unknown;
+                  revision?: unknown;
+                  state?: unknown;
+                  kind?: unknown;
+                };
+                if (
+                  item.state === "pending" &&
+                  item.kind === "command-approval" &&
+                  typeof item.id === "string" &&
+                  typeof item.revision === "number"
+                ) {
+                  interaction = { id: item.id, revision: item.revision };
+                  return true;
+                }
+              }
+              return false;
+            },
+            BACKEND_WAIT_MS,
+          );
+          record("approval-backend", listedAfter);
+          await allClients("approval-visible", toolCallAt, (client) => client.approvalVisible());
+          const mailBaseline = await Promise.all(clients.map((client) => client.mailCount()));
+          const mailed = await step([
+            "mail",
+            "send",
+            askEnvironment.id,
+            askSession.tabId,
+            "--subject",
+            `Busy ${tag}`,
+            "--body",
+            `Busy-profile mail ${tag}.`,
+          ]);
+          if (mailed.status !== 0) fail("mail");
+          else result.obligations.mails += 1;
+          const mailedAt = runtime.now();
+          await allClients(
+            "mail-visible",
+            mailedAt,
+            async (client) =>
+              (await client.mailCount()) > (mailBaseline[clients.indexOf(client)] ?? 0),
+          );
+
+          // 4. The outage (two clients) or a hidden document (one client).
+          const outageClient =
+            clientCount === 2 ? clients.find((client) => client.linked) : undefined;
+          const hiddenClient = clientCount === 1 ? clients[0] : undefined;
+          if (outageClient) {
+            outageClient.setLinkUp(false);
+            cut.add(outageClient);
+          }
+          if (hiddenClient) {
+            await hiddenClient.setHidden(true);
+            cut.add(hiddenClient);
+          }
+
+          // 5. Answer the approval, release the held turn, let the queue go.
+          const pending = interaction as { id: string; revision: number } | null;
+          if (!pending) fail("approval", "no pending approval was listed");
+          else {
+            const answered = await publicAction(
+              "session.interaction.resolve",
+              {
+                sessionId: askSession.sessionId,
+                interactionId: pending.id,
+                expectedRevision: pending.revision,
+                action: "answer",
+              },
+              true,
+            );
+            if (!answered.ok) fail("approval", "the approval was not applied");
+            const replied = await until(
+              null,
+              runtime.now(),
+              () => (fakeModel.marker(approval)?.toolResults ?? 0) >= 1,
+              BACKEND_WAIT_MS,
+            );
+            if (replied === null)
+              fail("approval", "the approved command's result never reached the model");
+            else {
+              result.obligations.approvals += 1;
+              const answerAt = fakeModel.marker(approval)?.lastAt ?? runtime.now();
+              await allClients(
+                "approved-turn-visible",
+                answerAt,
+                async (client) => (await client.markerState(askEnvironment.name)) === "idle",
+              );
             }
           }
-        }
-
-        // 7. Restore the cut client, or show the hidden one, and wait for it to converge.
-        const resumed = outageClient ?? hiddenClient;
-        if (resumed) {
-          const resumeAt = runtime.now();
-          if (outageClient) outageClient.setLinkUp(true);
-          else await resumed.setHidden(false);
-          cut.delete(resumed);
-          const converged = await until(
-            outageClient ? "outage-resume" : "hidden-resume",
-            resumeAt,
-            async () =>
-              (await resumed.markerState(turnEnvironment.name)) === "idle" &&
-              (await resumed.markerState(askEnvironment.name)) === "idle" &&
-              !(await resumed.approvalVisible()),
-            2 * BACKEND_WAIT_MS,
+          await readMetrics();
+          const releasedAt = runtime.now();
+          fakeModel.release(held);
+          const queuedAfter = await until(
+            "queued-dispatch",
+            releasedAt,
+            () => fakeModel.marker(queued) !== null,
+            BACKEND_WAIT_MS,
           );
-          record(outageClient ? "outage-resume" : "hidden-resume", converged);
-          if (converged === null) fail("resume", "the client did not converge");
+          if (queuedAfter === null) fail("queue", "the queued prompt was never dispatched");
+          else {
+            record(
+              "queued-dispatch",
+              Math.round((fakeModel.marker(queued)?.firstAt ?? releasedAt) - releasedAt),
+            );
+            result.obligations.queued += 1;
+            const queuedAt = fakeModel.marker(queued)?.firstAt ?? runtime.now();
+            await allClients(
+              "queued-turn-visible",
+              queuedAt,
+              async (client) => (await client.markerState(turnEnvironment.name)) === "idle",
+            );
+          }
+          if (fakeModel.marker(held)) result.obligations.turns += 1;
+
+          // 6. A Multi Review to completion, every slot on the fake model.
+          if (reviewId) await step(["review", "cancel", reviewId]);
+          const validationsBefore = runtime.validationRuns(reviewEnvironment.worktree);
+          const launchAt = runtime.now();
+          const workflowsBefore = fakeModel.workflow();
+          const launched = cliJson(
+            await step([
+              "review",
+              "launch",
+              reviewEnvironment.id,
+              "--reviewer",
+              `pi=${FAKE_PI_MODEL_REF}`,
+              "--review-model",
+              `pi=${FAKE_PI_MODEL_REF}`,
+              "--no-auto-address-findings",
+              "--no-auto-pr",
+            ]),
+          ) as { workflowId?: unknown; phase?: unknown } | null;
+          if (typeof launched?.workflowId !== "string")
+            fail("workflow", "the review did not launch");
+          else {
+            reviewId = launched.workflowId;
+            const transitions: Array<{ phase: string; at: number }> = [];
+            let phase = typeof launched.phase === "string" ? launched.phase : "";
+            const completed = await until(
+              "workflow-complete",
+              launchAt,
+              async () => {
+                const read = await publicAction("review.get", { workflowId: reviewId });
+                const next = (read.result as { phase?: unknown } | undefined)?.phase;
+                if (typeof next === "string" && next !== phase) {
+                  phase = next;
+                  transitions.push({ phase: next, at: runtime.now() });
+                }
+                if (transitions.length > 0 && runtime.now() - transitions.at(-1)!.at < POLL_MS * 2)
+                  await readMetrics();
+                return REVIEW_TERMINAL.has(phase);
+              },
+              WORKFLOW_WAIT_MS,
+            );
+            record("workflow-complete", completed);
+            if (phase !== "ready") fail("workflow", `the review ended ${phase || "unread"}`);
+            else result.obligations.workflows += 1;
+            for (const [id, timing] of runtime.validationRuns(reviewEnvironment.worktree))
+              if (!validationsBefore.has(id)) result.validationRuns.push(timing);
+            // Each accepted result is followed by the phase that consumed it.
+            const after = fakeModel.workflow();
+            for (const [tool, entry] of Object.entries(after)) {
+              const earlier = workflowsBefore[tool]?.resultsAt.length ?? 0;
+              for (const resultAt of entry.resultsAt.slice(earlier)) {
+                const next = transitions.find((transition) => transition.at >= resultAt);
+                if (next)
+                  record(
+                    tool === "submit_validation_plan" ? "workflow-validation" : "workflow-progress",
+                    Math.round(next.at - resultAt),
+                  );
+              }
+            }
+          }
+
+          // 7. Restore the cut client, or show the hidden one, and wait for it to converge.
+          const resumed = outageClient ?? hiddenClient;
+          if (resumed) {
+            const resumeAt = runtime.now();
+            if (outageClient) outageClient.setLinkUp(true);
+            else await resumed.setHidden(false);
+            cut.delete(resumed);
+            const converged = await until(
+              outageClient ? "outage-resume" : "hidden-resume",
+              resumeAt,
+              async () =>
+                (await resumed.markerState(turnEnvironment.name)) === "idle" &&
+                (await resumed.markerState(askEnvironment.name)) === "idle" &&
+                !(await resumed.approvalVisible()),
+              2 * BACKEND_WAIT_MS,
+            );
+            record(outageClient ? "outage-resume" : "hidden-resume", converged);
+            if (converged === null) fail("resume", "the client did not converge");
+          }
+          for (const id of [held, queued])
+            if ((fakeModel.marker(id)?.requests ?? 0) > 1) result.obligations.duplicates += 1;
+          if ((fakeModel.marker(approval)?.requests ?? 0) > 2) result.obligations.duplicates += 1;
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          fail("round", error instanceof Error ? error.message.split("\n", 1)[0] : String(error));
+          // Let a turn this round left waiting finish, so the next round's prompts are not refused.
+          for (const id of [held, queued, approval]) fakeModel.release(id);
         }
-        for (const id of [held, queued])
-          if ((fakeModel.marker(id)?.requests ?? 0) > 1) result.obligations.duplicates += 1;
-        if ((fakeModel.marker(approval)?.requests ?? 0) > 2) result.obligations.duplicates += 1;
         await Promise.all(clients.map((client) => client.close()));
         clients = [];
         await sampleWindow();

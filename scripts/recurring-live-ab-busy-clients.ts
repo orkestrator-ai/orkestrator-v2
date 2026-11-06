@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { startOutageLink, type OutageLink } from "../e2e/agent-testing/client-outage-support";
 import type { BusyClient, BusyClientFactory } from "./recurring-live-ab-busy";
@@ -86,13 +87,19 @@ function setHiddenIn(hidden: boolean) {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 async function openApprovalTab(page: Page, environmentName: string): Promise<void> {
   const expand = page.getByRole("button", { name: /^Expand project / });
-  const entry = page.getByText(environmentName, { exact: true }).first();
+  // The sidebar row, by its accessible name ("<name>, on <host>, <activity>"):
+  // the bare name also appears in notices and mail.
+  const entry = page
+    .getByRole("button", { name: new RegExp(`^${escaped(environmentName)}, `) })
+    .first();
   const dialog = page.getByRole("alertdialog");
   // Startup notices can open before or a moment after the sidebar paints.
   let quietSince = Date.now();
-  for (const deadline = Date.now() + 90_000; Date.now() < deadline; ) {
+  for (const deadline = Date.now() + 90_000; Date.now() < deadline;) {
     for (const label of STARTUP_NOTICES) {
       const button = page.getByRole("button", { name: label, exact: true });
       if (await button.isVisible().catch(() => false))
@@ -121,8 +128,17 @@ async function openApprovalTab(page: Page, environmentName: string): Promise<voi
     .waitFor({ state: "visible", timeout: 60_000 });
 }
 
-/** A client factory bound to one profile, sharing one headless browser. */
-export function playwrightBusyClients(profile: string, status: BusyClientStatus) {
+/**
+ * A client factory bound to one profile, sharing one headless browser. A
+ * client that cannot open its view leaves a screenshot of the fixture UI in
+ * `artifactDir` (no token or credential is ever on the page).
+ */
+export function playwrightBusyClients(
+  profile: string,
+  status: BusyClientStatus,
+  artifactDir?: string,
+) {
+  let failures = 0;
   let browser: Browser | undefined;
   const open: BusyClientFactory = async ({ count, openEnvironment, signal }) => {
     if (!status.browserUrl || !status.rendererUrl)
@@ -152,7 +168,20 @@ export function playwrightBusyClients(profile: string, status: BusyClientStatus)
             waitUntil: "domcontentloaded",
           });
           if (!response?.ok()) throw new Error(`${label}: sign-in failed`);
-          await openApprovalTab(page, openEnvironment);
+          try {
+            await openApprovalTab(page, openEnvironment);
+          } catch (error) {
+            if (artifactDir)
+              await page
+                .screenshot({
+                  path: path.join(
+                    artifactDir,
+                    `${profile}-${label}-open-failure-${++failures}.png`,
+                  ),
+                })
+                .catch(() => undefined);
+            throw error;
+          }
           clients.push(pageClient(label, page, context, link));
         } catch (error) {
           await context?.close().catch(() => undefined);

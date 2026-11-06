@@ -23,6 +23,8 @@ import {
 } from "../../scripts/recurring-live-ab-fake-model";
 
 type Scenario = {
+  /** Opening this many clients throws (a view that never appears). */
+  failOpen?: number;
   /** The public API never lists the parked approval. */
   noApproval?: boolean;
   /** The review ends in this phase instead of `ready`. */
@@ -256,6 +258,8 @@ function busyHarness(scenario: Scenario = {}) {
     writeFakePiModels: () => undefined,
     openClients: async ({ count, openEnvironment }) => {
       expect(openEnvironment).toBe("busy-ask");
+      if (count === scenario.failOpen)
+        throw new Error("waitFor: Timeout 60000ms exceeded.\nCall log");
       opened.push(count);
       return Array.from({ length: count }, (_, index) => client(`c${index + 1}`, index === 1));
     },
@@ -426,6 +430,23 @@ describe("busy phase", () => {
     expect(result.timeouts["approval-backend"]).toBe(1);
     expect(busyFailed(result)).toBe(true);
     expect(result.rounds[0]?.failed).toBe(true);
+  });
+
+  test("a round that throws is recorded and the next round still runs", async () => {
+    const h = busyHarness({ failOpen: 1 });
+    const result = await measureBusy(h.gateway, h.cli, options(), undefined, h.runtime);
+    expect(result.failures).toEqual([
+      { clients: 1, round: 1, step: "round", detail: "waitFor: Timeout 60000ms exceeded." },
+    ]);
+    expect(result.rounds.map((round) => [round.clients, round.failed])).toEqual([
+      [0, false],
+      [1, true],
+      [2, false],
+    ]);
+    // The failed round's held turn was released, so the next round's turn went out.
+    expect(result.obligations.turns).toBe(2);
+    expect(result.obligations.workflows).toBe(2);
+    expect(busyFailed(result)).toBe(true);
   });
 
   test("summarises each row against its budget", () => {

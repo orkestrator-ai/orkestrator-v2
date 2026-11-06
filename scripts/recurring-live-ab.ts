@@ -1107,7 +1107,7 @@ export async function runArm(
       checkedStatus();
       log(`${profile}: busy phase, ${options.busyRounds} rounds per client count`);
       if (!status.dataDir) throw new Error("The busy phase needs the profile's data directory");
-      const clients = runtime.busyClients(profile, status);
+      const clients = runtime.busyClients(profile, status, logDir);
       try {
         result.busy = await runtime.measureBusy(
           gateway,

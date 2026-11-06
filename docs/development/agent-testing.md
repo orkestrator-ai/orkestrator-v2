@@ -63,6 +63,8 @@ without a running profile. No provider turns are enabled. Linux Electron runs
 headless. On Linux hosts with exhausted automatic Docker pools, its scoped Docker
 shim tries otherwise-unrouted /29 networks in 172.16.240.0/22 only for labelled
 fixture networks. Docker refuses overlaps atomically; other errors propagate.
+Every other Docker call is `exec`ed straight to the real CLI, so a follower or
+exec session the backend stops is stopped itself rather than orphaned.
 The Docker scheduler profile allows ten minutes between reporter lines because
 the annotation cleanup case intentionally waits for a 100-tick, three-second
 backend garbage-collection pass (its own test deadline is nine minutes).

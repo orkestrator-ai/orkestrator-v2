@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { spawnCommand } from "./shell.js";
+import { spawnParentBoundCommand } from "./shell.js";
 
 /**
  * Backend-owned container log followers.
@@ -14,6 +14,11 @@ import { spawnCommand } from "./shell.js";
  * cursor from another source generation, receives an explicit gap and reads a
  * bounded tail instead. Diagnostic gaps never license dropping authoritative
  * lifecycle, approval or transcript events, which do not travel here.
+ *
+ * Each follower is parent-bound (`spawnParentBoundCommand`): a SIGKILLed
+ * backend runs no shutdown, and `docker logs -f` on a quiet container would
+ * otherwise wait for its next line before noticing (0019 task 6 saw one
+ * outlive its backend under systemd).
  *
  * Owned by `BackendRuntime` as `containerLogs`, so two backends in one process
  * follow their own containers and one's shutdown never ends the other's
@@ -69,7 +74,7 @@ export type LogReadResult =
 interface LogSource {
   sourceId: string;
   containerId: string;
-  child: ReturnType<typeof spawnCommand> | null;
+  child: ReturnType<typeof spawnParentBoundCommand> | null;
   ring: LogRecord[];
   ringBytes: number;
   nextSeq: number;
@@ -84,7 +89,7 @@ interface Subscription {
   leaseUntil: number;
 }
 
-type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnCommand>;
+type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnParentBoundCommand>;
 
 /** Test seams `BackendRuntime` passes through (`containerLogs`). */
 export type ContainerLogServiceOptions = {
@@ -99,7 +104,7 @@ export class ContainerLogService {
   private closed = false;
 
   constructor(
-    private readonly spawn: Spawn = spawnCommand,
+    private readonly spawn: Spawn = spawnParentBoundCommand,
     private readonly now: () => number = Date.now,
   ) {}
 

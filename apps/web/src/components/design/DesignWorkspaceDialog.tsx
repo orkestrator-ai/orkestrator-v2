@@ -271,7 +271,6 @@ export function DesignWorkspaceDialog({
   const hydrated = usePaneLayoutStore((state) => state.hydration.get(environmentId) === "done");
   const facts = readDesignLayoutFacts(environmentId);
   const environmentReady = Boolean(createTab) && hydrated;
-  const legacy = view?.protocol === "v1";
   const withAgent = agent !== "none";
   const plan = planDesignLaunch({ environmentReady, withAgent, facts });
   const nameProblem = validateDesignName(name);
@@ -355,7 +354,7 @@ export function DesignWorkspaceDialog({
         ? view.protocol === "v2" && Boolean(view.capabilities?.sessions)
         : withAgent &&
           (await getCapabilities().then(
-            (capabilities) => Boolean(capabilities?.sessions),
+            (capabilities) => Boolean(capabilities.sessions),
             () => false,
           ));
       if (launchScope !== scopeRef.current) return;
@@ -434,16 +433,14 @@ export function DesignWorkspaceDialog({
           Boolean(usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId)),
         removeTab: (tabId) => removeTab(environmentId, tabId),
         deleteCanvas: (canvasId, revision) =>
-          legacy
-            ? designAction(environmentId, "delete_canvas", { canvasId })
-            : runDesignLifecycle(
-                environmentId,
-                canvasId,
-                { kind: "delete_canvas" },
-                {
-                  canvasRevision: revision,
-                },
-              ),
+          runDesignLifecycle(
+            environmentId,
+            canvasId,
+            { kind: "delete_canvas" },
+            {
+              canvasRevision: revision,
+            },
+          ),
         ...(sessions
           ? {
               linkSession: (canvasId: string, tabId: string, platform: DesignAgent) =>
@@ -702,7 +699,6 @@ export function DesignWorkspaceDialog({
               <DesignLibrary
                 environmentId={environmentId}
                 backendKey={backendKey}
-                legacy={legacy}
                 canManage={Boolean(view.capabilities?.lifecycle)}
                 openChoices={(canvasId) =>
                   environmentReady

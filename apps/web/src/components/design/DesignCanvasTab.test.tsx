@@ -453,7 +453,7 @@ describe("DesignCanvasTab", () => {
         renderGate.resolve();
       });
 
-    async function setup(narrow = false, legacy = false) {
+    async function setup(narrow = false) {
       globalThis.ResizeObserver = class {
         constructor(private callback: ResizeObserverCallback) {}
         observe(element: Element) {
@@ -468,25 +468,6 @@ describe("DesignCanvasTab", () => {
         unobserve() {}
         disconnect() {}
       } as unknown as typeof ResizeObserver;
-      if (legacy) {
-        invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
-          if (command === "design_capabilities")
-            return Promise.reject(new Error("Unknown backend command: design_capabilities"));
-          if (command === "design_changes")
-            return Promise.resolve({
-              generation: "legacy",
-              revision: backend.revision,
-              reset: true,
-              events: [],
-            });
-          if (command === "design_action")
-            return Promise.resolve({
-              canvas: backend.canvas(),
-              history: { canUndo: false, canRedo: false, undoCount: 0, redoCount: 0 },
-            });
-          return backend.handle(command, args ?? {});
-        });
-      }
       renderGate = deferred();
       hitGate = deferred<DesignElement>();
       inspectGate = undefined;
@@ -533,12 +514,11 @@ describe("DesignCanvasTab", () => {
       )!;
       await waitFor(() =>
         expect(bridgesByFrame.get(frameB)?.renderedContentId).toBe(
-          legacy ? "revision:1" : backend.frames.get(frameB)!.contentId,
+          backend.frames.get(frameB)!.contentId,
         ),
       );
       waitingBridge = bridgesByFrame.get(frameB);
-      if (legacy) waitingBridge!.renderedContentId = null;
-      else await styleUpdate();
+      await styleUpdate();
     }
     async function styleUpdate() {
       const entry = backend.frames.get(frameB)!;
@@ -568,19 +548,16 @@ describe("DesignCanvasTab", () => {
       expect(inspector()).not.toBeNull();
     });
 
-    test.each([false, true])(
-      "a changed structure or legacy revision cancels positional selection (legacy=%s)",
-      async (legacy) => {
-        await setup(false, legacy);
-        fireEvent.click(layer);
-        backend.externalReplace(frameB);
-        await refresh();
-        expect(announcement()).toBe("The frame structure changed; select the layer again");
-        await finishRender();
-        expect(inspections()).toHaveLength(0);
-        expect(inspector() === null).toBe(true);
-      },
-    );
+    test("a changed structure cancels positional selection", async () => {
+      await setup();
+      fireEvent.click(layer);
+      backend.externalReplace(frameB);
+      await refresh();
+      expect(announcement()).toBe("The frame structure changed; select the layer again");
+      await finishRender();
+      expect(inspections()).toHaveLength(0);
+      expect(inspector() === null).toBe(true);
+    });
 
     test.each([false, true])(
       "a newer hit test wins before or during layer inspection (inspecting=%s)",
@@ -780,7 +757,7 @@ describe("DesignCanvasTab", () => {
     }
   });
 
-  test("legacy Delete asks for confirmation, and non-editable canvases ignore it", async () => {
+  test("Delete removes the frame without confirmation, and non-editable canvases ignore it", async () => {
     render(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
@@ -801,14 +778,11 @@ describe("DesignCanvasTab", () => {
       useDesignStore.getState().update(controller.key, (projection) => ({
         ...projection,
         snapshot: "current",
-        legacy: true,
       })),
     );
     fireEvent.keyDown(title, { key: "Delete" });
-    const dialog = await screen.findByRole("alertdialog");
-    expect(prepared("delete_frame")).toHaveLength(0);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete frame" }));
     await waitFor(() => expect(prepared("delete_frame")).toHaveLength(1));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   test("a rejected delete leaves the frame selected and never announces success", async () => {

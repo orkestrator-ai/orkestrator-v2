@@ -31,13 +31,10 @@ import {
 import {
   DesignClientError,
   classifyTransportError,
-  designAction,
   designApi,
   designBackendKey,
   failureOf,
-  getCanvasState,
   getCapabilities,
-  getChanges,
 } from "@/lib/design-client";
 import { clearLegacyDrafts, readLegacyDrafts } from "./design-drafts";
 import { fromStoredIntent, mergeIntents, settledOk, toIntentDraft } from "./design-intent-merge";
@@ -134,7 +131,7 @@ export class DesignCanvasController {
    */
   private ownCommits: DesignOperationStatus[] = [];
   private ownCommitsGeneration: string | undefined;
-  private capabilities: DesignCapabilities | null | undefined;
+  private capabilities: DesignCapabilities | undefined;
   lastUsed = Date.now();
 
   constructor(
@@ -310,10 +307,8 @@ export class DesignCanvasController {
     }
   }
 
-  private async caps(): Promise<DesignCapabilities | null> {
-    if (this.capabilities !== undefined) return this.capabilities;
-    this.capabilities = await getCapabilities(this.backend);
-    this.update((projection) => ({ ...projection, legacy: this.capabilities === null }));
+  private async caps(): Promise<DesignCapabilities> {
+    this.capabilities ??= await getCapabilities(this.backend);
     return this.capabilities;
   }
 
@@ -330,28 +325,24 @@ export class DesignCanvasController {
     try {
       const caps = await this.caps();
       if (epoch !== this.epoch) return;
-      if (!caps) {
-        await this.legacySync(epoch);
-      } else {
-        const current = this.projection;
-        const result: DesignSyncResult | DesignSnapshotResult =
-          current.generation && current.canvas && current.snapshot !== "invalid"
-            ? await designApi.sync(
-                this.environmentId,
-                this.canvasId,
-                current.generation,
-                current.revision,
-                current.statusVersion >= 0 ? current.statusVersion : undefined,
-              )
-            : await designApi.snapshot(this.environmentId, this.canvasId);
+      const current = this.projection;
+      const result: DesignSyncResult | DesignSnapshotResult =
+        current.generation && current.canvas && current.snapshot !== "invalid"
+          ? await designApi.sync(
+              this.environmentId,
+              this.canvasId,
+              current.generation,
+              current.revision,
+              current.statusVersion >= 0 ? current.statusVersion : undefined,
+            )
+          : await designApi.snapshot(this.environmentId, this.canvasId);
+      if (epoch !== this.epoch) return;
+      if (result.kind === "reset" || (result.kind === "delta" && !this.installDelta(result))) {
+        const snapshot = await designApi.snapshot(this.environmentId, this.canvasId);
         if (epoch !== this.epoch) return;
-        if (result.kind === "reset" || (result.kind === "delta" && !this.installDelta(result))) {
-          const snapshot = await designApi.snapshot(this.environmentId, this.canvasId);
-          if (epoch !== this.epoch) return;
-          this.install(snapshot);
-        } else if (result.kind !== "delta") {
-          this.install(result);
-        }
+        this.install(snapshot);
+      } else if (result.kind !== "delta") {
+        this.install(result);
       }
       this.backoffMs = 0;
       this.update((current) => ({
@@ -361,7 +352,7 @@ export class DesignCanvasController {
         lastSyncedAt: Date.now(),
       }));
       this.prune();
-      if (caps?.intents) await this.syncIntents(epoch);
+      if (caps.intents) await this.syncIntents(epoch);
     } catch (error) {
       if (epoch !== this.epoch) return;
       const kind = classifyTransportError(error);
@@ -386,46 +377,6 @@ export class DesignCanvasController {
       } else {
         this.update((current) => ({ ...current, readError: failureOf(error) }));
       }
-    }
-  }
-
-  private async legacySync(epoch: number) {
-    const current = this.projection;
-    const changes = await getChanges(
-      this.environmentId,
-      this.canvasId,
-      current.generation,
-      current.revision,
-    );
-    if (epoch !== this.epoch) return;
-    if (changes.reset || changes.revision !== current.revision || !current.canvas) {
-      const state = await getCanvasState(this.environmentId, this.canvasId);
-      if (epoch !== this.epoch) return;
-      this.update((projection) => ({
-        ...projection,
-        snapshot: "current",
-        canvas: state.canvas,
-        revision: state.canvas.revision,
-        generation: changes.generation,
-        workspace: projection.workspace
-          ? { ...projection.workspace, history: state.history }
-          : {
-              recordSequence: 0,
-              statusVersion: 0,
-              incarnation: "legacy",
-              createdAt: "",
-              modifiedAt: "",
-              frames: {},
-              history: state.history,
-              sessions: [],
-            },
-      }));
-    } else {
-      this.update((projection) => ({
-        ...projection,
-        snapshot: "current",
-        generation: changes.generation,
-      }));
     }
   }
 
@@ -831,7 +782,6 @@ export class DesignCanvasController {
     const epoch = this.epoch;
     try {
       const caps = await this.caps();
-      if (caps === null) return await this.runLegacy(intent);
       if (caps.intents) return await this.runOnBackend(id, intent);
       // A backend without an intent queue: prepare and execute directly,
       // rebasing over this window's own acknowledged commits.
@@ -1263,69 +1213,6 @@ export class DesignCanvasController {
     this.unblockLane(intent.lane);
     this.pump();
     this.persist();
-  }
-
-  private async runLegacy(intent: DesignIntent) {
-    const input = intent.descriptor.input;
-    const pre = intent.descriptor.preconditions;
-    const map: Record<string, () => Promise<unknown>> = {
-      update_frame: () =>
-        designAction(this.environmentId, "update_frame", {
-          canvasId: this.canvasId,
-          frameId: (input as { frameId: string }).frameId,
-          expectedRevision: pre.frameRevision,
-          patch: (input as { patch: unknown }).patch,
-        }),
-      set_element_styles: () =>
-        designAction(this.environmentId, "set_element_styles", {
-          canvasId: this.canvasId,
-          frameId: (input as { frameId: string }).frameId,
-          expectedRevision: pre.frameRevision,
-          selector: (input as { selector: string }).selector,
-          styles: (input as { styles: unknown }).styles,
-        }),
-      create_frame: () =>
-        designAction(this.environmentId, "create_frame", {
-          canvasId: this.canvasId,
-          expectedRevision: pre.canvasRevision,
-          ...(input as { frame: object }).frame,
-        }),
-      undo: () =>
-        designAction(this.environmentId, "undo", {
-          canvasId: this.canvasId,
-          expectedRevision: pre.canvasRevision,
-        }),
-      redo: () =>
-        designAction(this.environmentId, "redo", {
-          canvasId: this.canvasId,
-          expectedRevision: pre.canvasRevision,
-        }),
-    };
-    const action = map[input.kind];
-    if (!action) {
-      this.settle(intent.id, {
-        outcome: "rejected",
-        failure: {
-          code: "unsupported",
-          message: "Update the backend to use this action",
-          retry: "never",
-        },
-      });
-      return;
-    }
-    this.patchIntent(intent.id, { phase: "submitting" });
-    try {
-      await action();
-      this.patchIntent(intent.id, {
-        phase: "settled",
-        outcome: "committed",
-        awaitRevision: this.projection.revision + 1,
-      });
-      await this.refresh();
-      this.prune();
-    } catch (error) {
-      this.settle(intent.id, { outcome: "rejected", failure: failureOf(error) });
-    }
   }
 
   // ---------------------------------------------------------------------------

@@ -76,7 +76,6 @@ export interface DesignLayerTreeProps {
   canvasId: string;
   frames: DesignFrame[];
   metas: Record<string, DesignFrameMeta>;
-  legacy: boolean;
   getBridge: (frameId: string) => DesignFrameBridge | undefined;
   liveFrames: ReadonlySet<string>;
   renderedVersion: number;
@@ -98,12 +97,8 @@ function contentKey(frame: DesignFrame, meta: DesignFrameMeta | undefined): stri
   return meta?.contentId ?? `revision:${frame.revision}`;
 }
 
-function structureKey(
-  frame: DesignFrame,
-  meta: DesignFrameMeta | undefined,
-  legacy: boolean,
-): string {
-  return !legacy && meta ? `structure:${meta.structureId}` : `content:${contentKey(frame, meta)}`;
+function structureKey(frame: DesignFrame, meta: DesignFrameMeta | undefined): string {
+  return meta ? `structure:${meta.structureId}` : `content:${contentKey(frame, meta)}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -136,7 +131,7 @@ function frameSourceOf(
   )
     return "bridge";
   if (current.liveFrames.has(frameId)) return "wait";
-  return current.legacy ? "unavailable" : "backend";
+  return "backend";
 }
 
 function readinessOf(current: DesignLayerTreeProps, frameId: string): FrameSource {
@@ -156,7 +151,6 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
     canvasId,
     frames,
     metas,
-    legacy,
     liveFrames,
     renderedVersion,
     selection,
@@ -186,8 +180,8 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
 
   // Structure identity per frame: a change drops the frame's cached branches and cursors.
   const identities = useMemo(
-    () => frames.map((frame) => [frame.id, structureKey(frame, metas[frame.id], legacy)] as const),
-    [frames, metas, legacy],
+    () => frames.map((frame) => [frame.id, structureKey(frame, metas[frame.id])] as const),
+    [frames, metas],
   );
   // Derived while rendering so a structure change never renders old paths for a frame.
   const tree = useMemo(() => syncFrameKeys(committed, identities), [committed, identities]);
@@ -344,17 +338,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
     }
     if (state !== treeRef.current) commit(state);
     for (const load of loads) startLoad(load.frameId, load.branch, false);
-  }, [
-    commit,
-    frameIds,
-    liveFrames,
-    readiness,
-    renderedVersion,
-    startLoad,
-    committed,
-    metas,
-    legacy,
-  ]);
+  }, [commit, frameIds, liveFrames, readiness, renderedVersion, startLoad, committed, metas]);
 
   // Rows: filtered (loaded rows only) or the expanded tree.
   const [filter, setFilter] = useState("");

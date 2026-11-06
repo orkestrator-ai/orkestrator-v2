@@ -16,7 +16,7 @@ import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeCompos
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
-import type { DesignReadinessView } from "./design-launch";
+import { loadDesignReadiness, type DesignReadinessView } from "./design-launch";
 import { DesignWorkspaceDialog } from "./DesignWorkspaceDialog";
 import {
   deferred,
@@ -1080,6 +1080,50 @@ describe("DesignWorkspaceDialog", () => {
     expect(screen.getByText("Enter a name for the design.")).toBeTruthy();
     expect(invokeMock).not.toHaveBeenCalled();
     expect(createTab).not.toHaveBeenCalled();
+  });
+
+  test("an old backend shows upgrade guidance and Check again recovers after upgrade", async () => {
+    let upgraded = false;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "design_capabilities") {
+        if (!upgraded) throw new Error("Unknown backend command: design_capabilities");
+        return { ok: true, value: capabilities };
+      }
+      if (command === "design_readiness")
+        return {
+          ok: true,
+          value: { storage: { available: true }, renderer: ready.renderer },
+        };
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    render(
+      <DesignWorkspaceDialog
+        open
+        onOpenChange={() => {}}
+        environmentId="env-1"
+        createTab={() => true}
+        loadReadiness={loadDesignReadiness}
+      />,
+    );
+    await flush();
+    const create = screen.getByRole("button", {
+      name: "Create design workspace",
+    }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(screen.getByText(/too old.*[Uu]pdate/)).toBeTruthy();
+    expect(screen.queryByText(/Reconnect to the backend/) === null).toBe(true);
+    expect(commandNames()).toEqual(["design_capabilities"]);
+
+    upgraded = true;
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await flush();
+    expect(create.disabled).toBe(false);
+    expect(screen.queryByText(/too old/) === null).toBe(true);
+    expect(commandNames()).toEqual([
+      "design_capabilities",
+      "design_capabilities",
+      "design_readiness",
+    ]);
   });
 
   test("an unavailable renderer blocks creation but not opening", async () => {

@@ -341,7 +341,7 @@ describe("DesignInspector", () => {
       />,
     );
     expect(screen.getByText(/SVG element/)).toBeTruthy();
-    expect(screen.queryByText(/does not track element structure/)).toBeNull();
+    expect(screen.queryByText(/does not track element structure/) === null).toBe(true);
     expect(screen.getByText("Text truncated")).toBeTruthy();
     expect(screen.getByText("Some attributes are not shown.")).toBeTruthy();
   });

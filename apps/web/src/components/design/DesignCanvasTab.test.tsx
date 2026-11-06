@@ -782,7 +782,7 @@ describe("DesignCanvasTab", () => {
     );
     fireEvent.keyDown(title, { key: "Delete" });
     await waitFor(() => expect(prepared("delete_frame")).toHaveLength(1));
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
   });
 
   test("a rejected delete leaves the frame selected and never announces success", async () => {

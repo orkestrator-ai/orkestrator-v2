@@ -283,7 +283,9 @@ export function DesignWorkspaceDialog({
   const createBlocker = !environmentReady
     ? "Start this environment to create or open designs."
     : view && view.backend.state !== "connected"
-      ? "Reconnect to the backend before creating a design."
+      ? view.backend.state === "failed" && view.backend.message
+        ? view.backend.message
+        : "Reconnect to the backend before creating a design."
       : view?.storage.state === "unavailable"
         ? "Design storage is unavailable."
         : rendererUnavailable(view)

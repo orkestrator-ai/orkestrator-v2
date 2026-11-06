@@ -65,9 +65,10 @@ test("real renderer and workspace sessions grant writes/fullscreen and deny othe
         const geo = await navigator.permissions.query({ name: "geolocation" });
         const notifications = await navigator.permissions.query({ name: "notifications" });
         const child = document.querySelector("iframe").contentWindow;
+        const childNotifications = await child.navigator.permissions.query({ name: "notifications" });
         let childWrite = true;
         try { await child.navigator.clipboard.writeText("forbidden"); } catch { childWrite = false; }
-        return { fullscreen, geo: geo.state, notifications: notifications.state, childWrite };
+        return { fullscreen, geo: geo.state, notifications: notifications.state, childNotifications: childNotifications.state, childWrite };
       })()`,
           true,
         ),
@@ -75,7 +76,8 @@ test("real renderer and workspace sessions grant writes/fullscreen and deny othe
       expect(result).toEqual({
         fullscreen: true,
         geo: "denied",
-        notifications: "denied",
+        notifications: "granted",
+        childNotifications: "denied",
         childWrite: false,
       });
     }

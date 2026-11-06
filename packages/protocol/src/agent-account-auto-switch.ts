@@ -21,6 +21,11 @@ const PLATFORMS: readonly AgentAccountPlatform[] = ["claude", "codex"];
 
 /** Between turns, the general weekly limit or the 5-hour limit at or past this moves the machine. */
 export const AUTO_SWITCH_THRESHOLD_PERCENT = 98;
+/**
+ * Once a limit has refused a turn, an account a fresh reading shows below this on
+ * both limits is somewhere to go: a little allowance beats none until the reset.
+ */
+export const AFTER_REFUSAL_ROOM_PERCENT = 100;
 /** A limit error moves the machine when a fresh reading says this of the weekly limit. */
 export const WEEKLY_LIMIT_USED_UP_PERCENT = 100;
 /** Resends of one stopped turn. Each needs another confirmed used-up account. */
@@ -137,6 +142,28 @@ export interface AgentAccountAutoSwitchLastSwitch {
   at: string;
 }
 
+/** Why an included account was no place to go when a limit stopped work. */
+export const AUTO_SWITCH_BLOCKERS = ["weekly", "five-hour", "would-pay", "same-login"] as const;
+export type AutoSwitchBlocker = (typeof AUTO_SWITCH_BLOCKERS)[number];
+
+export interface AutoSwitchBlockedAccount {
+  accountId: string;
+  blocker: AutoSwitchBlocker;
+  /** The limit's reading, for `weekly` and `five-hour`. */
+  usedPercent?: number;
+  /** The reading behind it was an earlier one, because a fresh read failed. */
+  stale?: boolean;
+}
+
+/** A limit stopped work and the machine stayed, because no included account had room. */
+export interface AgentAccountAutoSwitchLastKept {
+  /** The account the limit stopped. */
+  fromAccountId: string;
+  at: string;
+  /** Each other included, signed-in account and what kept the machine off it. */
+  blocked: AutoSwitchBlockedAccount[];
+}
+
 export interface AgentAccountAutoSwitchState {
   mode: AgentAccountAutoSwitchMode;
   pinnedAccountId?: string;
@@ -144,6 +171,8 @@ export interface AgentAccountAutoSwitchState {
   /** The accounts on this machine whose own tick is on. */
   includedAccountIds: string[];
   lastSwitch?: AgentAccountAutoSwitchLastSwitch;
+  /** Absent once a later automatic switch moved the machine. */
+  lastKept?: AgentAccountAutoSwitchLastKept;
 }
 
 export type AgentAccountAutoSwitchStates = Partial<
@@ -152,6 +181,38 @@ export type AgentAccountAutoSwitchStates = Partial<
 
 function isShortId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 128;
+}
+
+const MAX_BLOCKED_ACCOUNTS = 32;
+
+/** Stored and peer values are untrusted; an unreadable record reads as absent. */
+export function parseAgentAccountAutoSwitchLastKept(
+  value: unknown,
+): AgentAccountAutoSwitchLastKept | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { fromAccountId, at, blocked } = value as Record<string, unknown>;
+  if (!isShortId(fromAccountId) || typeof at !== "string" || !at) return undefined;
+  const entries = Array.isArray(blocked) ? blocked.slice(0, MAX_BLOCKED_ACCOUNTS) : [];
+  return {
+    fromAccountId,
+    at: at.slice(0, 64),
+    blocked: entries.flatMap((entry): AutoSwitchBlockedAccount[] => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const { accountId, blocker, usedPercent, stale } = entry as Record<string, unknown>;
+      if (!isShortId(accountId)) return [];
+      if (!(AUTO_SWITCH_BLOCKERS as readonly unknown[]).includes(blocker)) return [];
+      return [
+        {
+          accountId,
+          blocker: blocker as AutoSwitchBlocker,
+          ...(typeof usedPercent === "number" && Number.isFinite(usedPercent)
+            ? { usedPercent: Math.max(0, Math.min(100, usedPercent)) }
+            : {}),
+          ...(stale === true ? { stale: true } : {}),
+        },
+      ];
+    }),
+  };
 }
 
 /** Peer answers are untrusted, and older machines send nothing. */
@@ -163,10 +224,9 @@ export function parseAgentAccountAutoSwitchStates(
   for (const platform of PLATFORMS) {
     const entry = (value as Record<string, unknown>)[platform];
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const { mode, pinnedAccountId, pinnedAt, includedAccountIds, lastSwitch } = entry as Record<
-      string,
-      unknown
-    >;
+    const { mode, pinnedAccountId, pinnedAt, includedAccountIds, lastSwitch, lastKept } =
+      entry as Record<string, unknown>;
+    const kept = parseAgentAccountAutoSwitchLastKept(lastKept);
     if (mode !== "off" && mode !== "automatic" && mode !== "pinned") continue;
     const last = lastSwitch as Record<string, unknown> | null | undefined;
     states[platform] = {
@@ -191,6 +251,7 @@ export function parseAgentAccountAutoSwitchStates(
             },
           }
         : {}),
+      ...(kept ? { lastKept: kept } : {}),
     };
   }
   return states;
@@ -345,6 +406,14 @@ function weeklyConfirmedUsedUp(reading: UsageLimitReading): boolean {
 /** One limit's reading, as far as who has room is concerned. */
 type LimitLevel = Pick<UsageLimitReading, "freshness" | "usedPercent" | "resetsAt">;
 
+/**
+ * How full a limit may read and still leave room. `between-turns` keeps the
+ * margin that moves the machine before anything runs out. `after-refusal` is for
+ * a turn a limit already stopped: there, an account a fresh reading puts below
+ * 100% is better than waiting for the reset.
+ */
+export type AutoSwitchRoomRule = "between-turns" | "after-refusal";
+
 function freshlyPast(level: LimitLevel | undefined): boolean {
   return level?.freshness === "fresh" && (level.usedPercent ?? 0) >= AUTO_SWITCH_THRESHOLD_PERCENT;
 }
@@ -373,18 +442,41 @@ export function confirmedLimitResetsAt(reading: UsageLimitReading): number | und
  * with its reset still ahead keeps that account out until the reset. With no
  * reset to go on, the reading says too little to rule the account out.
  */
-function levelHasRoom(level: LimitLevel, active: boolean): boolean {
+function levelHasRoom(
+  level: LimitLevel,
+  active: boolean,
+  rule: AutoSwitchRoomRule = "between-turns",
+): boolean {
   if (level.usedPercent === undefined || level.usedPercent < AUTO_SWITCH_THRESHOLD_PERCENT) {
     return true;
   }
-  if (level.freshness === "fresh") return false;
+  // Only a fresh reading is trusted that close to the end of an allowance.
+  if (level.freshness === "fresh") {
+    return rule === "after-refusal" && level.usedPercent < AFTER_REFUSAL_ROOM_PERCENT;
+  }
   return active || level.resetsAt === undefined;
 }
 
-function hasRoom(reading: UsageLimitReading, active: boolean): boolean {
+function hasRoom(
+  reading: UsageLimitReading,
+  active: boolean,
+  rule: AutoSwitchRoomRule = "between-turns",
+): boolean {
   return (
-    levelHasRoom(reading, active) && (!reading.fiveHour || levelHasRoom(reading.fiveHour, active))
+    levelHasRoom(reading, active, rule) &&
+    (!reading.fiveHour || levelHasRoom(reading.fiveHour, active, rule))
   );
+}
+
+const FRESHNESS_ORDER = { fresh: 0, stale: 1, none: 2 } as const;
+
+/**
+ * Whether one entry's reading may speak for a twin's. Both read one allowance,
+ * so an older reading never overrules a newer one: a stale twin past the
+ * threshold says nothing against a twin read just now.
+ */
+function speaksFor(other: LimitLevel, entry: LimitLevel | undefined): boolean {
+  return FRESHNESS_ORDER[other.freshness] <= FRESHNESS_ORDER[entry?.freshness ?? "none"];
 }
 
 function freshlyPastThreshold(reading: UsageLimitReading): boolean {
@@ -421,6 +513,7 @@ function sameLogin(left: AutoSwitchAccount, right: AutoSwitchAccount): boolean {
 export function rankAutoSwitchAccounts(
   accounts: readonly AutoSwitchAccount[],
   activeAccountId: string,
+  rule: AutoSwitchRoomRule = "between-turns",
 ): AutoSwitchAccount[] {
   const current = accounts.find(({ account }) => account.id === activeAccountId);
   const currentUsable = current?.included === true && current.account.signedIn;
@@ -430,13 +523,11 @@ export function rankAutoSwitchAccounts(
       if (!included || !account.signedIn) return false;
       const active = account.id === activeAccountId;
       if (!active && currentUsable && sameLogin(entry, current)) return false;
-      const twinOut = accounts.some(
-        (other) =>
-          other !== entry &&
-          sameLogin(other, entry) &&
-          (active ? freshlyPastThreshold(other.reading) : !hasRoom(other.reading, false)),
+      return (
+        !twinOut(accounts, entry, active, rule) &&
+        hasRoom(reading, active, rule) &&
+        (active || !reading.wouldPay)
       );
-      return !twinOut && hasRoom(reading, active) && (active || !reading.wouldPay);
     })
     .sort((left, right) => {
       const leftReset = left.reading.resetsAt ?? Number.POSITIVE_INFINITY;
@@ -445,13 +536,75 @@ export function rankAutoSwitchAccounts(
       // Equal on what the rule asks: staying put never costs a switch.
       if (left.account.id === activeAccountId) return -1;
       if (right.account.id === activeAccountId) return 1;
-      const freshness = { fresh: 0, stale: 1, none: 2 } as const;
       return (
-        freshness[left.reading.freshness] - freshness[right.reading.freshness] ||
+        FRESHNESS_ORDER[left.reading.freshness] - FRESHNESS_ORDER[right.reading.freshness] ||
         (left.reading.usedPercent ?? 100) - (right.reading.usedPercent ?? 100) ||
         left.account.id.localeCompare(right.account.id)
       );
     });
+}
+
+/** A twin of the entry whose reading, at least as recent, says the shared allowance is out. */
+function twinOut(
+  accounts: readonly AutoSwitchAccount[],
+  entry: AutoSwitchAccount,
+  active: boolean,
+  rule: AutoSwitchRoomRule,
+): AutoSwitchAccount | undefined {
+  const blocks = (other: LimitLevel | undefined, own: LimitLevel | undefined) =>
+    other !== undefined && speaksFor(other, own) && !levelHasRoom(other, active, rule);
+  return accounts.find(
+    (other) =>
+      other !== entry &&
+      sameLogin(other, entry) &&
+      (blocks(other.reading, entry.reading) ||
+        blocks(other.reading.fiveHour, entry.reading.fiveHour)),
+  );
+}
+
+/**
+ * Why each other included, signed-in account was no place to go, for a machine
+ * that stayed after a limit stopped work. Same rules as `rankAutoSwitchAccounts`.
+ * `stoppedIds` are the entries of the login the limit stopped; their twins are
+ * that same login.
+ */
+export function explainNoRoom(
+  accounts: readonly AutoSwitchAccount[],
+  activeAccountId: string,
+  rule: AutoSwitchRoomRule = "between-turns",
+  stoppedIds: ReadonlySet<string> = new Set(),
+): AutoSwitchBlockedAccount[] {
+  const stale = (reading: LimitLevel) =>
+    reading.freshness === "stale" ? { stale: true as const } : {};
+  const stopped = accounts.filter(
+    ({ account }) => account.id === activeAccountId || stoppedIds.has(account.id),
+  );
+  return accounts.flatMap((entry): AutoSwitchBlockedAccount[] => {
+    const { account, included, reading } = entry;
+    if (stopped.includes(entry) || !included || !account.signedIn) return [];
+    const accountId = account.id;
+    if (stopped.some((other) => sameLogin(other, entry))) {
+      return [{ accountId, blocker: "same-login" }];
+    }
+    if (!levelHasRoom(reading, false, rule)) {
+      return [
+        { accountId, blocker: "weekly", usedPercent: reading.usedPercent!, ...stale(reading) },
+      ];
+    }
+    if (reading.fiveHour && !levelHasRoom(reading.fiveHour, false, rule)) {
+      return [
+        {
+          accountId,
+          blocker: "five-hour",
+          usedPercent: reading.fiveHour.usedPercent,
+          ...stale(reading.fiveHour),
+        },
+      ];
+    }
+    if (reading.wouldPay) return [{ accountId, blocker: "would-pay" }];
+    if (twinOut(accounts, entry, false, rule)) return [{ accountId, blocker: "same-login" }];
+    return [];
+  });
 }
 
 /** Where the machine should be. With nothing to move onto, it stays: work stops at the limit. */

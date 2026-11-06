@@ -1,6 +1,7 @@
 /**
  * The build pipeline's "Rewind code to here" against a real container
- * environment (to-do 0405, task 7).
+ * environment (to-do 0405, task 7), and deleting a pipeline whose journaled
+ * reset can never finish there (task 9).
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
  * (this checkout's development image from `mise run docker:build:dev`, or the
@@ -29,6 +30,7 @@ import {
 } from "../src/core/build-pipeline-code-rewind";
 import { EnvironmentUnavailableError } from "../src/core/workspace-code-rewind";
 import {
+  mutateStored,
   pipeline,
   startInput,
   withService,
@@ -145,10 +147,28 @@ const advanceUntil = async (
 
 const head = async () => (await inContainer("git rev-parse HEAD")).trim();
 
+/** Stops the fixture container, as a user stopping the environment would. */
+const stopContainer = () => docker(["stop", "--time", "5", containerId]);
+
+/** Starts the fixture container again and waits for this boot to be ready. */
+async function startContainer(): Promise<void> {
+  await docker(["start", containerId]);
+  await waitForContainerBoot(containerId);
+}
+
+/** Whether the container is running, read from Docker rather than assumed. */
+const containerRunning = async () =>
+  (await docker(["inspect", "--format", "{{.State.Running}}", containerId])) === "true";
+
+type HarnessArgs = Parameters<Parameters<typeof withService>[0]>;
+
 interface ContainerPipeline {
   service: BuildPipelineService;
   storage: StorageService;
   provider: FakeProvider;
+  /** The backend commands the service invoked (Kanban updates among them). */
+  invocations: HarnessArgs[3];
+  controls: HarnessArgs[4];
   fence: EnvironmentMutationFence;
   git: EnvironmentGit;
   /** Fills the harness's worktree probe answers from the container. */
@@ -177,7 +197,7 @@ async function withContainerPipeline(run: (context: ContainerPipeline) => Promis
     return output;
   };
   await withService(
-    async (service, storage, provider, _invocations, controls) => {
+    async (service, storage, provider, invocations, controls) => {
       storageRef = storage;
       await storage.updateEnvironment("env-1", { containerId, worktreePath: null });
       const environment = (await storage.getEnvironment("env-1"))!;
@@ -189,7 +209,17 @@ async function withContainerPipeline(run: (context: ContainerPipeline) => Promis
         controls.currentHead = captured.head;
         controls.uncommittedPaths = parseGitPorcelainPaths(captured.status);
       };
-      await run({ service, storage, provider, fence, git, syncProbe, beforeGit });
+      await run({
+        service,
+        storage,
+        provider,
+        invocations,
+        controls,
+        fence,
+        git,
+        syncProbe,
+        beforeGit,
+      });
     },
     { environmentType: "containerized", environmentGit: git, environmentFence: fence },
   );
@@ -411,6 +441,159 @@ describe("Rewind code to here in a container environment", () => {
         expect(provider.created.slice(created).map((entry) => entry.phase)).toEqual(["build"]);
         expect((await pipeline(storage, id)).sessions.at(-1)?.headAtStart).toBe(base);
         expect(fence.isBeingMoved("env-1")).toBe(false);
+      });
+    },
+    240_000,
+  );
+});
+
+/**
+ * A completed Kanban pipeline whose confirmed "Rewind code to here" was
+ * journaled and then could not run, because the container stopped just as the
+ * backup ref was about to be written. Leaves the container stopped.
+ */
+async function pendingRewindWithStoppedContainer(context: ContainerPipeline, branch: string) {
+  const { service, storage, controls, syncProbe, beforeGit } = context;
+  const { id, base, tip, build } = await completedPipeline(context, branch);
+  // The ticket is attached after completion, as in the service test, so the
+  // only comment on it is the one written here.
+  const taskId = `ticket-${branch}`;
+  controls.kanbanTasks.set(taskId, {
+    id: taskId,
+    status: "in-progress",
+    comments: [{ text: "Existing lifecycle comment" }],
+  });
+  await mutateStored(storage, id, (snapshot) => {
+    snapshot.source = { type: "kanban", taskId };
+  });
+  await syncProbe();
+  let stopped = false;
+  beforeGit.current = async (args) => {
+    if (args[0] === "update-ref" && !stopped) {
+      stopped = true;
+      await stopContainer();
+    }
+  };
+  try {
+    await expect(service.rewindCode(id, build.sessionKey, tip)).rejects.toThrow(
+      `The code rewind to ${base.slice(0, 12)} has not finished, so this build cannot continue yet. The environment's container is not running. Start the environment, then try again.`,
+    );
+    expect(stopped).toBe(true);
+    expect(await containerRunning()).toBe(false);
+    const pending = await pipeline(storage, id);
+    expect(pending.rewinds?.at(-1)?.code?.pending).toBe(true);
+    return { id, base, tip, taskId, backupRef: pending.rewinds!.at(-1)!.code!.backupRef };
+  } catch (error) {
+    // Leave the shared container running for the cases after this one.
+    if (stopped) await startContainer();
+    throw error;
+  } finally {
+    beforeGit.current = undefined;
+  }
+}
+
+/**
+ * What a delete of a pending-rewind pipeline must leave: no record, the ticket
+ * back in the backlog with no completion comment, no agent started, and
+ * nothing the supervisor can still pick up.
+ */
+async function expectDeletedWithoutReset(
+  { service, storage, provider, invocations, controls, fence }: ContainerPipeline,
+  id: string,
+  taskId: string,
+  createdBefore: number,
+  invocationsBefore: number,
+) {
+  expect(await storage.getBuildPipeline(id)).toBeNull();
+  const task = controls.kanbanTasks.get(taskId)!;
+  expect(task.status).toBe("backlog");
+  expect(task.comments).toEqual([{ text: "Existing lifecycle comment" }]);
+  const after = invocations.slice(invocationsBefore);
+  expect(
+    after.filter((call) => call.command === "update_kanban_task").map((call) => call.args),
+  ).toEqual([{ taskId, status: "backlog" }]);
+  expect(after.some((call) => call.command === "add_kanban_comment")).toBe(false);
+  await service.advanceNow(id);
+  expect(provider.created.length).toBe(createdBefore);
+  expect(fence.isBeingMoved("env-1")).toBe(false);
+}
+
+describe("Deleting a pipeline whose code rewind cannot finish, in a container environment", () => {
+  live(
+    "Pause and Cancel refuse with the rewind's reason while the container is stopped and after the branch moved, and Delete removes the pipeline",
+    async () => {
+      await withContainerPipeline(async (context) => {
+        const { service, storage, provider, invocations, syncProbe } = context;
+        const { id, tip, taskId, backupRef } = await pendingRewindWithStoppedContainer(
+          context,
+          "stuck-moved",
+        );
+        const created = provider.created.length;
+        try {
+          // The container is stopped: every control names the outstanding
+          // rewind and the container's state, and nothing starts.
+          const stoppedReason =
+            "has not finished, so this build cannot continue yet. The environment's container is not running.";
+          await expect(service.pause(id)).rejects.toThrow(stoppedReason);
+          await expect(service.cancel(id)).rejects.toThrow(stoppedReason);
+          await service.advanceNow(id);
+          expect(provider.created.length).toBe(created);
+        } finally {
+          await startContainer();
+        }
+
+        // The user moved the branch by hand before the supervisor got back to
+        // the reset: the confirmed reset now refuses for good.
+        expect(await head()).toBe(tip);
+        await inContainer("printf 'by hand\\n' >> app.txt && git commit -qam 'by hand'");
+        const moved = await head();
+        await syncProbe();
+        await service.advanceNow(id);
+        const stuck = await pipeline(storage, id);
+        expect(stuck.rewinds?.at(-1)?.code?.pending).toBe(true);
+        expect(provider.created.length).toBe(created);
+        const movedReason = "The branch moved since the rewind was previewed.";
+        await expect(service.pause(id)).rejects.toThrow(movedReason);
+        await expect(service.cancel(id)).rejects.toThrow(movedReason);
+        expect(await head()).toBe(moved);
+
+        const invocationCount = invocations.length;
+        await service.remove(id);
+        await expectDeletedWithoutReset(context, id, taskId, created, invocationCount);
+        // In the container: the hand-made commit is still checked out, the
+        // worktree is clean, and no backup ref was ever written.
+        expect(await head()).toBe(moved);
+        expect(await inContainer("git status --porcelain --untracked-files=all")).toBe("");
+        expect(await inContainer(`git for-each-ref --format='%(refname)' ${backupRef}`)).toBe("");
+      });
+    },
+    240_000,
+  );
+
+  live(
+    "Delete removes the pipeline while the container is still stopped, and nothing is reset when it starts again",
+    async () => {
+      await withContainerPipeline(async (context) => {
+        const { service, provider, invocations, syncProbe } = context;
+        const { id, tip, taskId, backupRef } = await pendingRewindWithStoppedContainer(
+          context,
+          "stuck-stopped",
+        );
+        const created = provider.created.length;
+        const invocationCount = invocations.length;
+        try {
+          await service.remove(id);
+          await expectDeletedWithoutReset(context, id, taskId, created, invocationCount);
+        } finally {
+          await startContainer();
+        }
+        // Once the container answers again the supervisor has nothing left to
+        // finish: the branch is where the user left it.
+        await syncProbe();
+        await service.advanceNow(id);
+        expect(await head()).toBe(tip);
+        expect(await inContainer(`git for-each-ref --format='%(refname)' ${backupRef}`)).toBe("");
+        expect(provider.created.length).toBe(created);
       });
     },
     240_000,

@@ -17,6 +17,10 @@ set -e
 BOOT_STATUS_DIR=/run/orkestrator
 BOOT_STATUS_FILE="$BOOT_STATUS_DIR/boot-status.json"
 rm -f /tmp/.environment-ready /tmp/.entrypoint-complete "$BOOT_STATUS_FILE"
+# Container terminal shell records (CONTAINER_TERMINAL_PID_RECORD_COMMAND in
+# apps/backend/src/core/container-scripts.ts) name processes of an earlier
+# boot; none of them is alive now. Each shell start also sweeps its own uid's.
+rm -rf "/tmp/orkestrator-terminals-$(id -u)"
 mkdir -p "$BOOT_STATUS_DIR/processes"
 # The root entrypoint opened this boot's record before its firewall step;
 # keep its id so the record names one boot throughout.
@@ -1264,7 +1268,10 @@ if [ -f "$CLAUDE_JSON_INPUT" ] && [ -s "$CLAUDE_JSON_INPUT" ]; then
 
     # Use jq to:
     # 1. Keep only the allowlisted keys (drops projects, githubRepoPaths, keys)
-    # 2. Add bypassPermissionsModeAccepted for --dangerously-skip-permissions
+    # 2. Add bypassPermissionsModeAccepted for --dangerously-skip-permissions,
+    #    and hasSeenAutoDefaultNudge: this file is rebuilt on every start, so
+    #    without it terminal Claude offers "Make auto mode your default
+    #    permission mode?" in every new Claude CLI tab after each start
     # 3. Add hasCompletedOnboarding to skip first-run theme selection
     # 4. Add /workspace project settings with trust accepted
     #
@@ -1278,6 +1285,7 @@ if [ -f "$CLAUDE_JSON_INPUT" ] && [ -s "$CLAUDE_JSON_INPUT" ]; then
               'if type == "object" then . else error("not an object") end |
               with_entries(select(.key as $k | any($keep[]; . == $k))) |
               .bypassPermissionsModeAccepted = true |
+              .hasSeenAutoDefaultNudge = true |
               .hasCompletedOnboarding = true |
               .theme = "dark" |
               .projects = {"/workspace": {"hasTrustDialogAccepted": true, "hasCompletedProjectOnboarding": true}}' \
@@ -1314,6 +1322,7 @@ if [ -f "$CLAUDE_JSON_INPUT" ] && [ -s "$CLAUDE_JSON_INPUT" ]; then
         cat > "$HOME/.claude.json" << 'FALLBACK_EOF'
 {
   "bypassPermissionsModeAccepted": true,
+  "hasSeenAutoDefaultNudge": true,
   "hasCompletedOnboarding": true,
   "theme": "dark",
   "projects": {
@@ -1332,6 +1341,7 @@ else
     cat > "$HOME/.claude.json" << 'EOF'
 {
   "bypassPermissionsModeAccepted": true,
+  "hasSeenAutoDefaultNudge": true,
   "hasCompletedOnboarding": true,
   "theme": "dark",
   "projects": {

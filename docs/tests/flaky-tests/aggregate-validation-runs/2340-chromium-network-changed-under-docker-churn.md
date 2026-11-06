@@ -444,3 +444,18 @@ stopping.
   and 6 failed module imports when the Kanban view loaded, so the Home
   preview case's `visiblePreview` stayed `true`. Startup recovery does not
   cover later lazy loads.
+
+## 2026-11-06: a Docker spec that needs no UI (to-do 7081 task 1)
+
+Observed on beelink (Linux Engine) on branch
+`container-shell-cleanup-9caa78b55d24-r1`, base `ee2cc8423`, one worker,
+while other pipelines' containers were starting and stopping.
+`e2e/agent-testing/container-terminal-close.spec.ts` (new) failed 2 of its
+first 6 single-file runs in `loadAppWithDevRetry`: the project tree did not
+render within 30 s, before any terminal command ran. The second failure's trace
+holds two `net::ERR_NETWORK_CHANGED` aborts; the first one's artifacts were
+overwritten by its passing rerun. The spec drives only backend commands, so it
+now signs in through the browser context's request client (the login exchange,
+no page navigation), which Chromium's network-change abort cannot reach. It
+then passed 6 of 6 under the same churn. Not counted as a recurrence: the
+cause was this case's known one, and the fix removes the spec from it.

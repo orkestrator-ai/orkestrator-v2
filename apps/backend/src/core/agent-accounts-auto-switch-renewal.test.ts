@@ -4,11 +4,13 @@ import type {
   AgentAccountsSnapshot,
   AgentAccountSummary,
 } from "@orkestrator/protocol/agent-accounts";
+import type { AgentAccountAutoSwitchLastKept } from "@orkestrator/protocol/agent-account-auto-switch";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import {
   AgentAccountAutoSwitcher,
   LOGIN_RENEWAL_MAX_RETRY_MS,
   LOGIN_RENEWAL_RETRY_MS,
+  URGENT_LOGIN_RENEWAL_SPACING_MS,
 } from "./agent-accounts-auto-switch.js";
 
 const NOW = Date.parse("2026-11-03T12:00:00Z");
@@ -41,9 +43,12 @@ function harness(options: {
   active: string;
   accounts: Record<string, { before: PlanUsageSnapshot; after?: PlanUsageSnapshot }>;
   excluded?: string[];
+  /** Entries sharing an email are one login. Each defaults to its own. */
+  emails?: Record<string, string>;
   renewLogin?: (accountId: string) => Promise<boolean>;
   withoutRenewal?: boolean;
 }) {
+  const kept: AgentAccountAutoSwitchLastKept[] = [];
   let clock = NOW;
   const state = { active: options.active };
   const renewed = new Set<string>();
@@ -55,7 +60,7 @@ function harness(options: {
     isDefault: false,
     isActive: false,
     signedIn: true,
-    identity: { email: `${id}@example.com` },
+    identity: { email: options.emails?.[id] ?? `${id}@example.com` },
   }));
   const renewLogin = mock(async (_platform: AgentAccountPlatform, accountId: string) => {
     const result = options.renewLogin ? await options.renewLogin(accountId) : true;
@@ -95,11 +100,15 @@ function harness(options: {
     }),
     bridgeBusy: async () => false,
     notify: () => undefined,
+    noteKept: (_platform, entry) => {
+      kept.push(entry);
+    },
     now: () => clock,
   });
   return {
     switcher,
     state,
+    kept,
     reads,
     renewLogin,
     renewedIds: () => renewLogin.mock.calls.map(([, accountId]) => accountId),
@@ -132,7 +141,7 @@ describe("renewing candidates after a weekly limit stop", () => {
     expect(h.renewLogin).toHaveBeenCalledWith("claude", "idle");
     expect(h.reads).toEqual([
       { accountId: "host", force: true },
-      { accountId: "idle", force: false },
+      { accountId: "idle", force: true },
       { accountId: "idle", force: true },
     ]);
     expect(h.state.active).toBe("idle");
@@ -152,10 +161,11 @@ describe("renewing candidates after a weekly limit stop", () => {
     await h.switcher.evaluate("claude");
     expect(await stop(h.switcher, "another-turn")).toBe("resend");
     expect(h.renewLogin).toHaveBeenCalledTimes(1);
+    // A stop always reads afresh; the evaluation between them serves the cached reading.
     expect(h.reads.filter((read) => read.accountId === "idle")).toEqual([
+      { accountId: "idle", force: true },
       { accountId: "idle", force: false },
-      { accountId: "idle", force: false },
-      { accountId: "idle", force: false },
+      { accountId: "idle", force: true },
     ]);
     expect(h.state.active).toBe("other");
   });
@@ -171,7 +181,7 @@ describe("renewing candidates after a weekly limit stop", () => {
     expect(await stop(h.switcher)).toBe("stop");
     expect(h.renewedIds()).toEqual(["idle"]);
     expect(h.reads.filter((read) => read.accountId === "idle")).toEqual([
-      { accountId: "idle", force: false },
+      { accountId: "idle", force: true },
       { accountId: "idle", force: true },
     ]);
     expect(h.state.active).toBe("host");
@@ -313,5 +323,137 @@ describe("renewing idle accounts so they can be ranked", () => {
     h.advance(1);
     await h.switcher.evaluate("claude");
     expect(h.renewLogin).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("probing every candidate when a limit stops a turn", () => {
+  const stop = (switcher: AgentAccountAutoSwitcher, requestId = "limited-turn") =>
+    switcher.handleLimitStop({
+      platform: "claude",
+      environmentId: "env-1",
+      requestId,
+      error: "You've hit your 5-hour limit · resets 5:30am",
+      resends: 0,
+    });
+
+  test("a candidate known only from an old reading is renewed and read before deciding", async () => {
+    const h = harness({
+      active: "host",
+      accounts: {
+        host: { before: usage(100, 72) },
+        // Read fifteen hours ago at 96%, reset still ahead: ranked as it was until now.
+        idle: { before: usage(96, 30, true), after: usage(40, 30) },
+      },
+    });
+    expect(await stop(h.switcher)).toBe("resend");
+    expect(h.renewedIds()).toEqual(["idle"]);
+    expect(h.state.active).toBe("idle");
+  });
+
+  test("an old reading that was wrong in the other direction keeps the machine put", async () => {
+    const h = harness({
+      active: "host",
+      accounts: {
+        host: { before: usage(100, 72) },
+        idle: { before: usage(50, 30, true), after: usage(100, 30) },
+      },
+    });
+    expect(await stop(h.switcher)).toBe("stop");
+    expect(h.state.active).toBe("host");
+  });
+
+  test("after a refusal, a fresh reading under 100% is somewhere to go", async () => {
+    const h = harness({
+      active: "host",
+      accounts: {
+        host: { before: usage(2, 72) },
+        idle: { before: usage(98, 30) },
+      },
+    });
+    // Between turns, 98% is the margin that keeps the machine off it.
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("host");
+    const refused = harness({
+      active: "host",
+      accounts: {
+        host: { before: usage(100, 72) },
+        idle: { before: usage(98, 30) },
+      },
+    });
+    expect(await stop(refused.switcher)).toBe("resend");
+    expect(refused.state.active).toBe("idle");
+  });
+
+  test("an old reading at 98% still keeps an account out when it cannot be read again", async () => {
+    const h = harness({
+      active: "host",
+      renewLogin: async () => false,
+      accounts: {
+        host: { before: usage(100, 72) },
+        idle: { before: usage(98, 30, true) },
+      },
+    });
+    expect(await stop(h.switcher)).toBe("stop");
+    expect(h.state.active).toBe("host");
+  });
+
+  test("one fresh reading of a login is enough; a stale twin does not overrule it", async () => {
+    const h = harness({
+      active: "host",
+      emails: { old: "shared@example.com", added: "shared@example.com" },
+      accounts: {
+        host: { before: usage(100, 72) },
+        old: { before: usage(98, 30, true) },
+        added: { before: usage(96, 30, true), after: usage(97, 30) },
+      },
+      renewLogin: async (accountId) => accountId === "added",
+    });
+    expect(await stop(h.switcher)).toBe("resend");
+    // The first twin's renewal failed, so the second was tried; nothing more.
+    expect(h.renewedIds()).toEqual(["old", "added"]);
+    expect(h.state.active).toBe("added");
+  });
+
+  test("a stop renews through the backoff, but no more often than the spacing", async () => {
+    const h = harness({
+      active: "host",
+      renewLogin: async () => false,
+      accounts: {
+        host: { before: usage(100, 72) },
+        idle: { before: usage(96, 30, true) },
+      },
+    });
+    expect(await stop(h.switcher, "first")).toBe("resend");
+    h.advance(URGENT_LOGIN_RENEWAL_SPACING_MS - 1);
+    await stop(h.switcher, "second");
+    expect(h.renewLogin).toHaveBeenCalledTimes(1);
+    h.advance(1);
+    await stop(h.switcher, "third");
+    // Well inside the thirty-minute backoff a renewal between turns would wait out.
+    expect(h.renewLogin).toHaveBeenCalledTimes(2);
+  });
+
+  test("with nowhere to go it records what kept each account out", async () => {
+    const h = harness({
+      active: "host",
+      renewLogin: async () => false,
+      emails: { twin: "host@example.com" },
+      accounts: {
+        host: { before: usage(100, 72) },
+        twin: { before: usage(10, 72, true) },
+        weekly: { before: usage(99, 30, true) },
+      },
+    });
+    expect(await stop(h.switcher)).toBe("stop");
+    expect(h.kept).toEqual([
+      {
+        fromAccountId: "host",
+        at: new Date(NOW).toISOString(),
+        blocked: [
+          { accountId: "twin", blocker: "same-login" },
+          { accountId: "weekly", blocker: "weekly", usedPercent: 99, stale: true },
+        ],
+      },
+    ]);
   });
 });

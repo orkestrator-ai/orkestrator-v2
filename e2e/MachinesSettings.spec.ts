@@ -372,3 +372,57 @@ test.describe("machine order", () => {
       .toEqual(["Studio", "Rack", "Build box", "Laptop", "Attic", "Spare"]);
   });
 });
+
+for (const width of [390, 1280]) {
+  test(`ticked machines update to the latest release together at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/machines-settings?fleet");
+    const rows = page.getByTestId("machine-row");
+    await expect(rows).toHaveCount(6);
+    const row = (name: string) => rows.filter({ hasText: name });
+    const update = page.getByRole("button", { name: "Update app to latest" });
+    await expect(update).toBeDisabled();
+    // Attic is unreachable, so it cannot be ticked.
+    await expect(row("Attic").getByRole("checkbox")).toBeDisabled();
+
+    for (const name of ["Studio", "Build box", "Laptop", "Rack"]) {
+      await row(name)
+        .getByRole("checkbox", { name: `Select ${name}` })
+        .click();
+    }
+    await expect(page.getByText("4 of 5 selected")).toBeVisible();
+    // The checkbox column does not push the row's actions off screen.
+    const updates = row("Rack").getByRole("button", { name: /^Updates for/ });
+    const box = (await updates.boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+
+    await update.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("Update 4 machines to the latest Orkestrator?");
+    await expect(dialog.getByTestId("bulk-update-machines")).toContainText("3 agents working");
+    await expect(dialog).toContainText("This window's machine is asked last");
+    await dialog.getByRole("button", { name: "Update 4 machines" }).click();
+
+    await expect(row("Build box").getByTestId("machine-update-status")).toHaveText(
+      "Downloading 2.26.0 (40%)…",
+    );
+    await expect(row("Rack").getByTestId("machine-update-status")).toHaveText(
+      "Downloading 2.26.0 (40%)…",
+    );
+    await expect(row("Laptop").getByTestId("machine-update-status")).toHaveText(
+      "Already on the newest release (2.26.0)",
+    );
+    await expect(row("Studio").getByTestId("machine-update-status")).toHaveText(
+      "Already on the newest release (2.26.0)",
+    );
+    await expect(row("Spare").getByTestId("machine-update-status")).toHaveCount(0);
+    const requested = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("machines-fixture-updates") ?? "[]"),
+    );
+    expect(requested.map((entry: { nodeId: string }) => entry.nodeId).sort()).toEqual([
+      "bk_build",
+      "bk_rack",
+    ]);
+    expect(requested[0]).toMatchObject({ version: "2.26.0" });
+  });
+}

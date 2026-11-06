@@ -5,6 +5,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 import { sidebarActivity } from "./sidebar-activity";
+import {
+  containerProcessesInSessions,
+  containerSessionsRunning,
+} from "./container-terminal-processes";
 
 /**
  * The Claude terminal state signal (`claude-state-signal=2`) with a real
@@ -279,6 +283,10 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
   });
   let sessionId: string | undefined;
   let undoFakeApi: (() => void) | undefined;
+  // The terminal sessions (session IDs) running `claude` before this test's
+  // tab, so cleanup can tell its own shell from an earlier one.
+  const claudeSessionsBefore = containerSessionsRunning(containerId, "claude");
+  let claudeSessions = new Set<number>();
 
   try {
     const expand = page.getByRole("button", { name: /^Expand project / }).first();
@@ -385,19 +393,31 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
       (await screen(20_000)).includes("yes,iaccept"),
       "Claude asked for bypass-mode consent",
     ).toBe(false);
-    // Claude Code may follow with a one-time offer to make auto mode the
-    // default. Keep bypass permissions, the mode the image configures.
-    await page.waitForTimeout(3_000);
-    if ((await screen()).includes("makeautomodeyourdefault")) {
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("Enter");
-      await expect
-        .poll(async () => (await screen(600)).includes("bypasspermissionson"), {
-          timeout: 15_000,
-        })
-        .toBe(true);
-    }
+    // The image also records the answer to Claude Code's "Make auto mode your
+    // default permission mode?" offer, so the offer is a failed boot too.
+    expect(
+      docker([
+        "exec",
+        "--user",
+        "node",
+        containerId,
+        "sh",
+        "-c",
+        'jq -r .hasSeenAutoDefaultNudge "$HOME/.claude.json"',
+      ]),
+      "the container's ~/.claude.json does not record the auto-mode answer",
+    ).toBe("true");
+    expect(
+      (await screen(20_000)).includes("makeautomodeyourdefault"),
+      "Claude offered to make auto mode the default",
+    ).toBe(false);
     await page.waitForTimeout(1_000);
+    claudeSessions = new Set(
+      [...containerSessionsRunning(containerId, "claude")].filter(
+        (sid) => !claudeSessionsBefore.has(sid),
+      ),
+    );
+    expect(claudeSessions.size, "the tab's claude is not running in the container").toBe(1);
 
     const offsetMs = containerClockOffsetMs(containerId);
     const turns: TurnTiming[] = [];
@@ -510,6 +530,16 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
             "the test's terminal is still running after cleanup",
           ).toBe(false);
           expect(await invoke<string[]>("list_terminal_sessions")).not.toContain(sessionId);
+          // The backend's view is not enough: Docker keeps an exec running
+          // after its client is gone, so check the container itself.
+          if (claudeSessions.size > 0) {
+            await expect
+              .poll(() => containerProcessesInSessions(containerId, claudeSessions).length, {
+                timeout: 15_000,
+                message: "the tab's shell or claude is still running in the container",
+              })
+              .toBe(0);
+          }
         }
       } finally {
         // Undo the fake API last: Claude must stop before its settings change.

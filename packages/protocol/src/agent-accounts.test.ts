@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
+  agentAccountLoginOf,
+  groupAgentAccountLogins,
   normalizePreferredEmail,
   parsePreferredAgentIdentities,
   isPreferredIdentity,
   parseAgentAccountsSnapshot,
   parseHostAgentSignIns,
+  type AgentAccountSummary,
 } from "./agent-accounts.js";
 
 test("sign-in metadata drops unknown platforms, invalid states, secrets and long sources", () => {
@@ -110,4 +113,66 @@ test("preferred identity comparisons fold case and trim account emails", () => {
   expect(isPreferredIdentity({}, "work@example.com")).toBe(false);
   expect(isPreferredIdentity({ email: " " }, "work@example.com")).toBe(false);
   expect(isPreferredIdentity({ email: "work@example.com" }, undefined)).toBe(false);
+});
+
+describe("one row per login", () => {
+  const entry = (
+    id: string,
+    email: string | undefined,
+    overrides: Partial<AgentAccountSummary> = {},
+  ): AgentAccountSummary => ({
+    id,
+    platform: "claude",
+    label: id === "default" ? "Host login" : (email ?? id),
+    isDefault: id === "default",
+    isActive: false,
+    signedIn: true,
+    identity: email ? { email } : {},
+    ...overrides,
+  });
+
+  test("the host login and an added account on one login are one row, named by the added one", () => {
+    const logins = groupAgentAccountLogins([
+      entry("default", "Shared@Example.com", { isActive: true }),
+      entry("added", "shared@example.com"),
+      entry("other", "other@example.com"),
+    ]);
+    expect(logins).toHaveLength(2);
+    expect(logins[0]).toMatchObject({
+      account: { id: "added", isActive: false },
+      isActive: true,
+      entryIds: ["added", "default"],
+      alsoHostLogin: true,
+    });
+    expect(agentAccountLoginOf(logins, "default")).toBe(logins[0]);
+    expect(agentAccountLoginOf(logins, "other")?.entryIds).toEqual(["other"]);
+  });
+
+  test("a signed-out entry, one with no email and another platform stay their own rows", () => {
+    const logins = groupAgentAccountLogins([
+      entry("default", "shared@example.com"),
+      entry("expired", "shared@example.com", { signedIn: false }),
+      entry("key-1", undefined),
+      entry("key-2", undefined),
+      entry("codex", "shared@example.com", { platform: "codex" }),
+    ]);
+    expect(logins.map((login) => login.entryIds)).toEqual([
+      ["default"],
+      ["expired"],
+      ["key-1"],
+      ["key-2"],
+      ["codex"],
+    ]);
+    expect(logins.every((login) => !login.alsoHostLogin)).toBe(true);
+  });
+
+  test("of two added twins, the active one names the login", () => {
+    const logins = groupAgentAccountLogins([
+      entry("first", "shared@example.com"),
+      entry("second", "shared@example.com", { isActive: true }),
+    ]);
+    expect(logins).toEqual([
+      expect.objectContaining({ entryIds: ["second", "first"], alsoHostLogin: false }),
+    ]);
+  });
 });

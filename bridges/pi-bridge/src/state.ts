@@ -451,6 +451,23 @@ export interface SessionState {
    * from the transcript simply fails the lookup.
    */
   toolCallRows?: Map<string, string>;
+  /** Transient identities awaiting Pi's append; converted to stable ids next frame. */
+  historyMessages?: Map<string, object>;
+  /** Bounded live row -> Pi entry ids; persisted across detach and bridge restart. */
+  historyEntries?: Map<string, string>;
+  /** The HTTP prompt awaiting its first Pi user frame (local-only prompts have none). */
+  pendingHistoryPromptId?: string;
+  /** Completed response waiting for its tool-only row to be created. */
+  pendingHistoryResponse?: object;
+  /**
+   * The leaf a rewind or branch switch chose, with Pi's entry count then.
+   *
+   * Pi moves its leaf in memory only; reopening the session file puts it back
+   * at the newest entry. Until something is appended under the chosen leaf
+   * (which persists it), every reopen re-applies it (`restoreHistoryLeaf`).
+   * `entryId` is null for a rewind to before the first prompt.
+   */
+  historyLeaf?: { entryId: string | null; entries: number };
   /**
    * The text and thinking blocks still being appended to, by kind.
    *
@@ -568,8 +585,10 @@ export interface SessionState {
 }
 
 export interface PersistedSession {
+  historyEntries?: Array<[string, string]>;
   readOnly?: boolean;
   id: string;
+  historyLeaf?: { entryId: string | null; entries: number };
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   sessionFile?: string;

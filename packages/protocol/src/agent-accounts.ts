@@ -261,6 +261,64 @@ function isAccountRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * One login as the views show it. Entries with one email (ignoring case) share one
+ * allowance, as automatic switching already treats them. They arise when an added
+ * account and the host login (whatever `~/.claude` or `~/.codex` is signed in to)
+ * end up on the same login, usually because the host signed in to it after it was
+ * added. Only signed-in entries are merged: a signed-out one stays its own row, so
+ * it can still be signed in again or removed.
+ */
+export interface AgentAccountLogin {
+  /** The stored entry the login is shown as and switched to, with its own activity. */
+  account: AgentAccountSummary;
+  /** Whether any entry of this login is active. */
+  isActive: boolean;
+  /** Every entry of the login, `account` first. */
+  entryIds: string[];
+  /** The host login is one of the entries, shown under an added account. */
+  alsoHostLogin: boolean;
+}
+
+/**
+ * The accounts, one per login, in the order each login first appears. An added
+ * entry names the login, because the host login changes whenever someone signs
+ * the host in again.
+ */
+export function groupAgentAccountLogins(
+  accounts: readonly AgentAccountSummary[],
+): AgentAccountLogin[] {
+  const groups = new Map<string, AgentAccountSummary[]>();
+  for (const account of accounts) {
+    const email = account.identity.email?.trim().toLowerCase();
+    const key =
+      email && account.signedIn
+        ? `${account.platform}:email:${email}`
+        : `${account.platform}:id:${account.id}`;
+    groups.set(key, [...(groups.get(key) ?? []), account]);
+  }
+  return Array.from(groups.values(), (entries) => {
+    const added = entries.filter((entry) => !entry.isDefault);
+    const shown = added.find((entry) => entry.isActive) ?? added[0] ?? entries[0]!;
+    return {
+      account: shown,
+      isActive: entries.some((entry) => entry.isActive),
+      entryIds: [shown.id, ...entries.filter((entry) => entry !== shown).map(({ id }) => id)],
+      alsoHostLogin: !shown.isDefault && entries.some((entry) => entry.isDefault),
+    };
+  });
+}
+
+/** The login holding one entry. */
+export function agentAccountLoginOf(
+  logins: readonly AgentAccountLogin[],
+  accountId: string | undefined,
+): AgentAccountLogin | undefined {
+  return accountId === undefined
+    ? undefined
+    : logins.find((login) => login.entryIds.includes(accountId));
+}
+
 /** Peer summaries are untrusted. Reject malformed rows and copy only display fields. */
 export function parseAgentAccountsSnapshot(value: unknown): AgentAccountsSnapshot | undefined {
   if (!isAccountRecord(value) || !Array.isArray(value.accounts) || !isAccountRecord(value.active)) {

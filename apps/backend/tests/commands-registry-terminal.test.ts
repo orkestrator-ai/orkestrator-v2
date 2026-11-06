@@ -6,6 +6,7 @@ import {
 import * as containerAccounts from "../src/core/agent-accounts-containers";
 import type { AgentAccountStore } from "../src/core/agent-accounts-store";
 import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminal-runtime";
+import { CONTAINER_INTERACTIVE_SHELL_COMMAND } from "../src/core/container-scripts";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -3608,14 +3609,12 @@ printf '["exists","missing"]'
     expect(ptySpawn.mock.calls[1]?.[1]).toEqual([
       "exec",
       "-it",
+      "--env",
+      expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=[0-9a-f-]{36}$/),
       "container-legacy",
       "bash",
       "-lc",
-      [
-        "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
-        "orkestrator_source_runtime_env 2>/dev/null || true",
-        "exec zsh -l",
-      ].join("\n"),
+      CONTAINER_INTERACTIVE_SHELL_COMMAND,
     ]);
   });
 
@@ -3657,6 +3656,8 @@ printf '["exists","missing"]'
     expect(spawnCall?.[1]).toEqual([
       "exec",
       "-it",
+      "--env",
+      expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=[0-9a-f-]{36}$/),
       "--user",
       "node",
       "container-1",
@@ -3699,6 +3700,8 @@ printf '["exists","missing"]'
     expect(ptySpawn.mock.calls.at(-1)?.[1]).toEqual([
       "exec",
       "-it",
+      "--env",
+      expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=[0-9a-f-]{36}$/),
       "--env",
       "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
       "--user",
@@ -3751,6 +3754,8 @@ printf '["exists","missing"]'
     expect(ptySpawn.mock.calls[1]?.[1]).toEqual([
       "exec",
       "-it",
+      "--env",
+      expect.stringMatching(/^ORKESTRATOR_TERMINAL_SESSION=[0-9a-f-]{36}$/),
       "--user",
       "node",
       "container-new",

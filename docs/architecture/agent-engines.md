@@ -428,9 +428,10 @@ processed and retryable instead of parking the prompt as outcome unknown;
 nothing was written and the claim is rolled back, so the prompt did not run.
 The change-evidence spool claim and the turn-in-flight restart mark use the
 same owner rule. Tests: `process-identity.test.ts`, `session-preferences.test.ts`,
-`session-manager-lifecycle.test.ts` (the 503 refusal) and `routes/session.test.ts`
-([0726](../todo/agent-engines/0726-claude-preference-lock-reused-pid.md)
-tracks the remaining live container qualification).
+`session-manager-lifecycle.test.ts` (the 503 refusal) and `routes/session.test.ts`.
+It was qualified live in a container, including a restart that left a lock
+naming a reused pid, on 2026-11-06
+([container-qualification.md](../development/container-qualification.md#claude-preference-lock-with-a-reused-pid-docker-desktop-2026-11-06)).
 
 Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.ts`
 drives the Claude Code CLI inside a tmux session and observes its terminal
@@ -541,7 +542,7 @@ picker and the run on the same model:
 The bridge's `POST /session/:id/config` replaces the whole session config: a
 field left out resets (mode to Build, fast tier off). The backend therefore
 reads the current config and restates every field a control update leaves
-alone (`updateCodexSessionConfig` in `http-bridge-codex-config.ts`). A model
+alone (`updateCodexSessionConfig` in `http-bridge/codex-config.ts`). A model
 change without an effort drops the old model's effort, so Codex applies the
 new model's default.
 
@@ -1169,15 +1170,22 @@ Claude AskUserQuestion option previews are requested as Markdown
 block on the question card (`AgentInteractionOption.preview`, bounded per
 option and per request). Codex questions reach the card because interactive
 threads turn on `default_mode_request_user_input`; pipeline threads keep
-Codex's Default-mode refusal. Codex 0.164.0 sends such a question with
-`isBlocking: false`, yet its core waits for the answer with no timeout of its
-own: the flag only lets a client auto-resolve it (Codex's TUI sends an empty
-answer after two minutes). The bridge therefore publishes every parked
-question as blocking, so the session shows as waiting, and keeps the wire flag
-for the deadline: a Default-mode question gets the bounded, pausable deadline,
-whose expiry cancels with the same empty answer. The backend also reads a
-question from an older bridge that still says `false` as blocking
-(`mapCodexInteraction`).
+Codex's Default-mode refusal. Codex 0.164.0 and 0.166.0 send such a question
+with `isBlocking: false` and no `autoResolutionMs`, yet the core waits for the
+answer with no timeout of its own: the flag only lets a client auto-resolve it
+(Codex's TUI sends an empty answer after two minutes). The bridge therefore
+publishes every parked question as blocking, so the session shows as waiting,
+and keeps the wire flag for the deadline: a Default-mode question gets the
+bounded, pausable deadline, whose expiry cancels with the same empty answer.
+That deadline is Orkestrator's own `AGENT_INTERACTION_DEFAULT_TIMEOUT_MS`
+(5 minutes from `requestedAt`), and a pause moves it to the 24-hour hold
+ceiling. On 2026-11-06 a paused question outlived it by 10.5 minutes against
+the real 0.166.0 app-server and was still answered, while an unpaused control
+expired at five minutes (`live-request-user-input.test.ts`,
+`RUN_LIVE_CODEX_QUESTION_DEADLINES=1`). The default suite covers the same
+scenario on a manual clock against the bridge's fake app-server
+(`fake-question-deadline.test.ts`). The backend also reads a question from an
+older bridge that still says `false` as blocking (`mapCodexInteraction`).
 
 ## Cursor Agent
 

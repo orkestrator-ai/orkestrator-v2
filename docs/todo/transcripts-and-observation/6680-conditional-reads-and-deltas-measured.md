@@ -95,7 +95,7 @@ Not measured on the profile, each for a stated reason:
 
 **Context.** Part 0180 recommended a bridge state revision that the backend sends as `knownToken`, with an older bridge answering whole. The report's constraint was that a bridge answering "unchanged" must still reach the backend's interaction and queue reads.
 
-**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSessionState` (`apps/backend/src/core/http-bridge-progressive.ts`) still reads the state route with no condition, plus Codex `/config` and Pi `/queue`. `readProgressiveSessionState` (`native-agent-transcript-projection.ts`) still adds the interaction reads and the steer probe. In the aligned profile rerun, Claude's state body repeated on 35 of 39 streaming polls with one viewer, 76 of 80 with two, and 3 of 3 idle. A revision could therefore have answered `unchanged` on most polls, unlike the fake's prediction. What it saves is small. The body is about 1 KB, and the bridge answered it in 0.15–0.22 ms on average. The request itself, a loopback round trip, stays. So do the four other requests of each poll. Codex's and Pi's state bodies carry `messageRevision` and were not measured on the profile.
+**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSessionState` (`apps/backend/src/core/http-bridge/progressive.ts`) still reads the state route with no condition, plus Codex `/config` and Pi `/queue`. `readProgressiveSessionState` (`native-agent-transcript-projection.ts`) still adds the interaction reads and the steer probe. In the aligned profile rerun, Claude's state body repeated on 35 of 39 streaming polls with one viewer, 76 of 80 with two, and 3 of 3 idle. A revision could therefore have answered `unchanged` on most polls, unlike the fake's prediction. What it saves is small. The body is about 1 KB, and the bridge answered it in 0.15–0.22 ms on average. The request itself, a loopback round trip, stays. So do the four other requests of each poll. Codex's and Pi's state bodies carry `messageRevision` and were not measured on the profile.
 
 **Decisions.**
 
@@ -132,7 +132,7 @@ Not measured on the profile, each for a stated reason:
 
 **Context.** Part 0190 recommended a delta from the `knownToken` the backend already sends, falling back to a snapshot on an unknown base, with a bridge ring and a capability check. Its alternative was to keep whole windows, "a fair choice if the baseline shows it is small", because this is loopback CPU rather than remote bandwidth.
 
-**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSummaryTranscript` (`apps/backend/src/core/http-bridge-transcript-v2.ts`) handles `unchanged` and otherwise takes a whole snapshot. All five bridges answer through `bridgeTranscriptRouteBody` (`packages/protocol/src/node/bridge-transcript-routes.ts`), so a fix would land there and in the backend.
+**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSummaryTranscript` (`apps/backend/src/core/http-bridge/transcript-v2.ts`) handles `unchanged` and otherwise takes a whole snapshot. All five bridges answer through `bridgeTranscriptRouteBody` (`packages/protocol/src/node/bridge-transcript-routes.ts`), so a fix would land there and in the backend.
 
 On the profile, each viewer poll made one bridge transcript read. A snapshot was 38–114 KB decoded and cost the bridge 1.0–1.07 ms on average, building the summary and gzip included. A delta would have carried 7.5–8.2 KB, 5–15 times less. The bytes never leave the machine. The backend's parse of each snapshot was not isolated on the profile; the whole renderer round trip, which includes it, had a p50 of 11–15 ms. With the fake bridge, a 517 KB window would have shrunk 68 times, and the corrected one-viewer source time was 10 ms. Those fake timings depend on host load and are not a bound.
 
@@ -149,7 +149,7 @@ On the profile, each viewer poll made one bridge transcript read. A snapshot was
 
 ### 5. The steer qualification probe runs on every state poll
 
-**Problem.** One of the five bridge requests on each state poll is `GET /session/:id/steer/dispatch?requestId=orkestrator-steer-qualification` (`HttpBridgeSteerQualification.supported`, `apps/backend/src/core/http-bridge-steer-qualification.ts`), and its answer only changes when the bridge does.
+**Problem.** One of the five bridge requests on each state poll is `GET /session/:id/steer/dispatch?requestId=orkestrator-steer-qualification` (`HttpBridgeSteerQualification.supported`, `apps/backend/src/core/http-bridge/steer-qualification.ts`), and its answer only changes when the bridge does.
 
 **Context.** `readProgressiveSessionState` calls `steerSupported` on every read for platforms that advertise steer, so that the steer control can be cleared when the bridge cannot steer. #1870 (`dc9e818f9`) recently added diagnostics to this path.
 

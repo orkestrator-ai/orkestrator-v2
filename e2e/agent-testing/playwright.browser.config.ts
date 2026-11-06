@@ -43,6 +43,8 @@ export default defineConfig({
     "container-rebuild-cycle.spec.ts",
     "container-files-wiring.spec.ts",
     "container-app-wiring.spec.ts",
+    "change-to-visible-latency.spec.ts",
+    "changes-remote-freshness.spec.ts",
     "container-bridge-logs.spec.ts",
     "container-root-terminal.spec.ts",
     "container-approval-stop.spec.ts",

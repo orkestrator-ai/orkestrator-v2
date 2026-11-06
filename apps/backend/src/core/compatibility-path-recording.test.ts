@@ -4,7 +4,7 @@ import { codexConnection, httpProvider } from "./agent-provider-test-support.js"
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import { compatibilityPathUsage, type CompatibilityPathId } from "./compatibility-path-usage.js";
-import { bridgeReportsMcpConfig } from "./http-bridge-runtime-health.js";
+import { bridgeReportsMcpConfig } from "./http-bridge/runtime-health.js";
 import { olderBridgeOutcome } from "./mcp-management/evidence.js";
 
 const count = (id: CompatibilityPathId) => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;

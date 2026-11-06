@@ -109,6 +109,37 @@ describe("tmux hook doorbell", () => {
     expect(h.manager.status().states.armed).toBe(1);
   });
 
+  test("a probe silent for a whole retry window reports unconfirmed until a ring", async () => {
+    const h = harness({ probeRings: false });
+    const doorbell = h.manager.attach("c1", h.context, () => undefined);
+    await flush();
+    h.advance(TMUX_HOOK_SIGNAL_RETRY_MS - 1);
+    expect(h.manager.status().states).toMatchObject({ armed: 1, unconfirmed: 0 });
+    h.advance(1);
+    expect(h.manager.status()).toMatchObject({
+      containers: 1,
+      states: { armed: 0, unconfirmed: 1 },
+      fallback: 1,
+      rings: 0,
+    });
+    // The re-arm on the window keeps the stretch's first armed time.
+    expect(doorbell.confirmed()).toBe(false);
+    await flush();
+    expect(h.installs()).toBe(2);
+    expect(h.manager.status().states.unconfirmed).toBe(1);
+
+    h.ring();
+    expect(doorbell.confirmed()).toBe(true);
+    expect(h.manager.status().states).toMatchObject({ unconfirmed: 0, confirmed: 1 });
+    // A demotion starts a new stretch.
+    doorbell.missed();
+    h.advance(TMUX_HOOK_SIGNAL_RETRY_MS);
+    expect(doorbell.confirmed()).toBe(false);
+    await flush();
+    expect(h.manager.status().states).toMatchObject({ armed: 1, unconfirmed: 0 });
+    doorbell.release();
+  });
+
   test("an image without the capability is asked once and never armed", async () => {
     const h = harness({ support: "unsupported" });
     const doorbell = h.manager.attach("c1", h.context, () => undefined);

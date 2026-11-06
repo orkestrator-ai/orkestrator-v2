@@ -357,6 +357,29 @@ describe("Claude state signal", () => {
     harness.manager.shutdown(CONTAINER);
   });
 
+  test("a doorbell armed for a whole retry window with no ring reports unconfirmed", async () => {
+    const harness = createSignalHarness({ probeRings: false });
+    await harness.start();
+    await harness.time.advance(CLAUDE_STATE_SIGNAL_RETRY_MS - 1);
+    expect(harness.manager.status().states).toMatchObject({ armed: 1, unconfirmed: 0 });
+    await harness.time.advance(1);
+    expect(harness.manager.status()).toMatchObject({
+      containers: 1,
+      states: { armed: 0, unconfirmed: 1, confirmed: 0 },
+      fallback: 1,
+      rings: 0,
+    });
+    // Re-arming on the window keeps the stretch's first armed time.
+    await harness.start();
+    expect(harness.installs()).toBe(2);
+    expect(harness.manager.status().states).toMatchObject({ armed: 0, unconfirmed: 1 });
+
+    expect(harness.ringServer()).toBe(true);
+    await flushMicrotasks();
+    expect(harness.manager.status().states).toMatchObject({ unconfirmed: 0, confirmed: 1 });
+    harness.manager.shutdown(CONTAINER);
+  });
+
   test("reads on each doorbell and costs two reads a minute when idle", async () => {
     const harness = createSignalHarness();
     await harness.start();

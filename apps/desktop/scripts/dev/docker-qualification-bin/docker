@@ -1,2 +1,32 @@
 #!/bin/sh
-exec bun "$(dirname "$0")/../docker-qualification.ts" "$@"
+# Test-only PATH shim (see ../docker-qualification.ts).
+#
+# Every call except `network create` execs the real Docker CLI in this process,
+# so a signal the backend sends to stop a follower (`docker logs -f`,
+# `docker events`) or an exec session reaches Docker itself. Running it as a
+# child of the shim instead orphaned it when the shim was stopped (0019 task 6).
+case $0 in */*) shim_dir=${0%/*} ;; *) shim_dir=. ;; esac
+shim_dir=$(CDPATH= cd -- "$shim_dir" && pwd -P)
+if [ "$1" = network ] && [ "$2" = create ]; then
+  exec bun "$shim_dir/../docker-qualification.ts" "$@"
+fi
+real=${ORKESTRATOR_QUALIFICATION_DOCKER:-}
+if [ -z "$real" ]; then
+  # The credential-free backend keeps only PATH: resolve past this shim there.
+  old_ifs=$IFS
+  IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] || continue
+    [ "$(CDPATH= cd -- "$dir" 2>/dev/null && pwd -P)" = "$shim_dir" ] && continue
+    if [ -f "$dir/docker" ] && [ -x "$dir/docker" ]; then
+      real=$dir/docker
+      break
+    fi
+  done
+  IFS=$old_ifs
+fi
+if [ -z "$real" ]; then
+  echo "Missing qualification Docker executable" >&2
+  exit 1
+fi
+exec "$real" "$@"

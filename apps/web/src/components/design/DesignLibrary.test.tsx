@@ -66,7 +66,6 @@ function mount(api: DesignLibraryClient, props: Partial<Parameters<typeof Design
     <DesignLibrary
       environmentId="env-a"
       backendKey="local"
-      legacy={false}
       canManage
       client={api}
       openChoices={closedChoices}
@@ -168,7 +167,6 @@ describe("DesignLibrary", () => {
       <DesignLibrary
         environmentId="env-b"
         backendKey="local"
-        legacy={false}
         canManage
         client={api}
         openChoices={closedChoices}
@@ -310,9 +308,9 @@ describe("DesignLibrary", () => {
     expect(onOpen).toHaveBeenLastCalledWith("b", "split");
   });
 
-  test("an old backend hides lifecycle actions", async () => {
-    const api = client(async () => page([entry("a", { legacy: true })]));
-    mount(api, { legacy: true, canManage: false });
+  test("a backend without lifecycle support hides lifecycle actions", async () => {
+    const api = client(async () => page([entry("a")]));
+    mount(api, { canManage: false });
     await flush();
     fireEvent.click(screen.getByRole("button", { name: /Design a/ }));
     expect(screen.getByRole("button", { name: "Open beside" })).toBeTruthy();

@@ -99,7 +99,6 @@ function setup(overrides: Partial<DesignLayerTreeProps> = {}) {
     canvasId: "canvas",
     frames: [],
     metas: {},
-    legacy: false,
     getBridge: () => undefined,
     liveFrames: new Set(),
     renderedVersion: 0,
@@ -185,7 +184,7 @@ describe("DesignLayerTree", () => {
     });
   });
 
-  test("offscreen frames page from the backend; legacy offscreen frames ask to be brought into view", async () => {
+  test("offscreen frames page from the backend", async () => {
     const loadHierarchy = mock<HierarchyLoader>(async (_env, _canvas, _frameId, query) => ({
       revision: 1,
       structureId: "s1",
@@ -207,16 +206,6 @@ describe("DesignLayerTree", () => {
       maxNodes: 200,
       maxDepth: 1,
     });
-
-    cleanup();
-    const legacy = setup({ frames: [frame("f2", "Legacy")], legacy: true, focusedFrameId: "f2" });
-    const status = await screen.findByRole("treeitem", { name: "Bring into view to load layers" });
-    fireEvent.click(within(status).getByRole("button", { name: "Show" }));
-    expect(legacy.onFocusFrame).toHaveBeenCalledWith("f2");
-    // Once the frame renders live, the bridge loads it.
-    const { bridge } = fakeBridge("revision:1", { body: [{ label: "now-live" }] });
-    legacy.rerender({ getBridge: () => bridge, liveFrames: new Set(["f2"]), renderedVersion: 1 });
-    await screen.findByRole("button", { name: "now-live" });
   });
 
   test("a frame culled while its layers load falls back to the backend, not an error row", async () => {

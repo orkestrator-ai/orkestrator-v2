@@ -152,7 +152,7 @@ a pre-dispatch idle inert. A provider group whose sessions are all stably
 idle backs off to a 4 s safety read (`STABLE_IDLE_BACKOFF_MS`) only when the
 provider has a qualified wakeup for work started elsewhere: OpenCode's SDK
 event stream, and the Claude and Codex bridges' content-free observation
-stream (`/event/subscribe?observe=1`, `http-bridge-observation-stream.ts`).
+stream (`/event/subscribe?observe=1`, `http-bridge/observation-stream.ts`).
 Cursor, Pi and Grok groups are read on every sweep. Mail presence reports a
 retained idle the injection gate would not trust (older than 4 s, or read
 before the latest dispatch) as `unknown`. See
@@ -235,7 +235,7 @@ the running attempt.
 | B20 | `validation-heartbeat` | `review-validation-worker.ts` | 500 ms persistence and cancel heartbeat; 100 ms cooperative clock. Cross-process liveness, so partly correctness-related. |
 | B21 | `storage-lock-heartbeat` | `storage-context.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
 | B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. |
-| B23 | `bridge-observation-stream` | `http-bridge-observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
+| B23 | `bridge-observation-stream` | `http-bridge/observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
 | B26 | `node-summary-reconcile` | `nodes/node-read-model.ts` | Named activity due job, every 60 s; reconciles connected node summaries and stops with the portal. |
 | B27 | `scheduled-job-tick` | `scheduled-jobs/service.ts` | One timer for the earliest due fire, pending retry or stale heartbeat, capped at 30 s; woken by every schedule change in this process and by host resume. Fires only while the registry writer lease is held; claims are single-row transactions; at most four fires at once; a running fire heartbeats every 20 s. See [scheduled-jobs.md](scheduled-jobs.md). |
 | B28 | `graph-run-tick` | `graph-run-service.ts`, `graph-run-supervisor.ts`, `graph-run-pass.ts` | Keyed per run with an obligation (`provision`, `cancel`, `observe`, `advance`, `await-human`), 30 s discovery. Running activations are observed every 3 s plus a stable per-run spread of up to 1 s, admitting and provisioning runs every 1 s, a run waiting only for a person every 30 s. An accepted workflow result wakes only the run whose activation owns the slot; a released workspace lock wakes the environment's runs with ready work. Passes hold a `workflow-provider` slot (target: the run's environment) except while provisioning or waiting for a person; executor calls inside a pass are capped at 4 starting, 8 observing and 4 per provider. A pass reads only its run's row and writes only when something changed. |
@@ -313,7 +313,7 @@ targets for a live profile; the deterministic harness does not measure them.
 | Background environment activity indicator | 2 s sweep (B06), 4 s idle safety read | ≤ 4 s | |
 | Turn completion visible, queued prompt dispatched | Turn-end edge plus 2 s sweep (B06, B07) | ≤ 3 s | The edge path should dominate |
 | Mail presence | 2 s refresh, 4 s TTL (B10) | ≤ 4 s | Never inject into an active session |
-| Diff badge, watched local worktree | 400 ms settle plus scan (B03) | ≤ 2 s after the save settles | A missed hint is recovered by the 120 s safety scan |
+| Diff badge, watched local worktree | 400 ms settle plus scan, and at least 2 s from one scan's end to the next hinted one (`LOCAL_SCAN_MIN_GAP_MS`, B03) | ≤ 2 s after the save settles | A missed hint is recovered by the 120 s safety scan. Saves less than 2 s apart wait out the gap; back-to-back saves measured 1.6 to 1.7 s after settling in the packaged macOS app (todo 0048, task 7) |
 | Diff badge, container or unwatched | 15 s poll (B03) | ≤ 20 s | |
 | Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action | Explicit refresh waits for a read started after the click |
 | PR merge confirmation after merge-pending | 1 s (B01) | ≤ 3 s | |

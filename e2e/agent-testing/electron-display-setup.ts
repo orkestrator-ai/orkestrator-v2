@@ -1,5 +1,8 @@
 import type { FullConfig } from "@playwright/test";
-import { electronSpecDisplayProblem } from "./electron-launch-switches";
+import {
+  HEADLESS_CAPABLE_ELECTRON_SPECS,
+  electronSpecDisplayProblem,
+} from "./electron-launch-switches";
 
 /** Fails the run before its first launch when the Electron specs have no display to use. */
 export default function globalSetup(config?: FullConfig): void {
@@ -8,8 +11,10 @@ export default function globalSetup(config?: FullConfig): void {
     config.projects.every(
       (project) =>
         Array.isArray(project.testMatch) &&
-        project.testMatch.length === 1 &&
-        project.testMatch[0] === "design-canvas-electron.spec.ts",
+        project.testMatch.length > 0 &&
+        project.testMatch.every(
+          (spec) => typeof spec === "string" && HEADLESS_CAPABLE_ELECTRON_SPECS.includes(spec),
+        ),
     );
   const problem = electronSpecDisplayProblem(process.platform, process.env, headlessOnly);
   if (problem) throw new Error(problem);

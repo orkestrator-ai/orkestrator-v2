@@ -1,3 +1,6 @@
+// First, before any module reads the environment: what the bridge launcher
+// recorded for the agents this bridge spawns (bridge-launch-environment.ts).
+import "@orkestrator/protocol/node/bridge-launch-environment";
 export * from "./acp-context.js";
 export * from "./acp-session.js";
 export * from "./acp-tools.js";

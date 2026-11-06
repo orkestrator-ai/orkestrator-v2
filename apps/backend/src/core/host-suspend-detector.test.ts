@@ -223,7 +223,15 @@ describe("RecurringDiagnosticsRegistry signals", () => {
     const registry = new RecurringDiagnosticsRegistry();
     const status = {
       containers: 2,
-      states: { unarmed: 0, arming: 0, armed: 0, confirmed: 1, demoted: 1, unsupported: 0 },
+      states: {
+        unarmed: 0,
+        arming: 0,
+        armed: 0,
+        unconfirmed: 0,
+        confirmed: 1,
+        demoted: 1,
+        unsupported: 0,
+      },
       fallback: 1,
       demotions: { "missed-change": 2 },
       rings: 4,
@@ -283,7 +291,15 @@ describe("RecurringDiagnosticsRegistry signals", () => {
         await flushMicrotasks();
         expect(status()).toEqual({
           containers: 3,
-          states: { unarmed: 1, arming: 0, armed: 0, confirmed: 0, demoted: 0, unsupported: 2 },
+          states: {
+            unarmed: 1,
+            arming: 0,
+            armed: 0,
+            unconfirmed: 0,
+            confirmed: 0,
+            demoted: 0,
+            unsupported: 2,
+          },
           fallback: 3,
           demotions: {},
           rings: 0,
@@ -303,7 +319,15 @@ describe("RecurringDiagnosticsRegistry signals", () => {
     const registry = new RecurringDiagnosticsRegistry();
     const status = {
       containers: 2,
-      states: { unarmed: 0, arming: 0, armed: 0, confirmed: 1, demoted: 1, unsupported: 0 },
+      states: {
+        unarmed: 0,
+        arming: 0,
+        armed: 0,
+        unconfirmed: 0,
+        confirmed: 1,
+        demoted: 1,
+        unsupported: 0,
+      },
       fallback: 1,
       demotions: { "missed-change": 1 },
       rings: 4,

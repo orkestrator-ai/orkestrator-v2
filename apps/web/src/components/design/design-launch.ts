@@ -3,7 +3,6 @@ import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-fr
 import type {
   DesignCapabilities,
   DesignLibraryPage,
-  DesignLibraryQuery,
   DesignOperationInput,
   DesignOperationStatus,
   DesignPreconditions,
@@ -14,10 +13,8 @@ import {
   classifyTransportError,
   DesignClientError,
   designApi,
-  designAction,
   failureOf,
   getCapabilities,
-  getLegacyDesignStatus,
 } from "@/lib/design-client";
 import type { DesignPlacement } from "./design-open";
 
@@ -303,8 +300,8 @@ export type DesignRendererViewState = DesignRendererState;
 
 export interface DesignReadinessView {
   backend: { state: "connected" | "disconnected" | "unauthorized" | "failed"; message?: string };
-  /** null capabilities with protocol "v1" means an old backend. */
-  protocol: "v2" | "v1" | "unknown";
+  /** "unknown" (with null capabilities) until the backend has answered. */
+  protocol: "v2" | "unknown";
   capabilities: DesignCapabilities | null;
   storage: {
     state: "available" | "unavailable" | "unknown";
@@ -323,15 +320,13 @@ export interface DesignReadinessView {
 }
 
 export interface DesignReadinessDeps {
-  capabilities: () => Promise<DesignCapabilities | null>;
+  capabilities: () => Promise<DesignCapabilities>;
   readiness: (probe: boolean) => Promise<DesignReadiness>;
-  legacyStatus: () => Promise<{ ready: boolean; error?: string }>;
 }
 
 const defaultReadinessDeps: DesignReadinessDeps = {
   capabilities: () => getCapabilities(),
   readiness: (probe) => designApi.readiness(probe),
-  legacyStatus: () => getLegacyDesignStatus(),
 };
 
 const UNKNOWN_RENDERER = {
@@ -339,12 +334,6 @@ const UNKNOWN_RENDERER = {
   ready: false,
   message: "Renderer not checked.",
 } as const;
-
-function legacyRendererState(error: string | undefined): DesignRendererState {
-  return error && /requires? chromium|needs chromium|not found|no such file/i.test(error)
-    ? "missing-executable"
-    : "launch-failed";
-}
 
 /**
  * Loads separate backend, storage and renderer facts. `probe` asks a v2
@@ -355,7 +344,7 @@ export async function loadDesignReadiness(
   probe: boolean,
   deps: DesignReadinessDeps = defaultReadinessDeps,
 ): Promise<DesignReadinessView> {
-  let capabilities: DesignCapabilities | null;
+  let capabilities: DesignCapabilities;
   try {
     capabilities = await deps.capabilities();
   } catch (error) {
@@ -370,36 +359,6 @@ export async function loadDesignReadiness(
       storage: { state: "unknown" },
       renderer: { ...UNKNOWN_RENDERER },
     };
-  }
-  if (capabilities === null) {
-    try {
-      const status = await deps.legacyStatus();
-      return {
-        backend: { state: "connected" },
-        protocol: "v1",
-        capabilities: null,
-        storage: { state: "unknown", message: "This backend does not report storage health." },
-        renderer: status.ready
-          ? { state: "ready", ready: true, message: "Renderer ready." }
-          : {
-              state: legacyRendererState(status.error),
-              ready: false,
-              message: status.error ?? "Renderer unavailable.",
-            },
-      };
-    } catch (error) {
-      const kind = classifyTransportError(error);
-      return {
-        backend: {
-          state: kind === "unsupported" ? "failed" : kind,
-          message: failureOf(error).message,
-        },
-        protocol: "v1",
-        capabilities: null,
-        storage: { state: "unknown" },
-        renderer: { ...UNKNOWN_RENDERER },
-      };
-    }
   }
   try {
     const readiness = await deps.readiness(probe);
@@ -457,53 +416,10 @@ export function rendererUnavailable(view: DesignReadinessView | null): boolean {
 // Library data
 // ---------------------------------------------------------------------------
 
-/** Library entry; `legacy` entries come from an old backend with names only. */
-export type DesignLibraryItem = DesignLibraryPage["entries"][number] & { legacy?: true };
+/** One saved-designs library entry. */
+export type DesignLibraryItem = DesignLibraryPage["entries"][number];
 
-export interface DesignLibraryResult extends Omit<DesignLibraryPage, "entries"> {
-  entries: DesignLibraryItem[];
-}
-
-/** Builds a library page from an old backend's `list_canvases`. */
-export async function legacyLibraryPage(
-  environmentId: string,
-  query: DesignLibraryQuery,
-  list: () => Promise<Array<{ id: string; name: string; revision?: number }>> = () =>
-    designAction(environmentId, "list_canvases"),
-): Promise<DesignLibraryResult> {
-  const all = await list();
-  const search = query.search?.trim().toLowerCase();
-  const matching = (query.filter === "deleted" ? [] : all).filter(
-    (entry) => !search || entry.name.toLowerCase().includes(search),
-  );
-  if (query.sort === "name") matching.sort((a, b) => a.name.localeCompare(b.name));
-  const offset = query.offset ?? 0;
-  const limit = query.limit ?? 50;
-  const page = matching.slice(offset, offset + limit);
-  return {
-    entries: page.map((entry) => ({
-      id: entry.id,
-      name: entry.name,
-      revision: entry.revision ?? 0,
-      modifiedAt: "",
-      createdAt: "",
-      frameCount: 0,
-      state: "live",
-      validation: { invalid: 0, unvalidated: 0 },
-      legacy: true,
-    })),
-    total: matching.length,
-    ...(offset + limit < matching.length ? { nextOffset: offset + limit } : {}),
-    quota: {
-      live: all.length,
-      liveLimit: 256,
-      deleted: 0,
-      deletedLimit: 0,
-      deletedBytes: 0,
-      deletedBytesLimit: 0,
-    },
-  };
-}
+export type DesignLibraryResult = DesignLibraryPage;
 
 /**
  * Runs one lifecycle operation through prepare + execute and resolves only

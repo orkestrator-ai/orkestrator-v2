@@ -4,9 +4,9 @@
 - **Status:** open
 - **Date observed:** 2026-08-25
 - **Original command:**
-  `bun --cwd apps/backend test src/core/http-bridge-provider.test.ts`; the
+  `bun --cwd apps/backend test src/core/http-bridge/provider.test.ts`; the
   package script expanded this to
-  `bun test --preload ../../tests/setup-node.ts src tests --parallel src/core/http-bridge-provider.test.ts`.
+  `bun test --preload ../../tests/setup-node.ts src tests --parallel src/core/http-bridge/provider.test.ts`.
 - **Worker configuration:** the backend package ran 18 Bun workers over `src`
   and `tests`; the trailing file argument did not narrow the package script.
 - **Failure:** the case was reported failed after 32.48 ms. The direct command

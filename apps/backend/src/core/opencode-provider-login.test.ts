@@ -17,7 +17,7 @@ import {
 } from "./opencode-provider-login.js";
 import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 
-import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import { openCodeSdkFetch } from "./http-bridge/transport.js";
 
 const SECRET_KEY = AUTH_SECRET_CANARIES.openAiApiKey;
 

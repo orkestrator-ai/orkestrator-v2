@@ -6,7 +6,10 @@ import { networkOwnerContainer } from "./container-network-owner.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { allowlistForNetworkPolicy } from "@orkestrator/protocol/network-allowlist";
-import { ContainerLifecycleError } from "./container-lifecycle-service.js";
+import {
+  ContainerLifecycleError,
+  type ContainerProbeRunner,
+} from "./container-lifecycle-service.js";
 import {
   requiredAgentNetworkDomains,
   DOCKER_LABEL_APP,
@@ -76,9 +79,12 @@ type NetworkProbe =
   | { kind: "missing" }
   | { kind: "unreachable" };
 
-export async function inspectNetwork(name: string): Promise<NetworkProbe> {
+export async function inspectNetwork(
+  name: string,
+  run: ContainerProbeRunner = runCommand,
+): Promise<NetworkProbe> {
   try {
-    const { stdout } = await runCommand(
+    const { stdout } = await run(
       "docker",
       ["network", "inspect", "--format", "{{json .Labels}}\t{{len .Containers}}", name],
       { timeoutMs: 15_000 },
@@ -175,16 +181,17 @@ export async function ensureEnvironmentNetwork(
 export async function removeEnvironmentNetwork(
   context: Pick<CommandContext, "storage">,
   environmentId: string,
+  run: ContainerProbeRunner = runCommand,
 ): Promise<"removed" | "absent" | "foreign" | "in-use" | "unreachable"> {
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
   const name = environmentNetworkName(owner, environmentId);
-  const probe = await inspectNetwork(name);
+  const probe = await inspectNetwork(name, run);
   if (probe.kind === "missing") return "absent";
   if (probe.kind === "unreachable") return "unreachable";
   if (!labelsMatch(probe.labels, expectedLabels(owner, environmentId))) return "foreign";
   if (probe.containers > 0) return "in-use";
   try {
-    await runCommand("docker", ["network", "rm", name], { timeoutMs: 30_000 });
+    await run("docker", ["network", "rm", name], { timeoutMs: 30_000 });
     reportDockerNetworkChange();
     return "removed";
   } catch (error) {

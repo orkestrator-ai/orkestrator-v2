@@ -1,12 +1,14 @@
 /**
  * Security report H4 on a real container: a process running as the agent's uid
  * cannot get the bridge-control credential, cannot answer an approval without
- * it, and the backend's own calls still work. OpenCode, which has no bridge of
+ * it, and the backend's own calls still work. On a `bridge-launch=1` image
+ * (docs/architecture/agent-approvals.md) a token it catches in flight still answers nothing, and what it
+ * plants in its login shell does not run inside the next bridge. OpenCode, which has no bridge of
  * ours, is held to the same on a permission a real tool call parked, raised by a
  * fake model inside the container.
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
- * with `bridge-credential=1`. No credential is delivered (an agent-test context
+ * with `bridge-credential=1` and `bridge-launch=1`. No credential is delivered (an agent-test context
  * with no sources) and no agent turn runs, so nothing is billed. Tokens reach
  * the container only on stdin, so this suite adds none to any argv.
  */
@@ -15,14 +17,21 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
-import { bridgeTokenVerifier } from "@orkestrator/protocol/node/bridge-credential";
 import {
+  BRIDGE_AUTHORITY_REFUSED_CODE,
+  bridgeAuthorityKeyEnv,
+} from "@orkestrator/protocol/node/bridge-authority";
+import { bridgeTokenVerifier } from "@orkestrator/protocol/node/bridge-credential";
+import { bridgeAuthorityHeaders } from "../src/core/bridge-authority-keys";
+import { bridgeFetch } from "../src/core/http-bridge/transport";
+import {
+  containerAuthorityKeyFile,
   containerCredentialFile,
   CONTAINER_TOKEN_FILES,
   readContainerBridgeToken,
   type ContainerBridgeKind,
 } from "../src/core/container-bridge-credential";
-import { OPENCODE_SERVER_PORT } from "../src/core/constants";
+import { CODEX_MAX_CONCURRENT_THREADS_ENV, OPENCODE_SERVER_PORT } from "../src/core/constants";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { runCommand } from "../src/core/shell";
@@ -42,35 +51,41 @@ const BRIDGES: ReadonlyArray<{
   port: number;
   process: string;
   answer: string;
+  tokenEnv: string;
 }> = [
   {
     kind: "claude",
     port: 4097,
     process: "claude-bridge/dist/index.js",
+    tokenEnv: "CLAUDE_BRIDGE_TOKEN",
     answer: "/session/none/permissions/request",
   },
   {
     kind: "codex",
     port: 4098,
     process: "codex-bridge/dist/index.js",
+    tokenEnv: "CODEX_BRIDGE_TOKEN",
     answer: "/session/none/approvals/request",
   },
   {
     kind: "cursor",
     port: 4099,
     process: "cursor-bridge/dist/index.js",
+    tokenEnv: "CURSOR_BRIDGE_TOKEN",
     answer: "/session/none/approvals/request",
   },
   {
     kind: "grok",
     port: 4100,
     process: "acp-bridge/dist/index.js",
+    tokenEnv: "ACP_BRIDGE_TOKEN",
     answer: "/session/none/approvals/request",
   },
   {
     kind: "pi",
     port: 4101,
     process: "pi-bridge/dist/index.js",
+    tokenEnv: "PI_BRIDGE_TOKEN",
     answer: "/session/none/approvals/request",
   },
 ];
@@ -97,6 +112,25 @@ async function statusFromAgent(port: number, route: string, bearer: string): Pro
   return asAgent(
     `curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST -H @- http://127.0.0.1:${port}${route} -d '{}'`,
     `Authorization: Bearer ${bearer}\nX-Orkestrator-Claude-Token: ${bearer}\n`,
+  );
+}
+
+/** Root's own read of a file the agent cannot open, for the test to scan for. */
+async function asRoot(script: string): Promise<string> {
+  return docker(["exec", "--user", "root", containerId, "sh", "-c", script]);
+}
+
+/** What the backend's transport sends, signature included, to a bridge on the host port. */
+function backendFetch(
+  kind: ContainerBridgeKind,
+  bridge: { hostPort: number; authToken: string },
+  route: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  return bridgeFetch(
+    { agent: kind, baseUrl: `http://127.0.0.1:${bridge.hostPort}`, authToken: bridge.authToken },
+    route,
+    init,
   );
 }
 
@@ -192,8 +226,11 @@ describe("bridge credential on a real container", () => {
         expect(result.wasRunning).toBe(false);
         expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
         started.set(bridge.kind, result);
-        // The token is where the backend reads it back.
+        // The token is where the backend reads it back, with its authority key beside it.
         expect(await readContainerBridgeToken(containerId, bridge.kind)).toBe(result.authToken);
+        expect(
+          await asRoot(`test -s ${containerAuthorityKeyFile(bridge.kind)} && echo present`),
+        ).toBe("present");
       }
     },
     LIVE_TIMEOUT_MS,
@@ -204,8 +241,11 @@ describe("bridge credential on a real container", () => {
     async () => {
       for (const bridge of BRIDGES) {
         const { authToken } = started.get(bridge.kind)!;
-        // The bridge, not the wrapper shell that pipes its log.
-        const pid = await asAgent(`pgrep -f '^bun .*${bridge.process}' | head -n 1`);
+        // The bridge, not the wrapper shell that pipes its log: the launcher
+        // runs bun by its root-owned path, never through the agent's PATH.
+        const pid = await asAgent(
+          `pgrep -f '^/usr/local/bin/bun --config=/dev/null --no-env-file /opt/${bridge.process}' | head -n 1`,
+        );
         expect(pid).toMatch(/^\d+$/);
         // The file, its directory, and the old location.
         expect(
@@ -230,6 +270,11 @@ describe("bridge credential on a real container", () => {
         for f in /proc/[0-9]*/environ /proc/[0-9]*/cmdline; do tr '\\0' ' ' < "$f" 2>/dev/null; echo; done | grep -cFf <(printf '%s\\n' "$pattern") || true`;
         const found = (await asAgent(scan, `${authToken}\n`)).split("\n");
         expect(found.filter((line) => line && line !== "0")).toEqual([]);
+        // Nor the private half of the authority key, which only root and the backend hold.
+        const privateKey = await asRoot(`cat ${containerAuthorityKeyFile(bridge.kind)}`);
+        expect(privateKey.length).toBeGreaterThan(40);
+        const keyFound = (await asAgent(scan, `${privateKey}\n`)).split("\n");
+        expect(keyFound.filter((line) => line && line !== "0")).toEqual([]);
         // The same scan does find what the agent can read: the wrapper's verifier.
         const control = await asAgent(scan, `${bridgeTokenVerifier(authToken)}\n`);
         expect(Number(control.split("\n").at(-1))).toBeGreaterThan(0);
@@ -239,15 +284,15 @@ describe("bridge credential on a real container", () => {
   );
 
   live(
-    "an approval can't be answered with what the agent can read, and can with the token",
+    "an approval can't be answered with what the agent can read, nor with the token alone",
     async () => {
       for (const bridge of BRIDGES) {
         const { hostPort, authToken } = started.get(bridge.kind)!;
         const verifier = bridgeTokenVerifier(authToken);
         expect(await statusFromAgent(bridge.port, bridge.answer, verifier)).toBe("401");
         expect(await statusFromAgent(bridge.port, bridge.answer, "")).toBe("401");
-        // The backend's call reaches the route: no such request, but not refused.
-        const response = await fetch(`http://127.0.0.1:${hostPort}${bridge.answer}`, {
+        // The token without the backend's signature: what an imposter catches.
+        const unsigned = await fetch(`http://127.0.0.1:${hostPort}${bridge.answer}`, {
           method: "POST",
           headers: {
             authorization: `Bearer ${authToken}`,
@@ -256,8 +301,193 @@ describe("bridge credential on a real container", () => {
           },
           body: "{}",
         });
-        expect(response.status).not.toBe(401);
+        expect(unsigned.status).toBe(403);
+        expect(await unsigned.json()).toMatchObject({ code: BRIDGE_AUTHORITY_REFUSED_CODE });
+        // The backend's call reaches the route: no such request, but not refused.
+        const response = await backendFetch(bridge.kind, started.get(bridge.kind)!, bridge.answer, {
+          method: "POST",
+          body: "{}",
+        });
+        expect([401, 403]).not.toContain(response.status);
         await response.body?.cancel();
+        // A read needs no signature.
+        const read = await backendFetch(
+          bridge.kind,
+          started.get(bridge.kind)!,
+          "/global/auth-check",
+        );
+        expect(read.status).toBe(200);
+        await read.body?.cancel();
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "the agents a launched bridge spawns get the start script's environment, and no credential",
+    async () => {
+      // Codex's bridge starts app-server at once; the child is the agent's, so readable.
+      const pid = await asAgent(`pgrep -f '[c]odex app-server' | head -n 1`);
+      expect(pid).toMatch(/^\d+$/);
+      const environ = (await asAgent(`tr '\\0' '\\n' < /proc/${pid}/environ`)).split("\n");
+      const names = environ.map((line) => line.split("=", 1)[0]);
+      // Values the node start script exported reach the agent.
+      expect(names).toContain(CODEX_MAX_CONCURRENT_THREADS_ENV);
+      expect(names).toContain("ORKESTRATOR_VERSION");
+      expect(environ.find((line) => line.startsWith("PATH="))).toContain("/home/node");
+      // What only the launcher gave the bridge does not.
+      for (const name of [
+        "CODEX_BRIDGE_TOKEN",
+        "CODEX_BRIDGE_TOKEN_SHA256",
+        bridgeAuthorityKeyEnv("CODEX_BRIDGE_TOKEN"),
+        "ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT",
+        "ORKESTRATOR_BRIDGE_LAUNCH_KEYS",
+      ]) {
+        expect(names).not.toContain(name);
+      }
+      // The snapshot was read once and removed.
+      expect(await asAgent("ls /tmp/.orkestrator-bridge-env-* 2>/dev/null | wc -l")).toBe("0");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "a token an imposter on the bridge's port catches answers nothing",
+    async () => {
+      const bridge = BRIDGES.find((entry) => entry.kind === "pi")!;
+      const real = started.get("pi")!;
+      // What the agent can read before it strikes: the wrapper's arguments
+      // carry the verifier and the public key, neither of them secret.
+      const wrapper = await asAgent(`pgrep -af '[o]rkestrator-bridge /tmp/pi-bridge.log'`);
+      const verifierLine = `PI_BRIDGE_TOKEN_SHA256=${bridgeTokenVerifier(real.authToken)}`;
+      expect(wrapper).toContain(verifierLine);
+      const publicKeyLine = wrapper
+        .split(" ")
+        .find((word) => word.startsWith(`${bridgeAuthorityKeyEnv(bridge.tokenEnv)}=`))!;
+      expect(publicKeyLine).toBeTruthy();
+
+      // Kill the bridge (same uid) and listen on its port.
+      await asAgent(`cat > /tmp/imposter.js <<'IMPOSTER'
+Bun.serve({ hostname: "0.0.0.0", port: ${bridge.port}, fetch(request) {
+  require("node:fs").appendFileSync("/tmp/caught", (request.headers.get("authorization") ?? "") + "\\n");
+  return Response.json({ activity: "idle", sessions: [] });
+} });
+IMPOSTER
+      pkill -f '[p]i-bridge/dist/index.js' || true
+      for i in $(seq 1 50); do curl -s -m 1 -o /dev/null http://127.0.0.1:${bridge.port}/ || break; sleep 0.1; done
+      setsid bun /tmp/imposter.js > /tmp/imposter.log 2>&1 < /dev/null &`);
+      // The backend's next request, as the activity sweep makes it, gives up the token.
+      let caught = "";
+      for (let attempt = 0; attempt < 50 && !caught; attempt += 1) {
+        await backendFetch("pi", real, "/session/none/activity").then(
+          (response) => response.body?.cancel(),
+          () => undefined,
+        );
+        caught = await asAgent("tail -n 1 /tmp/caught 2>/dev/null || true");
+        if (!caught) await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      expect(caught).toBe(`Bearer ${real.authToken}`);
+
+      // The strongest next move: a real bridge from the same verifier and key,
+      // started through the launcher itself, which the backend still trusts.
+      await asAgent(`pkill -f '[i]mposter.js' || true
+      for i in $(seq 1 50); do curl -s -m 1 -o /dev/null http://127.0.0.1:${bridge.port}/ || break; sleep 0.1; done
+      snapshot=/tmp/.orkestrator-bridge-env-pi-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \\n')
+      CWD=/workspace PI_AGENT_DIR=/home/node/.pi/agent PI_SESSION_DIR=/home/node/.pi/agent/sessions \\
+        PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state env -0 > "$snapshot"
+      printf '%s\\n%s\\nPORT=${bridge.port}\\nHOSTNAME=0.0.0.0\\n' '${verifierLine}' '${publicKeyLine}' |
+        /usr/local/bin/orkestrator-bridge-launch pi "$snapshot"`);
+      let healthy = false;
+      for (let attempt = 0; attempt < 60 && !healthy; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        healthy = await backendFetch("pi", real, "/global/auth-check").then(
+          (response) => response.ok,
+          () => false,
+        );
+      }
+      expect(healthy).toBe(true);
+
+      // The caught token opens it, and changes nothing that needs authority.
+      const ask = {
+        id: "interactive-container",
+        sandbox: "provider",
+        approvals: "ask",
+        projectResources: false,
+        networkAccess: "restricted",
+      };
+      for (const route of [bridge.answer, "/session/create"]) {
+        const refused = await fetch(`http://127.0.0.1:${real.hostPort}${route}`, {
+          method: "POST",
+          headers: { authorization: caught, "content-type": "application/json" },
+          body: JSON.stringify({ clientSessionKey: "imposter", policy: ask }),
+        });
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toMatchObject({ code: BRIDGE_AUTHORITY_REFUSED_CODE });
+      }
+      // A signature the backend made is good once, even replayed by the agent.
+      const body = JSON.stringify({ clientSessionKey: "backend", policy: ask });
+      const url = `http://127.0.0.1:${real.hostPort}/session/create`;
+      const signed = bridgeAuthorityHeaders(real.authToken, "POST", url, body);
+      const send = () =>
+        fetch(url, {
+          method: "POST",
+          headers: { authorization: caught, "content-type": "application/json", ...signed },
+          body,
+        });
+      expect((await send()).status).toBe(201);
+      const replayed = await send();
+      expect(replayed.status).toBe(403);
+      expect(await replayed.json()).toMatchObject({ reason: "replayed" });
+      await invoke("stop_pi_server", { containerId });
+      await asAgent("rm -f /tmp/caught /tmp/imposter.js /tmp/imposter.log");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "what the agent plants in its login shell does not run inside the next bridge",
+    async () => {
+      // A login profile is read by every \`bash -lc\` exec, the start script's included.
+      await asAgent(`cp ~/.bash_profile /tmp/bash_profile.saved 2>/dev/null || touch /tmp/bash_profile.none
+      printf 'require("node:fs").appendFileSync("/tmp/planted-login", process.argv.join(" ") + "\\\\n");\\n' > /tmp/planted-login.js
+      cat >> ~/.bash_profile <<'PLANT'
+export BUN_OPTIONS="--preload /tmp/planted-login.js"
+bun() { printf 'fn:%s\\n' "$*" >> /tmp/planted-login; command bun "$@"; }
+PLANT`);
+      try {
+        // The plant works: a bun the agent's login shell starts runs it.
+        await asAgent(`bash -lc 'bun -e 0'`);
+        expect(await asAgent("cat /tmp/planted-login")).toContain("fn:-e 0");
+        await asAgent("rm -f /tmp/planted-login");
+
+        await invoke("stop_pi_server", { containerId });
+        const restarted = (await invoke("start_pi_server", { containerId })) as {
+          wasRunning: boolean;
+          authToken: string;
+        };
+        expect(restarted.wasRunning).toBe(false);
+        const planted = await asAgent("cat /tmp/planted-login 2>/dev/null || true");
+        expect(planted).not.toContain("pi-bridge/dist/index.js");
+        // And the bridge is the backend's: signed requests work, the token alone does not.
+        const bridge = { hostPort: started.get("pi")!.hostPort, authToken: restarted.authToken };
+        const body = JSON.stringify({ clientSessionKey: "after-plant" });
+        const signed = await backendFetch("pi", bridge, "/session/create", {
+          method: "POST",
+          body,
+        });
+        expect(signed.status).toBe(201);
+        await signed.body?.cancel();
+        const unsigned = await fetch(`http://127.0.0.1:${bridge.hostPort}/session/create`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${bridge.authToken}` },
+          body,
+        });
+        expect(unsigned.status).toBe(403);
+        await unsigned.body?.cancel();
+      } finally {
+        await asAgent(`if [ -f /tmp/bash_profile.saved ]; then mv /tmp/bash_profile.saved ~/.bash_profile; else rm -f ~/.bash_profile /tmp/bash_profile.none; fi
+        rm -f /tmp/planted-login /tmp/planted-login.js`);
+        await invoke("stop_pi_server", { containerId });
       }
     },
     LIVE_TIMEOUT_MS,
@@ -309,12 +539,8 @@ describe("bridge credential on a real container", () => {
       };
       const wider = { ...ask, approvals: "auto-approve", sandbox: "none" };
       const create = (bridge: { hostPort: number; authToken: string }, policy: unknown) =>
-        fetch(`http://127.0.0.1:${bridge.hostPort}/session/create`, {
+        backendFetch("pi", bridge, "/session/create", {
           method: "POST",
-          headers: {
-            authorization: `Bearer ${bridge.authToken}`,
-            "content-type": "application/json",
-          },
           body: JSON.stringify({ clientSessionKey: "widening", policy }),
         });
       const before = (await invoke("start_pi_server", { containerId })) as {

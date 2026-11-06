@@ -135,6 +135,6 @@ Each run's `afterAll` removed its owner-labelled runtimes, gateways, fixtures an
 
 ## Related
 
-- [6100](6100-default-allowlist-telemetry-hosts.md), [6101](6101-egress-name-checks-platform-coverage.md)
+- [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6101](6101-egress-name-checks-platform-coverage.md)
 - [Container lifecycle, name checks](../../architecture/container-lifecycle.md#name-checks-egress-filter1)
 - [7510](7510-refusal-counts-refresh.md): refresh the counts while the Network section is open

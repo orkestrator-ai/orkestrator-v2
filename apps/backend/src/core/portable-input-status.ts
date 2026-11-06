@@ -10,6 +10,7 @@ import {
 } from "./constants.js";
 import { enqueueContainerBridgeOperation } from "./container-bridge-operations.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { hasLegacyHostMounts, inspectRuntimeShape } from "./legacy-runtime-shape.js";
 import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-recovery";
@@ -146,6 +147,12 @@ export async function pruneEnvironmentInputRevisions(
   return pruneInputRevisions(context.storage.getDataDir(), environmentId, referenced);
 }
 
+/**
+ * What agent inputs an environment's runtime was given. `host-mounts` needs
+ * the cleanup review's evidence (no inputs-revision label and a bind at an old
+ * mount point); a runtime with neither staged inputs nor such a bind, or one
+ * Docker says is gone, has `none`; a failed inspect is `unknown`.
+ */
 export async function environmentInputStatus(
   environmentId: string,
   context: Pick<CommandContext, "storage" | "runtimeFlavor" | "credentialSources">,
@@ -166,8 +173,21 @@ export async function environmentInputStatus(
   const config = await context.storage.loadConfig();
   const revoked = environment.revokedInputProviders ?? [];
   const selected = selectedInputProviders(context, config.global.enabledAgentPlatforms, revoked);
-  const revision = await containerLabel(environment.containerId, DOCKER_LABEL_INPUTS_REVISION);
-  if (!revision) return { ...base, mode: "host-mounts" };
+  // The cleanup review's evidence, read the same way: a missing label alone
+  // is not a host mount, and Docker's silence is not an answer.
+  const shape = await inspectRuntimeShape(environment.containerId);
+  if (shape === "unchecked") return { ...base, mode: "unknown" };
+  if (shape === "missing") return base;
+  const revision = shape.inputsRevision;
+  if (!revision) {
+    let hostMounts: boolean;
+    try {
+      hostMounts = hasLegacyHostMounts(revision, shape.mountsJson);
+    } catch {
+      return { ...base, mode: "unknown" };
+    }
+    return hostMounts ? { ...base, mode: "host-mounts" } : base;
+  }
   const manifest = await readInputsManifest(context.storage.getDataDir(), environmentId, revision);
   if (!manifest) return { ...base, mode: "unknown", revision };
   const staged = new Set(manifest.providers.map((entry) => entry.provider));

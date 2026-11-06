@@ -18,8 +18,8 @@ native transcript windows keep the contract below instead.
 | `packages/protocol/src/node/bridge-transcript-summary.ts` | v2 summaries, detail locators, history pages, wire bounds |
 | `packages/protocol/src/node/bridge-transcript-routes.ts` | Route bodies every bridge serves from one `BridgeTranscriptSource` |
 | `packages/protocol/src/node/revised-rows.ts` | `RecentlyRevisedRows`: changed rows outside the live window |
-| `apps/backend/src/core/http-bridge-transcript-v2.ts` | Backend side of v2: capability learning, bounded reads |
-| `apps/backend/src/core/http-bridge-progressive.ts` | Snapshot reads, with the v1 and pre-`/transcript` fallbacks |
+| `apps/backend/src/core/http-bridge/transcript-v2.ts` | Backend side of v2: capability learning, bounded reads |
+| `apps/backend/src/core/http-bridge/progressive.ts` | Snapshot reads, with the v1 and pre-`/transcript` fallbacks |
 | `apps/backend/src/core/native-agent-transcript-projection.ts` | Projection, conditional reads, deltas, history pages |
 | `apps/backend/src/core/native-terminal-messages.ts`, `packages/protocol/src/native-terminal-rows.ts` | Terminal-state rows and where they are placed |
 | `apps/backend/src/core/native-agent-direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |

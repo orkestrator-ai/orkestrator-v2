@@ -84,7 +84,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** Items 5 and 6 and the config-merge fix are proven only by unit and provider tests.
 
-**Context.** The merge fix stops a model or fast pick resetting a Plan session to Build (`updateCodexSessionConfig`, `apps/backend/src/core/http-bridge-codex-config.ts:137`). The pinned Codex is now `0.164.0` (`packages/toolchain/src/manifest.ts:8`), newer than the 0.162.1 the file's live evidence used.
+**Context.** The merge fix stops a model or fast pick resetting a Plan session to Build (`updateCodexSessionConfig`, `apps/backend/src/core/http-bridge/codex-config.ts:137`). The pinned Codex is now `0.164.0` (`packages/toolchain/src/manifest.ts:8`), newer than the 0.162.1 the file's live evidence used.
 
 **Investigation.** Code present on `main`. No live run recorded since 2026-10-17.
 

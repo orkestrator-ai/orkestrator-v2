@@ -336,6 +336,17 @@ test("suites that launch Playwright's Chromium install it first without pruning 
   }
 });
 
+// On Linux, Chromium aborts loopback requests whenever a host interface changes
+// (flake 2340); both suites need only loopback, so they run in their own network.
+test("the component and public-site browser suites run in a loopback-only network", () => {
+  const run = miseTasks()["test:browser"]!.run as string;
+  for (const config of ["e2e/playwright.config.ts", "e2e/public-site/playwright.config.ts"])
+    expect(run).toContain(
+      `bun scripts/loopback-network.ts -- bunx playwright test --config ${config}`,
+    );
+  expect(run).not.toMatch(/&& bunx playwright/);
+});
+
 test("the live coordinator suite runs only when asked for", () => {
   const tasks = miseTasks();
   const policy = JSON.parse(read(".orkestrator-test-scheduler.json"));

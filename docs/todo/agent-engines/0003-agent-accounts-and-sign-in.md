@@ -56,7 +56,7 @@ four switching gaps are on `main` and are not repeated as tasks.
 
 **Context.** "Needs verification" records the same gate passing live for Codex on 2026-10-26. Claude sends windows only sparsely, near a limit, so the run could not be done.
 
-**Investigation.** The gate is platform-neutral: `contextUsageWithPlanUsage` (`apps/backend/src/core/plan-usage-cache.ts:205-224`) folds Claude and Codex windows only when the reporting account matches the active one, and `HttpBridgeProvider` passes `this.connection.accountId ?? "unknown"` (`apps/backend/src/core/http-bridge-provider.ts:157`). Claude windows come from `rate_limit_event` (`bridges/claude-bridge/src/services/session-manager-prompt-handlers/leaf.ts:46-49`) and the SDK usage report (`.../assistant.ts:35-58`). The switch-time unit tests in `apps/backend/src/core/agent-accounts.test.ts:975-1044` exercise Codex only; `plan-usage-cache.test.ts:154-220` has Claude cases but none with a mismatched reporting account.
+**Investigation.** The gate is platform-neutral: `contextUsageWithPlanUsage` (`apps/backend/src/core/plan-usage-cache.ts:205-224`) folds Claude and Codex windows only when the reporting account matches the active one, and `HttpBridgeProvider` passes `this.connection.accountId ?? "unknown"` (`apps/backend/src/core/http-bridge/provider.ts:157`). Claude windows come from `rate_limit_event` (`bridges/claude-bridge/src/services/session-manager-prompt-handlers/leaf.ts:46-49`) and the SDK usage report (`.../assistant.ts:35-58`). The switch-time unit tests in `apps/backend/src/core/agent-accounts.test.ts:975-1044` exercise Codex only; `plan-usage-cache.test.ts:154-220` has Claude cases but none with a mismatched reporting account.
 
 **Decisions.**
 

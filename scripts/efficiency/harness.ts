@@ -109,6 +109,11 @@ export function createContext(root: string): WorkloadContext {
   const modulePath = (relativePath: string): string => {
     const current = path.join(resolved, relativePath);
     if (existsSync(current)) return current;
+    // The cursor coverage workload also measures roots before the bridge move.
+    if (relativePath === "apps/backend/src/core/http-bridge/transcript-v2.ts") {
+      const legacy = path.join(resolved, "apps/backend/src/core/http-bridge-transcript-v2.ts");
+      if (existsSync(legacy)) return legacy;
+    }
     // Historical roots predate the protocol node/ boundary. Resolve both
     // layouts within the measured root; never borrow the harness's modules.
     const prefix = "packages/protocol/src/node/";

@@ -204,3 +204,25 @@ implementation changed.
 - **Failures:** desktop `live transcript follow releases on scroll-up and re-engages at bottom` (`e2e/VirtuosoFollow.spec.ts:43`) and `a small wheel release stays unfollowed through growth inside the bottom band` (`:86`) retained `false` instead of `auto` until the five-second assertion deadline.
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=54833 mise run test:logged -- --name review-follow-diagnostic -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --project desktop-chromium --workers=1 --output output/playwright/review-follow-diagnostic` passed. Passing counts and duration were not retained by the logged wrapper.
 - **Assessment:** unchanged isolated passes confirm intermittent recurrence. The cause of this run is unconfirmed; no implementation, assertion, timeout or skip changed in these owners. The original aggregate remains failed.
+
+## Transcript restoration repair — 2026-11-06
+
+The combined paging/follow run (37 passed, three failed, two skipped, 80.8 s)
+and the complete one-worker follow owner (one passed, one failed, two skipped,
+18.4 s) retained `false` after the DOM-only return to the end, at line 43.
+Evidence: `orkestrator-test-run.7sBWhR/repair-transcript-browser.log.gz` and
+`orkestrator-test-run.tMgYZn/repair-follow-alone.log.gz` under the host temporary directory.
+
+Commit `f04262139` changes both return-to-tail steps to a real wheel gesture.
+`TranscriptScrollController.handleScroll` deliberately permits re-arming follow
+only during reader input; a programmatic scroll arriving after the earlier
+wheel's input window expires cannot do so. The assertions and deadlines are
+unchanged. This corrects the return driver's dependence on timing rather than
+loosening the follow contract.
+
+`ORKESTRATOR_E2E_PORT=14862 mise run test:logged -- --name repair-follow-alone -- bunx playwright test --config e2e/playwright.config.ts --output output/playwright/repair-follow-fixed e2e/VirtuosoFollow.spec.ts --workers=1`
+passed the complete owner, exit 0, in 11.5 s. The subsequent exact combined
+command passed both follow cases (39 passed, one automatic-paging failure,
+two skips in 75.4 s; `orkestrator-test-run.IBipuK`). The case remains **open**
+for the distinct original scroll-release symptom; this result does not establish
+its cause or claim that every historical failure is resolved.

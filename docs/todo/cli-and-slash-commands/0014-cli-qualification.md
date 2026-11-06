@@ -9,6 +9,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 Rechecked 2026-11-01 against `main` at `93b99bfb`: tasks 2 and 3 are done
 (see their outcomes), task 6 was settled by #1491, and task 7 is unchanged.
 
+Rechecked 2026-11-06 against `main` at `c1724ab74`: task 5 is done (see its
+outcome); tasks 1, 4 and 7 are unchanged.
+
 Code items 1 to 4 and qualification items 2 to 4 are done and on `main`
 (`c23f6be9` #1274, with the harness toolchain install from `a51045a4` #1287).
 The open work is the live run for three providers, two measurements or
@@ -20,7 +23,7 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
 2. **Re-run the slow-admission `--wait` recovery under load** (code item 4, flake 0440). Status: done (2026-11-01, credential-free; flake 0440 resolved).
 3. **Lost-response recovery for `environment exec --wait` and `environment start --wait`**. Status: done (2026-11-01; `stop`, `recreate` and `delete --wait` share it).
 4. **Token cost of a live run** (qualification item 5). Status: open (optional measurement).
-5. **Fresh Linux evidence**: the latest Linux CLI run is 2026-09-26. Status: open.
+5. **Fresh Linux evidence**: the latest Linux CLI run was 2026-09-26. Status: done (2026-11-06, credential-free; Cursor's task 1 run left to task 1).
 6. **Ship the Pi, ACP and Cursor bridges in the published package?** (open question 1). Status: done (settled by #1491 on 2026-10-31).
 7. **Re-run qualified providers after an agent upgrade?** (open question 2, shared with 0031). Status: open (maintainer's call; recommendation below).
 
@@ -157,6 +160,16 @@ response; see "Assumptions and decisions".
     - Pros: no manual run.
     - Cons: no workflow under `.github/workflows/` runs `test:cli:scenarios` or `smoke:cli`, so CI gives no Linux CLI evidence.
 
+**Outcome (2026-11-06).** Done with the recommended option on beelink (Linux
+x86_64) at `c1724ab74`, without the batched Cursor run: that run needs
+credentials, which this run excluded, so it stays with task 1. Local matrix
+10/10, container matrix 8/8 and `mise run smoke:cli` passed; no defect was
+found. The container matrix first failed 5 of 8 scenarios at environment start because
+Docker's default address pools were full (29 unattached reach-probe networks,
+to-do [7041](../containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md)
+task 2), and passed 8/8 with the test-only Docker shim on `PATH`. See
+"Evidence log" and "Assumptions and decisions".
+
 ### 6. Ship the Pi, ACP and Cursor bridges in the published package?
 
 **Problem.** `packages/cli/scripts/build.ts:15-44` bundles only the Claude and Codex bridges, so a standalone `orkestrator serve` cannot run Pi, Cursor or Grok in local environments.
@@ -276,7 +289,8 @@ a success signal.
 - `mise run smoke:cli` checks the packed install's platform default config
   directory (macOS `~/Library/Application Support/orkestrator-cli` under a
   disposable `HOME`): 0700 directory, 0600 file, group-writable file refused.
-- Recorded runs: Linux on 2026-09-26, macOS with Docker Desktop on
+- Recorded runs: Linux on 2026-09-26 and 2026-11-06 (credential-free local
+  and container matrices and `smoke:cli`), macOS with Docker Desktop on
   2026-10-18 and 2026-10-25, the 2026-10-18 one after SQLite storage (#969), native-agent provider and
   transcript unification (#970, #971), the Claude bridge `sendPrompt` split
   (#984) and agent SDK upgrades (#935, #964). See "Evidence log".
@@ -450,6 +464,46 @@ command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages, exit
 codes, backend start-up time and, for live turns, the pinned and reported
 model).
+
+- **2026-11-06, Linux (Arch, kernel 7.1.8, x86_64, host beelink), task 5.**
+  Branch `linux-cli-evidence-517ed3f70513-r1` on `c1724ab74` (no code
+  change); Bun 1.4.4, Docker Engine 29.9.2, CLI 2.36.5-beta, image
+  `orkestrator-v2:dev-0417a01b03be` (`mise run docker:build:dev`, all layers
+  cached). Image pins: Claude Code 2.1.314, Codex 0.166.0, OpenCode 1.19.5,
+  Grok Build 1.0.70, Pi 1.4.0 (none exercised: no provider turns). Load
+  average 17.6 to 35.0 from other builds. Credential-free;
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off` throughout.
+  - Local (`mise run test:cli:scenarios`): 10/10 pass, 37.2 s including the
+    CLI build. Scenario durations 1.0 to 8.2 s, backend start-up 0.8 to 1.5 s,
+    no cleanup errors. Manifest `2026-11-06T04-13-17-355Z-90d4f0a4`.
+  - Container (`--environment-type container --docker-image
+    orkestrator-v2:dev-0417a01b03be`), first attempt: 3/8 pass. `read-only`,
+    `retry-and-retention` and `wrong-profile` passed, and every scenario that
+    starts an environment (`local-lifecycle`, `exec`, `lost-response`,
+    `foreign-owner`, `project-cascade`) failed at its first start with exit 1,
+    `ContainerLifecycleError:resource-exhausted: Docker has no free address
+    range for another environment network`. Docker's default pools
+    (172.18-31/16, 192.168.0.0/16 in /20s) were held by 29 unattached
+    `ork-*-reach-probe-net` networks created 2026-10-31 to 2026-11-02 (13, 9
+    and 7 per day; none newer), not by this run. They were left in place:
+    removing them is the user's call (to-do 7041 task 2). Manifest
+    `2026-11-06T04-14-18-386Z-899a4906`.
+  - Container, rerun with the test-only shim
+    (`ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)"
+    PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH"`,
+    which retries only owner-labelled `network create` calls on an unrouted
+    /29 in 172.16.240.0/22): 8/8 pass, `foreign-owner` included, 82.2 s.
+    Scenario durations 1.4 to 20.2 s, backend start-up 0.8 to 1.2 s, no
+    cleanup errors. Manifest `2026-11-06T04-15-05-906Z-ac80d366`.
+  - Both container attempts left no container, volume or network behind
+    (Docker listings diffed against a snapshot taken before them).
+  - `mise run smoke:cli`: pass (9.4 s), including the Cursor and Pi packed
+    runtime launches, help/version/errors without a backend, the Linux
+    platform config directory (`<tmp>/home/.config/orkestrator-cli`, private
+    and enforced) and an installed-service fixture lifecycle. Its temporary
+    root was removed.
+  - Not run: live `live-session` for any provider and task 1's Cursor run
+    (no credentials or billed turns in this run); `cli-ui.spec.ts`.
 
 - **2026-11-01, macOS (Darwin 27.0.0, arm64), tasks 2 and 3.** Branch
   `cli-wait-recovery-0e4046a8eef3-r1` on `93b99bfb` plus this change; Bun
@@ -820,6 +874,18 @@ model).
   stay open indefinitely, because the path triggers only by chance. The case
   file says to reopen it on any live `transport-uncertain` exit from a
   `--wait` command.
+- **Task 5: the container matrix ran through the test-only Docker shim**
+  rather than being recorded as blocked or run after freeing networks. The
+  pools were full of other runs' unattached probe networks, which this work
+  may not remove; the shim is the scoped fallback
+  `test:agent:docker:isolated` already uses, and it only changes where
+  owner-labelled networks are allocated, so the scenarios still exercise the
+  real lifecycle. The unshimmed failure is kept above as evidence. Con: the
+  matrix on this host proves the /29 fallback path, not Docker's own pool
+  allocation. The invocation is now next to the container command in the
+  testing guide.
+- **Task 5: Cursor's run (task 1) left out.** The recommended option batched
+  it with this re-run, but it needs credentials, which this ticket excluded.
 - **Item 5 narrowed, not finished.** Start-up, failure time, flake rate and
   cleanup failures were measurable from the manifests; token cost was not,
   and stays open.

@@ -1,5 +1,5 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
-import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import { openCodeSdkFetch } from "./http-bridge/index.js";
 
 export type { OpencodeClient };
 

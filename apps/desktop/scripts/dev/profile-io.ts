@@ -1188,6 +1188,33 @@ export async function reserveLoopbackPorts(count: number): Promise<number[]> {
   return ports;
 }
 
+/**
+ * Refuses an agent tools port that something already listens on, on the
+ * address the backend's agent tools server binds (all interfaces). The
+ * backend refuses a busy explicit port too, but only after Electron and Vite
+ * have started; this names the port before anything is launched. A port
+ * taken between this check and the backend's bind still fails the start.
+ */
+export async function assertAgentToolsPortFree(port: number, host = "0.0.0.0"): Promise<void> {
+  const server = net.createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ port, host, exclusive: true }, () => resolve());
+    });
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    throw new Error(
+      code === "EADDRINUSE"
+        ? `--agent-tools-port ${port} is already in use; choose another port in the range (a profile never falls back to a random one)`
+        : `--agent-tools-port ${port} cannot be bound (${typeof code === "string" ? code : "unknown error"})`,
+      { cause: error },
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
 export function processStartTime(pid: number): number | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {

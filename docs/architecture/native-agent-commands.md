@@ -421,7 +421,7 @@ backend's fallback to them. A read without a session makes no request
 contract (2.21.0) answers the session route with 404; its catalogue is
 `unavailable` with `outdated-bridge` until the environment runs a current
 bridge, and each such read is counted per agent
-(`outdatedBridgeCatalogueReadCounts` in `http-bridge-catalog.ts`, with one
+(`outdatedBridgeCatalogueReadCounts` in `http-bridge/catalog.ts`, with one
 warning per provider instance and no command names). A pre-2.21 bridge that
 does answer the session route sends rows without `catalogueVersion`; those are
 non-enhanced: they get a synthetic `legacy:` ID (`legacyCommandId`) and run as

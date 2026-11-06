@@ -6,7 +6,7 @@ import {
   describeApproval,
   buildApprovalResponse,
 } from "../../bridges/codex-bridge/src/app-server/approvals";
-import { HttpBridgeInteractionAdapter } from "../../apps/backend/src/core/http-bridge-interactions";
+import { HttpBridgeInteractionAdapter } from "../../apps/backend/src/core/http-bridge/interactions";
 import {
   PermissionRuleEnforcer,
   type PermissionRuleChoice,

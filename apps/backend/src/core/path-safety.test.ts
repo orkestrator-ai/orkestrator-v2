@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -309,6 +310,95 @@ describe("writeConfinedFile", () => {
 });
 
 describe("removeConfinedDirectory", () => {
+  test("does not settle cancellation until the helper's exit is delivered", async () => {
+    const root = await createWorktree();
+    await fs.mkdir(path.join(root, "tree"));
+    const controller = new AbortController();
+    const realSpawn = childProcess.spawn;
+    let releaseExit = () => {};
+    let exitSignal: unknown;
+    let sawExit!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      sawExit = resolve;
+    });
+    const spawnSpy = spyOn(childProcess, "spawn").mockImplementation(((
+      ...args: Parameters<typeof childProcess.spawn>
+    ) => {
+      const child = realSpawn(...args);
+      const emit = child.emit.bind(child);
+      child.emit = ((...emitArgs: Parameters<typeof child.emit>) => {
+        const [event, ...eventArgs] = emitArgs;
+        if (event !== "exit") return emit(event, ...eventArgs);
+        exitSignal = eventArgs[1];
+        releaseExit = () => {
+          emit(event, ...eventArgs);
+        };
+        sawExit();
+        return true;
+      }) as typeof child.emit;
+      return child;
+    }) as typeof childProcess.spawn);
+    // Abort after the production caller registers its kill handler.
+    const register = controller.signal.addEventListener.bind(controller.signal);
+    controller.signal.addEventListener = ((
+      ...args: Parameters<AbortSignal["addEventListener"]>
+    ) => {
+      register(...args);
+      queueMicrotask(() => controller.abort());
+    }) as AbortSignal["addEventListener"];
+    let settled = false;
+    const removal = removeConfinedDirectory(root, "tree", undefined, { signal: controller.signal })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      await exited;
+      // Flush an immediate abort rejection as well as the real SIGKILL exit.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(exitSignal).toBe("SIGKILL");
+      expect(settled).toBe(false);
+      releaseExit();
+      expect(((await removal) as Error).message).toBe("Confined directory cleanup stopped");
+      expect(settled).toBe(true);
+    } finally {
+      releaseExit();
+      await removal;
+      spawnSpy.mockRestore();
+    }
+  });
+
+  test("a signal stops the removal, and it settles only after the helper has exited", async () => {
+    const root = await createWorktree();
+    await fs.mkdir(path.join(root, "tree/nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "tree/nested/file"), "kept");
+
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      removeConfinedDirectory(root, "tree", undefined, { signal: aborted.signal }),
+    ).rejects.toThrow("Confined directory cleanup stopped");
+
+    // Aborted the moment the helper is spawned: it is killed before it removes
+    // anything. Aborting from the listener registration, rather than a timer,
+    // keeps a loaded host from letting the helper finish first.
+    const late = new AbortController();
+    const register = late.signal.addEventListener.bind(late.signal);
+    late.signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+      register(...args);
+      queueMicrotask(() => late.abort());
+    }) as AbortSignal["addEventListener"];
+    const removal = removeConfinedDirectory(root, "tree", undefined, { signal: late.signal });
+    await expect(removal).rejects.toThrow("Confined directory cleanup stopped");
+    await expect(fs.readFile(path.join(root, "tree/nested/file"), "utf8")).resolves.toBe("kept");
+
+    // A signal that never fires changes nothing.
+    await removeConfinedDirectory(root, "tree", undefined, {
+      signal: new AbortController().signal,
+    });
+    await expect(fs.stat(path.join(root, "tree"))).rejects.toThrow();
+  });
+
   test("does not remove through a root replacement race", async () => {
     const root = await createWorktree();
     const external = await createWorktree();

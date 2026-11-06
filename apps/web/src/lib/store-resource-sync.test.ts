@@ -47,10 +47,12 @@ mock.module("@/lib/build-pipeline-persistence", () => ({
   buildPipelineChangeReadOptions: realBuildPipeline.buildPipelineChangeReadOptions,
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
+  isBuildPipelineKnownUnavailable: () => false,
 }));
 mock.module("@/lib/multi-review-persistence", () => ({
   hydrateMultiReviewWorkflow,
   hydrateMultiReviewWorkflowsForEnvironment,
+  isMultiReviewWorkflowKnownUnavailable: () => false,
 }));
 mock.module("@/lib/prompt-queue-persistence", () => ({ hydratePromptQueuesForEnvironment }));
 mock.module("@/lib/prompt-queue-sources", () => ({ createPromptQueueSources }));
@@ -62,7 +64,8 @@ const {
   resetResourceSync,
   startResourceSync,
 } = await import("./resource-sync");
-const { startStoreResourceSync } = await import("./store-resource-sync");
+const { MAX_DEFERRED_WORKFLOW_READS, startStoreResourceSync } =
+  await import("./store-resource-sync");
 const { armBuildPipelineTabActivation, armStartupAgentTabActivation } =
   await import("./pane-layout-authoritative");
 const {
@@ -600,6 +603,53 @@ describe("multi-review binding", () => {
     await tick();
 
     expect(hydrateMultiReviewWorkflow).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("workflow bindings in a hidden window", () => {
+  function setVisibility(state: DocumentVisibilityState): void {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  afterEach(() => {
+    setVisibility("visible");
+  });
+
+  test("remembers pipeline and review changes and reads each once when shown", async () => {
+    setVisibility("hidden");
+    for (let revision = 1; revision <= 3; revision++) {
+      dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision });
+      dispatchResourceChange({ resource: "multi-review", id: "multi-1", revision });
+      await tick(60);
+    }
+    expect(hydrateBuildPipeline).not.toHaveBeenCalled();
+    expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
+
+    setVisibility("visible");
+    await tick();
+
+    expect(hydrateBuildPipeline).toHaveBeenCalledTimes(1);
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {});
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledTimes(1);
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1");
+  });
+
+  test("reconciles both collections instead when too many ids changed while hidden", async () => {
+    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    setVisibility("hidden");
+    for (let index = 0; index <= MAX_DEFERRED_WORKFLOW_READS; index++) {
+      dispatchResourceChange({ resource: "multi-review", id: `multi-${index}`, revision: index });
+    }
+    await tick(60);
+
+    setVisibility("visible");
+    await tick();
+
+    expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
+    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
+    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith("project-1");
   });
 });
 

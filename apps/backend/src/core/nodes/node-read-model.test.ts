@@ -512,3 +512,40 @@ test("a leaf's agent-mail change re-reads every project for the rows' mail badge
     model.stop();
   }
 });
+
+test("summary changes for one node are announced at most once per interval, the last one included", async () => {
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const model = new NodeReadModel({
+    nodes: {
+      selfIdentity: async () => "bk_command" as BackendId,
+      selfProfile: async () => ({ displayName: "Command" }),
+      listNodes: async () => ({ nodes: [] }) as never,
+      link: () => null,
+      subscribe: () => () => undefined,
+      recordProfile: async () => undefined,
+    },
+    emit: (event, payload) => {
+      events.push({ event, payload });
+    },
+    local: {
+      invoke: async <T>(command: string) => (command === "get_projects" ? [] : []) as T,
+    },
+    changeMinIntervalMs: 200,
+  });
+  try {
+    await model.summaries(undefined, { includeSelf: true });
+    for (let index = 0; index < 10; index++) {
+      model.noteLocalEvent("resource-changed", { resource: "environment" });
+      await Bun.sleep(10);
+    }
+    await Bun.sleep(80);
+    // The first change is announced after the 50 ms batch; the rest wait out the interval.
+    expect(events.filter(({ event }) => event === "node-summary-changed")).toHaveLength(1);
+    await Bun.sleep(250);
+    const announced = events.filter(({ event }) => event === "node-summary-changed");
+    expect(announced).toHaveLength(2);
+    expect(announced[1]!.payload).toMatchObject({ nodeId: "bk_command" });
+  } finally {
+    model.stop();
+  }
+});

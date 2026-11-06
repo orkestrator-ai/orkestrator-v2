@@ -52,10 +52,24 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 const log = createLogger("web.resource-sync");
 
 /**
+ * Most workflow ids a hidden window remembers to re-read. Past it the window
+ * forgets the ids and reconciles both collections once it is shown again.
+ */
+export const MAX_DEFERRED_WORKFLOW_READS = 512;
+
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+/**
  * Binds the backend change feed to the stores that are read-through caches.
  *
  * Each binding refetches only when this client is actually showing the affected
  * scope — a kanban change for a project nobody has open costs nothing.
+ * Build pipelines and Multi Reviews feed views across every environment (the
+ * sidebar, boards, badges), so their changes are read in every visible window;
+ * a hidden window only remembers which ids changed and reads them when it is
+ * shown again, instead of re-reading on every save while nobody looks.
  * Pane/tab existence is backend-owned too, while active pane/tab selection is
  * preserved locally whenever an authoritative snapshot is installed.
  *
@@ -95,6 +109,22 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   const paneLayoutRequestGenerations = new Map<string, number>();
   const deferredPaneLayoutRefreshes = new Map<string, DeferredPaneLayoutRefresh>();
   const declinedPaneLayoutRefreshes = new Set<string>();
+  const deferredPipelineReads = new Set<string>();
+  const deferredMultiReviewReads = new Set<string>();
+  let deferredWorkflowReadsOverflowed = false;
+
+  /** Remembers a change a hidden window will read when shown; true when deferred. */
+  const deferWhileHidden = (reads: Set<string>, id: string): boolean => {
+    if (!documentHidden()) return false;
+    if (deferredWorkflowReadsOverflowed) return true;
+    reads.add(id);
+    if (deferredPipelineReads.size + deferredMultiReviewReads.size > MAX_DEFERRED_WORKFLOW_READS) {
+      deferredPipelineReads.clear();
+      deferredMultiReviewReads.clear();
+      deferredWorkflowReadsOverflowed = true;
+    }
+    return true;
+  };
 
   const refreshConfig = async (): Promise<void> => {
     const generation = ++configRequestGeneration;
@@ -554,35 +584,73 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }),
   );
 
+  const refreshPipeline = (pipelineId: string): Promise<void> =>
+    // A missing record means another client finished or deleted this build.
+    // Dropping it locally is what stops a stale tab from resuming a dead
+    // pipeline, so treat "not found" as authoritative rather than as an error.
+    // Bodies only while a transcript of this pipeline is on screen.
+    hydrateBuildPipeline(pipelineId, undefined, buildPipelineChangeReadOptions(pipelineId))
+      .then((pipeline) => {
+        if (pipeline) return;
+        const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+        if (local?.backendRevision) {
+          useBuildPipelineStore.getState().removePipeline(pipelineId);
+        }
+      })
+      .catch((error) => {
+        log.warn("build-pipeline.refresh-failed", { pipelineId, error: formatLogError(error) });
+        throw error;
+      });
+
+  const refreshMultiReview = (workflowId: string): Promise<void> =>
+    hydrateMultiReviewWorkflow(workflowId)
+      .then(() => undefined)
+      .catch((error) => {
+        log.warn("multi-review.refresh-failed", { workflowId, error: formatLogError(error) });
+        throw error;
+      });
+
   unsubscribes.push(
     onResourceChanged("build-pipeline", ({ id: pipelineId }) => {
-      // A missing record means another client finished or deleted this build.
-      // Dropping it locally is what stops a stale tab from resuming a dead
-      // pipeline, so treat "not found" as authoritative rather than as an error.
-      // Bodies only while a transcript of this pipeline is on screen.
-      return hydrateBuildPipeline(pipelineId, undefined, buildPipelineChangeReadOptions(pipelineId))
-        .then((pipeline) => {
-          if (pipeline) return;
-          const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-          if (local?.backendRevision) {
-            useBuildPipelineStore.getState().removePipeline(pipelineId);
-          }
-        })
-        .catch((error) => {
-          log.warn("build-pipeline.refresh-failed", { pipelineId, error: formatLogError(error) });
-          throw error;
-        });
+      if (deferWhileHidden(deferredPipelineReads, pipelineId)) return;
+      return refreshPipeline(pipelineId);
     }),
   );
 
   unsubscribes.push(
     onResourceChanged("multi-review", ({ id: workflowId }) => {
-      return hydrateMultiReviewWorkflow(workflowId).catch((error) => {
-        log.warn("multi-review.refresh-failed", { workflowId, error: formatLogError(error) });
-        throw error;
-      });
+      if (deferWhileHidden(deferredMultiReviewReads, workflowId)) return;
+      return refreshMultiReview(workflowId);
     }),
   );
+
+  const flushDeferredWorkflowReads = (): void => {
+    if (disposed || documentHidden()) return;
+    if (deferredWorkflowReadsOverflowed) {
+      deferredWorkflowReadsOverflowed = false;
+      void requestStoreResync({
+        resources: new Set<ResourceManifestKind>(["build-pipeline", "multi-review"]),
+        reason: "explicit",
+      }).catch(() => undefined);
+      return;
+    }
+    const pipelineIds = Array.from(deferredPipelineReads);
+    const workflowIds = Array.from(deferredMultiReviewReads);
+    deferredPipelineReads.clear();
+    deferredMultiReviewReads.clear();
+    // Failures are logged by the refresh itself; the next change or the
+    // periodic manifest check reads the record again.
+    for (const pipelineId of pipelineIds) void refreshPipeline(pipelineId).catch(() => undefined);
+    for (const workflowId of workflowIds) {
+      void refreshMultiReview(workflowId).catch(() => undefined);
+    }
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", flushDeferredWorkflowReads);
+    unsubscribes.push(() =>
+      document.removeEventListener("visibilitychange", flushDeferredWorkflowReads),
+    );
+  }
 
   return () => {
     disposed = true;
@@ -591,6 +659,8 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }
     deferredPaneLayoutRefreshes.clear();
     declinedPaneLayoutRefreshes.clear();
+    deferredPipelineReads.clear();
+    deferredMultiReviewReads.clear();
     paneLayoutRequestGenerations.clear();
     for (const unsubscribe of unsubscribes) unsubscribe();
   };

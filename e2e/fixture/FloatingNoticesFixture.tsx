@@ -4,6 +4,13 @@ import type {
   AgentMailMessageSummary,
 } from "@orkestrator/protocol/agent-mail";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
+import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
+import { CoordinatorConversationPane } from "../../apps/web/src/components/projects/CoordinatorConversationPane";
+import { CoordinatorPaneTree } from "../../apps/web/src/components/projects/CoordinatorPaneTree";
+import {
+  focusCoordinatorPane,
+  type CoordinatorPaneLayout,
+} from "../../apps/web/src/lib/coordinator-pane-layout";
 import { AgentMailBanner } from "../../apps/web/src/components/agent-mail/AgentMailBanner";
 import { HumanPromptBanner } from "../../apps/web/src/components/chat/HumanPromptBanner";
 import { NativeMessage } from "../../apps/web/src/components/chat/NativeMessage";
@@ -231,6 +238,181 @@ function CoordinatorScene() {
   );
 }
 
+const coordinatorSnapshot: CoordinatorSnapshot = {
+  workspace: {
+    version: 1,
+    id: "notice-coordinator",
+    projectId: "project-1",
+    executionPolicy: "coordinator-read-only",
+    lifecycleState: "ready",
+    conversations: [],
+    selectedConversationId: "first",
+    repositoryContextRevision: 0,
+    createdAt: "2026-11-06T00:00:00Z",
+    updatedAt: "2026-11-06T00:00:00Z",
+  },
+  projectPath: "/fixture",
+  providerAvailability: {
+    codex: {
+      tier: "enforced",
+      available: false,
+      delegation: true,
+      reason: "Fixture provider unavailable.",
+    },
+  },
+  controlMcp: { enabled: false, running: false, error: null },
+  workflows: [],
+};
+
+function CoordinatorSplitScene() {
+  const [layout, setLayout] = useState<CoordinatorPaneLayout>({
+    activePaneId: "first-pane",
+    root: {
+      kind: "split",
+      id: "split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      children: [
+        {
+          kind: "leaf",
+          id: "first-pane",
+          conversationIds: ["first"],
+          activeConversationId: "first",
+        },
+        {
+          kind: "leaf",
+          id: "second-pane",
+          conversationIds: ["second"],
+          activeConversationId: "second",
+        },
+      ],
+    },
+  });
+  return (
+    <div className="relative min-h-0 flex-1">
+      <FloatingNoticeLayer>
+        <CoordinatorBanner tone="info" label="Panel notice" summary="Shared panel notice">
+          Shared panel notice
+        </CoordinatorBanner>
+        <CoordinatorPaneTree
+          layout={layout}
+          onLayoutChange={(change) => setLayout(change)}
+          onFocusPane={(id) => setLayout((current) => focusCoordinatorPane(current, id))}
+          conversationLabel={(id) => id}
+          renderStripActions={() => null}
+          renderTab={(id, pane) => (
+            <button key={id} role="tab" id={`coordinator-tab-${pane.id}-${id}`}>
+              {id}
+            </button>
+          )}
+          renderContent={(pane, focused) => (
+            <CoordinatorConversationPane
+              conversation={{
+                id: pane.activeConversationId!,
+                title: pane.activeConversationId!,
+                tabId: pane.id,
+                logicalSessionKey: pane.id,
+                agent: pane.activeConversationId === "first" ? undefined : "codex",
+                role: pane.activeConversationId === "first" ? "main" : "side",
+                createdAt: "2026-11-06T00:00:00Z",
+                mailboxIncarnationId: pane.id,
+                startupError: `${pane.activeConversationId} failed to start`,
+              }}
+              paneFocused={focused}
+              projectId="project-1"
+              snapshot={coordinatorSnapshot}
+              availablePlatforms={[]}
+              platformNotes={{}}
+              platformBadges={{}}
+              launch={undefined}
+              startConversation={async () => {}}
+              confirmUpstreamMerge={async () => undefined}
+              conversationBusy={false}
+              newConversationLabel="New conversation"
+              onCreateConversation={() => {}}
+              onRetry={() => {}}
+              onRetryConversation={() => {}}
+              onCloseConversation={() => {}}
+            />
+          )}
+        />
+      </FloatingNoticeLayer>
+    </div>
+  );
+}
+
+function ConstrainedScene({ narrow = false }: { narrow?: boolean }) {
+  const [actions, setActions] = useState(0);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <output aria-label="Completed notice actions">{actions}</output>
+      <div
+        className="relative flex h-[220px] shrink-0 flex-col overflow-hidden border border-border"
+        style={{ width: narrow ? 128 : "100%" }}
+        data-testid="constrained-pane"
+      >
+        <FloatingNoticeLayer columnRem={TRANSCRIPT_COLUMN_REM}>
+          <HumanPromptBanner
+            prompts={Array.from({ length: 12 }, (_, index) => ({
+              ...signIn,
+              id: `long-${index}`,
+              command: `command ${index}`,
+            }))}
+          />
+          {["First long notice", "Second long notice"].map((label) => (
+            <FloatingNotice
+              label={label}
+              summary="A long notice requiring attention"
+              key={label}
+              actions={
+                <Button onClick={() => setActions((count) => count + 1)}>Resolve {label}</Button>
+              }
+            >
+              {Array.from({ length: 12 }, (_, index) => (
+                <p key={index}>Notice detail {index + 1}</p>
+              ))}
+            </FloatingNotice>
+          ))}
+          <Transcript />
+        </FloatingNoticeLayer>
+      </div>
+    </div>
+  );
+}
+
+function LiveAnnouncementsScene() {
+  const [revision, setRevision] = useState(0);
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col" style={{ maxWidth: 390 }}>
+      <div className="flex gap-2">
+        <Button onClick={() => setRevision((value) => value + 1)}>Update notices</Button>
+      </div>
+      <FloatingNoticeLayer columnRem={TRANSCRIPT_COLUMN_REM}>
+        {revision > 0 && (
+          <>
+            <HumanPromptBanner
+              prompts={[
+                {
+                  ...signIn,
+                  prompt: { ...signIn.prompt, kind: revision === 1 ? "device-code" : "sign-in" },
+                },
+              ]}
+            />
+            <CoordinatorBanner
+              tone="error"
+              label="Action failed"
+              summary={`Attempt ${revision} failed`}
+            >
+              Attempt {revision} failed
+            </CoordinatorBanner>
+          </>
+        )}
+        <Transcript />
+      </FloatingNoticeLayer>
+    </div>
+  );
+}
+
 function LogsScene() {
   // The first read succeeds; every later one fails, so the view goes stale.
   useLayoutEffect(() => {
@@ -308,7 +490,15 @@ export function FloatingNoticesFixture() {
   const scene = new URLSearchParams(window.location.search).get("scene") ?? "agent";
   return (
     <main className="flex h-screen flex-col bg-background text-foreground">
-      {scene === "coordinator" ? (
+      {scene === "live" ? (
+        <LiveAnnouncementsScene />
+      ) : scene === "coordinator-split" ? (
+        <CoordinatorSplitScene />
+      ) : scene === "short" ? (
+        <ConstrainedScene />
+      ) : scene === "narrow" ? (
+        <ConstrainedScene narrow />
+      ) : scene === "coordinator" ? (
         <CoordinatorScene />
       ) : scene === "logs" ? (
         <LogsScene />

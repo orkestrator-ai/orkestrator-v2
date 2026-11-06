@@ -80,3 +80,133 @@ test("over a pane's content a card can be minimized and reopened", async ({ page
   await pill.click();
   await expect(card).toBeVisible();
 });
+
+test("short horizontal panes keep every tall notice and its actions reachable", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "wide horizontal split");
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/floating-notices?scene=short");
+  const pane = page.getByTestId("constrained-pane");
+  const stack = pane.locator("[data-floating-notice-stack]");
+  const bounds = (await pane.boundingBox())!;
+  const stackBounds = (await stack.boundingBox())!;
+  expect(stackBounds.y + stackBounds.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+  expect(await stack.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  // Each card scrolls independently; the stack can also reach later cards.
+  for (const label of ["First long notice", "Second long notice"]) {
+    const action = page.getByRole("button", { name: `Resolve ${label}` });
+    await action.scrollIntoViewIfNeeded();
+    await action.click();
+  }
+  await expect(page.getByRole("status", { name: "Completed notice actions" })).toHaveText("2");
+  const prompt = page.getByRole("status", { name: "Waiting for you", exact: true });
+  await prompt.scrollIntoViewIfNeeded();
+  const lastCode = prompt.getByRole("button", { name: "1A2B-3C4D" }).last();
+  await lastCode.scrollIntoViewIfNeeded();
+  await expect(lastCode).toBeVisible();
+  await page.screenshot({ path: "output/visual-previews/notices-fixed-short-stack.png" });
+});
+
+test("128px panes contain long-label pills and their opened cards", async ({ page }) => {
+  await page.goto("/floating-notices?scene=narrow");
+  const pane = page.getByTestId("constrained-pane");
+  const bounds = (await pane.boundingBox())!;
+  for (const pill of await pane.getByRole("button").all()) {
+    const rect = (await pill.boundingBox())!;
+    expect(rect.x).toBeGreaterThanOrEqual(bounds.x);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+  }
+  const pill = page.getByRole("button", { name: /^First long notice:/ });
+  await pill.focus();
+  await page.keyboard.press("Enter");
+  const card = page.getByRole("region", { name: "First long notice" });
+  await expect(card).toBeFocused();
+  const rect = (await card.boundingBox())!;
+  expect(rect.x).toBeGreaterThanOrEqual(bounds.x);
+  expect(rect.x + rect.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+  await page.keyboard.press("Escape");
+  await expect(pill).toBeFocused();
+  await page.screenshot({ path: "output/visual-previews/notices-fixed-128px.png" });
+});
+
+test("coordinator splits keep notices in their conversation pane", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "two desktop columns");
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/floating-notices?scene=coordinator-split");
+  for (const id of ["first", "second"]) {
+    const pane = page.locator(`[data-coordinator-pane="${id}-pane"]`);
+    const pill = pane.getByRole("button", { name: `Could not start: ${id} could not start.` });
+    await expect(pill).toBeVisible();
+    await expect(pane.getByRole("alert", { name: "Could not start", exact: true })).toHaveCount(0);
+    await pill.click();
+    const card = pane.getByRole("alert", { name: "Could not start", exact: true });
+    await expect(card).toContainText(`${id} failed to start`);
+    const bounds = (await pane.boundingBox())!;
+    const rect = (await card.boundingBox())!;
+    expect(rect.x).toBeGreaterThanOrEqual(bounds.x);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+    await pane.getByRole("button", { name: "Minimize Could not start" }).click();
+    await expect(pill).toBeFocused();
+  }
+  await page.reload();
+  await expect(page.getByRole("button", { name: /^Could not start:/ })).toHaveCount(2);
+  await page.screenshot({ path: "output/visual-previews/notices-fixed-coordinator-split.png" });
+});
+
+test("hidden mobile coordinator conversations keep their notices hidden", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile switcher");
+  await page.goto("/floating-notices?scene=coordinator-split");
+  const first = page.getByRole("button", { name: "Could not start: first could not start." });
+  const second = page.getByRole("button", { name: "Could not start: second could not start." });
+  await expect(first).toBeVisible();
+  await expect(second).toHaveCount(0);
+  const hidden = page.locator('[data-coordinator-pane="second-pane"]');
+  for (const announcement of await hidden.locator("[data-floating-notice-announcement]").all()) {
+    await expect(announcement).toBeHidden();
+  }
+  await page.getByRole("tab", { name: "2. second", exact: true }).click();
+  await expect(second).toBeVisible();
+  await expect(first).toHaveCount(0);
+  await second.click();
+  await expect(page.getByRole("alert", { name: "Could not start", exact: true })).toContainText(
+    "second failed to start",
+  );
+  await page.getByRole("tab", { name: "1. first", exact: true }).click();
+  await expect(page.getByText("second failed to start", { exact: true })).toBeHidden();
+  await expect(first).toBeVisible();
+  await page.reload();
+  await expect(first).toBeVisible();
+  await expect(second).toHaveCount(0);
+  await page.screenshot({ path: "output/visual-previews/notices-fixed-coordinator-mobile.png" });
+});
+
+test("new and updated prompt and error summaries stay live while their pills are closed", async ({
+  page,
+}) => {
+  await page.goto("/floating-notices?scene=live");
+  await page.getByRole("button", { name: "Update notices" }).click();
+  const status = page.getByRole("status", { name: "Notice announcement", exact: true });
+  const alert = page.getByRole("alert", { name: "Notice announcement", exact: true });
+  await expect(status).toHaveAttribute("aria-live", "polite");
+  await expect(status).toHaveText("Waiting for you: Sign in and enter the code");
+  await expect(alert).toHaveAttribute("aria-live", "assertive");
+  await expect(alert).toHaveText("Action failed: Attempt 1 failed");
+  await expect(page.getByRole("button", { name: /^Waiting for you:/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(page.getByRole("button", { name: /^Action failed:/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(page.getByRole("status", { name: "Waiting for you", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Update notices" }).click();
+  await expect(status).toHaveText("Waiting for you: Sign in to continue");
+  await expect(alert).toHaveText("Action failed: Attempt 2 failed");
+  const tree = await page.locator("main").ariaSnapshot();
+  expect(tree).toContain('status "Notice announcement"');
+  expect(tree).toContain('alert "Notice announcement"');
+});

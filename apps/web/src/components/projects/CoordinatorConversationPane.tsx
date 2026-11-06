@@ -185,9 +185,9 @@ export function CoordinatorConversationPane({
     conversation.agent && !normalizeAgentPlatforms(enabledPlatforms).includes(conversation.agent),
   );
   return (
-    <div key={conversation.id} className="flex h-full min-h-0 flex-col">
-      {/* Inside the coordinator area this joins the area's stack. */}
-      <FloatingNoticeLayer columnRem={TRANSCRIPT_COLUMN_REM}>
+    <div key={conversation.id} className="relative flex h-full min-h-0 min-w-0 flex-col">
+      {/* Conversation notices stay inside this pane, including when it is hidden. */}
+      <FloatingNoticeLayer independent columnRem={TRANSCRIPT_COLUMN_REM}>
         {conversation.startupError ? (
           <CoordinatorStartupFailure
             title={conversation.title}

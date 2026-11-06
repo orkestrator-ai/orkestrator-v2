@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { memo, useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
   FloatingNotice,
@@ -6,6 +7,7 @@ import {
   FloatingNoticeLayer,
   TRANSCRIPT_COLUMN_REM,
   floatingNoticeLayout,
+  useInFloatingNoticeLayer,
 } from "./floating-notice";
 
 describe("floatingNoticeLayout", () => {
@@ -52,6 +54,8 @@ describe("FloatingNotice", () => {
   const realResizeObserver = globalThis.ResizeObserver;
   const realRect = HTMLElement.prototype.getBoundingClientRect;
   let paneWidth = 0;
+  let paneHeight = 300;
+  let resize: () => void;
 
   beforeEach(() => {
     cleanup();
@@ -59,6 +63,7 @@ describe("FloatingNotice", () => {
     globalThis.ResizeObserver = class {
       constructor(private readonly callback: ResizeObserverCallback) {}
       observe() {
+        resize = () => this.callback([], this as unknown as ResizeObserver);
         this.callback([], this as unknown as ResizeObserver);
       }
       unobserve() {}
@@ -67,11 +72,11 @@ describe("FloatingNotice", () => {
     HTMLElement.prototype.getBoundingClientRect = function () {
       return {
         width: paneWidth,
-        height: 0,
+        height: paneHeight,
         top: 0,
         left: 0,
         right: paneWidth,
-        bottom: 0,
+        bottom: this.hasAttribute("data-floating-notice-anchor") ? 0 : paneHeight,
       } as DOMRect;
     };
   });
@@ -201,5 +206,91 @@ describe("FloatingNotice", () => {
       Number((screen.getByRole("region", { name }).parentElement as HTMLElement).style.order);
     expect(order("Error")).toBeLessThan(order("Warning"));
     expect(order("Warning")).toBeLessThan(order("Info"));
+  });
+  test("bounds the stack to pane height and updates on height-only resize", () => {
+    paneWidth = 1600;
+    const { container } = render(<FloatingNoticeLayer>{notice()}</FloatingNoticeLayer>);
+    const stack = container.querySelector<HTMLElement>("[data-floating-notice-stack]")!;
+    expect(stack.style.maxHeight).toBe("288px");
+    act(() => {
+      paneHeight = 160;
+      resize();
+    });
+    expect(stack.style.maxHeight).toBe("148px");
+    expect(stack.style.getPropertyValue("--floating-notice-height")).toBe("148px");
+  });
+
+  test("an independent conversation layer keeps its notices in its pane", () => {
+    paneWidth = 800;
+    render(
+      <FloatingNoticeLayer>
+        <FloatingNotice label="Panel" summary="panel" />
+        <section data-testid="conversation">
+          <FloatingNoticeLayer independent columnRem={56}>
+            {notice()}
+          </FloatingNoticeLayer>
+        </section>
+      </FloatingNoticeLayer>,
+    );
+    expect(
+      screen
+        .getByTestId("conversation")
+        .contains(screen.getByRole("button", { name: /^Agent mail:/ })),
+    ).toBe(true);
+    expect(
+      screen
+        .getByTestId("conversation")
+        .contains(screen.getByRole("button", { name: "Minimize Panel" })),
+    ).toBe(false);
+  });
+
+  test.each(["status", "alert"] as const)(
+    "announces inserted and updated collapsed %s summaries",
+    (role) => {
+      paneWidth = 128;
+      const tree = (summary?: string) => (
+        <FloatingNoticeLayer columnRem={56}>
+          {summary && <FloatingNotice role={role} label="Attention" summary={summary} />}
+        </FloatingNoticeLayer>
+      );
+      const { rerender } = render(tree());
+      rerender(tree("First notice"));
+      const live = screen.getByRole(role, { name: "Notice announcement" });
+      expect(live.textContent).toBe("Attention: First notice");
+      expect(live.getAttribute("aria-live")).toBe(role === "alert" ? "assertive" : "polite");
+      rerender(tree("Changed notice"));
+      expect(screen.getByRole(role, { name: "Notice announcement" })).toBe(live);
+      expect(live.textContent).toBe("Attention: Changed notice");
+      expect(
+        screen
+          .getByRole("button", { name: "Attention: Changed notice" })
+          .getAttribute("aria-expanded"),
+      ).toBe("false");
+    },
+  );
+
+  test("layer presence consumers do not render on anchor geometry changes", () => {
+    paneWidth = 1600;
+    let renders = 0;
+    const Controller = memo(function Controller() {
+      const inside = useInFloatingNoticeLayer();
+      useEffect(() => {
+        renders += 1;
+      });
+      return <span>{String(inside)}</span>;
+    });
+    render(
+      <FloatingNoticeLayer columnRem={56}>
+        <Controller />
+        {notice()}
+      </FloatingNoticeLayer>,
+    );
+    const before = renders;
+    act(() => {
+      paneWidth = 800;
+      resize();
+    });
+    expect(screen.getByRole("button", { name: /^Agent mail:/ })).toBeTruthy();
+    expect(renders).toBe(before);
   });
 });

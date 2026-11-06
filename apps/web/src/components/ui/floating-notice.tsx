@@ -3,6 +3,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type HTMLAttributes,
@@ -19,7 +20,7 @@ import { cn } from "@/lib/utils";
  * A pane mounts one `FloatingNoticeLayer`; every `FloatingNotice` rendered
  * anywhere beneath it portals into that layer's stack, so notices from
  * different components share one corner instead of overlapping. A layer
- * beneath another layer adds nothing: its notices join the outer stack.
+ * beneath another layer joins the outer stack unless it owns an independent pane.
  * A notice with no layer above it renders in place, as a plain card.
  */
 
@@ -99,6 +100,7 @@ interface LayerContext {
 }
 
 const FloatingNoticeContext = createContext<LayerContext | null>(null);
+const FloatingNoticePresenceContext = createContext(false);
 
 /**
  * Collects the notices of everything beneath it. With `anchor` it also shows
@@ -107,11 +109,14 @@ const FloatingNoticeContext = createContext<LayerContext | null>(null);
  */
 export function FloatingNoticeLayer({
   anchor = true,
+  independent = false,
   columnRem,
   anchorClassName,
   children,
 }: {
   anchor?: boolean;
+  /** Own a pane-local stack even inside another layer. */
+  independent?: boolean;
   /** Width of the pane's centred content column, when it has one. */
   columnRem?: number;
   /** Where the stack sits; see `FloatingNoticeAnchor`. */
@@ -119,7 +124,7 @@ export function FloatingNoticeLayer({
   children?: ReactNode;
 }) {
   const parent = useContext(FloatingNoticeContext);
-  if (parent) return <>{children}</>;
+  if (parent && !independent) return <>{children}</>;
   return (
     <FloatingNoticeRoot anchor={anchor} columnRem={columnRem} anchorClassName={anchorClassName}>
       {children}
@@ -129,7 +134,7 @@ export function FloatingNoticeLayer({
 
 /** Whether notices rendered here float in a layer's stack rather than in place. */
 export function useInFloatingNoticeLayer(): boolean {
-  return useContext(FloatingNoticeContext) !== null;
+  return useContext(FloatingNoticePresenceContext);
 }
 
 function FloatingNoticeRoot({
@@ -144,11 +149,14 @@ function FloatingNoticeRoot({
   children?: ReactNode;
 }) {
   const [state, setState] = useState<LayerState>({ container: null, widthRem: 0 });
+  const value = useMemo(() => ({ state, setAnchor: setState }), [state]);
   return (
-    <FloatingNoticeContext.Provider value={{ state, setAnchor: setState }}>
-      {anchor ? <FloatingNoticeAnchor columnRem={columnRem} className={anchorClassName} /> : null}
-      {children}
-    </FloatingNoticeContext.Provider>
+    <FloatingNoticePresenceContext.Provider value={true}>
+      <FloatingNoticeContext.Provider value={value}>
+        {anchor ? <FloatingNoticeAnchor columnRem={columnRem} className={anchorClassName} /> : null}
+        {children}
+      </FloatingNoticeContext.Provider>
+    </FloatingNoticePresenceContext.Provider>
   );
 }
 
@@ -169,18 +177,30 @@ export function FloatingNoticeAnchor({
   const anchorRef = useRef<HTMLDivElement>(null);
   const [stack, setStack] = useState<HTMLDivElement | null>(null);
   const [widthRem, setWidthRem] = useState(0);
+  const [availableHeight, setAvailableHeight] = useState<number>();
   const setAnchor = layer?.setAnchor;
 
   useEffect(() => {
     const element = anchorRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    const pane = element?.parentElement;
+    if (!element || !pane || !stack) return;
+    const measure = () => {
       const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       setWidthRem(element.getBoundingClientRect().width / rem);
-    });
+      setAvailableHeight(
+        Math.max(
+          0,
+          pane.getBoundingClientRect().bottom - stack.getBoundingClientRect().top - EDGE_REM * rem,
+        ),
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
     observer.observe(element);
+    observer.observe(pane);
     return () => observer.disconnect();
-  }, []);
+  }, [stack]);
 
   useEffect(() => {
     if (!setAnchor) return;
@@ -190,11 +210,19 @@ export function FloatingNoticeAnchor({
 
   if (!layer) return null;
   return (
-    <div ref={anchorRef} className="relative z-20 h-0 shrink-0" data-floating-notice-anchor="">
+    <div ref={anchorRef} className="relative z-30 h-0 shrink-0" data-floating-notice-anchor="">
       <div
         ref={setStack}
+        data-floating-notice-stack=""
+        style={
+          {
+            maxHeight: availableHeight,
+            "--floating-notice-height":
+              availableHeight === undefined ? "70vh" : `${availableHeight}px`,
+          } as React.CSSProperties
+        }
         className={cn(
-          "pointer-events-none absolute flex flex-col items-end gap-2",
+          "pointer-events-auto absolute flex max-w-[calc(100%_-_1.5rem)] flex-col items-end gap-2 overflow-y-auto overscroll-contain",
           className ?? "top-3 right-3",
         )}
       />
@@ -217,6 +245,8 @@ export function FloatingNotice({
   onDismiss,
   dismissLabel,
   role = "region",
+  "aria-live": ariaLive,
+  "aria-atomic": ariaAtomic = true,
   children,
   className,
   style,
@@ -283,7 +313,7 @@ export function FloatingNotice({
   const notice = (
     <div
       ref={noticeRef}
-      className="pointer-events-none flex flex-col items-end gap-2"
+      className="pointer-events-none flex max-w-full shrink-0 flex-col items-end gap-2"
       style={{ order: TONE_ORDER[tone] }}
       onKeyDown={(event) => {
         if (foldable && open && event.key === "Escape") {
@@ -292,20 +322,34 @@ export function FloatingNotice({
         }
       }}
     >
+      {/* The open card announces its body; the persistent live node announces a closed pill. */}
+      {(role === "status" || role === "alert" || ariaLive) && (
+        <div
+          className="sr-only"
+          role={open ? undefined : role === "region" ? "status" : role}
+          aria-label="Notice announcement"
+          data-floating-notice-announcement=""
+          aria-live={open ? "off" : (ariaLive ?? (role === "alert" ? "assertive" : "polite"))}
+          aria-atomic={ariaAtomic}
+        >
+          {open ? null : `${label}: ${summary}`}
+        </div>
+      )}
       {!open && (
         <button
           ref={pillRef}
           type="button"
+          style={{ maxWidth: `${Math.min(16, cardRem)}rem` }}
           aria-expanded={false}
           aria-label={`${label}: ${summary}`}
           onClick={() => {
             moveFocus.current = true;
             setOpen(true);
           }}
-          className="pointer-events-auto flex h-7 max-w-[16rem] items-center gap-1.5 rounded-full border border-border bg-panel-surface/95 px-2.5 text-xs font-medium text-foreground shadow-lg shadow-black/30 outline-none backdrop-blur-sm transition-colors hover:bg-elevated focus-hairline"
+          className="pointer-events-auto flex h-7 max-w-full items-center gap-1.5 rounded-full border border-border bg-panel-surface/95 px-2.5 text-xs font-medium text-foreground shadow-lg shadow-black/30 outline-none backdrop-blur-sm transition-colors hover:bg-elevated focus-hairline"
         >
           <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="truncate">{pill ?? label}</span>
+          <span className="min-w-0 truncate">{pill ?? label}</span>
           {dot}
         </button>
       )}
@@ -316,10 +360,11 @@ export function FloatingNotice({
           tabIndex={-1}
           id={cardId}
           role={role}
+          aria-live={ariaLive}
           aria-label={label}
           style={{ ...style, width: `${cardRem}rem` }}
           className={cn(
-            "pointer-events-auto max-h-[min(28rem,70vh)] overflow-y-auto rounded-xl outline-none border border-border bg-panel-surface/95 p-3 text-xs text-foreground shadow-xl shadow-black/40 backdrop-blur-sm",
+            "pointer-events-auto max-w-full max-h-[min(28rem,var(--floating-notice-height,70vh))] overflow-y-auto rounded-xl outline-none border border-border bg-panel-surface/95 p-3 text-xs text-foreground shadow-xl shadow-black/40 backdrop-blur-sm",
             className,
           )}
         >

@@ -47,7 +47,6 @@ import {
   FLOATING_NOTICE_ACTION,
   FloatingNoticeAnchor,
   FloatingNoticeLayer,
-  TRANSCRIPT_COLUMN_REM,
 } from "@/components/ui/floating-notice";
 import * as backend from "@/lib/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
@@ -499,7 +498,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           onPause={() => setPaused(true)}
         />
 
-        {/* Every notice in the coordinator floats in one stack over the conversations. */}
+        {/* Panel-wide notices use a collapsible stack; conversations own their stacks. */}
         <FloatingNoticeLayer anchor={false}>
           {actionAlert ? (
             <CoordinatorActionAlert
@@ -575,8 +574,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             onClearFinished={clearFinishedWork}
           >
             <div className="relative min-h-0 min-w-0 flex-1">
-              {/* Below the conversation tab bar, beside the transcript column. */}
-              <FloatingNoticeAnchor columnRem={TRANSCRIPT_COLUMN_REM} className="top-12 right-3" />
+              {/* The area has no shared transcript gutter when conversations split. */}
+              <FloatingNoticeAnchor className="top-12 right-3" />
               {layout ? (
                 <CoordinatorPaneTree
                   layout={layout}

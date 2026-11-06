@@ -34,7 +34,7 @@ and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open.
 19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: open.
 20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: open.
-21. **Retired to-do pointers in source comments**: repoint four comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: open.
+21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: open.
 
 ### 1. Busy live profile
 
@@ -522,7 +522,7 @@ Applying the same patch everywhere is quicker but may duplicate existing logic.
 
 ### 21. Retired to-do pointers in source comments
 
-**Problem.** Four source comments point to files retired on 2026-11-06.
+**Problem.** Four source comments point to files retired on 2026-11-06, and a fifth to a task number removed when 0241 was rewritten that day.
 
 **Context.** The retirement ticket is docs-only, so the source edits are tracked
 here for the next code-allowed change. This records the review's requested
@@ -542,6 +542,10 @@ retired paths and run the checks required for the files changed:
 4. `apps/desktop/electron/native-dialogs.ts:19`: deleted
    `0880-desktop-main-thread-held-by-modal-dialog.md` →
    `docs/todo/cross-cutting/0741-backend-responsiveness-under-load.md` task 7.
+5. `scripts/probe-network-sweep.ts:5`: `todo 0241 task 5`, a task removed
+   when 0241 was rewritten to hold only its live check →
+   `docs/development/disk-usage.md` (the sweep's rules); its live run is
+   0241 task 1.
 
 **Decisions.** Record a concrete code-allowed follow-up (recommended): respects
 the ticket's boundary and preserves every destination, but the comments stay

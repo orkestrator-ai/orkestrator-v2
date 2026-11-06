@@ -282,6 +282,30 @@ unchanged when rerun alone.
   unconfirmed. No owning code, timeout, assertion or skip changed. The aggregate
   also retained unrelated backend timer and missing WebKit-library failures.
 
+
+## Disposable Docker review recurrence — 2026-11-06
+
+Preparation at `8867918058550640e000f05d7a738f3f92a9a0be` repeated the
+15-second startup timeout (15009.59 ms) with two desktop workers. The default
+aggregate was incomplete: root, bridges and protocol groups expired waiting
+for host capacity. Original output is preserved in
+`.orkestrator/review-artifacts/review-validation-04a61cfc-0131-4ca9-9fd6-8cf53e5d25f9/validation-04.stdout.txt`.
+The complete unchanged owner passed alone (exit 0, 1.6 s):
+
+```sh
+mise run test:logged -- --name bridge-build-triage -- bun test ./apps/desktop/scripts/dev/bridge-builds.test.ts --preload ./tests/setup-node.ts --parallel=1 --only-failures
+```
+
+No desktop implementation, timeout or assertion changed. The cause remains
+unconfirmed. A fresh aggregate rerun is recorded separately by this repair stage.
+
+The fresh `mise run test` rerun finished after 574.9 s (exit 1). It repeated
+the desktop deadline at 15006.81 ms (1870 pass, 14 skip, 1 fail); bridges and
+protocol passed, and root reported the two repository guard failures. Evidence:
+`/tmp/orkestrator-test-run.RZrNux/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `/tmp/orkestrator-test-run.xej5WW/repaired-full-test.log.gz`.
+The timeout remains undetermined; it is not excused as an environmental cause.
+
 ## Legacy host-mount coverage review — 2026-11-06
 
 - **Commit:** `b8ff1848b` (coverage repair `5279014f9`).

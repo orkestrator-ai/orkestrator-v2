@@ -454,6 +454,11 @@ description = "Build the development Docker image"
 raw_args = true
 run = "bun apps/desktop/scripts/dev-build-image.ts"
 
+[tasks."docker:disposable"]
+description = "Start, restart or stop a disposable rootless Docker daemon for the live container suites"
+raw_args = true
+run = "bun scripts/disposable-docker-daemon.ts"
+
 [tasks."package:mac"]
 description = "Build and install an unpacked macOS application"
 run = [

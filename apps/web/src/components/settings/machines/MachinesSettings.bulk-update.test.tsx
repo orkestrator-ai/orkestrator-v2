@@ -1,5 +1,5 @@
-import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { NodeListResult, NodeStatus, NodeView } from "@orkestrator/protocol/command-nodes";
 import type {
   HostMaintenanceSnapshot,
@@ -12,17 +12,27 @@ import {
 import { invoke } from "@/lib/native/backend";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
 import { useMachineBulkUpdateStore } from "@/stores/machineBulkUpdateStore";
-import { mockToastSuccess, resetSonnerMocks } from "../../../../../../tests/mocks/sonner";
+import {
+  mockToastSuccess,
+  mockToastWarning,
+  mockToastError,
+  resetSonnerMocks,
+} from "../../../../../../tests/mocks/sonner";
 import { MachinesSettings } from "./MachinesSettings";
 
+const originalSetTimeout = globalThis.setTimeout;
+const originalClearTimeout = globalThis.clearTimeout;
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 afterEach(() => {
   cleanup();
+  mock.restore();
+  globalThis.setTimeout = originalSetTimeout;
+  globalThis.clearTimeout = originalClearTimeout;
   resetSonnerMocks();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
-  useMachineBulkUpdateStore.setState({ outcomes: {}, running: false });
+  useMachineBulkUpdateStore.setState({ outcomes: {}, snapshots: {}, running: false });
 });
 
 const status: NodeStatus = {
@@ -93,7 +103,13 @@ function updater(overrides: Partial<HostMaintenanceSnapshot["updater"]>) {
  * Desk (this window's machine) is on the newest release; Build box is one
  * behind; Zed cannot be reached. Every machine command is recorded in order.
  */
-function install() {
+function install(
+  override?: (
+    machine: "self" | "bk_build",
+    command: string,
+    args: Record<string, unknown>,
+  ) => unknown,
+) {
   const calls: string[] = [];
   const desk = hostMaintenanceSnapshotFixture({ version: "2.36.0" });
   const build = hostMaintenanceSnapshotFixture({
@@ -156,10 +172,14 @@ function install() {
       }
       return {
         outcome: "ok",
-        result: answer("bk_build", inner, (args.args as Record<string, unknown>) ?? {}),
+        result: await (override?.(
+          "bk_build",
+          inner,
+          (args.args as Record<string, unknown>) ?? {},
+        ) ?? answer("bk_build", inner, (args.args as Record<string, unknown>) ?? {})),
       };
     }
-    return answer("self", command, args);
+    return override?.("self", command, args) ?? answer("self", command, args);
   });
   return { calls };
 }
@@ -227,4 +247,303 @@ test("a single ticked machine names itself in the confirmation", async () => {
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => expectDomAbsent(screen.queryByRole("alertdialog")));
   expect(screen.getByText("1 of 2 selected")).toBeTruthy();
+});
+
+async function confirmBuild() {
+  fireEvent.click(within(row("Build box")).getByRole("checkbox", { name: "Select Build box" }));
+  fireEvent.click(screen.getByRole("button", { name: "Update app to latest" }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Update" }));
+}
+
+for (const stage of ["read", "check", "request"] as const) {
+  test(`Settings remount follows a remote batch paused at ${stage}, progress, and completion`, async () => {
+    let release!: (value: unknown) => void;
+    let reads = 0;
+    let next = hostMaintenanceSnapshotFixture({ version: "2.35.0" });
+    install((machine, command) => {
+      if (machine !== "bk_build") return;
+      if (command === "get_host_maintenance") {
+        reads++;
+        if (stage === "read" && reads === 2)
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        return next;
+      }
+      if (
+        (stage === "check" && command === "request_host_update_check") ||
+        (stage === "request" && command === "request_host_update")
+      ) {
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+    });
+    const mounted = render(<MachinesSettings />);
+    await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+    await confirmBuild();
+    await waitFor(() => expect(release).toBeDefined());
+    mounted.unmount();
+    render(<MachinesSettings />);
+    await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+    expect(useMachineBulkUpdateStore.getState().running).toBe(true);
+    expect(
+      (screen.getByRole("checkbox", { name: "Select Build box" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    const job = hostUpdateJobFixture({ state: "downloading", requestedVersion: "2.36.0" });
+    await act(async () =>
+      release(
+        stage === "request"
+          ? { job, snapshot: { ...next, revision: 3, job } }
+          : stage === "check"
+            ? {
+                ...next,
+                revision: 2,
+                updater: updater({ latestVersion: "2.36.0", updateAvailable: true }),
+              }
+            : next,
+      ),
+    );
+    await waitFor(() => expect(useMachineBulkUpdateStore.getState().running).toBe(false));
+    expect(within(row("Build box")).getByTestId("machine-update-status").textContent).toMatch(
+      /Starting|Downloading/,
+    );
+    // Drive only the summary polling interval; other page timers stay untouched.
+    const callbacks: Array<() => void> = [];
+    const realSet = globalThis.setInterval.bind(globalThis);
+    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay: number) => {
+      if (delay === 3000) callbacks.push(callback);
+      return realSet(callback, delay);
+    }) as typeof setInterval);
+    // Remount also proves the accepted job is retained independently of its initiating hook.
+    cleanup();
+    render(<MachinesSettings />);
+    await waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
+    next = {
+      ...next,
+      revision: 4,
+      job: { ...job, state: "failed", error: "download interrupted" },
+    };
+    await act(async () => callbacks.at(-1)!());
+    await waitFor(() =>
+      expect(within(row("Build box")).getByTestId("machine-update-status").textContent).toContain(
+        "download interrupted",
+      ),
+    );
+    cleanup();
+    render(<MachinesSettings />);
+    await waitFor(() =>
+      expect(within(row("Build box")).getByTestId("machine-update-status").textContent).toContain(
+        "download interrupted",
+      ),
+    );
+  });
+}
+
+test("blocked selections are pruned and do not reappear when the machine becomes eligible", async () => {
+  install();
+  render(<MachinesSettings />);
+  await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+  const checkbox = () => screen.getByRole("checkbox", { name: "Select Desk" });
+  fireEvent.click(checkbox());
+  expect(checkbox().getAttribute("aria-checked")).toBe("true");
+  // Publish host state through the same shared path as detached batch snapshots.
+  act(() =>
+    useMachineBulkUpdateStore
+      .getState()
+      .report(
+        "self:bk_self",
+        { state: "skipped", reason: "unavailable" },
+        hostMaintenanceSnapshotFixture({ revision: 10, updater: updater({ available: false }) }),
+      ),
+  );
+  await waitFor(() => expect(checkbox().hasAttribute("disabled")).toBe(true));
+  act(() =>
+    useMachineBulkUpdateStore
+      .getState()
+      .report(
+        "self:bk_self",
+        { state: "current", version: "2.36.0" },
+        hostMaintenanceSnapshotFixture({ revision: 11 }),
+      ),
+  );
+  await waitFor(() => expect(checkbox().hasAttribute("disabled")).toBe(false));
+  expect(checkbox().getAttribute("aria-checked")).toBe("false");
+});
+
+for (const mixed of [false, true]) {
+  test(`${mixed ? "mixed" : "all failed"} batch reports a ${mixed ? "warning" : "error"} toast and releases its lock`, async () => {
+    install((machine, command) => {
+      if (command === "request_host_update_check" && (machine === "bk_build" || !mixed)) {
+        throw new Error("check offline");
+      }
+    });
+    render(<MachinesSettings />);
+    await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select every machine that can update" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update app to latest" }));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Update 2 machines",
+      }),
+    );
+    await waitFor(() =>
+      expect((mixed ? mockToastWarning : mockToastError).mock.calls).toHaveLength(1),
+    );
+    expect(useMachineBulkUpdateStore.getState().running).toBe(false);
+    expect(within(row("Build box")).getByTestId("machine-update-status").textContent).toContain(
+      "check offline",
+    );
+  });
+}
+
+test("the wait-until-idle switch and restart timeout reach the selected host", async () => {
+  let request: Record<string, unknown> | undefined;
+  install((machine, command, args) => {
+    if (machine === "bk_build" && command === "request_host_update") request = args;
+  });
+  render(<MachinesSettings />);
+  await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select Build box" }));
+  fireEvent.click(screen.getByRole("button", { name: "Update app to latest" }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(
+    within(dialog).getByRole("switch", { name: "Wait until no agent or pipeline is running" }),
+  );
+  const select = within(dialog).getByRole("combobox", { name: "Restart anyway after" });
+  fireEvent.keyDown(select, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "30 minutes" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Update when idle" }));
+  await waitFor(() =>
+    expect(request).toEqual({ version: "2.36.0", drain: "when-idle", maxWaitSeconds: 1800 }),
+  );
+});
+
+for (const prior of ["failed", "current", "busy", "skipped", "requested"] as const) {
+  for (const state of ["succeeded", "failed", "cancelled"] as const) {
+    test(`${prior} outcome yields to a later ${state} job, even for a different version`, async () => {
+      let next = hostMaintenanceSnapshotFixture({ version: "2.35.0" });
+      install((machine, command) =>
+        machine === "bk_build" && command === "get_host_maintenance" ? next : undefined,
+      );
+      const mounted = render(<MachinesSettings />);
+      await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+      const outcome =
+        prior === "failed"
+          ? ({ state: prior, error: "old check failure" } as const)
+          : prior === "current"
+            ? ({ state: prior, version: next.version } as const)
+            : prior === "skipped"
+              ? ({ state: prior, reason: "old skip" } as const)
+              : prior === "requested"
+                ? ({ state: prior, version: "2.36.0" } as const)
+                : { state: prior };
+      act(() => useMachineBulkUpdateStore.getState().report("node:bk_build", outcome, next));
+      expect(within(row("Build box")).getByTestId("machine-update-status")).toBeTruthy();
+      mounted.unmount();
+      next = {
+        ...next,
+        revision: 5,
+        job: hostUpdateJobFixture({
+          id: "later-job",
+          state,
+          requestedVersion: "2.38.0",
+          error: state === "failed" ? "later download failed" : null,
+        }),
+      };
+      render(<MachinesSettings />);
+      await waitFor(() =>
+        expect(within(row("Build box")).getByTestId("machine-update-status").textContent).toMatch(
+          state === "succeeded"
+            ? /Updated/
+            : state === "failed"
+              ? /later download failed/
+              : /cancelled/i,
+        ),
+      );
+      expectDomAbsent(
+        within(row("Build box"))
+          .getByTestId("machine-update-status")
+          .querySelector(".animate-spin"),
+      );
+    });
+  }
+}
+
+for (const stage of [
+  "get_host_maintenance",
+  "request_host_update_check",
+  "request_host_update",
+] as const) {
+  test(`a hung ${stage} releases the bulk lock and permits serving-host processing`, async () => {
+    const callbacks = new Map<number, () => void>();
+    let id = 100000;
+    let reads = 0;
+    let entered = false;
+    const realSet = globalThis.setTimeout.bind(globalThis);
+    const realClear = globalThis.clearTimeout.bind(globalThis);
+    globalThis.setTimeout = ((callback: () => void, delay: number) => {
+      if (delay > 89_000 && delay <= 90_000) {
+        callbacks.set(++id, callback);
+        return id;
+      }
+      return realSet(callback, delay);
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timer: number) => {
+      if (!callbacks.delete(timer)) realClear(timer);
+    }) as typeof clearTimeout;
+    const backend = install((machine, command) => {
+      if (machine !== "bk_build") return;
+      if (command === "get_host_maintenance") reads++;
+      if (command === stage && (stage !== "get_host_maintenance" || reads > 1)) {
+        entered = true;
+        return new Promise(() => undefined);
+      }
+    });
+    render(<MachinesSettings />);
+    await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select every machine that can update" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update app to latest" }));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Update 2 machines",
+      }),
+    );
+    await waitFor(() => expect(entered).toBe(true));
+    expect(useMachineBulkUpdateStore.getState().running).toBe(true);
+    await act(async () => {
+      for (const callback of Array.from(callbacks.values())) callback();
+    });
+    await waitFor(() => expect(useMachineBulkUpdateStore.getState().running).toBe(false));
+    expect(backend.calls).toContain("self:request_host_update_check");
+    expect(mockToastWarning).toHaveBeenCalledTimes(1);
+    expect(within(row("Build box")).getByTestId("machine-update-status").textContent).toContain(
+      "Timed out",
+    );
+    expect(callbacks.size).toBe(0);
+  });
+}
+
+test("a changed installed version clears an old requested spinner without a job", async () => {
+  let next = hostMaintenanceSnapshotFixture({ version: "2.35.0" });
+  install((machine, command) =>
+    machine === "bk_build" && command === "get_host_maintenance" ? next : undefined,
+  );
+  const mounted = render(<MachinesSettings />);
+  await waitFor(() => expect(screen.getAllByTestId("machine-row")).toHaveLength(3));
+  act(() =>
+    useMachineBulkUpdateStore
+      .getState()
+      .report("node:bk_build", { state: "requested", version: "2.36.0" }, next),
+  );
+  expect(within(row("Build box")).getByTestId("machine-update-status").textContent).toBe(
+    "Update requested",
+  );
+  mounted.unmount();
+  next = { ...next, revision: 5, version: "2.38.0" };
+  render(<MachinesSettings />);
+  await waitFor(() =>
+    expectDomAbsent(within(row("Build box")).queryByTestId("machine-update-status")),
+  );
 });

@@ -85,6 +85,7 @@ export function MachinesSettings() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [confirmingBulk, setConfirmingBulk] = useState(false);
   const bulkOutcomes = useMachineBulkUpdateStore((state) => state.outcomes);
+  const bulkSnapshots = useMachineBulkUpdateStore((state) => state.snapshots);
   const bulkRunning = useMachineBulkUpdateStore((state) => state.running);
 
   useEffect(
@@ -141,6 +142,11 @@ export function MachinesSettings() {
 
   // A machine that stops being updatable drops out of the selection.
   const updatable = entries.filter((entry) => updateBlocker(entry, summaries[entry.key]) === null);
+  if (Array.from(selected).some((key) => !updatable.some((entry) => entry.key === key))) {
+    setSelected(
+      new Set(updatable.filter((entry) => selected.has(entry.key)).map((entry) => entry.key)),
+    );
+  }
   const selectedMachines = updatable.filter((entry) => selected.has(entry.key));
   const toggleSelected = (key: string, checked: boolean) =>
     setSelected((previous) => {
@@ -166,8 +172,7 @@ export function MachinesSettings() {
       targets,
       choice.whenIdle ? { drain: "when-idle", maxWaitSeconds: choice.maxWaitSeconds } : {},
       (key, outcome, snapshot) => {
-        useMachineBulkUpdateStore.getState().report(key, outcome);
-        if (snapshot) record(key, snapshot);
+        useMachineBulkUpdateStore.getState().report(key, outcome, snapshot);
       },
     )
       .then((outcomes) => {
@@ -369,6 +374,7 @@ export function MachinesSettings() {
                             onChange: (checked) => toggleSelected(entry.key, checked),
                           },
                           bulkOutcome: bulkOutcomes[entry.key],
+                          bulkSnapshot: bulkSnapshots[entry.key],
                         };
                         return reorderable && entry.role === "node" && entry.nodeId ? (
                           <SortableMachineRow key={entry.key} sortableId={entry.nodeId} {...row} />
@@ -489,6 +495,7 @@ interface MachineRowProps {
     onChange: (checked: boolean) => void;
   };
   bulkOutcome: BulkUpdateOutcome | undefined;
+  bulkSnapshot: MaintenanceSummary["snapshot"] | undefined;
 }
 
 /** Why "Update app to latest" cannot include this machine, or null when it can. */
@@ -512,6 +519,7 @@ function updateBlocker(
 function updateStatusText(
   snapshot: MaintenanceSummary["snapshot"],
   outcome: BulkUpdateOutcome | undefined,
+  observed: MaintenanceSummary["snapshot"] | undefined,
 ): { text: string; tone: "muted" | "active" | "good" | "bad" } | null {
   const job = snapshot?.job ?? null;
   if (job && isActiveHostUpdateJob(job)) {
@@ -521,19 +529,33 @@ function updateStatusText(
         : null;
     return { text: describeHostUpdateJob(job, secondsLeft), tone: "active" };
   }
+  // Outcomes describe the state observed by this batch. A later job, check or
+  // installed version supersedes that message, including failures and skips.
+  const changed =
+    snapshot &&
+    observed &&
+    (snapshot.version !== observed.version ||
+      snapshot.job?.id !== observed.job?.id ||
+      snapshot.job?.state !== observed.job?.state ||
+      snapshot.updater.checkedAt !== observed.updater.checkedAt ||
+      snapshot.updater.available !== observed.updater.available);
+  if (
+    outcome?.state !== "checking" &&
+    (changed || outcome?.state === "requested" || outcome?.state === "busy") &&
+    job
+  ) {
+    return {
+      text: describeHostUpdateJob(job, null),
+      tone: job.state === "succeeded" ? "good" : job.state === "failed" ? "bad" : "muted",
+    };
+  }
+  if (changed && outcome?.state !== "checking") return null;
   switch (outcome?.state) {
     case undefined:
       return null;
     case "checking":
       return { text: "Checking for the newest release…", tone: "active" };
     case "requested":
-      // The job has settled since: report how it ended.
-      if (job && (outcome.version === null || job.requestedVersion === outcome.version)) {
-        return {
-          text: describeHostUpdateJob(job, null),
-          tone: job.state === "succeeded" ? "good" : job.state === "failed" ? "bad" : "muted",
-        };
-      }
       return { text: "Update requested", tone: "active" };
     case "current":
       return { text: `Already on the newest release (${outcome.version})`, tone: "good" };
@@ -601,6 +623,7 @@ function MachineRow({
   leaf,
   selection,
   bulkOutcome,
+  bulkSnapshot,
   grip,
   rowRef,
   rowStyle,
@@ -614,7 +637,7 @@ function MachineRow({
   const snapshot = summary?.snapshot ?? null;
   const issues = snapshot ? maintenanceIssues(snapshot) : [];
   const outdated = issues.length > 0;
-  const updateStatus = updateStatusText(snapshot, bulkOutcome);
+  const updateStatus = updateStatusText(snapshot, bulkOutcome, bulkSnapshot);
   const lastConnected = formatMachineTime(entry.lastConnectedAt);
   const windowReason = !api?.openWindow
     ? "Only the desktop app opens machines in their own windows"

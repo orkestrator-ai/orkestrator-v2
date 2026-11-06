@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
 import {
   hostMaintenanceSnapshotFixture,
@@ -19,7 +19,7 @@ function checked(updater: Partial<HostMaintenanceSnapshot["updater"]>): HostMain
 }
 
 /** A machine whose reads answer from `reads` in turn, keeping the last. */
-function machine(reads: HostMaintenanceSnapshot[], afterCheck = pending) {
+function machine(reads: HostMaintenanceSnapshot[], afterCheck: HostMaintenanceSnapshot = pending) {
   const calls: string[] = [];
   const updates: unknown[] = [];
   let index = 0;
@@ -58,7 +58,12 @@ describe("updateMachineToLatest", () => {
     expect(outcome).toEqual({ state: "requested", version: "2.37.0" });
     expect(target.calls).toEqual(["read", "check", "read", "update"]);
     expect(target.updates).toEqual([{ version: "2.37.0" }]);
-    expect(progress.map((step) => step.state)).toEqual(["checking", "requested"]);
+    expect(progress.map((step) => step.state)).toEqual([
+      "checking",
+      "checking",
+      "checking",
+      "requested",
+    ]);
   });
 
   test("leaves a machine already on the newest release alone", async () => {
@@ -108,9 +113,11 @@ describe("updateMachineToLatest", () => {
     expect(target.calls).not.toContain("update");
   });
 
-  test("an unanswered check lets the host pick the newest release itself", async () => {
+  test("an unanswered check on a current host never blindly requests an update", async () => {
     let clock = 0;
-    const target = machine([idle, pending]);
+    const current = checked({ latestVersion: idle.version, updateAvailable: false });
+    const stillChecking = { ...current, checkRequest: pending.checkRequest };
+    const target = machine([current, stillChecking], stillChecking);
     const outcome = await updateMachineToLatest(target.client, {
       sleep: async (ms) => {
         clock += ms;
@@ -118,8 +125,8 @@ describe("updateMachineToLatest", () => {
       now: () => clock,
       checkTimeoutMs: 5_000,
     });
-    expect(outcome).toEqual({ state: "requested", version: null });
-    expect(target.updates).toEqual([{}]);
+    expect(outcome.state).toBe("failed");
+    expect(target.updates).toEqual([]);
   });
 
   test("a refused request is a failure with the host's message", async () => {
@@ -172,3 +179,81 @@ test("summarizeBulkUpdate counts each kind of result", () => {
   ).toBe("Started on 2 machines · 1 already current · 1 failed");
   expect(summarizeBulkUpdate([])).toBe("Nothing to update");
 });
+
+test("reuses a pending check and refuses incomplete release metadata", async () => {
+  const target = machine([pending, checked({ updateAvailable: false })]);
+  expect(await updateMachineToLatest(target.client, { sleep: noSleep })).toEqual({
+    state: "current",
+    version: idle.version,
+  });
+  expect(target.calls).toEqual(["read", "read"]);
+  const incomplete = machine([idle], checked({ updateAvailable: true, latestVersion: null }));
+  expect((await updateMachineToLatest(incomplete.client)).state).toBe("failed");
+  expect(incomplete.updates).toEqual([]);
+});
+
+for (const stage of [
+  "initial read",
+  "check acknowledgement",
+  "poll",
+  "update acknowledgement",
+] as const) {
+  test(`a hung ${stage} settles at the target deadline before processing the serving host`, async () => {
+    const timers = new Map<number, () => void>();
+    let timerId = 10000;
+    const setTimer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+      timers.set(++timerId, callback);
+      return timerId;
+    }) as typeof setTimeout);
+    const clearTimer = spyOn(globalThis, "clearTimeout").mockImplementation(((id: number) => {
+      timers.delete(id);
+    }) as typeof clearTimeout);
+    let entered = false;
+    let hungCalls = 0;
+    let lateReject!: (error: Error) => void;
+    const hung = () => {
+      entered = true;
+      hungCalls++;
+      return new Promise<never>((_resolve, reject) => {
+        lateReject = reject;
+      });
+    };
+    const remote = machine([idle, checked({ latestVersion: "2.37.0", updateAvailable: true })]);
+    const serving = machine([idle], checked({ updateAvailable: false }));
+    if (stage === "initial read") remote.client.getHostMaintenance = hung;
+    if (stage === "check acknowledgement") remote.client.requestHostUpdateCheck = hung;
+    if (stage === "poll") {
+      let reads = 0;
+      remote.client.getHostMaintenance = async () => (++reads === 1 ? idle : hung());
+    }
+    if (stage === "update acknowledgement") remote.client.requestHostUpdate = hung;
+    try {
+      const result = updateMachinesToLatest(
+        [
+          { key: "remote", client: remote.client, last: false },
+          { key: "self", client: serving.client, last: true },
+        ],
+        { sleep: noSleep },
+        () => undefined,
+      );
+      for (let i = 0; i < 50 && !entered; i++) await Promise.resolve();
+      expect(entered).toBe(true);
+      expect(serving.calls).toEqual([]);
+      expect(timers.size).toBe(1);
+      for (const callback of Array.from(timers.values())) callback();
+      const outcomes = await result;
+      expect(outcomes.get("remote")?.state).toBe("failed");
+      expect(outcomes.get("self")?.state).toBe("current");
+      expect(serving.calls).toEqual(["read", "check"]);
+      expect(remote.calls.filter((call) => call === "update")).toEqual([]);
+      expect(timers.size).toBe(0);
+      expect(hungCalls).toBe(1);
+      // A transport that finishes after the deadline is observed, never retried.
+      lateReject(new Error("late transport failure"));
+      await Promise.resolve();
+    } finally {
+      setTimer.mockRestore();
+      clearTimer.mockRestore();
+    }
+  });
+}

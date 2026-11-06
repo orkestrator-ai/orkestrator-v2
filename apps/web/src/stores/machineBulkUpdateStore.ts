@@ -1,3 +1,4 @@
+import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
 import { create } from "zustand";
 
 /** Where "Update app to latest" got to on one machine. */
@@ -14,9 +15,15 @@ export type BulkUpdateOutcome =
 interface MachineBulkUpdateState {
   /** Keyed by machine list key. */
   outcomes: Record<string, BulkUpdateOutcome>;
+  /** Last batch readings also seed polling after Settings remounts. */
+  snapshots: Record<string, HostMaintenanceSnapshot>;
   running: boolean;
   start: (keys: string[]) => void;
-  report: (key: string, outcome: BulkUpdateOutcome) => void;
+  report: (
+    key: string,
+    outcome: BulkUpdateOutcome,
+    snapshot?: HostMaintenanceSnapshot | null,
+  ) => void;
   finish: () => void;
 }
 
@@ -28,12 +35,17 @@ interface MachineBulkUpdateState {
  */
 export const useMachineBulkUpdateStore = create<MachineBulkUpdateState>((set) => ({
   outcomes: {},
+  snapshots: {},
   running: false,
   start: (keys) =>
     set({
       running: true,
       outcomes: Object.fromEntries(keys.map((key) => [key, { state: "checking" } as const])),
     }),
-  report: (key, outcome) => set((state) => ({ outcomes: { ...state.outcomes, [key]: outcome } })),
+  report: (key, outcome, snapshot) =>
+    set((state) => ({
+      outcomes: { ...state.outcomes, [key]: outcome },
+      snapshots: snapshot ? { ...state.snapshots, [key]: snapshot } : state.snapshots,
+    })),
   finish: () => set({ running: false }),
 }));

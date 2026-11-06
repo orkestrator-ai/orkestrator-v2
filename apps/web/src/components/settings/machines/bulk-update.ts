@@ -6,7 +6,7 @@ import {
 import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
 import type { BulkUpdateOutcome } from "@/stores/machineBulkUpdateStore";
 
-/** How long a machine has to answer the check before its own updater picks the release. */
+/** Total deadline for one target, including reads and mutation acknowledgements. */
 const CHECK_TIMEOUT_MS = 90_000;
 const CHECK_POLL_MS = 1_500;
 
@@ -41,8 +41,28 @@ export async function updateMachineToLatest(
   const sleep = options.sleep ?? wait;
   const now = options.now ?? Date.now;
   const timeout = options.checkTimeoutMs ?? CHECK_TIMEOUT_MS;
+  const deadline = now() + timeout;
+  let snapshot: HostMaintenanceSnapshot | null = null;
+  // The transport has no abort API. Stop awaiting at the deadline, observe any
+  // late rejection, and never retry a mutation whose acknowledgement is unknown.
+  const bounded = async <T>(operation: () => Promise<T>, label: string): Promise<T> => {
+    const remaining = deadline - now();
+    const error = () => new Error(`Timed out ${label}; refresh the machine before trying again`);
+    if (remaining <= 0) throw error();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(error()), remaining);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   try {
-    let snapshot = await client.getHostMaintenance();
+    snapshot = await bounded(() => client.getHostMaintenance(), "reading maintenance");
     if (!snapshot.updater.available) {
       const outcome: BulkUpdateOutcome = {
         state: "skipped",
@@ -58,14 +78,28 @@ export async function updateMachineToLatest(
     }
 
     onProgress({ state: "checking" }, snapshot);
-    snapshot = await client.requestHostUpdateCheck();
-    const deadline = now() + timeout;
-    while (snapshot.checkRequest !== null && now() < deadline) {
-      await sleep(CHECK_POLL_MS);
-      snapshot = await client.getHostMaintenance();
+    if (snapshot.checkRequest === null) {
+      snapshot = await bounded(
+        () => client.requestHostUpdateCheck(),
+        "acknowledging the update check",
+      );
+      onProgress({ state: "checking" }, snapshot);
     }
-    const answered = snapshot.checkRequest === null;
-    if (answered && snapshot.updater.checkError) {
+    while (snapshot.checkRequest !== null) {
+      await bounded(
+        () => sleep(Math.min(CHECK_POLL_MS, deadline - now())),
+        "waiting for the update check",
+      );
+      snapshot = await bounded(() => client.getHostMaintenance(), "reading the update check");
+      onProgress({ state: "checking" }, snapshot);
+    }
+    // A different caller may have started a job while the check was pending.
+    if (isActiveHostUpdateJob(snapshot.job)) {
+      const outcome: BulkUpdateOutcome = { state: "busy" };
+      onProgress(outcome, snapshot);
+      return outcome;
+    }
+    if (snapshot.updater.checkError) {
       const outcome: BulkUpdateOutcome = {
         state: "failed",
         error: `The check failed: ${snapshot.updater.checkError}`,
@@ -73,27 +107,32 @@ export async function updateMachineToLatest(
       onProgress(outcome, snapshot);
       return outcome;
     }
-    if (answered && snapshot.updater.updateAvailable === false) {
+    if (snapshot.updater.updateAvailable === false) {
       const outcome: BulkUpdateOutcome = { state: "current", version: snapshot.version };
       onProgress(outcome, snapshot);
       return outcome;
     }
 
-    // An unanswered check leaves the choice of release to the host, which
-    // fails the job itself when nothing newer exists.
-    const version = answered ? snapshot.updater.latestVersion : null;
-    const result = await client.requestHostUpdate({
-      ...(version ? { version } : {}),
-      ...(options.drain === "when-idle"
-        ? { drain: "when-idle" as const, maxWaitSeconds: options.maxWaitSeconds }
-        : {}),
-    });
+    const version = snapshot.updater.latestVersion;
+    if (snapshot.updater.updateAvailable !== true || !version) {
+      throw new Error("The check did not identify a newer release");
+    }
+    const result = await bounded(
+      () =>
+        client.requestHostUpdate({
+          ...(version ? { version } : {}),
+          ...(options.drain === "when-idle"
+            ? { drain: "when-idle" as const, maxWaitSeconds: options.maxWaitSeconds }
+            : {}),
+        }),
+      "acknowledging the update request (it may still have been accepted)",
+    );
     const outcome: BulkUpdateOutcome = { state: "requested", version };
     onProgress(outcome, result.snapshot);
     return outcome;
   } catch (error) {
     const outcome: BulkUpdateOutcome = { state: "failed", error: errorText(error) };
-    onProgress(outcome, null);
+    onProgress(outcome, snapshot);
     return outcome;
   }
 }

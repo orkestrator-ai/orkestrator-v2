@@ -78,6 +78,42 @@ describe("codexRuleDetail", () => {
       codexRuleDetail({ ruleEligible: true, permissions: { network: true } }, "permission", true),
     ).toBeNull();
   });
+
+  test("never reads a request a person must answer, even one also marked eligible", () => {
+    // A bridge never sends both; the reader refuses the pair rather than trust either.
+    expect(
+      codexRuleDetail(
+        { ruleEligible: true, humanRequired: true, command: "npm test" },
+        "command-approval",
+        true,
+      ),
+    ).toBeNull();
+    expect(
+      acpRuleDetail(
+        { ruleEligible: true, humanRequired: true, kind: "command", command: "npm test" },
+        "q0o0",
+        "decision",
+      ),
+    ).toBeNull();
+    expect(
+      claudeRuleDetail(
+        { ruleEligible: true, humanRequired: true, command: "npm test" },
+        "command-approval",
+      ),
+    ).toBeNull();
+    // Tool hints are not a gate either way.
+    expect(
+      claudeRuleDetail(
+        {
+          ruleEligible: true,
+          toolName: "mcp__linear__create_issue",
+          mcpServer: "linear",
+          toolHints: { destructive: true },
+        },
+        "permission",
+      )?.subject,
+    ).toEqual({ kind: "mcp-tool", server: "linear", tool: "create_issue" });
+  });
 });
 
 describe("acpRuleDetail", () => {

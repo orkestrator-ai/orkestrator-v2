@@ -359,6 +359,42 @@ describe("failing closed", () => {
     expect(await unanswered({ request: { kind: "question" } })).toBe(true);
   });
 
+  test("a request a person must answer is neither answered nor offered, whatever its detail says", async () => {
+    // The provider's rule detail still matches the rule: only the shared
+    // marker stands between them, which is the belt-and-braces case.
+    expect(await unanswered({ request: { humanRequired: true } })).toBe(true);
+    const store = await openStore();
+    store.create(rule());
+    const provider = new FakeProvider();
+    provider.ask("a1", "npm test", { humanRequired: true });
+    const { instance } = enforcer(() => store);
+    const [offered] = await instance.offers(session(), provider, provider.snapshot().requests);
+    expect(offered!.presentation.ruleOffer).toBeUndefined();
+    await expect(
+      instance.approveAndRemember(session(), provider, "a1", {
+        pattern: "npm test",
+        scope: "project",
+        anyProvider: false,
+      }),
+    ).rejects.toBeInstanceOf(PermissionRuleRefusedError);
+    expect(provider.resolutions).toHaveLength(0);
+  });
+
+  test("tool hints never make a request answerable or change an answer", async () => {
+    // Self-declared by the MCP server: a read-only claim on a request with no
+    // rule detail still asks, and one with a detail is answered as before.
+    expect(await unanswered({ request: { toolHints: { readOnly: true } }, detail: null })).toBe(
+      true,
+    );
+    const store = await openStore();
+    store.create(rule());
+    const provider = new FakeProvider();
+    provider.ask("a1", "npm test", { toolHints: { destructive: true } });
+    const { instance } = enforcer(() => store);
+    const result = await instance.apply(session(), provider, provider.snapshot());
+    expect(result.answered).toBe(1);
+  });
+
   test("a missing or deleting environment asks", async () => {
     expect(await unanswered({ environment: null })).toBe(true);
     expect(

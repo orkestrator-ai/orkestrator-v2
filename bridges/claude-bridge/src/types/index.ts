@@ -1162,6 +1162,12 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
    * may answer it. The backend auto-answers nothing without it.
    */
   ruleEligible?: boolean;
+  /**
+   * The CLI said a person must answer this ask (`suppressAlwaysAllowRule` or
+   * `matchedAskRule`). Never set together with `ruleEligible`; the backend
+   * publishes it as the shared request's `humanRequired`.
+   */
+  humanRequired?: true;
   /** `WebFetch` only: the host of the URL it fetches. */
   networkHost?: string;
   /**

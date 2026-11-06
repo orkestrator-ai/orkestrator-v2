@@ -13,6 +13,7 @@ import type {
  */
 import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
+import type { AgentInteractionToolHints } from "@orkestrator/protocol/agent-interactions";
 import type {
   NativeAgentComposerState,
   NativeAgentSlashCommand,
@@ -284,6 +285,11 @@ export interface PendingApproval {
   toolName: string;
   input: JsonObject;
   createdAt: number;
+  /**
+   * For a tool from an MCP server, what that server's `tools/list` declared
+   * about it (MCP annotations), read when the call was parked. Display only.
+   */
+  toolHints?: AgentInteractionToolHints;
   /**
    * The countdown that denies this call unless it is answered, which the user
    * may pause. Its `expiresAt` is the one published. Never persisted: a timer

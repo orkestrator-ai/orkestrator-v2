@@ -285,7 +285,8 @@ export async function requestClaudeToolApproval(
   // rule would grant more than this call, or a plugin started the call, where
   // the CLI saves no rule at all) and `matchedAskRule` (the user's own ask rule
   // forced the prompt, including, since 2.1.319, under another name of the MCP
-  // server). A stored Orkestrator rule must neither answer it nor be offered.
+  // server). A stored Orkestrator rule must neither answer it nor be offered;
+  // the request carries `humanRequired` so the card can say why.
   const humanRequired =
     permissionContext?.suppressAlwaysAllowRule === true ||
     permissionContext?.matchedAskRule !== undefined;
@@ -334,6 +335,7 @@ export async function requestClaudeToolApproval(
     ...(mcpServerSource ? { mcpServerSource } : {}),
     ...(networkHost ? { networkHost } : {}),
     ...(ruleEligible ? { ruleEligible: true } : {}),
+    ...(humanRequired ? { humanRequired: true } : {}),
     ...(proposedCommandPrefix ? { proposedCommandPrefix } : {}),
   };
   const outcome = await parkInteraction(request, permissionContext?.signal);

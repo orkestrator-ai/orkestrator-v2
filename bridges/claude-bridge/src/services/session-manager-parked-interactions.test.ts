@@ -539,6 +539,16 @@ describe("tool approvals under an ask policy", () => {
     expect(pending.get("req-r8")).not.toHaveProperty("ruleEligible");
     expect(pending.get("req-r9")).not.toHaveProperty("ruleEligible");
     expect(pending.get("req-r9")).toMatchObject({ mcpServer: "linear" });
+    // A person must answer these: the marker travels so the card can say why,
+    // and the backend's rule reader refuses them on its own as well.
+    expect(pending.get("req-r8")).toMatchObject({ humanRequired: true });
+    expect(pending.get("req-r9")).toMatchObject({ humanRequired: true });
+    expect(
+      claudeRuleDetail({ ...pending.get("req-r8"), ruleEligible: true }, "command-approval"),
+    ).toBeNull();
+    for (const id of ["req-r1", "req-r2", "req-r3", "req-r4", "req-r5", "req-r6", "req-r7"]) {
+      expect(pending.get(id)).not.toHaveProperty("humanRequired");
+    }
     for (const id of [
       "req-r1",
       "req-r2",

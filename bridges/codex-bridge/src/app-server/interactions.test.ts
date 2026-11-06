@@ -380,6 +380,76 @@ describe("describeInteraction: MCP elicitation", () => {
     expect(described?.url).toBeUndefined();
   });
 
+  test("an MCP tool approval carries the tool's annotations as hints", () => {
+    // What Codex 0.167.0 sends for an approval before an MCP tool call
+    // (`build_mcp_tool_approval_elicitation_meta`): an empty form whose
+    // `_meta` names the tool and, when declared, its MCP annotations.
+    const described = describeWith(ELICITATION, {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      serverName: "linear",
+      mode: "form",
+      message: 'Allow the linear MCP server to run tool "delete_issue"?',
+      requestedSchema: { type: "object", properties: {} },
+      _meta: {
+        codex_approval_kind: "mcp_tool_call",
+        persist: ["session", "always"],
+        tool_name: "delete_issue",
+        tool_annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+    });
+    expect(described?.kind).toBe("mcp-form");
+    expect(described?.toolHints).toEqual({
+      readOnly: false,
+      destructive: true,
+      idempotent: true,
+      openWorld: false,
+    });
+  });
+
+  test("tool hints are absent when undeclared, malformed, or not from a Codex tool approval", () => {
+    const form = (meta: unknown) =>
+      describeWith(ELICITATION, {
+        threadId: "thread-1",
+        serverName: "linear",
+        mode: "form",
+        message: "Allow?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: meta,
+      });
+    // A tool that declares nothing.
+    expect(
+      form({ codex_approval_kind: "mcp_tool_call", tool_name: "run_action" }),
+    ).not.toHaveProperty("toolHints");
+    // Only booleans survive.
+    expect(
+      form({
+        codex_approval_kind: "mcp_tool_call",
+        tool_annotations: { readOnlyHint: "yes", destructiveHint: null, openWorldHint: true },
+      })?.toolHints,
+    ).toEqual({ openWorld: true });
+    for (const annotations of [null, "readOnly", [true], 1]) {
+      expect(
+        form({ codex_approval_kind: "mcp_tool_call", tool_annotations: annotations }),
+      ).not.toHaveProperty("toolHints");
+    }
+    // An MCP server's own elicitation cannot describe a tool.
+    expect(form({ tool_annotations: { readOnlyHint: true } })).not.toHaveProperty("toolHints");
+    expect(
+      form({ codex_approval_kind: "browser_auth", tool_annotations: { readOnlyHint: true } }),
+    ).not.toHaveProperty("toolHints");
+    for (const meta of [null, undefined, "x", []]) {
+      const described = form(meta);
+      expect(described?.kind).toBe("mcp-form");
+      expect(described).not.toHaveProperty("toolHints");
+    }
+  });
+
   test("openai/form is an alias for form, not a separate kind", () => {
     const described = describeWith(ELICITATION, {
       threadId: "thread-1",

@@ -102,3 +102,18 @@ Isolated evidence: `orkestrator-test-run.ShXcQv/merge-restore-plan-alone.log.gz`
 under the same temporary root. The nine-worker component browser suite was
 also running. No isolated pass, new root cause or fix is claimed; no assertion,
 deadline, skip or implementation changed.
+
+## Transcript restoration review — 2026-11-06
+
+The first concurrent default rerun reported this case at 5,986.09 ms; the
+second reported 5,776.24 ms plus a between-test closed-database error. The
+branch changes no measurement implementation or owning test. Evidence:
+`orkestrator-test-run.PCIx5Q/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `orkestrator-test-run.IKjOmZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, under the host temporary directory.
+
+`mise run test:logged -- --name repair-measurement-cap-alone -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`
+still failed: 19 pass, one fail, one error, 12.33 s. The deadline was 5,512.50 ms,
+followed by outstanding work querying the closed database. Isolated evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.eBdt0k/repair-measurement-cap-alone.log.gz`.
+No isolated pass, environmental cause or fix is claimed; the failure is left
+for verification. No assertion, deadline, skip or implementation changed.

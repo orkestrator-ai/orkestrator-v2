@@ -18,6 +18,10 @@ rules re-derived from the pinned OpenCode 1.19.4 on 2026-10-25 from
 closed and task 8 worked on 2026-10-31 from `931e5541` (branch
 `todo-0039-mcp-management-d5f657bb2ee5`): Grok rules re-derived at 1.0.70,
 Codex and Grok parity guards added, agent-account copies kept in step.
+Tasks 14 and 11 closed and task 5's harness half done on 2026-11-06 from
+`c1724ab7` (branch `mcp-management-0c257de34897-r1`; follow-ups
+[7220](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md)
+and [7221](7221-live-panel-stale-after-probe-reconnect.md)).
 
 ### Tasks
 
@@ -25,16 +29,16 @@ Codex and Grok parity guards added, agent-account copies kept in step.
 2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
 4. **Grok live probes and the untrusted-project check**: run the live apply spec for Grok and confirm that an untrusted session skips project MCP servers. Status: blocked (no current Grok login on the host; `grok mcp doctor` now shows the gate credential-free, a live session is still unrun).
-5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: open.
+5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: open (harness half done 2026-11-06: every failed probe now records the session's inventory and a diagnosis; the Pi rerun needs a Pi login).
 6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: open.
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: open.
-8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13).
+8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case has failed since 2026-11-06 with the panel left stale, follow-up 7221).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: partly done (container behaviour superseded by 0040).
 10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (on tasks 4 to 7).
-11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: open (decision only; recommendation recorded 2026-10-31).
+11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
 12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun).
 13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: open (needs a Claude login).
-14. **Claude MCP rows read `unknown` after a refused CLI exits**: on a real browser, rows left `connecting` by a CLI that exited show `unknown` and still offer reconnect. Moved from to-do 1240 (deleted 2026-11-06). Status: open (credential-free).
+14. **Claude MCP rows read `unknown` after a refused CLI exits**: on a real browser, rows left `connecting` by a CLI that exited show `unknown` and still offer reconnect. Moved from to-do 1240 (deleted 2026-11-06). Status: done (2026-11-06; credential-free case in `mcp-ui-matrix.spec.ts`).
 
 ### 1. Replaced Claude server processes linger (code item 8)
 
@@ -155,6 +159,60 @@ Codex and Grok parity guards added, agent-account copies kept in step.
   - **Rerun Pi unchanged and hope it passes.**
     - Pros: no code.
     - Cons: a pass after run 6 and a failure in run 7 already showed the result is not deterministic; another failure would be just as ambiguous.
+
+**Outcome (2026-11-06): harness half done, Pi rerun left.** The recommended
+option, first half.
+
+- `mcp-apply-live.spec.ts` now reads the session's live MCP inventory (name,
+  status and tool count from the projection's `runtime.mcp`) after **every**
+  failed probe, not only for a substitution on a probe that must fail. The
+  verdict is judged again with that inventory, so a substitution can still be
+  proven by it.
+- `diagnoseProbe` (`mcp-apply-live-support.ts`, unit-tested in
+  `mcp-apply-live-support.test.ts`) turns a failed probe into one cause, which
+  the step record keeps as `diagnosis` and the summary line appends in
+  brackets: `not-offered` (the inventory does not list the server: the rebuild
+  never offered it, so an `applied` outcome was false), `offered-not-connected`
+  (listed but not connected; the status is the detail),
+  `offered-not-called` (listed and connected, and no tool row of the turn
+  names it after a successful turn: the model did not look),
+  `called-not-reached` (a tool row names it but the server logged no call), `still-offered` (a probe that must fail,
+  and the session still lists the server), `no-inventory` (the session
+  reported none), `turn-failed` (the turn failed before a server call was
+  observed, so model non-use cannot be inferred) and `reached` (the server
+  logged the call; the failure is in the reply or tag). The record keeps only probe-server rows of the inventory,
+  plus a count of the other servers, so a missing name is not mistaken for a
+  missing list.
+- The Pi bridge serves that inventory (`GET /session/:id/mcp`, from the MCP
+  client it owns), so the 2026-10-22 user-scope failures would now read
+  `not-offered`, `offered-not-called` or `turn-failed` instead of only
+  "unavailable". A logged server call remains `reached` even if the turn later
+  fails.
+- Checked: unit tests (all of `mcp-apply-live-support.test.ts` pass), the
+  agent-testing typecheck, lint and format. The spec itself was not run: every
+  probe needs a model turn.
+- Correction to the investigation above: `bridges/pi-bridge/src/mcp.ts` has
+  changed since `e37fc50e` (last on 2026-11-04, #1752); the user path
+  (`<agentDir>/mcp.json`) is unchanged. Its user-server filter applies only to
+  policies that restrict user MCP servers, which the live spec does not set.
+
+**What the Pi rerun needs** (not done here: it needs a real login and billed
+turns):
+
+- A Pi login with a provider and model the login accepts, shared into a
+  disposable profile as in the [Pi record](#live-apply-record-pi-2026-10-22):
+  `mise run dev:test --profile <p> --fixture --credential-source pi
+  --agent-platforms pi`. The host's Pi `auth.json` is then readable by the
+  profile; check afterwards that it is unchanged.
+- The model named explicitly, a ChatGPT login using `openai-codex/…` ids
+  (`ORKESTRATOR_AGENT_TEST_MCP_MODELS=pi=openai-codex/<model>`), with the
+  raised no-progress and group timeouts from that record, at Pi 1.4.0.
+- Then read each failed user-scope probe's `diagnosis` in
+  `output/agent-testing/<run>/mcp-apply-live/pi.json`: `not-offered` after an
+  `applied` outcome is a Pi bridge bug to fix; `offered-not-called` is the
+  model after a successful turn, and qualifies the scope only if a repeat
+  passes. `turn-failed` needs a successful rerun before attributing non-use
+  to the model.
 
 ### 6. Corrected live probes and completion matrix
 
@@ -297,7 +355,13 @@ Codex and Grok parity guards added, agent-account copies kept in step.
     - Pros: smoother local sign-in.
     - Cons: needs an OAuth fixture and a remote-browser exclusion rule.
 
-**Recommendation (2026-10-31, not acted on).** Keep both recommended options: no restart button, and the CLI route for OpenCode MCP sign-in, with the `mcp.auth.authenticate` verification item dropped. New evidence: at the current pin 1.19.5 `verify:opencode:mcp-live` still shows the user files cached for the server's lifetime and the in-place reload working (2 passed, after the harness fix in task 3), so the reason for `restart-required` stands and nothing cheaper has appeared. A restart button becomes worth building only if user-scope OpenCode saves turn out to be common; revisit at the next OpenCode bump, when the guard reruns anyway. Status stays open for the maintainer's decision.
+**Recommendation (2026-10-31).** Keep both recommended options: no restart button, and the CLI route for OpenCode MCP sign-in, with the `mcp.auth.authenticate` verification item dropped. New evidence: at the current pin 1.19.5 `verify:opencode:mcp-live` still shows the user files cached for the server's lifetime and the in-place reload working (2 passed, after the harness fix in task 3), so the reason for `restart-required` stands and nothing cheaper has appeared. A restart button becomes worth building only if user-scope OpenCode saves turn out to be common; revisit at the next OpenCode bump, when the guard reruns anyway.
+
+**Outcome (2026-11-06).** Both recommended options taken. Neither needed new product code, because each keeps what already ships; building them meant checking that the shipped behaviour matches the decision, closing the open items and recording the decisions where a maintainer will meet them.
+
+- **No "restart OpenCode to apply" button.** User-file saves keep `restart-required` with the guidance "OpenCode keeps its user configuration until its server restarts; stop and start the environment to load the change." (`OPENCODE_USER_RESTART` in `apply.ts`). The re-check is already wired to each bump: step 6 of the OpenCode upgrade in `docs/development/upgrade-agents.md` runs `verify:opencode:mcp-live` and says what to do if the user file starts being reloaded. The open question is closed, and `docs/architecture/mcp-management.md` now says the button is deliberately absent and why.
+- **CLI route for OpenCode MCP sign-in.** A `needs-auth` row carries `OPENCODE_MCP_SIGN_IN_GUIDANCE` (`packages/protocol/src/native-agent.ts`), and the backend refuses a sign-in request with the same text (`opencode-capabilities.ts`); no code calls `mcp.auth.authenticate`. The "Needs verification" item is dropped, and the architecture doc gives the reason not to drive it from the panel.
+- Nothing found while doing this gave a reason to take the other options. The pin is still 1.19.5, so the cache evidence above is current.
 
 ### 12. Agent-account homes
 
@@ -398,6 +462,57 @@ fixture server about 100 ms after starting it.
     - Pros: no spec to maintain.
     - Cons: a regression would go unseen.
 
+**Outcome (2026-11-06).** Built as recommended: a third case in
+`mcp-ui-matrix.spec.ts`, "live panel: rows left connecting by a refused CLI
+read unknown, and reconnect runs through the probe", opt-in with the rest of
+the file (`ORKESTRATOR_AGENT_TEST_MCP_UI=1`, skipped unless the profile has
+no Claude credential).
+
+- **Making it deterministic.** Without the hold-open hook the race the step
+  list describes depends on host load. Instead the case adds one project
+  server, `mcpui-slow`, started with the probe server's new `--hold-file`
+  option (`mcp-probe-server.mjs`, stdio only): while the file exists the
+  server leaves the client's messages unread, so the CLI reports it
+  `connecting`, waits its MCP connect timeout (about 30 s), ends the turn at
+  the login check and exits with the row still `connecting`. The test checks
+  that the worktree has no `.claude/settings.json` that could hold the CLI
+  open, and that the CLI really started the held server.
+- **Checks.** After the turn: the backend projection serves `mcpui-slow` as
+  `unknown`, no row is `connecting`, `orkestrator` is present, and every
+  panel row shows the backend's status with no "connecting" text; the row's
+  own button still says "unknown — click to reconnect". Then the hold file is
+  removed and the row clicked: the reconnect request answers 200, no turn
+  runs, the probe starts the server again, the row becomes `connected` with
+  its one tool, and no other row changes. After a hard reload the panel
+  matches the backend again with no "connecting".
+- **Runs** on `dev:test --profile mcp0039-t14 --fixture
+  --no-agent-credentials --agent-platforms claude --headless`, host load
+  about 10 to 13: the case passed in all 4 runs (one by an earlier attempt on
+  this branch, three here; 76 to 82 s each). Final inventories:
+  `mcpui-slow:unknown:project, orkestrator:connected:orkestrator` after the
+  exit, `mcpui-slow:connected:project, orkestrator:connected:orkestrator`
+  after the reconnect. Screenshots in
+  `output/agent-testing/mcp0039-t14/mcp-ui-matrix/exit-*.png` (git-ignored).
+  The profile was stopped and reset afterwards.
+- **Found on the way.**
+  - In two runs `orkestrator` read `failed` ("Server rejected the configured
+    Authorization header (HTTP 401)"). The restarted profile's agent tools
+    server had re-bound its saved port on `0.0.0.0` while another worktree's
+    backend held the same port on `127.0.0.1`, so the CLI's requests reached
+    that backend. A product defect, recorded as
+    [7220](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md);
+    resetting the profile (a fresh port) cleared it. This case only requires
+    `orkestrator` to be present and not `connecting`, so it passed either
+    way.
+  - Task 8's case "reconnect a failing server beside a healthy one, then
+    reload" fails at its reconnect step: the backend reads `mcpui-late`
+    `connected` while the panel keeps it failed. It fails the same way with
+    the spec at `HEAD` and on its own, so it predates this work and is not a
+    flake: [7221](7221-live-panel-stale-after-probe-reconnect.md). The
+    editor case passed in every run.
+- The shared live-panel helpers of task 8's case moved into `liveSession`,
+  `isMcpAction` and `describeServers` in the same file, so both cases use them.
+
 The MCP server editor ([`mcp-management.md`](../../architecture/mcp-management.md))
 reads and writes each agent platform's own MCP files and reports saved state,
 runtime application and connection health separately. Its catalogue mirrors
@@ -477,7 +592,9 @@ collects the live evidence the shipped behaviour has never had.
 - Live probe spec: `e2e/agent-testing/mcp-apply-live.spec.ts` (opt-in,
   `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`) with the dependency-free probe server
   `e2e/agent-testing/mcp-probe-server.mjs`; the verdict rules have unit tests
-  in `mcp-apply-live-support.test.ts`. How to run it is under "Live apply
+  in `mcp-apply-live-support.test.ts`. Since 2026-11-06 every failed probe
+  records the session's live inventory and a diagnosis (`diagnoseProbe`,
+  task 5). How to run it is under "Live apply
   record" below.
 - Outside edits for waiting runtimes no pass polls (OpenCode or container
   `restart-required`, sessions with nothing to poll) are re-checked by
@@ -640,8 +757,8 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   2026-10-22 (see [the Pi record](#live-apply-record-pi-2026-10-22)): the
   project scope passed every probe; the user scope failed four, with the
   runtime `applied` while the model answered "unavailable" without a tool
-  call. Find out whether a user-scope Pi rebuild really offers the tool, then
-  rerun Pi. Claude, Codex, OpenCode and Cursor have historical observations,
+  call. Rerun Pi with a Pi login; since 2026-11-06 each failed probe's
+  `diagnosis` says whether the rebuild offered the tool (task 5). Claude, Codex, OpenCode and Cursor have historical observations,
   with the corrected-check gaps below.
 - **Corrected live probes and completion matrix.** Rerun the busy-turn and
   negative tool-call checks, including Claude's warm SSE stale-server hook,
@@ -678,7 +795,10 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   The rest of the UI matrix (conflict recovery and secret replacement at
   desktop and narrow widths; a healthy and a failing Claude server, reconnect,
   reload) passed on 2026-10-31 in `mcp-ui-matrix.spec.ts` (task 8); reconnect
-  on a running CLI remains, with 1163.
+  on a running CLI remains (task 13). On 2026-11-06 the same spec gained the
+  refused-CLI `unknown` case (task 14, passing), and task 8's reconnect case
+  went red with the panel left stale
+  ([7221](7221-live-panel-stale-after-probe-reconnect.md)).
 - **Containers and remote.** The read-only container catalogue (ok, absent,
   oversized, offline) through `mise run test:agent:docker`, and a remote
   browser showing correct backend paths and operation recovery.
@@ -1143,10 +1263,12 @@ directory and were deleted with it.
   restart); the user files and containers keep restart guidance. Grok keeps
   guidance only, and per-session Grok application is not worth it while
   restart-based evidence works (see the decisions).
-- Whether to offer an explicit, idle-gated "restart OpenCode to apply" for
-  the user files. Not built: a server restart drops every pending question and
-  permission in the environment, which is a bigger step than apply has taken
-  so far.
+- Resolved 2026-11-06 (task 11): no explicit, idle-gated "restart OpenCode
+  to apply" for the user files. A server restart drops every pending question
+  and permission in the environment, which is a bigger step than apply has
+  taken so far; user-file saves keep `restart-required` with guidance, and
+  the OpenCode upgrade step reruns `verify:opencode:mcp-live`, which fails if
+  a bump stops caching the user files.
 
 ## Needs verification
 
@@ -1163,10 +1285,11 @@ directory and were deleted with it.
   host's expired on 2026-10-19).
 
 - ~~How OpenCode OAuth completes after `mcp.auth.start`.~~ Traced 2026-10-25:
-  it does not (see the OpenCode 1.19.4 record). Whether
-  `mcp.auth.authenticate` could be driven from the panel (it opens the
-  browser on the server's machine and holds the request up to 5 minutes) is
-  not verified; the guidance route is what ships.
+  it does not (see the OpenCode 1.19.4 record). ~~Whether
+  `mcp.auth.authenticate` could be driven from the panel.~~ Dropped
+  2026-11-06 (task 11): it opens the browser on the server's machine and
+  holds the request up to 5 minutes, which is wrong for remote browsers and
+  containers, so the CLI guidance route stays and this is not verified.
 - ~~Whether Grok 1.0.67 still follows the 1.0.52 trust rule and source
   table.~~ Checked 2026-10-31 at the new pin 1.0.70 (task 2): the trust rule
   and precedence hold; the catalogue gained `requirements.toml` sources, the
@@ -1200,6 +1323,137 @@ Made on 2026-10-25 while closing the code items, without stopping to ask.
 | Count-only MCP tiles (item 6) | (a) delete; (b) show only when no list is reported | (b): an older bridge that reports only the count still shows something | No duplicate number beside the list | Two code paths |
 | Rename probe (item 12) | (a) a tool name the model cannot substitute; (b) pin another model; (c) accept a substitution when the runtime's inventory proves the old name gone | (c): a renamed process keeps its label and tool, so (a) cannot work; (b) breaks when the model changes | Absence is proven by the runtime, not by the model's choice | Needs the session to report an inventory (OpenCode does) |
 | Item 8 report | (a) file it with Anthropic now; (b) draft it and pin the behaviour | (b): filing is outward-facing; the canary tells us when it is fixed | Nothing published without a maintainer | Still unreported |
+
+### 2026-11-06: tasks 5, 11 and 14
+
+Made without stopping to ask, following the (recommended) options unless
+noted.
+
+#### Task 14: a hold file instead of the race
+
+The step list relied on the CLI exiting before a status read reached it,
+which depends on host load (the 1240 run saw it at load 4). Options: (a) run
+without the hold-open hook and hope the exit wins; (b) hold one server
+`connecting` until after the exit. Chose (b), a `--hold-file` option on the
+probe server: stdin stays unread while the file exists, so the CLI reports
+the server `connecting` and exits before it can connect, and removing the
+file lets the probe reconnect succeed. It makes the case deterministic and
+also gives the reconnect a server that changes state. Cost: the turn waits
+out the CLI's MCP connect timeout (about 30 s per run).
+
+#### Task 14: what the `orkestrator` row must read
+
+The step list says every row, `orkestrator` included, must read `unknown`.
+The injected server connects over HTTP at once, so it reads `connected`; it
+was never left `connecting`. The case asserts what the fix guarantees: no row
+is `connecting`, the held row is `unknown`, and `orkestrator` is present.
+
+#### Task 14: helpers shared with task 8's case
+
+Moved task 8's live-panel helpers (`liveSession`, `isMcpAction`,
+`describeServers`) to file scope rather than copying them, so both cases
+expand, click and compare the panel the same way.
+
+#### Task 14: follow-ups instead of fixes
+
+Two faults found during the runs are outside this ticket and touch other
+areas (the agent tools server, the renderer's projection refresh), so they
+are recorded rather than fixed:
+[7220](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md)
+(High: a scoped bearer token reaches another process) and
+[7221](7221-live-panel-stale-after-probe-reconnect.md) (Medium). Task 8's
+spec case is left as it is, red until 7221 is fixed, rather than loosened.
+
+#### Task 5: read the inventory on every failed probe
+
+Options: (a) read it only for a reach probe that logged no call (the Pi
+failure); (b) read it for every failed probe. Chose (b): one projection read
+per failure costs nothing on a passing run, and a diagnosis for every failure
+kind helps all six providers. The verdict is judged again with the
+inventory, so the existing substitution rule (item 12) still applies.
+
+#### Task 5: no Pi rerun
+
+The Pi rerun needs a real Pi login and billed turns, which this work was not
+allowed to use. What it needs is recorded under task 5.
+
+#### Tasks 5 and 14: review corrections (2026-11-06)
+
+Task 5 now passes the turn error into `diagnoseProbe`. Chose a distinct
+`turn-failed` classification before interpreting inventory, while keeping a
+logged server call authoritative as `reached`. Keeping inventory-only
+classification would preserve the old labels, but could blame the model for a
+dispatch, provider or no-progress failure. Unit cases cover each error kind,
+missing inventory, negative expectations and a reached server followed by an
+error. Error text is not copied into the diagnosis.
+
+Task 14's hold-file server now reads and buffers at most 1 MiB while deferring
+responses. Keeping stdin paused avoided a fixture buffer, but could not
+observe EOF and left the polling process alive when its client closed. Direct
+process tests cover silence while held, the buffered response after release,
+and exit on EOF both with and without buffered input. These tests live in
+`mcp-probe-server.integration.test.ts` and use only their own child handles for
+cleanup.
+
+The first review run with EOF handling read `failed` rather than `unknown`:
+Claude waited out its 30 s MCP connection deadline before refusing the turn.
+The task 14 fixture now sets `CLAUDE_CODE_MCP_STARTUP_WAIT_MS=0` in its own
+project settings, as documented in
+[the SDK connection timing guide](https://code.claude.com/docs/en/agent-sdk/mcp#connection-timing).
+The disposable profile also sets the existing
+`CLAUDE_BRIDGE_RUNTIME_IDLE_MS=0` control, because the default keeps the CLI
+warm for ten minutes. The profile supplies the startup-wait variable too,
+so the SDK sees it at process launch. No hold-open hook or credentials are
+added, and the `unknown` assertion is retained. Keeping the defaults would
+test a warm runtime and a failed connection rather than the exited-CLI
+pending-connection fallback this case owns.
+
+
+Review validation on this worktree (all through `test:logged` where applicable):
+
+- Helper and process tests: `bun test
+  e2e/agent-testing/mcp-apply-live-support.test.ts
+  e2e/agent-testing/mcp-probe-server.integration.test.ts --parallel=1` passed.
+- `bun check -p e2e/agent-testing/tsconfig.json`, focused `bun fmt --check`
+  and focused oxlint passed for the changed harness files.
+- Task 14: **1 passed, 0 skipped**, 79.7 s, at 1440×1000 against the real
+  isolated profile `mcp0039-review-fix`. The profile used
+  `CLAUDE_BRIDGE_RUNTIME_IDLE_MS=0 CLAUDE_CODE_MCP_STARTUP_WAIT_MS=0`,
+  `--fixture --headless --no-agent-credentials --agent-platforms claude`.
+  The exact test invocation was
+  `ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-review-fix
+  ORKESTRATOR_AGENT_TEST_RUN_ID=mcp0039-review-fix
+  ORKESTRATOR_AGENT_TEST_MCP_UI=1 mise run test:logged -- --name
+  mcp-findings-task14 -- mise run test:agent:browser --
+  e2e/agent-testing/mcp-ui-matrix.spec.ts --grep 'rows left connecting'
+  --workers=1`. Its JSON report is
+  `output/agent-testing/mcp0039-review-fix/browser/results.json`; annotations
+  record `mcpui-slow:unknown`, reconnect 200, then `mcpui-slow:connected`,
+  with `orkestrator:connected` unchanged. Reload assertions also passed.
+- Two earlier attempts with the default warm-runtime lifetime failed the
+  `unknown` assertion and then exceeded the trace sanitizer's 64 MiB limit.
+  Their separate compressed logs remain under
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1R2MIZ/`
+  and `orkestrator-test-run.ChH1WS/`, and browser reports are copied to
+  `output/agent-testing/mcp0039-review-fix-attempt1/` and `-attempt2/`.
+  The same command passed after the profile lifetime correction; assertions
+  and sanitizer limits were not loosened. The profile was stopped and reset.
+- The preparation run of `mise run test:agent:browser:isolated` remains
+  unresolved: three assertions in unchanged gateway, CLI UI and terminal
+  resume specs, followed by the 1500 s runner timeout. The original review
+  package's triage marks the command `unattributed: true` and supplies no
+  unrelated verdict. No path in those reported failures is changed here;
+  their relation to the ticket cannot be established from the diagnostics.
+  This broad failure is left for the verifier, without claiming it passed
+  or excusing it as environmental. Original package and logs are preserved.
+
+#### Task 11: decisions taken, no code
+
+Both recommended options keep shipped behaviour, so nothing in the product
+changed. The decisions are recorded in the task, in "Open questions" and
+"Needs verification", and in `docs/architecture/mcp-management.md` (OpenCode
+reload and OpenCode MCP sign-in), where a maintainer changing that code will
+see them. No reason against either option came up.
 
 ### 2026-10-31: tasks 2, 3, 8, 11 and 12
 
@@ -1328,6 +1582,10 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
+- [7220-agent-tools-port-shadowed-by-loopback-listener.md](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md):
+  the agent tools port clash found under task 14.
+- [7221-live-panel-stale-after-probe-reconnect.md](7221-live-panel-stale-after-probe-reconnect.md):
+  task 8's reconnect case, red since 2026-11-06.
 - [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md) for a
   read-only Claude plugin source (split from item 7).
 - [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md) for containers,

@@ -3,7 +3,6 @@ import { containerBridgeOperationId } from "./container-bridge-operations.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import {
-  boundedBackgroundLaunch,
   boundedTailCommand,
   boundDiagnosticTail,
   bridgeLogEnvironmentExports,
@@ -444,7 +443,7 @@ export function registerServerCommands(
           export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
           export ORKESTRATOR_VERSION="${APP_VERSION}"
           ${persistentStateExports("codex")}
-          ${boundedBackgroundLaunch(`${credential.bun} /opt/codex-bridge/dist/index.js`, "/tmp/codex-bridge.log")}
+          ${credential.start("/opt/codex-bridge/dist/index.js", "/tmp/codex-bridge.log")}
         `,
           {
             ...credential.launch,
@@ -610,14 +609,8 @@ export function registerServerCommands(
           }
           ${
             useCursorSdk
-              ? boundedBackgroundLaunch(
-                  `${credential.bun} /opt/cursor-bridge/dist/index.js`,
-                  logFile,
-                )
-              : boundedBackgroundLaunch(
-                  `${credential.bun} /opt/acp-bridge/dist/index.js --provider=grok`,
-                  logFile,
-                )
+              ? credential.start("/opt/cursor-bridge/dist/index.js", logFile)
+              : credential.start("/opt/acp-bridge/dist/index.js --provider=grok", logFile)
           }
         `,
           credential.launch,
@@ -736,7 +729,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
           export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state
           export ORKESTRATOR_BRIDGE_DEBUG=${bridgeDebugEnvValue(config.global)}
           ${bridgeLogEnvironmentExports()}
-          ${boundedBackgroundLaunch(`${credential.bun} /opt/pi-bridge/dist/index.js`, logFile)}
+          ${credential.start("/opt/pi-bridge/dist/index.js", logFile)}
         `,
         credential.launch,
       );

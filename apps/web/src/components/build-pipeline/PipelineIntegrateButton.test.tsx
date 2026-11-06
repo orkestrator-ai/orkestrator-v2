@@ -247,7 +247,9 @@ describe("PipelineIntegrateButton waiting states", () => {
     await act(async () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Auto-merge" }));
     });
-    expect(integrateButton().querySelector('[data-integrate-hold="attention"]')).toBeNull();
+    expect(integrateButton().querySelector('[data-integrate-hold="attention"]') === null).toBe(
+      true,
+    );
   });
 });
 

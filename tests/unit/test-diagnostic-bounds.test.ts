@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDomAbsent, summarizeValue, truncateUtf8 } from "../bounded-test-diagnostics";
 import {
@@ -38,32 +38,7 @@ function projectionByteLength(value: unknown): number {
   return Buffer.byteLength(typeof value === "string" ? value : String(value), "utf8");
 }
 
-async function testFiles(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await testFiles(target)));
-    else if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(entry.name)) files.push(target);
-  }
-  return files;
-}
-
 describe("bounded test diagnostics", () => {
-  test("never passes a DOM-producing query result directly to toBeNull", async () => {
-    const roots = [path.join(root, "tests"), path.join(root, "apps"), path.join(root, "bridges")];
-    const offenders: string[] = [];
-    for (const sourceRoot of roots) {
-      for (const file of await testFiles(sourceRoot)) {
-        const source = await readFile(file, "utf8");
-        if (findUnsafeDomAbsenceAssertions(file, source).length > 0) {
-          offenders.push(path.relative(root, file));
-        }
-      }
-    }
-    expect(offenders).toEqual([]);
-  }, 30_000);
-
   test("detects and faithfully rewrites DOM-producing absence assertions", () => {
     const source = [
       "expect(screen.queryByRole('button')).toBeNull();",

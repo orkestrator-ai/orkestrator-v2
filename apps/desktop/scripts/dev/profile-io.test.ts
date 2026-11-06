@@ -39,6 +39,7 @@ import {
   restrictOpenCodeAuthSnapshot,
   CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX,
   agentTestCursorSnapshotPath,
+  prefetchAgentToolchains,
   seedAgentTestProviderCredentials,
   seedInstalledAgentToolchains,
   seedInstalledModelCatalogCaches,
@@ -1274,7 +1275,7 @@ describe("development profile lifecycle primitives", () => {
     };
   }
 
-  async function toolchainFixture(platforms: Array<"pi" | "grok">) {
+  async function toolchainFixture(platforms: Array<"pi" | "grok" | "cursor">) {
     const fixture = await modelCacheFixture();
     const artifacts = [toolchainArtifact("pi", "0.84.3"), toolchainArtifact("grok", "1.0.3")];
     const hostDirectory = (name: string, version: string) =>
@@ -1498,6 +1499,10 @@ describe("development profile lifecycle primitives", () => {
         return [];
       },
       seedAgentToolchains: async () => ({ seeded: ["pi@0.84.3"], failed: ["grok@1.0.3"] }),
+      prefetchAgentToolchains: async (_profile, platforms) => {
+        expect(platforms).toEqual(["grok"]);
+        return { downloaded: [], error: "grok download failed with HTTP 503" };
+      },
       log: (message) => logs.push(message),
       warn,
     });
@@ -1510,7 +1515,62 @@ describe("development profile lifecycle primitives", () => {
     expect(warnings).toEqual([
       "provider snapshot withheld",
       "Could not seed from the host install: grok@1.0.3",
+      "Could not download managed toolchains before Electron: grok download failed with HTTP 503",
     ]);
+  });
+
+  test("downloads what the host could not seed before Electron starts", async () => {
+    const { profile } = await toolchainFixture(["pi", "grok", "cursor"]);
+    const logs: string[] = [];
+
+    await seedAgentTestProfileState(profile, "agent-test", {
+      seedModelCatalogCaches: async () => [],
+      seedProviderCredentials: async () => [],
+      seedAgentToolchains: async () => ({ seeded: ["pi@0.84.3"], failed: [] }),
+      prefetchAgentToolchains: async (_profile, platforms) => {
+        expect(platforms).toEqual(["grok", "cursor"]);
+        return { downloaded: ["grok@1.0.3", "cursor@2.0.0"] };
+      },
+      log: (message) => logs.push(message),
+      warn: (message) => logs.push(`warn: ${message}`),
+    });
+
+    // Electron finds both installed and has nothing left to fetch through
+    // Chromium, whose requests a Docker interface change aborts.
+    expect(logs).toEqual([
+      "Seeded toolchains from the host install: pi@0.84.3",
+      "Downloaded managed toolchains before Electron: grok@1.0.3, cursor@2.0.0",
+    ]);
+  });
+
+  test("prefetches only the named platforms through the manager, without the profile path in errors", async () => {
+    const { profile, artifacts } = await toolchainFixture(["pi", "grok"]);
+    const received: string[][] = [];
+
+    await expect(
+      prefetchAgentToolchains(profile, ["grok"], {
+        artifacts,
+        platform: "darwin",
+        architecture: "arm64",
+        ensure: async (options) => {
+          expect(options.dataDir).toBe(profile.dataDir);
+          received.push((options.artifacts ?? []).map((artifact) => artifact.name));
+          return { rootDir: "", binDir: "", executables: {} as never };
+        },
+      }),
+    ).resolves.toEqual({ downloaded: ["grok@1.0.3"] });
+    expect(received).toEqual([["grok"]]);
+
+    await expect(
+      prefetchAgentToolchains(profile, ["grok"], {
+        artifacts,
+        platform: "darwin",
+        architecture: "arm64",
+        ensure: async () => {
+          throw new Error(`grok failed in ${profile.dataDir}/toolchains`);
+        },
+      }),
+    ).resolves.toEqual({ downloaded: [], error: "grok failed in <profile>/toolchains" });
   });
 
   test("seeds nothing for an ordinary development profile", async () => {

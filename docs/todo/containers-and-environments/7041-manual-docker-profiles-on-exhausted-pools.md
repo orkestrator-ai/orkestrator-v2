@@ -17,6 +17,8 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 
 **Investigation.** Starting the same profile with the shim on PATH (`ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" mise run dev:test …`) succeeded, and the fixture network was created on a /29.
 
+The CLI container matrix fails the same way (2026-11-06, to-do [0014](../cli-and-slash-commands/0014-cli-qualification.md) task 5): `mise run test:cli:scenarios -- --environment-type container` passed 2/8, with every scenario that starts an environment failing with `resource-exhausted`. With the same two variables it passed 8/8 and left nothing behind. The invocation is now documented beside that command in `docs/development/testing-guide.md`; the manual `dev:test` workflow in `agent-testing.md` still lacks it.
+
 **Decisions.**
 
 - **How should a manual profile get the fallback?**
@@ -33,7 +35,7 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 
 **Context.** [0241](0241-leaked-reach-probe-networks.md) found and fixed the earlier sources, and `mise run disk:report --fix probe-networks` removes unattached probe networks older than a day. Removing them is the user's call; this work did not.
 
-**Investigation.** Not traced. The owner namespaces are one-off (one network each), which fits backends started on temporary data directories, as in 0241 task 1.
+**Investigation.** Not traced. On 2026-11-06 the host still held 29 unattached probe networks, created 2026-10-31 (13), 2026-11-01 (9) and 2026-11-02 (7), and none newer, so the leak has not recurred since 2026-11-02. They still fill both default pools (172.18–31/16 and 192.168.0.0/16 in /20s). The owner namespaces are one-off (one network each), which fits backends started on temporary data directories, as in 0241 task 1.
 
 **Decisions.**
 
@@ -49,3 +51,4 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 
 - [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md)
 - [7040-container-cells-on-real-cursor-and-pi.md](../agent-engines/7040-container-cells-on-real-cursor-and-pi.md)
+- [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md) (task 5's container matrix ran through the shim)

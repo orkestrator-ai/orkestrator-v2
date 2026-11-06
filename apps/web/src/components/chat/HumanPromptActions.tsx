@@ -1,4 +1,13 @@
-import { Copy, ExternalLink, KeyRound } from "lucide-react";
+import {
+  Copy,
+  CornerDownLeft,
+  ExternalLink,
+  Fingerprint,
+  KeyRound,
+  Lock,
+  LogIn,
+  type LucideIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -21,6 +30,26 @@ export function humanPromptHeadline(prompt: HumanPrompt): string {
     case "press-enter":
       return "Waiting for ENTER";
   }
+}
+
+const PROMPT_ICONS: Record<HumanPrompt["kind"], LucideIcon> = {
+  "host-key": Fingerprint,
+  secret: Lock,
+  "device-code": LogIn,
+  "sign-in": LogIn,
+  "press-enter": CornerDownLeft,
+};
+
+/** An icon for what the prompt wants, shown beside its headline. */
+export function HumanPromptIcon({
+  prompt,
+  className,
+}: {
+  prompt: HumanPrompt;
+  className?: string;
+}) {
+  const Icon = PROMPT_ICONS[prompt.kind];
+  return <Icon className={className} aria-hidden="true" />;
 }
 
 /**

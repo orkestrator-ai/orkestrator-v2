@@ -951,7 +951,13 @@ the pinned binary's parser over the production argument shape.
    starts resolving a non-blocking question itself, publish its limit as the
    question's `providerLimitAt` instead. To prove a paused question outlives
    the default deadline and Codex's own auto-resolution, run the same test
-   once with `CODEX_LIVE_QUESTION_ANSWER_DELAY_MS=660000` (about 11 minutes).
+   once more with `RUN_LIVE_CODEX_QUESTION_DEADLINES=1` and
+   `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=750000` through `test:logged`
+   (a fixed 10.5-minute hold plus an unheld five-minute control; the command
+   is in [agent-testing.md](agent-testing.md)). If the new binary starts
+   sending `autoResolutionMs` or a different `isBlocking`, update the fake
+   app-server's `question` script (`fake-codex-app-server.mjs`) so
+   `fake-question-deadline.test.ts` keeps matching what Codex sends.
 
    Then check that approving a command still saves no rule, on the same kind
    of loopback endpoint and without credits:

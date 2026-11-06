@@ -111,7 +111,7 @@ Running the file first showed it was stale on main: its three pinned cases faile
 
 **Problem.** Codex questions now park as cards, but no real model turn has raised one through the app.
 
-**Context.** Proven against the pinned binary with a loopback endpoint (`bridges/codex-bridge/src/app-server/live-request-user-input.test.ts`). The feature flag `default_mode_request_user_input` is marked under development upstream; 0161 tracks `isBlocking: false`.
+**Context.** Proven against the pinned binary with a loopback endpoint (`bridges/codex-bridge/src/app-server/live-request-user-input.test.ts`). The feature flag `default_mode_request_user_input` is marked under development upstream; `isBlocking: false` was settled in 0161 (deleted 2026-11-06; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing)).
 
 **Investigation.** The spec case exists (`paused-interactions-live.spec.ts:76`) and the task `test:agent:paused-interactions` is defined (`mise.toml:267`). Codex is pinned at `0.164.0`, the version the loopback test used.
 
@@ -654,10 +654,9 @@ or a person.
     control still gets "unavailable in Default mode". With the config
     removed the first case fails, so the test is not passing by accident.
     Codex sends these questions with `isBlocking: false` but still waits for
-    the answer; since
-    [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md)
-    (2026-10-27) the bridge publishes them as blocking, so the session shows
-    as waiting.
+    the answer; since `0161-codex-default-mode-question-activity.md`
+    (2026-10-27, deleted 2026-11-06) the bridge publishes them as blocking, so
+    the session shows as waiting.
     `upgrade-agents.md` now runs the live test on every Codex bump, because
     the feature is marked under development and could be renamed.
 
@@ -695,7 +694,8 @@ or a person.
   `codex-question` case must raise a card, stay pending past ten minutes
   while paused, and finish with the chosen codeword after a reload. Codex
   0.164.0 has no timeout of its own on a held question (0161, from source and
-  an 11-minute run against the real app-server).
+  an 11-minute run against the real app-server; 0.166.0 rechecked with a
+  10.5-minute hold on 2026-11-06).
 - Live Claude tmux pause (item 9): in a Claude tmux tab of a disposable
   profile, raise a PermissionRequest (a Bash `touch`), pause it from the card,
   wait past ten minutes (Claude Code's default 600 s hook limit), then
@@ -1113,8 +1113,8 @@ server as loaded; the address is never contacted.
 ## Related
 
 - `0160-codex-saved-rules-list-and-revoke.md` (deleted 2026-11-06),
-  [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md)
-  (split out on 2026-10-25).
+  `0161-codex-default-mode-question-activity.md` (split out on 2026-10-25,
+  deleted 2026-11-06).
 - [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing):
   the OpenCode abort and session-grant rules from todo 0162 (the interaction
   test gaps, split out on 2026-10-25 and retired on 2026-10-29).

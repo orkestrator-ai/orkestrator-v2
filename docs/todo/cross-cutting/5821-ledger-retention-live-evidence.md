@@ -56,7 +56,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 **Context.** 0730's constraints. The first pass also builds `change_turn_boundaries_environment`, `change_thread_segments_environment` and `change_turn_boundaries_age`, each one synchronous statement on small tables.
 
-**Investigation.** Not run. The fixtures hold hundreds of rows; `retention-deletion.test.ts` proves the pass splits them into many transactions, not how long a real one takes.
+**Investigation.** Not run. The fixtures hold hundreds of rows; `retention-deletion.test.ts` proves the pass splits them into many transactions, not how long a real one takes. A synthetic ledger of mini's size (2.8M rows, 1.28 GB; [0741](0741-backend-responsiveness-under-load.md) task 6) with a 7-day window retired 773,000 rows over 8 passes (78 s), with a worst event-loop stall of 120 ms, after 0741 removed four whole-table statements from the pass. A real ledger has not run it.
 
 **Decisions.**
 

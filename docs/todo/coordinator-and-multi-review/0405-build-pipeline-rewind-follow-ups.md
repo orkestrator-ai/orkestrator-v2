@@ -1,8 +1,9 @@
 # Build pipeline rewind follow-ups
 
 Checked against the branch that made build pipeline restarts rewind
-(2026-10-27), the branch that built the code items below (2026-10-28) and the
-branch that ran the code rewind in a real container (2026-11-01). The
+(2026-10-27), the branch that built the code items below (2026-10-28), the
+branch that ran the code rewind in a real container (2026-11-01) and the
+branch that ran the stacked bypass in WebKit (2026-11-06). The
 design is in
 [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step).
 
@@ -13,9 +14,11 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 Items 3 to 6 were built or checked on 2026-10-28 (#1376, `077da798`); they are
 listed as done and covered by "Assumptions and decisions" below. Item 7 was
 run against a real container on 2026-11-01 (rechecked against `main` at
-`93b99bfb`) and is done. What is left
-is live qualification: two runs that need provider logins (and, for item 2, a
-GitHub repository), and the WebKit check of item 8. Since #1376 the Git side
+`93b99bfb`) and is done. Item 8's WebKit half was run on 2026-11-06
+(against `main` at `e6c3da899`) and passes; it found and fixed one WebKit-only
+fault in the graph's fullscreen. What is left is live qualification: two runs
+that need provider logins (and, for item 2, a GitHub repository), and item 8's
+physical phone. Since #1376 the Git side
 moved to `workspace-code-rewind.ts`, shared with graph runs' code rewinds
 (#1436), the reset became a journaled intent finished under the environment's
 exclusive mutation fence, and worktree reads retry once without fsmonitor
@@ -31,7 +34,7 @@ exclusive mutation fence, and worktree reads retry once without fsmonitor
 5. **Address without rerunning Review**: per-round report copies. Status: done.
 6. **Package-only restart on the single-review path**: "Prepare package again". Status: done.
 7. **Code rewind in a container environment**: `git update-ref` and `git reset --hard` through `docker exec`. Status: done.
-8. **Stacked bypass on WebKit and a physical phone**. Status: open.
+8. **Stacked bypass on WebKit and a physical phone**. Status: open (the WebKit half done 2026-11-06; the physical phone not run).
 
 ### 1. A real rewind end to end
 
@@ -153,7 +156,15 @@ reset cannot finish is refused too; that is
 
 **Context.** Decision 5 below. The browser config accepts `ORKESTRATOR_E2E_BROWSER=webkit` as an opt-in qualification engine and notes WebKit has no `moveBefore` (`e2e/playwright.config.ts:8-15`).
 
-**Investigation.** Not run. The phone and desktop projects keep their names whatever engine runs them.
+**Investigation.** The WebKit half was run on 2026-11-06 on this Mac (macOS, Playwright 1.64.0, WebKit build 2370), headless, against the component fixture server on a private port (`ORKESTRATOR_E2E_PORT=14622`), with no backend, profile or provider. The phone and desktop projects keep their names whatever engine runs them, so `mobile-chromium` is WebKit at 390 px with touch and `desktop-chromium` is WebKit at 1024 px.
+
+- "an expanded previous attempt keeps the live line beside every superseded step" (`e2e/PipelineFlow.spec.ts:401`) passed in both projects with `--repeat-each=3`, 6 of 6, before and after the fix below. At 390 px every superseded column drew its own bypass beside its node; at 1024 px the one bypass edge was there.
+- The whole `PipelineFlow.spec.ts` under WebKit first gave 84 passed, 1 skipped (a wide-only case at phone width) and 1 failed: "completion in fullscreen lands in the overlay and then the panel" (`:1108`), desktop project only, at `:1134`, 3 of 3 alone. Chromium passed it 3 of 3. A probe (not kept) showed the cause: leaving fullscreen remounts the graph out of its portal, and the new viewport element starts with `scrollLeft` 0 (it was 2488, with Notes centred). `useFlowViewport` (`apps/web/src/components/flow-graph/FlowViewport.tsx`) put a remembered view back only on the first width measurement or after a width change. Chromium passed only because headless Chromium's classic scrollbars change the viewport's width (1024 to 1009) between the overlay and the panel, which resets the view and re-centres the selection; WebKit's overlay scrollbars leave the width the same, so nothing moved the canvas back and Notes was off screen. macOS Electron also uses overlay scrollbars by default, so the desktop app probably had the same fault; not checked in Electron.
+- Fixed: `attachViewport` now puts the remembered view (zoom, `scrollLeft`, `scrollTop`) on a newly attached viewport element when the store's view was taken at the current width and no zoom is waiting to land; a changed width still resets it as before. The hook is shared with the Multi Review and graph run graphs, which get the same fix. Regression test: "entering and leaving fullscreen at the same width keeps the canvas's pan" (`apps/web/src/components/review/MultiReviewFlowGraph.test.tsx`), which fails on the code before the fix (`scrollLeft` 0, 289 expected) and passes after.
+- After the fix the whole `PipelineFlow.spec.ts` passed under WebKit three runs in a row, and once under Chromium.
+- The other flow-graph specs under WebKit (`GraphRunFlow`, `MultiReviewFlow`, `MultiReviewPackageLayout`) gave 122 passed, 6 skipped and 2 failed: "validation preserves a package reader's position at 1600px", both projects. It fails the same way with the fix set back, passes in Chromium, and is in the Multi Review package reader, not the pipeline graph: recorded as [6960](6960-multi-review-package-reader-webkit-width-scroll.md).
+
+The physical phone was not run: this worker had no phone and must open no window on the host's desktop. WebKit showed no difference in the stacked bypass itself, which is the condition the decision below sets for the phone check; the fullscreen fault was in the wide graph.
 
 **Decisions.**
 
@@ -164,6 +175,13 @@ reset cannot finish is refused too; that is
   - **Also look on a physical phone through the remote gateway.**
     - Pros: the real device.
     - Cons: manual; needs a phone and a reachable profile. Worth doing only if WebKit shows a difference.
+- **Is the phone still needed?** WebKit showed no difference in the stacked bypass.
+  - **Keep it open, to run with the real-Safari checks of [0860](0860-multi-review-inspector-webkit-divergences.md) task 4 and [6960](6960-multi-review-package-reader-webkit-width-scroll.md) task 2 in one phone session (recommended).**
+    - Pros: one session with the hardware covers every open WebKit check; real touch scrolling and safe areas are seen once.
+    - Cons: the item stays open on evidence that already passes in Safari's engine.
+  - **Close it on the WebKit result.**
+    - Pros: matches the decision above, which asked for the phone only if WebKit differed.
+    - Cons: the ticket that ran the WebKit half asked for the phone part to stay open.
 
 ## Current state
 
@@ -191,6 +209,13 @@ environment, through `docker exec`, by the opt-in live test
 the production Git port and fence). An unreachable container is now refused
 with a readable reason, and a reset journaled before the container stopped
 says it is outstanding, logs once, and finishes when the container answers.
+
+Run on 2026-11-06 (item 8, WebKit half): the stacked-bypass check passes in
+Playwright WebKit at 390 px and 1024 px, headless on macOS, three times. The
+WebKit run of the whole spec found that leaving the graph's fullscreen lost the
+canvas's pan wherever the width does not change (overlay scrollbars); the
+viewport now carries its view over to the remounted element. The physical
+phone is still to look at.
 
 Built on 2026-10-28 (items 3 to 6 below):
 
@@ -234,6 +259,12 @@ two scenarios in `e2e/PipelineFlow.spec.ts` (`rewound-loop`, `code-rewind`).
    Docker with fake providers; three failure-reporting faults fixed with
    regression tests; decisions 9 to 11.
 
+Partly done:
+
+8. **Stacked bypass on WebKit.** The WebKit half passes; one WebKit-only
+   fullscreen fault fixed with a regression test; decisions 12 and 13. The
+   physical phone is open.
+
 ## Outstanding work
 
 ### Qualification
@@ -250,6 +281,11 @@ two scenarios in `e2e/PipelineFlow.spec.ts` (`rewound-loop`, `code-rewind`).
    Then "Rewind code to here" on the Build of a shipped pipeline: confirm the
    dialog names the pushed commits, the branch is reset with the backup ref
    in place, and the next Ship force-pushes with lease to the same PR.
+3. **The stacked bypass on a physical phone.** Open `rewound-loop` (or a live
+   rewound pipeline) on an iPhone through the remote gateway of a `dev:test`
+   profile, expand the previous attempt and check each superseded step's
+   bypass beside its node, with touch scrolling. Best done in the same session
+   as 0860 task 4 and 6960 task 2.
 
 ### Code
 
@@ -282,7 +318,10 @@ Known limits, by design:
   network policy, but the qualification workflow's arm64 and amd64 runs are
   the next evidence. A real provider session committing in the container is
   covered by task 1 or 2 if either runs on a container environment.
-- The stacked bypass on WebKit and on a physical phone. Task 8.
+- The stacked bypass on a physical phone (task 8). Playwright WebKit passed
+  on 2026-11-06; no phone or real Safari was used. The fullscreen fix was
+  checked in Playwright WebKit and headless Chromium only, not in macOS
+  Electron, whose overlay scrollbars likely showed the same lost pan.
 
 ## Assumptions and decisions
 
@@ -348,7 +387,7 @@ Decisions made on 2026-10-28 while building items 3 to 6.
    geometry (each bypass spans its node and runs past its right edge) rather
    than a screenshot judgement. Cons: fixture data, not a real run; WebKit and
    a physical phone are not covered (the opt-in `ORKESTRATOR_E2E_BROWSER=webkit`
-   run was not done).
+   run was not done until 2026-11-06; see decision 12).
 6. **How to ask for a package-only restart.** Options: a new command; a new
    field on `restart_build_pipeline_step`; a stage-ID form. Chose the stage ID
    `review-package:<sessionKey>` on the existing command, offered on the Build
@@ -415,3 +454,30 @@ Decisions made on 2026-11-01 while running item 7.
 - [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step): the design
 - [0315-build-pipeline-flow-graph.md](0315-build-pipeline-flow-graph.md): the flow graph's own live qualification
 - [2120-build-pipeline-pending-code-rewind-blocks-delete.md](2120-build-pipeline-pending-code-rewind-blocks-delete.md): a reset that cannot finish blocks deleting its pipeline
+- [6960-multi-review-package-reader-webkit-width-scroll.md](6960-multi-review-package-reader-webkit-width-scroll.md): a WebKit-only fault the item 8 run found outside the pipeline graph
+- [0860-multi-review-inspector-webkit-divergences.md](0860-multi-review-inspector-webkit-divergences.md): the other WebKit divergences, whose real-Safari check pairs with item 8's phone
+
+Decisions made on 2026-11-06 while running the WebKit half of item 8.
+
+12. **How the WebKit check was run** (task 8). Options: (a) the stacked-bypass
+    test alone in WebKit; (b) the whole `PipelineFlow.spec.ts` in WebKit as
+    well; (c) a `dev:test` profile with a live pipeline. Chose (a) three
+    times plus (b), on the component fixture server on a private port
+    (14622), headless. Pros: the bypass is a pure projection of the record
+    (decision 5), so the fixture is the same evidence a profile would give,
+    with no backend, provider or window; (b) found the fullscreen fault (a)
+    alone would have missed. Cons: (c) was not run, so the bypass was not
+    seen on a pipeline rewound by a real restart; that stays with task 1.
+13. **Where to fix the lost pan on leaving fullscreen** (task 8). Options:
+    (a) carry the remembered view over in `useFlowViewport` when a viewport
+    element attaches at the width the view was taken at; (b) re-centre the
+    selection in `FlowGraph` whenever fullscreen toggles; (c) keep one
+    viewport element across the portal move (React has no portal move that
+    keeps the DOM node). Chose (a). Pros: keeps whatever the reader had,
+    zoom and a manual pan included, not only a centred selection; every
+    flow graph (pipeline, Multi Review, graph run) shares the hook; a
+    width change still resets the view, as before. Cons: it restores what
+    the store last recorded (each scroll event and each programmatic move
+    saves it), so it relies on that record staying current; Chromium with
+    classic scrollbars never reaches it, because the width changes and the
+    reset path re-centres instead.

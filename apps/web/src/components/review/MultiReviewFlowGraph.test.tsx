@@ -1123,6 +1123,42 @@ describe("zoom and pan", () => {
     }
   });
 
+  test("entering and leaving fullscreen at the same width keeps the canvas's pan", () => {
+    // Overlay scrollbars (WebKit, macOS Electron) leave the width unchanged.
+    const width = 1200;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => width,
+    });
+    const matchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...matchMedia.call(window, query),
+      matches: query.includes("prefers-reduced-motion"),
+    })) as typeof window.matchMedia;
+    try {
+      render(<SelectableGraph {...panel(4)} />);
+      const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
+      const maxScroll = layout.width - width;
+      expect(maxScroll).toBeGreaterThan(0);
+      fireEvent.click(screen.getByRole("tab", { name: "pr, not-started" }));
+      expect(viewport().scrollLeft).toBe(maxScroll);
+
+      // The move replaces the viewport element; query it afresh each time.
+      fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+      expect(document.querySelector("[data-flow-fullscreen]")).not.toBeNull();
+      expect(viewport().scrollLeft).toBe(maxScroll);
+
+      fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+      expect(document.querySelector("[data-flow-fullscreen]")).toBeNull();
+      expect(viewport().scrollLeft).toBe(maxScroll);
+    } finally {
+      window.matchMedia = matchMedia;
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    }
+  });
+
   for (const observeHide of [true, false]) {
     test(`centres a stage selected at zero width after showing (hide observed: ${observeHide})`, () => {
       let width = 1200;

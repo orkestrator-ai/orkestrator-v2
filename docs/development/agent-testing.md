@@ -1128,6 +1128,59 @@ The restarts leave the profile running under a detached launcher; stop it
 with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
 restart, so the spec falls back to the profile's seeded copy.
 
+### Multi-client, restarts and an older backend (fake model)
+
+`e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
+browser clients, backend and bridge restarts, and an older backend without a
+billed turn (todo 0048 task 11). The provider is the profile's real Claude CLI
+and bridge, sent to a loopback Anthropic endpoint
+(`e2e/agent-testing/fake-anthropic-model.ts`) by a `settings.json` the spec
+writes into the profile's own isolated `CLAUDE_CONFIG_DIR`. Every prompt is
+answered `Answer to: <prompt>`, every call is counted, and a prompt carrying
+`[hold:<id>]` is parked until the spec releases it, which pins a turn at "the
+provider is working" across a disconnect or a restart. The startup notice that
+Claude is not logged in is expected (the fixture key is not a login) and the
+spec dismisses it.
+
+```bash
+mise run dev:test --profile q48t11 --fixture --no-agent-credentials --agent-platforms claude --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=q48t11 ORKESTRATOR_AGENT_TEST_LIVE_MULTI_CLIENT=1 \
+ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43207 ORKESTRATOR_AGENT_TEST_MULTI_CLIENT_ROUNDS=10 \
+  mise run test:logged -- --name multi-client -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  multi-client-restarts-live.spec.ts --workers=1
+mise run dev:stop --profile q48t11
+mise run dev:reset --profile q48t11
+```
+
+A fixed `ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT` lets the spec leave a running
+profile alone; a new endpoint makes it restart the profile once so no Claude
+process keeps an old one. `ORKESTRATOR_AGENT_TEST_MULTI_CLIENT_ROUNDS` repeats
+the two-client and queued cases for a p50/p95. Cases:
+
+- **Older backend** (first, and only when
+  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_URL` and
+  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_AUTH_FILE` name a running older
+  backend whose `--renderer-dev-server-url` is this profile's current
+  `rendererUrl`, and whose Claude config points at the same fake port): two
+  clients run today's renderer against it through a turn and a save.
+- **Two clients, one disconnected**: client B sits behind the outage link
+  (`client-outage-support.ts`) and is cut off while client A sends a held
+  turn, the turn completes and a file is saved; then B's link returns.
+- **Queued prompt**: a prompt queued behind a held turn through the backend's
+  queue, dispatched on the turn-end edge.
+- **Backend crash and graceful restart** with a held turn and a queued prompt:
+  the interrupted prompt is never sent again, the conversation continues, and
+  the queued prompt arrives exactly once.
+- **Bridge restart** mid-turn and idle: the Claude bridge is `SIGKILL`ed (found
+  as the profile backend's child by command), the held call must be aborted,
+  and the next prompt resumes the same conversation.
+
+Measurements land in `evidence-multi-client-*.json` beside the run, judged
+against the latency budgets in
+[recurring-work.md](../architecture/recurring-work.md#latency-budgets).
+
 ### Live requests of a running agent tab
 
 `e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible

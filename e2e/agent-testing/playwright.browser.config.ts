@@ -51,6 +51,7 @@ export default defineConfig({
     "sidebar-width-consumers.spec.ts",
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",
+    "multi-client-restarts-live.spec.ts",
     "codex-typed-prompts-live.spec.ts",
     "codex-refused-login-live.spec.ts",
     "codex-saved-rules-live.spec.ts",

@@ -321,6 +321,45 @@ describe("session.transcript", () => {
     }
     expect(before).toBeUndefined();
   });
+
+  test("a restart preview with no rows and no cursor is not complete", async () => {
+    // Seen live (todo 0048 task 11): the first read after a backend restart
+    // got a Claude bridge preview holding none of the conversation's rows,
+    // with no history cursor. A missing cursor alone used to answer
+    // `complete: true`, telling a client the conversation was empty.
+    const { harness } = await setup();
+    const started = await harness.call<{ sessionId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "hello" },
+      { requestId: "t-preview" },
+    );
+    if (!started.ok) throw new Error(started.error.message);
+    const sessionId = started.result.sessionId;
+    const view = (historyComplete: boolean, messages: unknown[]) => ({
+      status: "snapshot",
+      token: `preview-${historyComplete}`,
+      value: {
+        messages,
+        freshness: "cached",
+        historyEpoch: "epoch:preview:1",
+        historyComplete,
+        messageWindow: { truncated: !historyComplete },
+      },
+    });
+    let next = view(false, []);
+    harness.commands.set("get_native_agent_transcript_update", async () => next);
+
+    const preview = await harness.call<PublicTranscriptPage>("session.transcript", { sessionId });
+    if (!preview.ok) throw new Error(`${preview.error.code}: ${preview.error.message}`);
+    expect(preview.result).toMatchObject({ messages: [], freshness: "cached", complete: false });
+    expect(preview.result.olderCursor).toBeUndefined();
+
+    next = view(true, [{ id: "m-0", role: "user", content: "hello", createdAt: null, parts: [] }]);
+    const hydrated = await harness.call<PublicTranscriptPage>("session.transcript", { sessionId });
+    if (!hydrated.ok) throw new Error(`${hydrated.error.code}: ${hydrated.error.message}`);
+    expect(hydrated.result.complete).toBe(true);
+    expect(hydrated.result.messages.map((message) => message.id)).toEqual(["m-0"]);
+  });
 });
 
 describe("unqualified providers", () => {

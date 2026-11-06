@@ -886,6 +886,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/browser-test.test.ts",
   "./e2e/agent-testing/artifact-sanitizing-reporter.test.ts",
   "./e2e/agent-testing/electron-display-setup.test.ts",
+  "./e2e/agent-testing/fake-anthropic-model.test.ts",
   "./scripts/opencode-live-compatibility-probe.test.ts",
   "./test-fixtures/agent-project/server.test.ts",
 ];

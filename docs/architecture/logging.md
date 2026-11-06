@@ -269,6 +269,7 @@ and no site logs a stderr tail.
 | `process` | `uncaught-exception` | `error` | An exception reached the top of the backend, which then dies. See [the handler](#the-uncaught-exception-handler). |
 | `docker` | `writer-lease.not-acquired` | `info` | A backend starts without the lease, with `reason` (`busy`, `schema-incompatible`). A second backend on one directory is normal. |
 | `local-server` | `bridge.exited` | `warn`, or `info` if the backend asked | Every exit of a local bridge, with `code`, `signal` and `requested`. A clean exit 0 nothing asked for warns. Read it with `server.stopping`. |
+| `local-server` | `bridge.orphans-reaped` | `warn`, or `error` if one survived | A bridge that exited on its own left processes in its group (its agent CLI, mid-turn), and the backend stopped them. `result` is `stopped` or `survived`. |
 | `bridge.pi`, `bridge.cursor` | `session.resume-fell-back` | `warn` | A saved conversation could not be resumed and a new one started. |
 | `bridge.pi`, `bridge.cursor` | `turn.failed` | `warn` | A turn ended in failure. A turn someone stopped stays out, even if stopping it made the run reject. |
 | `bridge.pi` | `turn.startup-timed-out`, `turn.refused` | `warn` | Pi did not start a turn in time, or refused it before any run. |
@@ -391,6 +392,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `desktop` | `uncaught-exception` | error | The main process hit an uncaught exception. |
 | `local-server` | `bridge.started` | `key`, `pid` | A local bridge was spawned. `key` is `kind:environmentId`. |
 | `local-server` | `bridge.exited` | `key`, `pid`, `code`, `signal`, `requested` | A local bridge exited. |
+| `local-server` | `bridge.orphans-reaped` | `key`, `pid`, `result` | What a bridge left in its group after exiting on its own was stopped. |
 | `docker` | `bridge.launched` | `provider`, `containerPort` | A bridge was launched in a container, for the first time there or as a relaunch. |
 | `docker` | `writer-lease.lost` | `reason` | This backend lost the registry writer lease. |
 | `docker` | `writer-lease.regained` | `staleForMs` | This backend took it over from a holder that stopped refreshing it. |

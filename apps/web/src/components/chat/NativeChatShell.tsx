@@ -2,6 +2,7 @@ import {
   Children,
   useCallback,
   useLayoutEffect,
+  useMemo,
   useState,
   type ReactNode,
   type RefObject,
@@ -180,6 +181,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   highlightedMessageId?: string | null;
 }
 
+const messageItemKey = (_index: number, message: NativeMessageType) => message.id;
+
 /**
  * The frame every native chat tab renders inside.
  *
@@ -275,6 +278,165 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     };
   }, [composeDockElement]);
 
+  /**
+   * Counted, not coerced. The natural thing to pass is a `.map()` result, and
+   * an empty array is truthy — `Boolean([])` would render the empty pinned
+   * wrapper and permanently switch the spacer to dock-height mode for a tab
+   * that has no blocking prompt at all.
+   */
+  const hasPinnedContent = Children.count(blockingCards) > 0 || Children.count(pinnedAccessory) > 0;
+
+  /**
+   * A measured height of 0 means the dock has not laid out yet (first paint, a
+   * hidden tab), so pinned content still needs the conservative reservation
+   * rather than a spacer that clears nothing.
+   */
+  const measuredDockHeight =
+    composeDockHeight !== null && composeDockHeight > 0 ? composeDockHeight : null;
+
+  /**
+   * A transcript card is only reachable through the transcript, and the
+   * centered-composer layout hides the transcript entirely. A question that
+   * arrives before the first message would otherwise block the turn behind an
+   * invisible card, so its presence ends the centered state.
+   */
+  const hasTranscriptCards = Children.count(transcriptCards) > 0;
+  const refreshingTranscript =
+    displayAvailable &&
+    connectionState !== "error" &&
+    sessionEstablished &&
+    transcriptRefreshing &&
+    !transcriptSettled;
+  const composerCentered = centerCompose && !hasTranscriptCards;
+  // What the transcript list renders from. Each keeps its identity until
+  // something it shows changes (see `StableVirtuoso`), so a render of this shell
+  // for any other reason does not render the visible rows again.
+  const renderMessage = useCallback(
+    (_index: number, message: TMessage, previous: TMessage | null) => (
+      <NativeMessage
+        message={message}
+        previousMessage={previous}
+        assistantLabel={agentLabel}
+        containerId={containerId}
+        agentExpansionScope={agentExpansionScope}
+        actions={messageActions?.(message)}
+        resolveModelLabel={resolveModelLabel}
+        loadToolDetails={loadToolDetails}
+        stopBackgroundTask={stopBackgroundTask}
+        asyncQuestionResponses={asyncQuestionResponses}
+        respondToAsyncQuestion={respondToAsyncQuestion}
+        platform={platform}
+      />
+    ),
+    [
+      agentExpansionScope,
+      agentLabel,
+      asyncQuestionResponses,
+      containerId,
+      loadToolDetails,
+      messageActions,
+      platform,
+      resolveModelLabel,
+      respondToAsyncQuestion,
+      stopBackgroundTask,
+    ],
+  );
+  const emptyState = useMemo(
+    () =>
+      !composerCentered ? (
+        <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
+          <p className="text-sm">
+            {emptyStateMessage ?? `No messages yet. Start a conversation with ${agentLabel}!`}
+          </p>
+          {onResumeClick && (
+            <Button variant="outline" size="sm" onClick={onResumeClick}>
+              <History className="mr-2 h-4 w-4" />
+              Resume Session
+            </Button>
+          )}
+        </div>
+      ) : undefined,
+    [agentLabel, composerCentered, emptyStateMessage, onResumeClick],
+  );
+  // An empty `.map()` result has a new identity every render and shows nothing.
+  const footerCards = hasTranscriptCards ? transcriptCards : null;
+  const footer = useMemo(
+    () => (
+      <>
+        {isLoading && (
+          <div className="px-2 @sm:px-4">
+            <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                {statusLabel ?? <AgentThinkingIndicator agentName={agentLabel} />}
+                {elapsedStartedAt !== undefined ? (
+                  <LiveElapsed startedAt={elapsedStartedAt} />
+                ) : elapsedSeconds !== null && elapsedSeconds > 0 ? (
+                  <span className="text-xs text-muted-foreground/50">
+                    {formatElapsed(elapsedSeconds)}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!isLoading && finalElapsedSeconds !== null && (
+          <div className="px-2 @sm:px-4">
+            <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+              <span className="text-[10px] text-muted-foreground/40">
+                Completed in {formatElapsed(finalElapsedSeconds)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {footerCards && (
+          <div data-testid="transcript-cards" className="px-3 py-3 @sm:px-6">
+            <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-3">{footerCards}</div>
+          </div>
+        )}
+        {/*
+            Only while the transcript is the visible surface. The centered
+            layout fades it out, and a skeleton animating behind `opacity-0`
+            is work nobody sees.
+          */}
+        <SessionRefreshShimmer active={refreshingTranscript && !composerCentered} />
+        {/*
+            The dock floats over the transcript, so its full live height must
+            be reserved here. That keeps a growing composer — plus any pinned
+            cards — from covering the last messages.
+          */}
+        <div
+          data-testid="transcript-bottom-spacer"
+          className={cn(
+            "shrink-0",
+            measuredDockHeight === null
+              ? hasPinnedContent
+                ? "h-80"
+                : bottomSpacerClassName
+              : undefined,
+          )}
+          style={measuredDockHeight !== null ? { height: measuredDockHeight } : undefined}
+          aria-hidden="true"
+        />
+      </>
+    ),
+    [
+      agentLabel,
+      bottomSpacerClassName,
+      composerCentered,
+      elapsedSeconds,
+      elapsedStartedAt,
+      finalElapsedSeconds,
+      footerCards,
+      hasPinnedContent,
+      isLoading,
+      measuredDockHeight,
+      refreshingTranscript,
+      statusLabel,
+    ],
+  );
+
   /*
    * Establishment is not a refresh. A first session is still being created, so
    * there is no cached transcript to protect and nothing the composer can send
@@ -331,36 +493,6 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     );
   }
 
-  /**
-   * Counted, not coerced. The natural thing to pass is a `.map()` result, and
-   * an empty array is truthy — `Boolean([])` would render the empty pinned
-   * wrapper and permanently switch the spacer to dock-height mode for a tab
-   * that has no blocking prompt at all.
-   */
-  const hasPinnedContent = Children.count(blockingCards) > 0 || Children.count(pinnedAccessory) > 0;
-
-  /**
-   * A measured height of 0 means the dock has not laid out yet (first paint, a
-   * hidden tab), so pinned content still needs the conservative reservation
-   * rather than a spacer that clears nothing.
-   */
-  const measuredDockHeight =
-    composeDockHeight !== null && composeDockHeight > 0 ? composeDockHeight : null;
-
-  /**
-   * A transcript card is only reachable through the transcript, and the
-   * centered-composer layout hides the transcript entirely. A question that
-   * arrives before the first message would otherwise block the turn behind an
-   * invisible card, so its presence ends the centered state.
-   */
-  const hasTranscriptCards = Children.count(transcriptCards) > 0;
-  const refreshingTranscript =
-    displayAvailable &&
-    connectionState !== "error" &&
-    sessionEstablished &&
-    transcriptRefreshing &&
-    !transcriptSettled;
-  const composerCentered = centerCompose && !hasTranscriptCards;
   /*
    * The transcript-end skeleton is the primary indicator, but the centered
    * layout fades the whole transcript out and a reader scrolled away from the
@@ -453,104 +585,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       >
         <VirtualizedMessageList
           messages={messages}
-          computeItemKey={(_index, message) => message.id}
+          computeItemKey={messageItemKey}
           highlightedItemKey={highlightedMessageId}
           animateArrivals
           resolvePreviousMessage={findPreviousNativeMessage}
-          renderMessage={(_index, message, previous) => (
-            <NativeMessage
-              message={message}
-              previousMessage={previous}
-              assistantLabel={agentLabel}
-              containerId={containerId}
-              agentExpansionScope={agentExpansionScope}
-              actions={messageActions?.(message)}
-              resolveModelLabel={resolveModelLabel}
-              loadToolDetails={loadToolDetails}
-              stopBackgroundTask={stopBackgroundTask}
-              asyncQuestionResponses={asyncQuestionResponses}
-              respondToAsyncQuestion={respondToAsyncQuestion}
-              platform={platform}
-            />
-          )}
+          renderMessage={renderMessage}
           header={transcriptHeader}
-          emptyState={
-            !composerCentered ? (
-              <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
-                <p className="text-sm">
-                  {emptyStateMessage ?? `No messages yet. Start a conversation with ${agentLabel}!`}
-                </p>
-                {onResumeClick && (
-                  <Button variant="outline" size="sm" onClick={onResumeClick}>
-                    <History className="mr-2 h-4 w-4" />
-                    Resume Session
-                  </Button>
-                )}
-              </div>
-            ) : undefined
-          }
-          footer={
-            <>
-              {isLoading && (
-                <div className="px-2 @sm:px-4">
-                  <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      {statusLabel ?? <AgentThinkingIndicator agentName={agentLabel} />}
-                      {elapsedStartedAt !== undefined ? (
-                        <LiveElapsed startedAt={elapsedStartedAt} />
-                      ) : elapsedSeconds !== null && elapsedSeconds > 0 ? (
-                        <span className="text-xs text-muted-foreground/50">
-                          {formatElapsed(elapsedSeconds)}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {!isLoading && finalElapsedSeconds !== null && (
-                <div className="px-2 @sm:px-4">
-                  <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                    <span className="text-[10px] text-muted-foreground/40">
-                      Completed in {formatElapsed(finalElapsedSeconds)}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {hasTranscriptCards && (
-                <div data-testid="transcript-cards" className="px-3 py-3 @sm:px-6">
-                  <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-3">
-                    {transcriptCards}
-                  </div>
-                </div>
-              )}
-              {/*
-                Only while the transcript is the visible surface. The centered
-                layout fades it out, and a skeleton animating behind `opacity-0`
-                is work nobody sees.
-              */}
-              <SessionRefreshShimmer active={refreshingTranscript && !composerCentered} />
-              {/*
-                The dock floats over the transcript, so its full live height must
-                be reserved here. That keeps a growing composer — plus any pinned
-                cards — from covering the last messages.
-              */}
-              <div
-                data-testid="transcript-bottom-spacer"
-                className={cn(
-                  "shrink-0",
-                  measuredDockHeight === null
-                    ? hasPinnedContent
-                      ? "h-80"
-                      : bottomSpacerClassName
-                    : undefined,
-                )}
-                style={measuredDockHeight !== null ? { height: measuredDockHeight } : undefined}
-                aria-hidden="true"
-              />
-            </>
-          }
+          emptyState={emptyState}
+          footer={footer}
           scrollProps={scrollProps}
           virtuosoRef={virtuosoRef}
           find={{

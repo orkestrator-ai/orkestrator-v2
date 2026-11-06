@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -17,6 +17,15 @@ import {
 } from "@/components/ui/dialog";
 import { getNativeAgentSuborkTranscript, type NativeAgentSuborkTranscript } from "@/lib/backend";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
+
+const messageItemKey = (_index: number, message: NativeMessageType) => message.id;
+const SUBORK_FIND = { isActive: false, getSearchText: getNativeMessageSearchText };
+const LOADING_TRANSCRIPT = (
+  <span className="flex items-center justify-center gap-2">
+    <Loader2 className="size-3.5 animate-spin" /> Loading the transcript…
+  </span>
+);
 
 /**
  * One subork's transcript. The call's row references it in the same
@@ -77,24 +86,41 @@ function SuborkTranscriptBody({
     environmentId,
     activation: "latest",
   });
-  const empty = !agent ? (
-    (subork.line ?? "This target never started.")
-  ) : revision === undefined ? (
-    subork.status === "running" || subork.status === "starting" ? (
-      "This subork is working. Its transcript appears here once the first part is stored."
-    ) : (
-      (subork.line ?? "No transcript was stored for this subork.")
-    )
-  ) : error ? (
-    `The transcript could not be read: ${error}`
-  ) : read && read.status !== "found" ? (
-    "The stored transcript for this subork could not be read."
-  ) : (
-    <span className="flex items-center justify-center gap-2">
-      <Loader2 className="size-3.5 animate-spin" /> Loading the transcript…
-    </span>
-  );
+  const empty = !agent
+    ? (subork.line ?? "This target never started.")
+    : revision === undefined
+      ? subork.status === "running" || subork.status === "starting"
+        ? "This subork is working. Its transcript appears here once the first part is stored."
+        : (subork.line ?? "No transcript was stored for this subork.")
+      : error
+        ? `The transcript could not be read: ${error}`
+        : read && read.status !== "found"
+          ? "The stored transcript for this subork could not be read."
+          : LOADING_TRANSCRIPT;
   const assistantLabel = agent ? AGENT_PLATFORM_LABELS[agent] : "Agent";
+  const platform = agent && isAgentPlatform(agent) ? agent : undefined;
+  // Stable inputs, so a render here that changes no row leaves the list alone.
+  const renderMessage = useCallback(
+    (_index: number, message: NativeMessageType, previous: NativeMessageType | null) => (
+      <NativeMessage
+        message={message}
+        previousMessage={previous}
+        assistantLabel={assistantLabel}
+        containerId={containerId}
+        agentExpansionScope={environmentId}
+        platform={platform}
+      />
+    ),
+    [assistantLabel, containerId, environmentId, platform],
+  );
+  const emptyState = useMemo(
+    () => (
+      <div className="whitespace-pre-wrap break-words px-4 py-12 text-center text-sm text-muted-foreground">
+        {empty}
+      </div>
+    ),
+    [empty],
+  );
   return (
     <div
       data-testid="subork-transcript"
@@ -135,26 +161,13 @@ function SuborkTranscriptBody({
       )}
       <VirtualizedMessageList
         messages={messages}
-        computeItemKey={(_index, message) => message.id}
+        computeItemKey={messageItemKey}
         resolvePreviousMessage={findPreviousNativeMessage}
-        renderMessage={(_index, message, previous) => (
-          <NativeMessage
-            message={message}
-            previousMessage={previous}
-            assistantLabel={assistantLabel}
-            containerId={containerId}
-            agentExpansionScope={environmentId}
-            platform={agent && isAgentPlatform(agent) ? agent : undefined}
-          />
-        )}
-        emptyState={
-          <div className="whitespace-pre-wrap break-words px-4 py-12 text-center text-sm text-muted-foreground">
-            {empty}
-          </div>
-        }
+        renderMessage={renderMessage}
+        emptyState={emptyState}
         scrollProps={scrollProps}
         virtuosoRef={virtuosoRef}
-        find={{ isActive: false, getSearchText: getNativeMessageSearchText }}
+        find={SUBORK_FIND}
       />
     </div>
   );

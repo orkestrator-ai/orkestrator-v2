@@ -24,6 +24,20 @@ describe("ratchetOverscan", () => {
 });
 
 describe("useRatchetedOverscan", () => {
+  test("keeps one object while the numbers stand, since it goes to the list as a prop", () => {
+    const { result, rerender } = renderHook(
+      ({ top }) => useRatchetedOverscan("row-1", { top, bottom: 2 }),
+      { initialProps: { top: 3 } },
+    );
+    const first = result.current;
+
+    rerender({ top: 3 });
+    expect(result.current).toBe(first);
+
+    rerender({ top: 4 });
+    expect(result.current).toEqual({ top: 4, bottom: 2 });
+  });
+
   test("settles the range feedback loop a re-rendering list produces", () => {
     // The ranges a real list reported while protecting row 85, each one
     // measured during the re-render the previous overscan caused. Without the

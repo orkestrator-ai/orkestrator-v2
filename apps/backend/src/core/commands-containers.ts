@@ -811,7 +811,9 @@ export async function startContainerOpenCodeServer(
   await ensureCurrentBootReady(containerId);
   const authToken = mintBridgeToken();
   const mode = typeof credentialMode === "function" ? await credentialMode() : credentialMode;
-  const keepPasswordFromAgent = mode === "verifier";
+  // OpenCode has no bridge of ours to launch, so a launcher image's server is
+  // started as a verifier image's is: the plugin keeps the password from tools.
+  const keepPasswordFromAgent = mode !== "token-file";
   const serve = `opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`;
   await launchContainerScript(
     containerId,
@@ -962,7 +964,7 @@ export async function startContainerClaudeServer(
           ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}`
           : ""
       }
-      ${boundedBackgroundLaunch(`${credential.bun} /opt/claude-bridge/dist/index.js`, "/tmp/claude-bridge.log")}
+      ${credential.start("/opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log")}
     `,
       {
         ...credential.launch,

@@ -61,3 +61,14 @@ ORKESTRATOR_AGENT_TEST_PROFILE=review-refusal-recovery ORKESTRATOR_AGENT_TEST_RU
 Artifacts: `output/agent-testing/refusal-graph-owner/browser/`.
 No graph implementation, assertion, timeout or skip was changed; the cause
 remains unconfirmed.
+
+## Recurrence, beelink, 2026-11-06
+
+In run 6 of the to-do 4222 task 3 qualification (`mise run test:agent:browser:isolated`,
+credential-free Codex profile, branch based on `main` at `e6c3da899`, one worker,
+load average about 60, with this work's Docker network churn), the case failed at a new
+step: `expect(locator).toHaveText("QA design bake-off")` on
+`[data-graph-designer] [data-graph-designer-title]` (line 363), element not found after
+5 s. Its trace has no `net::ERR_NETWORK_CHANGED`, so it is not flake 2340. The same case
+passed in the other six full runs of the suite that night (runs 1 to 5 and 7). It was not
+rerun alone. The cause remains unconfirmed.

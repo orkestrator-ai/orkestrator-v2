@@ -1224,6 +1224,18 @@ export class StorageDatabase {
   }
 
   /**
+   * Free pages a release could return: the free list with incremental
+   * auto-vacuum, else 0 (free pages are then only reused). Two pragma reads,
+   * no lock, so the upkeep can skip starting a release that has nothing to do.
+   */
+  releasableFreePages(): number {
+    const { auto_vacuum } = this.db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number };
+    if (auto_vacuum !== 2) return 0;
+    return (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number })
+      .freelist_count;
+  }
+
+  /**
    * Returns up to `maxPages` free pages to the filesystem (with incremental
    * auto-vacuum; a no-op otherwise) and the number of free pages left (-1 on
    * contention). A bounded step, so a caller freeing much space can yield between steps.

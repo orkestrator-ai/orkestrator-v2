@@ -284,6 +284,70 @@ mise run test:logged -- --name rootless-default-loopback -- bun test --cwd apps/
   2026-11-04 hand-built rootless daemon). Tracked in
   [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md).
 
+## Claude preference lock with a reused pid, Docker Desktop (2026-11-06)
+
+To-do 0726 task 5, the last item of that file (retired with this run): a
+Claude session's preference lock left by a dead bridge whose pid is live
+again must not stop the session's prompts. The rule is in
+[agent-engines.md](../architecture/agent-engines.md#claude-code).
+
+- **Host and stack:** Docker Desktop 4.98.0 (Engine 29.9.2, linux/arm64,
+  kernel 7.0.14-linuxkit) on Apple Silicon. A `dev:test` profile started with
+  `--fixture --fixture-environments local,container --no-agent-credentials
+  --agent-platforms claude` and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, on
+  an image built from `main` at `c1724ab74` (`mise run docker:build:dev`).
+  The image's `/opt/claude-bridge/dist/index.js` matched a local build of the
+  bridge byte for byte (SHA-256).
+- **Model:** the image's pinned Claude Code 2.1.314 against
+  `container-fake-claude-api.ts` on the container's loopback, wired as the
+  terminal-signal spec does (`ANTHROPIC_BASE_URL`, a fixture
+  `ANTHROPIC_AUTH_TOKEN`, merged into `~/.claude/settings.json`). No login, no
+  provider request. The native Claude tab reads the same user settings, so a
+  bridge session needs nothing more.
+- **Method:** one native session in `fixture-container`, driven with the
+  worktree's `orkestrator` CLI (`session start`, then `session prompt --wait`
+  with a new request key per case). Before each prompt a lock was written as
+  `node` to `~/.claude/orkestrator/session-preferences/<session>.json.lock`
+  (the provider-state volume) and back-dated two minutes. A prompt with no
+  lock took 3.75 s end to end; a refused one about 5.8 s (the 5 s wait).
+
+| Case | Lock | Result |
+| --- | --- | --- |
+| A | Older format, `{token, pid}` naming the running bridge's own pid | Admitted, 2.83 s; lock taken over |
+| B | New format naming live pid 9 (`sleep infinity`) with `procStart: "1"` and the real boot id | Admitted, 3.00 s |
+| C | New format naming the bridge's own pid and start time under another `instance` | Admitted, 2.65 s |
+| D | New format naming live pid 9 with its real start time and another boot id | Admitted, 2.56 s |
+| Restart | The bridge's real identity (copied from its change-evidence `owner.pid`), then the environment stopped and started; in the new pid namespace a `sleep` owned by `node` was walked onto the dead bridge's pid (982) before the first prompt | Admitted, 3.00 s; the new bridge (pid 1120) also took over the change-evidence spool claim |
+| E (control) | New format naming live pid 9 with its real start time and boot id | Refused: 503 "The session's preferences are busy, so the prompt was not sent", lock untouched. With the lock removed, the next prompt ran at once and the session was not parked |
+| F (control) | Older format naming live pid 9, an unrelated process | Refused the same way, as documented: an older bridge's lock held by an unrelated live pid waits until that pid exits |
+
+The transcript held each admitted prompt and its answer exactly once, and
+neither refused prompt reached the model.
+
+- **Before the fix, same container.** The current bridge was rebuilt with only
+  the pre-#1369 recovery rule restored (a live pid is never recoverable),
+  copied over `/opt/claude-bridge/dist/index.js` as root with the original
+  kept beside it, and the environment restarted. Case A's lock (naming that
+  bridge's pid 496) refused two prompts in a row, and case B's refused too;
+  the locks stayed in place. The original file was then restored (SHA-256
+  checked) and the environment restarted, after which a prompt ran normally.
+  The pre-fix 500 would have been 503 here, because only the recovery rule
+  was reverted, not the typed refusal.
+- **Found:** no defect in the lock rule. A refusal like case E reaches the
+  CLI as `operation-failed`, exit 1, with no `retryable` flag, and the same
+  request key replays that failure; a script cannot tell it from a permanent
+  refusal ([7260](../todo/cli-and-slash-commands/7260-cli-transient-prompt-refusal-not-retryable.md)).
+- **Not run:** the container restart was staged by stopping and starting the
+  environment and placing a process on the dead bridge's pid. A bridge killed
+  inside its real lock hold was not attempted (timing-dependent, and the
+  staged lock is the same file). macOS host bridges (the `ps` path) and Linux
+  Engine were not part of this run.
+
+Created and removed: the profile `claude-pidlock` and its fixture runtimes,
+gateway, network and volumes (`dev:stop`, then `dev:reset`), and the image
+tag `orkestrator-v2:dev-57301bd868fa`. The fake API, its settings merge, the
+pid walker and the comparison bundle lived only in that container.
+
 ## Egress name checks on rootful Linux Engine (2026-11-06)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)

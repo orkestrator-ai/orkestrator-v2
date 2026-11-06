@@ -170,3 +170,20 @@ test("remote failed deletion shows one complete failure message and a Retry acti
   await page.reload();
   await expect(failure).toBeVisible();
 });
+
+test("a slow remote delete says how long it has run and which step it is on", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/remote-machine-tree?delete-slow");
+  await expect(page.getByText("Still deleting after 5 min", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: `output/visual-previews/remote-delete-slow-before-${testInfo.project.name}.png`,
+  });
+  await page.goto("/remote-machine-tree?delete-slow=worktree");
+  await expect(
+    page.getByText("Still deleting after 5 min: removing the worktree", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: `output/visual-previews/remote-delete-slow-step-${testInfo.project.name}.png`,
+  });
+});

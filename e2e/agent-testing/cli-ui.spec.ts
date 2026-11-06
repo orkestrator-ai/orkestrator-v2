@@ -1,6 +1,7 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test, type Page } from "./browser-test";
 import { pendingInteractionIds, waitPastResolved } from "./cli-ui-waits";
+import { ensureProjectExpanded } from "./sidebar-project";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -222,15 +223,7 @@ function readEnvironmentFile(configDir: string, environmentId: string, file: str
  * to serve its first render, and a reused one may already be expanded.
  */
 async function openProject(page: Page, projectName: string, timeout = 30_000) {
-  const expand = page.getByRole("button", {
-    name: `Expand project ${projectName}`,
-  });
-  const collapse = page.getByRole("button", {
-    name: `Collapse project ${projectName}`,
-  });
-  await expect(expand.or(collapse)).toBeVisible({ timeout });
-  if (await expand.isVisible()) await expand.click();
-  await expect(collapse).toBeVisible();
+  await ensureProjectExpanded(page, projectName, timeout);
 }
 
 async function prBaseBranchInDialog(page: Page, projectName: string): Promise<string> {

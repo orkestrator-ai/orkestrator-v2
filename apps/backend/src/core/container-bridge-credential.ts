@@ -1,13 +1,27 @@
 import { randomBytes } from "node:crypto";
 import {
+  bridgeAuthorityKeyEnv,
+  isBridgeAuthorityKey,
+  mintBridgeAuthorityKeyPair,
+} from "@orkestrator/protocol/node/bridge-authority";
+import {
   bridgeTokenVerifier,
   bridgeTokenVerifierEnv,
   mintBridgeToken,
 } from "@orkestrator/protocol/node/bridge-credential";
+import { forgetBridgeAuthorityKey, rememberBridgeAuthorityKey } from "./bridge-authority-keys.js";
 import { quoteShell } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { dockerExecDetached } from "./commands-server-health.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { boundedBackgroundLaunch } from "./container-log-bounds.js";
+import {
+  CLAUDE_BRIDGE_PORT,
+  CODEX_BRIDGE_PORT,
+  CURSOR_BRIDGE_PORT,
+  GROK_ACP_BRIDGE_PORT,
+  PI_BRIDGE_PORT,
+} from "./constants.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import { BRIDGE_TOKEN_PATTERN, type LocalServerKind } from "./local-server-runtime.js";
 import { runCommand } from "./shell.js";
@@ -24,9 +38,20 @@ import { runCommand } from "./shell.js";
  * environment, where the agent can read it, until the container is rebuilt.
  * Either way it reaches the container on stdin, never in `docker exec` argv,
  * where any local user can read it through `ps` or `/proc`.
+ *
+ * On an image with `bridge-launch=1` (`launcher` mode) the root-only directory
+ * also holds the private half of an authority key, whose public half the bridge
+ * requires a signature from on everything that changes an agent's authority
+ * (`bridge-authority-keys.ts`). Such a bridge is started by the root-owned
+ * `orkestrator-bridge-launch`, from the backend's own exec, so the public key
+ * and the verifier never pass through the `node` login shell that prepares the
+ * start: that shell only records the environment it built, for the bridge to
+ * hand to its agents.
  */
 export type ContainerBridgeKind = Exclude<LocalServerKind, "opencode">;
-export type ContainerCredentialMode = "verifier" | "token-file";
+export type ContainerCredentialMode = "launcher" | "verifier" | "token-file";
+
+export const CONTAINER_BRIDGE_LAUNCHER = "/usr/local/bin/orkestrator-bridge-launch";
 
 export const CONTAINER_BRIDGE_CREDENTIAL_DIR = "/run/orkestrator-bridge";
 
@@ -59,6 +84,11 @@ export function containerCredentialFile(kind: LocalServerKind): string {
   return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-token`;
 }
 
+/** The private half of a launcher-mode bridge's authority key, beside its token. */
+export function containerAuthorityKeyFile(kind: LocalServerKind): string {
+  return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-authority`;
+}
+
 /** What a start script needs to hand a fresh token to the bridge it launches. */
 export interface ContainerBridgeLaunch {
   token: string;
@@ -68,15 +98,60 @@ export interface ContainerBridgeLaunch {
   script: string;
   /** The command that runs the bridge's entrypoint. */
   bun: string;
+  /**
+   * The script's last line: start `entry` (the bridge's file and arguments)
+   * with output to `logFile`, or, in `launcher` mode, record the environment
+   * the script built for the launcher to start the bridge with.
+   */
+  start(entry: string, logFile: string): string;
+}
+
+/** A bridge {@link launchContainerScript} starts through `orkestrator-bridge-launch`. */
+export interface ContainerBridgeLauncherStart {
+  kind: ContainerBridgeKind;
+  /** Where the start script records its environment; the bridge removes it. */
+  snapshot: string;
+  /** The backend's own values, passed to the launcher on stdin. */
+  env: Record<string, string>;
 }
 
 export interface ContainerScriptLaunch {
   /** The file and token to write as root, before the script runs. */
-  rootCredential?: { kind: LocalServerKind; token: string };
+  rootCredential?: { kind: LocalServerKind; token: string; authorityKey?: string };
   removeRootCredential?: LocalServerKind;
   /** Exported at the top of the script, delivered on stdin. */
   secrets?: Record<string, string | undefined>;
+  /**
+   * Run the script to completion as preparation, then start the bridge with
+   * the launcher. Without it the script is detached and starts the bridge itself.
+   */
+  launcher?: ContainerBridgeLauncherStart;
 }
+
+/** What only the launcher may give a bridge: the verifier, the authority key and the port. */
+function launcherEnvironment(
+  kind: ContainerBridgeKind,
+  token: string,
+  publicKey: string,
+  port: number,
+): Record<string, string> {
+  const tokenEnv = TOKEN_ENV[kind];
+  return {
+    [bridgeTokenVerifierEnv(tokenEnv)]: bridgeTokenVerifier(token),
+    [bridgeAuthorityKeyEnv(tokenEnv)]: publicKey,
+    PORT: String(port),
+    HOSTNAME: "0.0.0.0",
+  };
+}
+
+/** Each bridge's port inside the container, which only the launcher sets in `launcher` mode. */
+const CONTAINER_BRIDGE_PORTS: Record<ContainerBridgeKind, number> = {
+  claude: CLAUDE_BRIDGE_PORT,
+  codex: CODEX_BRIDGE_PORT,
+  cursor: CURSOR_BRIDGE_PORT,
+  grok: GROK_ACP_BRIDGE_PORT,
+  pi: PI_BRIDGE_PORT,
+};
 
 export function containerBridgeLaunch(
   kind: ContainerBridgeKind,
@@ -84,6 +159,27 @@ export function containerBridgeLaunch(
   token = mintBridgeToken(),
 ): ContainerBridgeLaunch {
   const tokenEnv = TOKEN_ENV[kind];
+  const detached = (bun: string) => (entry: string, logFile: string) =>
+    boundedBackgroundLaunch(`${bun} ${entry}`, logFile);
+  if (mode === "launcher") {
+    const keys = mintBridgeAuthorityKeyPair();
+    const snapshot = `/tmp/.orkestrator-bridge-env-${kind}-${randomBytes(16).toString("hex")}`;
+    return {
+      token,
+      launch: {
+        rootCredential: { kind, token, authorityKey: keys.privateKey },
+        launcher: {
+          kind,
+          snapshot,
+          env: launcherEnvironment(kind, token, keys.publicKey, CONTAINER_BRIDGE_PORTS[kind]),
+        },
+      },
+      // Nothing about the credential goes through this shell.
+      script: `rm -f ${CONTAINER_TOKEN_FILES[kind]}`,
+      bun: VERIFIER_BUN,
+      start: () => `env -0 > ${snapshot}`,
+    };
+  }
   if (mode === "verifier") {
     return {
       token,
@@ -92,6 +188,7 @@ export function containerBridgeLaunch(
       script: `rm -f ${CONTAINER_TOKEN_FILES[kind]}
       export ${bridgeTokenVerifierEnv(tokenEnv)}=${bridgeTokenVerifier(token)}`,
       bun: VERIFIER_BUN,
+      start: detached(VERIFIER_BUN),
     };
   }
   return {
@@ -99,30 +196,47 @@ export function containerBridgeLaunch(
     launch: { secrets: { [tokenEnv]: token }, removeRootCredential: kind },
     script: `printf '%s' "$${tokenEnv}" > ${CONTAINER_TOKEN_FILES[kind]}`,
     bun: "bun",
+    start: detached("bun"),
   };
 }
 
-/** Write `token` where only root in the container can read it. */
+/**
+ * Write `token`, and the authority key when there is one, where only root in
+ * the container can read them. A start without a key removes any earlier one,
+ * so a key never outlives the token it was minted with.
+ */
 export async function writeContainerBridgeCredential(
   containerId: string,
   kind: LocalServerKind,
   token: string,
+  authorityKey?: string,
 ): Promise<void> {
   const command = [
     "set -eu",
     "umask 077",
     `install -d -m 700 ${CONTAINER_BRIDGE_CREDENTIAL_DIR}`,
+    "IFS= read -r token || true",
+    "IFS= read -r key || true",
     `credential_tmp="$(mktemp ${CONTAINER_BRIDGE_CREDENTIAL_DIR}/.token.XXXXXX)"`,
-    "trap 'rm -f \"$credential_tmp\"' EXIT",
-    'cat > "$credential_tmp"',
+    `key_tmp="$(mktemp ${CONTAINER_BRIDGE_CREDENTIAL_DIR}/.authority.XXXXXX)"`,
+    'trap \'rm -f "$credential_tmp" "$key_tmp"\' EXIT',
+    `rm -f ${containerAuthorityKeyFile(kind)}`,
+    'printf \'%s\' "$token" > "$credential_tmp"',
+    `if [ -n "$key" ]; then printf '%s' "$key" > "$key_tmp"; mv "$key_tmp" ${containerAuthorityKeyFile(kind)}; fi`,
     `mv "$credential_tmp" ${containerCredentialFile(kind)}`,
     "trap - EXIT",
+    'rm -f "$key_tmp"',
   ].join("\n");
   await runCommand(
     "docker",
     ["exec", "-i", ...CONTAINER_ROOT_USER_ARGS, containerId, "sh", "-c", command],
-    { stdin: token, timeoutMs: 30_000, redactValues: [token] },
+    {
+      stdin: `${token}\n${authorityKey ?? ""}\n`,
+      timeoutMs: 30_000,
+      redactValues: [token, authorityKey],
+    },
   );
+  if (authorityKey) rememberBridgeAuthorityKey(token, authorityKey);
 }
 
 export async function removeContainerBridgeCredential(
@@ -131,17 +245,26 @@ export async function removeContainerBridgeCredential(
 ): Promise<void> {
   await runCommand(
     "docker",
-    ["exec", ...CONTAINER_ROOT_USER_ARGS, containerId, "rm", "-f", containerCredentialFile(kind)],
+    [
+      "exec",
+      ...CONTAINER_ROOT_USER_ARGS,
+      containerId,
+      "rm",
+      "-f",
+      containerCredentialFile(kind),
+      containerAuthorityKeyFile(kind),
+    ],
     { timeoutMs: 30_000 },
   );
 }
 
+/** The token and, on a second line, the authority key, in one root exec. */
 async function readRootCredential(
   containerId: string,
   kind: LocalServerKind,
   timeoutMs: number,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ token: string; authorityKey: string }> {
   const { stdout } = await runCommand(
     "docker",
     [
@@ -150,11 +273,12 @@ async function readRootCredential(
       containerId,
       "sh",
       "-c",
-      `cat ${containerCredentialFile(kind)} 2>/dev/null || true`,
+      `cat ${containerCredentialFile(kind)} 2>/dev/null || true; echo; cat ${containerAuthorityKeyFile(kind)} 2>/dev/null || true`,
     ],
     { timeoutMs, signal },
   );
-  return stdout.trim();
+  const [token = "", authorityKey = ""] = stdout.split("\n", 2);
+  return { token: token.trim(), authorityKey: authorityKey.trim() };
 }
 
 /**
@@ -169,8 +293,16 @@ export async function readContainerBridgeToken(
   options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 120_000;
-  const rootToken = await readRootCredential(containerId, kind, timeoutMs, options.signal);
-  if (BRIDGE_TOKEN_PATTERN.test(rootToken)) return rootToken;
+  const root = await readRootCredential(containerId, kind, timeoutMs, options.signal);
+  if (BRIDGE_TOKEN_PATTERN.test(root.token)) {
+    // Signed requests to this bridge use the key that was minted with it.
+    if (isBridgeAuthorityKey(root.authorityKey)) {
+      rememberBridgeAuthorityKey(root.token, root.authorityKey);
+    } else {
+      forgetBridgeAuthorityKey(root.token);
+    }
+    return root.token;
+  }
   const token = (
     await dockerExec(
       containerId,
@@ -217,7 +349,11 @@ export async function launchContainerScript(
       Boolean(entry[1]),
     ),
   );
-  const redactValues = [...Object.values(secrets), launch.rootCredential?.token];
+  const redactValues = [
+    ...Object.values(secrets),
+    launch.rootCredential?.token,
+    launch.rootCredential?.authorityKey,
+  ];
   if (launch.removeRootCredential) {
     await removeContainerBridgeCredential(containerId, launch.removeRootCredential);
   }
@@ -226,15 +362,74 @@ export async function launchContainerScript(
       containerId,
       launch.rootCredential.kind,
       launch.rootCredential.token,
+      launch.rootCredential.authorityKey,
     );
   }
   const delivered = Object.keys(secrets).length
     ? await deliverStartSecrets(containerId, secrets)
     : undefined;
   try {
-    await dockerExecDetached(containerId, `${delivered?.source ?? ""}${script}`, redactValues);
+    if (launch.launcher) {
+      // Preparation only, so it runs to completion: the launcher needs the
+      // environment it records, and its failures are this start's.
+      await dockerExec(
+        containerId,
+        `${delivered?.source ?? ""}${script}`,
+        CONTAINER_PREPARE_TIMEOUT_MS,
+        redactValues,
+      );
+      await startContainerBridgeWithLauncher(containerId, launch.launcher);
+    } else {
+      await dockerExecDetached(containerId, `${delivered?.source ?? ""}${script}`, redactValues);
+    }
   } catch (error) {
     if (delivered) await dockerExec(containerId, `rm -f ${delivered.file}`).catch(() => undefined);
+    if (launch.launcher) {
+      await dockerExec(containerId, `rm -f ${launch.launcher.snapshot}`).catch(() => undefined);
+    }
     throw error;
   }
+}
+
+const CONTAINER_PREPARE_TIMEOUT_MS = 60_000;
+
+/** The launcher's stdin: the backend's values, one `NAME=VALUE` per line. */
+export function containerBridgeLauncherInput(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([name, value]) => {
+      if (!/^[A-Z][A-Z0-9_]*$/.test(name) || /[\n\r\0]/.test(value)) {
+        throw new Error("A bridge launch variable cannot be passed to the launcher");
+      }
+      return `${name}=${value}\n`;
+    })
+    .join("");
+}
+
+/**
+ * Start a prepared bridge through the image's root-owned launcher, as `node`,
+ * with no login shell: a fixed PATH and working directory, and the backend's
+ * values on stdin rather than in argv.
+ */
+async function startContainerBridgeWithLauncher(
+  containerId: string,
+  launcher: ContainerBridgeLauncherStart,
+): Promise<void> {
+  await runCommand(
+    "docker",
+    [
+      "exec",
+      "-i",
+      "--user",
+      "node",
+      "--workdir",
+      "/",
+      "--env",
+      "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+      containerId,
+      CONTAINER_BRIDGE_LAUNCHER,
+      launcher.kind,
+      launcher.snapshot,
+    ],
+    { stdin: containerBridgeLauncherInput(launcher.env), timeoutMs: 30_000 },
+  );
 }

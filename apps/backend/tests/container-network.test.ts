@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   allowedDomainsArgument,
@@ -11,7 +12,10 @@ import {
   ensureEnvironmentNetwork,
   environmentNetworkName,
   environmentNetworkPolicy,
+  FIREWALL_STATUS_READ,
   ingressPorts,
+  parseEgressRefusals,
+  parseFirewallReport,
   parseFirewallStatus,
   removeEnvironmentNetwork,
 } from "../src/core/container-network";
@@ -259,6 +263,70 @@ exit 0
     expect(
       parseFirewallStatus('{"mode":"restricted","egressFilter":"maybe"}')?.egressFilter,
     ).toBeNull();
+  });
+
+  test("reads the name checks' refusal counts only as two bounded numbers", () => {
+    expect(parseEgressRefusals('{"refusedConnections":3,"refusedQueries":2}\n')).toEqual({
+      connections: 3,
+      queries: 2,
+    });
+    for (const text of [
+      "",
+      "not json",
+      "null",
+      '{"refusedConnections":3}',
+      '{"refusedConnections":-1,"refusedQueries":2}',
+      '{"refusedConnections":1.5,"refusedQueries":2}',
+      '{"refusedConnections":"3","refusedQueries":2}',
+      `{"refusedConnections":1,"refusedQueries":1,"pad":"${"x".repeat(300)}"}`,
+    ]) {
+      expect(parseEgressRefusals(text)).toBeNull();
+    }
+  });
+
+  test("the firewall report read returns the counts beside an enforcing gateway's report", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-firewall-read-"));
+    try {
+      const read = FIREWALL_STATUS_READ.replaceAll("/run/", `${root}/`);
+      const run = () => spawnSync("sh", ["-c", read], { encoding: "utf8" });
+      // No report at all (a stopped or failed firewall): nothing to show.
+      expect(run().status).toBe(0);
+      expect(parseFirewallReport(run().stdout)).toBeNull();
+
+      await fs.mkdir(path.join(root, "orkestrator-firewall"));
+      const report = path.join(root, "orkestrator-firewall", "firewall.json");
+      const counts = path.join(root, "orkestrator-firewall", "egress-refusals.json");
+      await fs.writeFile(
+        report,
+        '{"mode":"restricted","state":"applied","egressFilter":"enforced"}\n',
+      );
+      // A gateway from before the counts: the checks run, the counts are unknown.
+      expect(parseFirewallReport(run().stdout)).toMatchObject({
+        egressFilter: "enforced",
+        refusals: null,
+      });
+      await fs.writeFile(counts, '{"refusedConnections":4,"refusedQueries":7}\n');
+      expect(parseFirewallReport(run().stdout)).toMatchObject({
+        state: "applied",
+        egressFilter: "enforced",
+        refusals: { connections: 4, queries: 7 },
+      });
+      // Counts are kept only where the name checks are enforced.
+      await fs.writeFile(report, '{"mode":"restricted","state":"applied","egressFilter":"off"}\n');
+      expect(parseFirewallReport(run().stdout)?.refusals).toBeNull();
+      // A report without a trailing newline still parses.
+      await fs.writeFile(
+        report,
+        '{"mode":"restricted","state":"applied","egressFilter":"enforced"}',
+      );
+      expect(parseFirewallReport(run().stdout)?.refusals).toEqual({ connections: 4, queries: 7 });
+      // The output of an older read, with no separator, has no counts.
+      expect(
+        parseFirewallReport('{"mode":"restricted","state":"applied","egressFilter":"enforced"}'),
+      ).toMatchObject({ refusals: null });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

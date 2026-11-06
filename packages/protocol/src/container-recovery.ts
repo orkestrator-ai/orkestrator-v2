@@ -256,5 +256,14 @@ export interface EnvironmentNetworkPolicy {
      * enforces addresses only.
      */
     egressFilter?: "enforced" | "off" | "unavailable" | null;
+    /**
+     * What the name checks refused since the gateway booted: TCP connections
+     * (a TLS name, an HTTP Host, or a non-TLS stream on 443) and DNS
+     * queries. Counts only; no refused name is kept anywhere, because one
+     * can carry the data an agent tried to send. `null` when the gateway
+     * does not count them (name checks not running, or an image from before
+     * the counts).
+     */
+    refusals?: { connections: number; queries: number } | null;
   } | null;
 }

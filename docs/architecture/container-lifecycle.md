@@ -1242,6 +1242,23 @@ never run it. The daemon listens on 31443 and 31453 in the shared namespace,
 so a workload cannot listen there, and a connection to them that was not
 redirected is refused.
 
+The daemon counts what it refuses since the gateway booted: connections (a
+name off the list in the ClientHello or Host, another protocol on TCP 443,
+or a connection that never finished its first bytes) and DNS queries
+answered REFUSED. It writes the two numbers to
+`/run/orkestrator-firewall/egress-refusals.json` at most once a second when
+one moved; a restarted worker carries them on, and a new boot (fresh `/run`)
+starts at zero. The backend reads the file in the same `docker exec` as the
+firewall report and returns it as `effective.refusals` only beside
+`egressFilter: enforced` (`null` from an image before the counts), and the
+Network section says how many were refused. Counts only: no refused name,
+part of one or digest of one is stored, logged or reported, because a refused
+name can carry the data an agent tried to send (`<secret>.attacker.tld`).
+`init-firewall.sh` holds `egress-filter.quiet` while its own boot checks ask
+for names off the list, and the daemon does not count during it (a marker
+older than two minutes is ignored, so one left by a script that died cannot
+mute counting for long).
+
 What it does not stop: a name hidden inside TLS (an encrypted ClientHello
 whose outer name is allowed, domain fronting), a second request with another
 Host on a kept-alive HTTP connection, an HTTP/2 connection a client reuses

@@ -6,6 +6,7 @@ import {
   OpenCodeAgentToolsReconciler,
   type OpenCodeAgentToolsTuning,
 } from "./opencode-agent-tools.js";
+import { forgetBridgeAuthorityKey } from "./bridge-authority-keys.js";
 import { OpenCodeHostStartGate } from "./opencode-host-start.js";
 import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
@@ -242,6 +243,7 @@ export class LocalServerRuntime {
     const kind = key.slice(0, separator) as LocalServerKind;
     const environmentId = key.slice(separator + 1);
     if (separator > 0 && this.bridgeTokens.has(kind)) {
+      forgetBridgeAuthorityKey(this.bridgeTokens.get(kind)!.get(environmentId));
       this.bridgeTokens.get(kind)!.delete(environmentId);
       if (kind === "opencode") this.openCodeAgentTools.cancel(`local:${environmentId}`);
       if (kind === "cursor") this.cursorCredentialFingerprints.delete(environmentId);
@@ -338,11 +340,15 @@ export class LocalServerRuntime {
     return this.bridgeTokens.get(kind)?.get(environmentId);
   }
 
+  /** A replaced or forgotten token takes its bridge's authority key with it. */
   recordBridgeToken(kind: LocalServerKind, environmentId: string, token: string): void {
+    const previous = this.bridgeTokens.get(kind)?.get(environmentId);
+    if (previous !== token) forgetBridgeAuthorityKey(previous);
     this.bridgeTokens.get(kind)?.set(environmentId, token);
   }
 
   forgetBridgeToken(kind: LocalServerKind, environmentId: string): void {
+    forgetBridgeAuthorityKey(this.bridgeTokens.get(kind)?.get(environmentId));
     this.bridgeTokens.get(kind)?.delete(environmentId);
   }
 

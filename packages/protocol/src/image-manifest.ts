@@ -117,6 +117,15 @@ export const IMAGE_CAPABILITIES = {
    * the token in a `node`-readable `/tmp` file and in the bridge's environment.
    */
   "bridge-credential": 1,
+  /**
+   * `orkestrator-bridge-launch` starts a bridge as `node` under `env -i`, from
+   * the backend's own exec and a root-owned working directory, with only the
+   * backend's values, so nothing `node` can write runs inside it; and every
+   * bridge in the image takes `<TOKEN_ENV>_AUTHORITY_KEY` and requires its
+   * signature on what changes an agent's authority. An older image keeps the
+   * login-shell start and unsigned requests.
+   */
+  "bridge-launch": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

@@ -30,6 +30,8 @@
     "./node/log-policy": "./src/node/log-policy.ts",
     "./node/bridge-log-policy": "./src/node/bridge-log-policy.ts",
     "./node/bridge-credential": "./src/node/bridge-credential.ts",
+    "./node/bridge-authority": "./src/node/bridge-authority.ts",
+    "./node/bridge-launch-environment": "./src/node/bridge-launch-environment.ts",
     "./logger": "./src/logger.ts",
     "./log-vocabulary": "./src/log-vocabulary/index.ts",
     "./node/logger-environment": "./src/node/logger-environment.ts",

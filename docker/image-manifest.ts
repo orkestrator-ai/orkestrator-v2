@@ -66,6 +66,10 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
     installed: "/usr/local/bin/orkestrator-git-credential",
     source: "docker/orkestrator-git-credential.sh",
   },
+  {
+    installed: "/usr/local/bin/orkestrator-bridge-launch",
+    source: "docker/orkestrator-bridge-launch.sh",
+  },
 ];
 
 const MARKER = /ORKESTRATOR_CAPABILITY ([a-z-]+)=(\d+)/g;

@@ -70,4 +70,4 @@ mise run test:logged -- --name linked-skill -- mise exec -- bun --cwd=apps/backe
 ```
 
 The same run also failed case
-[9834](../environments-and-containers/9834-container-status-excludes-aggregate-timeout.md).
+[7140](../environments-and-containers/7140-container-status-excludes-aggregate-timeout.md).

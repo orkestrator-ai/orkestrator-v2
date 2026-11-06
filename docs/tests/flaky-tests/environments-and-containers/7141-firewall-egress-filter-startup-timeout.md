@@ -1,7 +1,8 @@
 # Firewall name-check setup times out in the default aggregate
 
-- **ID:** 9834
+- **ID:** 7141
 - **Status:** open
+- **Previously:** 9834, renumbered on 2026-11-06 because three cases shared it ([todo 7142](../../../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md))
 - **Date observed:** 2026-11-06
 - **Test:** `init-firewall.sh with name checks > redirects TCP to allowed tuples and every DNS query to the daemon, and lets only marked traffic leave`
 - **Owner:** `tests/unit/firewall-egress-filter.test.ts`

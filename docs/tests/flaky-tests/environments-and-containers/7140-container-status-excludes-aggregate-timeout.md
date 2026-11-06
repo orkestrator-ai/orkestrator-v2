@@ -1,7 +1,8 @@
 # Container status: exclude repair timed out in the aggregate suite
 
-- **ID:** 9834
+- **ID:** 7140
 - **Status:** open
+- **Previously:** 9834, renumbered on 2026-11-06 because three cases shared it ([todo 7142](../../../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md))
 - **Date observed:** 2026-11-05
 - **Test:** `container status > repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping`
 - **File:** `apps/backend/src/core/commands-files-local-scan.test.ts:368`

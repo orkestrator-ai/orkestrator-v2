@@ -42,7 +42,6 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/unit/run-logged.test.ts",
     "tests/unit/runtime-env-wiring.test.ts",
     "tests/unit/test-all.test.ts",
-    "tests/unit/test-diagnostic-bounds.test.ts",
   ],
   "apps/backend": [
     ...LIVE_PATTERNS,

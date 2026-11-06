@@ -17,7 +17,7 @@
 
 ## Assessment
 
-The deadline reproduces on `origin/main`, so it predates the keyboard-shortcuts branch, whose main-process input hooks add no quit-time work. The process table at the deadline was not captured, so we don't yet know which descendant outlived the quit. Host load is a possible cause, not a proven one; [0671](0671-design-electron-preview-group-shutdown.md) is the earlier Vite-group shutdown case for the same spec.
+The deadline reproduces on `origin/main`, so it predates the keyboard-shortcuts branch, whose main-process input hooks add no quit-time work. The process table at the deadline was not captured, so we don't yet know which descendant outlived the quit. Host load is a possible cause, not a proven one; [9872](9872-design-electron-preview-group-shutdown.md) is the earlier Vite-group shutdown case for the same spec.
 
 **Next step:** capture `ps -axo pid,ppid,stat,command` for the owned tree when `waitForStopped` times out, then rerun the owner on a quiet host.
 

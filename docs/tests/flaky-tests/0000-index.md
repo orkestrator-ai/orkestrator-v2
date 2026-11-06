@@ -73,11 +73,7 @@ files.
 - A new case takes the next number after the highest one in use in any group
   (or one from a range reserved for the branch), and a number is never
   reused. `tests/unit/flaky-tests-index.test.ts` fails on a number used by
-  more than one case file, in one group or across groups. The 29 numbers that
-  were already shared when the check was added are frozen in its
-  `FROZEN_DUPLICATES` list and kept, not renumbered; none of them may gain
-  another file. When a reused number is cited in prose, cite the case file
-  name too.
+  more than one case file, in one group or across groups.
 - A case numbered 9800 or above also adds its claim,
   `docs/number-claims/flaky-tests/NNNN`, holding `<group>/NNNN-slug.md`. Two
   branches that take the same number then conflict in Git instead of both

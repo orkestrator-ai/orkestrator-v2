@@ -37,7 +37,7 @@ ORKESTRATOR_E2E_PORT=15430 mise run test:logged -- --name sidebar-browser-final 
 
 It passed in 95.8 s. No timeout, assertion or skip was changed. The initial run used an eager import of the new sidebar fixture; the final run loads that fixture only on its own route. The three failing browser owners themselves were unchanged.
 
-Existing related cases: [long transcript 0627](../native-agents-and-transcripts/0627-long-transcript-fixture-aggregate-timeout.md), [toolchain probe 0290](../backend-services-and-tooling/0290-toolchain-version-probe-empty-output.md), [environment move 0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), [Pi staging 0514](../agent-bridges/0514-pi-bridge-vendor-timeout-under-load.md), [disk report 0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md), [canvas 0174](../design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md), and [component browser load 0382](../web-ui/0382-component-browser-parallel-load.md).
+Existing related cases: [long transcript 0627](../native-agents-and-transcripts/0627-long-transcript-fixture-aggregate-timeout.md), [toolchain probe 0290](../backend-services-and-tooling/0290-toolchain-version-probe-empty-output.md), [environment move 0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), [Pi staging 9860](../agent-bridges/9860-pi-bridge-vendor-timeout-under-load.md), [disk report 0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md), [canvas 0174](../design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md), and [component browser load 0382](../web-ui/0382-component-browser-parallel-load.md).
 
 ## Sidebar verification
 

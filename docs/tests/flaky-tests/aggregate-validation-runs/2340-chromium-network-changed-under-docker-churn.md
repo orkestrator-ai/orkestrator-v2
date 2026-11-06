@@ -25,7 +25,7 @@
     `ensureProjectExpanded` (line 341) three times in a row, with about 200
     module requests ending at status -1 in each trace.
   - The same `ERR_NETWORK_CHANGED` errors are the "blank fixture pages" in
-    [0826](0826-scheduled-jobs-review-validation.md#browser-infrastructure),
+    [0826](9891-scheduled-jobs-review-validation.md#browser-infrastructure),
     whose cause was not established.
 - **Cause, reproduced:** on Linux, Chromium's network change notifier aborts
   in-flight requests, loopback included, with `ERR_NETWORK_CHANGED` when a

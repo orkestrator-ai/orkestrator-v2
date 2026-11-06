@@ -24,7 +24,7 @@ typechecks and production web build passed. The remaining failures were:
 | `apps/desktop/scripts/dev/coordinator-live.test.ts` | Fixture-tree digest exceeded five seconds; Git worktree command also failed after timeout. | Passed with `tests/unit/disk-report.test.ts`, one worker (7.8 s). See [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md). |
 | `tests/unit/disk-report.test.ts` | Isolated-checkout report exceeded five seconds. | Passed in the same one-worker support rerun. See [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md). |
 | `apps/backend/src/core/environment-move.test.ts` | Nested-submodule move exceeded five seconds. | Passed with `apps/backend/tests/commands-integration.test.ts`, one worker (64.1 s). See [0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md). |
-| `apps/backend/tests/commands-integration.test.ts` | Files-panel diff-cache check observed an unexpected Git status scan. | Passed in the same complete backend-owner rerun. Prior family: [0162](../environments-and-containers/0162-electron-diff-statistics-aggregate-timeout.md). |
+| `apps/backend/tests/commands-integration.test.ts` | Files-panel diff-cache check observed an unexpected Git status scan. | Passed in the same complete backend-owner rerun. Prior family: [9854](../environments-and-containers/9854-electron-diff-statistics-aggregate-timeout.md). |
 | `bridges/cursor-bridge/src/http.test.ts` | Three ten-second hooks timed out. | First complete one-worker rerun still failed one authentication hook (72 passed, one failed, 12.6 s); final unchanged complete owner passed in 4.1 s after the other reruns finished. See [0182](../agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md). |
 
 Commands for the owner reruns:
@@ -71,7 +71,7 @@ directory. No browser assertion, timeout or skip changed.
 `mise run test:agent:electron` reported 30 passed, one skipped and the known
 nickname-reload timeout (481.1 s logged). The complete unchanged Electron main
 owner passed in 29.4 s. Evidence is recorded in
-[0515](../electron-and-desktop/0515-electron-nickname-reload-timeout.md).
+[9863](../electron-and-desktop/9863-electron-nickname-reload-timeout.md).
 
 ## Repair and confirmation follow-up — 2026-10-23
 

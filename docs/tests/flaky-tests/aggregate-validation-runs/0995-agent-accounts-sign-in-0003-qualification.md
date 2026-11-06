@@ -17,7 +17,7 @@ and 2 failed.
 
 | Owner | Failure | Complete owner rerun |
 | --- | --- | --- |
-| `apps/desktop/scripts/dev/isolated-browser.test.ts` | Three `isolated browser overrides an inherited live … opt-in` cases hit Bun's five-second budget (5002 to 5012 ms). | Passed alone (9.0 s). Recurrence of [0163](../electron-and-desktop/0163-desktop-isolated-browser-aggregate-timeout.md). |
+| `apps/desktop/scripts/dev/isolated-browser.test.ts` | Three `isolated browser overrides an inherited live … opt-in` cases hit Bun's five-second budget (5002 to 5012 ms). | Passed alone (9.0 s). Recurrence of [9855](../electron-and-desktop/9855-desktop-isolated-browser-aggregate-timeout.md). |
 | `apps/desktop/tests/backend-process.test.ts` | `Electron backend process supervisor > adopts and removes an owned Serve route after an ungraceful backend restart` failed a `toMatchObject` after 12,657 ms. | Passed alone (15.5 s). The branch does not touch the desktop backend supervisor. |
 | `tests/unit/firewall-policy.test.ts` | `the root entrypoint runs the firewall itself and records the outcome per mode` timed out (5291 ms, `exitCode` `null`). | Failed alone too (32 passed, 2 failed at ~5,005 ms each): the host-load condition of [0632](../environments-and-containers/0632-firewall-policy-probe-budget.md) and [0192](../environments-and-containers/0192-firewall-bootstrap-shell-timeout.md), which `main` shares. Not classified as a new flake. |
 | `tests/unit/flaky-tests-index.test.ts` | `environments-and-containers index lists every case file and stores a status for each row`: case 0887 had no `- **ID:**` / `- **Status:**` lines. | A deterministic defect already on `main` (from `c55807f96`); this branch gives 0887 the metadata lines and the owner passes (11 passed). |

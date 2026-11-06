@@ -49,7 +49,7 @@ temporary directory with its own `bun install` (removed afterwards).
 | `apps/backend/src/core/environment-move.test.ts` | Nested-submodule moves, failed re-link, restart re-link (first run only) | 38 passed | not needed | [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) |
 | `apps/backend/src/core/commands-registry-coordinator.test.ts` | Dirty submodule switch confirmation (first run only) | 23 passed | not needed | Aggregate-only; recorded here. |
 | `apps/backend/src/core/agent-accounts-active.test.ts` | Owner login renewal before the coordinator handoff (first run only) | 27 passed | not needed | [0930](../backend-services-and-tooling/0930-coordinator-codex-login-renewal-loginless.md) |
-| `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | `its first answer is stale until a settling re-read…` timed out (first run only) | 30 passed | not needed | [0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md) |
+| `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | `its first answer is stale until a settling re-read…` timed out (first run only) | 30 passed | not needed | [9889](../agent-bridges/9889-codex-command-catalogue-stale-race.md) |
 | `apps/backend/src/core/preview-local-discovery.test.ts` | `terminal exited 0` (second run, and an earlier focused backend run) | 19 passed | 19 passed | [1145](../previews-annotations-and-gateway/1145-preview-local-discovery-terminal-exit.md) (new) |
 | `apps/backend/src/core/opencode-sdk-fetch.test.ts` | Body `{}` instead of `ok` (second run only) | 5 passed | 5 passed | [1146](../backend-services-and-tooling/1146-opencode-sdk-fetch-aggregate-body.md) (new) |
 

@@ -41,7 +41,7 @@
 
 Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. The Chromium policy hook timed out after 5001.89 ms. `mise run test:logged -- --name merge-artifact-engine-owner -- bun --cwd=apps/backend test ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (122.9 s); unavailable Firefox/WebKit coverage remained skipped.
 
-Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
+Full failure names, counts, evidence paths and unresolved limitations are in [9884](../aggregate-validation-runs/9884-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
 
 ## Repository separator validation — 2026-10-25
 

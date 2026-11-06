@@ -313,7 +313,7 @@ rerun alone at load 31–46 still timed out (`orkestrator-test-run.yb5lB7`).
 
 Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. GitHub seed/live/cache timed out at 5008.03 ms in the aggregate. `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` also failed (21 passed, three different five-second timeouts; 52.7 s). This run adds no independent pass-alone confirmation.
 
-Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
+Full failure names, counts, evidence paths and unresolved limitations are in [9884](../aggregate-validation-runs/9884-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
 
 ## Recurrence — 2026-10-24 (worktree signal review validation)
 

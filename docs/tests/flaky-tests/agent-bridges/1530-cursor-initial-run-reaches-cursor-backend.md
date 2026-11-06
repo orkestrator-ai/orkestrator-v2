@@ -5,7 +5,7 @@
 - **Date observed:** 2026-10-24 (aggregate); reproduced 2026-10-31.
 - **Test:** `replaces an unused warm agent when a read-only prompt changes its policy`, and three later cases in the same file
 - **File:** `bridges/cursor-bridge/src/initial-run.test.ts:175`
-- **First record:** [0790](../aggregate-validation-runs/0790-settings-machine-strip-validation.md),
+- **First record:** [9888](../aggregate-validation-runs/9888-settings-machine-strip-validation.md),
   a five-second timeout (5,001.32 ms) in the aggregate; the 2026-10-25 triage
   in todo 0030 named this owner without a case.
 

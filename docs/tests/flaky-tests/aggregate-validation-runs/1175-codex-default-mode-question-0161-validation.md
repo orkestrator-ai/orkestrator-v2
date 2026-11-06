@@ -63,7 +63,7 @@ changed in this follow-up; no runtime implementation changed.
   five-second deadlines again; `environment-move.test.ts` alone (`Ap6MvT`)
   also timed out (17 passed, 21 failed, 19 follow-on errors, 247.8 s).
 - Bridges additionally hit Codex catalogue's two-second settle wait
-  ([0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md)); its
+  ([9889](../agent-bridges/9889-codex-command-catalogue-stale-race.md)); its
   owner rerun (`u3qij2`) failed a sibling settle-wait case (29 passed).
   Claude coordinator sandbox cases `default-sandbox-writes` and
   `unavailable-hook-refuses-abbreviation`, execution-policy `escape`, and

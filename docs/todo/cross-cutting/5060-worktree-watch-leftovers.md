@@ -236,7 +236,7 @@ A worktree with more than 256 ignored `node_modules` or a plan of over 1,024 wat
 
 - [git-scan-caches.md](../../architecture/git-scan-caches.md)
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 7
-- Flakes [0947](../../tests/flaky-tests/environments-and-containers/0947-worktree-git-aggregate-timeouts.md), [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)
+- Flakes [9892](../../tests/flaky-tests/environments-and-containers/9892-worktree-git-aggregate-timeouts.md), [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)
 
 ## Replaces
 

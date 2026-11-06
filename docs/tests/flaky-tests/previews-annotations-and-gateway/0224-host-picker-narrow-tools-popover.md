@@ -468,7 +468,7 @@ profile. The full run reported 27 passed, 51 skipped and two failed; the owner
 reported 13 passed, 10 skipped and this single failure (127.0 seconds). The
 other full-run failure, local-environment `origin` visibility, passed in the
 owner, but the owner remains non-green. Commands, evidence and cleanup are
-recorded in [0515](../aggregate-validation-runs/0515-idle-observation-main-merge-validation.md), under
+recorded in [9861](../aggregate-validation-runs/9861-idle-observation-main-merge-validation.md), under
 “Main refresh”. No implementation, assertion, deadline or skip changed; this
 recurrence remains unresolved rather than a newly confirmed flake.
 

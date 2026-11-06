@@ -26,6 +26,10 @@ the same way.
   number is taken. Renumber your file to the next number after the highest in
   use (files and claims), update its index row and every link to it, and add
   the claim for the new number.
+- **On a move or slug rename**, keep the number and update the existing claim
+  body to the new register-relative path in the same change. An absent owner
+  may also mean a retired number: update the claim only for the same case or
+  to-do, never to reuse its number for a different one.
 - **A claim is permanent.** When its file is deleted or renumbered the claim
   stays, so the number is never reused.
 - `tests/unit/number-claims.test.ts` fails when a file at or above the

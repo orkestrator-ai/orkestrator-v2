@@ -45,9 +45,9 @@ Owner reruns used `mise run test:logged -- --name <label> -- bun test --cwd
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` | Two `pruneProfiles` cases | Not rerun (macOS Keychain warning) | Known | [1100](../electron-and-desktop/1100-profile-cleanup-macos-keychain-warning.md) |
 | `tests/unit/migrate-copy.test.ts` | `verified copy helper > a missing listing/root completion times out as extract-failed` | 10 pass, 2 fail, deterministic | Same two fail on `863b5782` | [1013](1013-interactive-command-main-merge-validation.md), [1101](1101-codex-typed-prompts-0211-validation.md) |
 | `tests/unit/test-all.test.ts` | `honours a per-group deadline…` (first run: `runs every non-iOS group…`) | 58 pass | — | [0160](../backend-services-and-tooling/0160-runtime-env-wiring-and-test-all-aggregate-timeouts.md) |
-| `tests/unit/electron-spec-process-ownership.test.ts`, `tests/unit/pi-bridge-vendor.test.ts` | First run only | Pass alone | — | Pi: [0178](../agent-bridges/0178-pi-vendor-runtime-aggregate-timeout.md), [0514](../agent-bridges/0514-pi-bridge-vendor-timeout-under-load.md) |
+| `tests/unit/electron-spec-process-ownership.test.ts`, `tests/unit/pi-bridge-vendor.test.ts` | First run only | Pass alone | — | Pi: [0178](../agent-bridges/0178-pi-vendor-runtime-aggregate-timeout.md), [9860](../agent-bridges/9860-pi-bridge-vendor-timeout-under-load.md) |
 | `bridges/claude-bridge/src/conformance-coordinator-sandbox-live.test.ts` | Three `unavailable-hook-*` cases at 17 s | 9 pass | — | Recorded here |
-| `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | First run: `an explicit refresh cannot replace the baseline for an already armed delay` | 29 pass, 1 fail (`two pre-plugin answers stay stale…`) | — | [0800](../agent-bridges/0800-codex-command-catalogue-armed-delay-race.md) (resolved; recurrence), [0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md) (open) |
+| `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | First run: `an explicit refresh cannot replace the baseline for an already armed delay` | 29 pass, 1 fail (`two pre-plugin answers stay stale…`) | — | [0800](../agent-bridges/0800-codex-command-catalogue-armed-delay-race.md) (resolved; recurrence), [9889](../agent-bridges/9889-codex-command-catalogue-stale-race.md) (open) |
 
 ## Conclusion
 

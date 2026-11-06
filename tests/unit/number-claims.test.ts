@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -75,7 +76,9 @@ function claimProblems(register: string, claimsDir: string, claimsFrom: number):
     if (claimed === file) continue;
     if (claimed !== undefined) {
       problems.push(
-        `${file}: number ${id} is claimed by ${claimed}; renumber this file to an unclaimed number`,
+        existsSync(path.join(register, claimed))
+          ? `${file}: number ${id} is claimed by ${claimed}; renumber this file to an unclaimed number`
+          : `${file}: number ${id} is claimed by absent file ${claimed}; if this is its move or rename, update docs/number-claims/${claimsName}/${id} to "${file}"; otherwise renumber this file to an unclaimed number (retired numbers cannot be reused)`,
       );
     } else if (Number(id) >= claimsFrom) {
       problems.push(`${file}: add docs/number-claims/${claimsName}/${id} containing "${file}"`);
@@ -144,6 +147,36 @@ describe("number claim guard fixtures", () => {
     const directory = fixture();
     write(directory, "register/area/7510-duplicate.md");
     expect(check(directory)).toHaveLength(1);
+  });
+
+  test.each(["other/7500-first.md", "area/7500-renamed.md"])(
+    "guides a claim update after moving or renaming to %s",
+    (destination) => {
+      const directory = fixture();
+      renameSync(
+        path.join(directory, "register/area/7500-first.md"),
+        path.join(directory, "register", destination),
+      );
+      const problems = check(directory);
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(
+        `if this is its move or rename, update docs/number-claims/claims/7500 to "${destination}"`,
+      );
+      write(directory, "claims/7500", `${destination}\n`);
+      expect(check(directory)).toEqual([]);
+    },
+  );
+
+  test("rejects a planted flake duplicate with its claim", () => {
+    const directory = fixture();
+    write(directory, "register/area/9851-first.md");
+    write(directory, "claims/9851", "area/9851-first.md\n");
+    write(directory, "register/other/9851-duplicate.md");
+    expect(
+      claimProblems(path.join(directory, "register"), path.join(directory, "claims"), 9800),
+    ).toContain(
+      "other/9851-duplicate.md: number 9851 is claimed by area/9851-first.md; renumber this file to an unclaimed number",
+    );
   });
 
   test("rejects a new number with no claim and says which claim to add", () => {

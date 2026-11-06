@@ -198,7 +198,8 @@ test was added, because real-Git tests belong to the slow tier.
 Claims are required from 7500 (todos) and 9800 (flakes), just below the
 highest numbers in use, rather than for every existing file: backfilling about
 a thousand files adds no protection, because collisions happen at the top, and
-the 31 frozen or allowlisted duplicates could not have one owner each.
+the historical duplicates initially could not have one owner each. The
+review fix below removes the flake exceptions.
 
 The renumbering kept each clashing number on the file that merged first
 (squash-merge commit time): agent-engines 7520 (#1957, 20:51 UTC) and
@@ -207,5 +208,26 @@ unused numbers right after the old ones, which no branch taking "the next
 number" will race for: containers-and-environments 7520 (#1958) to 7521,
 transcripts-and-observation 7520 (#1960) to 7522, and
 containers-and-environments 7530 (#1961) to 7531. Each records the old number
-in a "Replaces" section. The flake register had no new clash; its 29 frozen
-duplicates are unchanged.
+in a "Replaces" section. Review found the full-register cleanup incomplete;
+the follow-up below removes all 29 historical flake collisions.
+
+
+### Task 3: remove historical flake collisions and clarify moves
+
+Renumbered 45 flake cases sharing 29 IDs to 9851–9895, with a claim per new
+number. For each shared ID, the case with the earliest recorded Git addition
+keeps it (path order breaks timestamp ties). Updated case ID fields, group
+index rows and repository filename references. Removed the frozen-duplicate
+allowlist so every flake number must now be unique. This completes the global
+cleanup instead of preserving historical exceptions.
+
+Options: (recommended) renumber historical collisions, which gives every case
+an unambiguous ID but changes old links; keep frozen exceptions, which preserves
+paths but fails the full-register uniqueness requirement. The implemented
+option is renumbering; all tracked filename references were updated.
+
+For moves and slug renames, keep the number and update its claim body in the
+same change. The guard distinguishes an existing owner (collision) from an
+absent owner (possible move or retired number); it cannot infer file identity.
+Fixtures cover both a folder move and a slug rename, the corrected claim,
+and a claimed flake duplicate. Retired numbers remain unavailable to new cases.

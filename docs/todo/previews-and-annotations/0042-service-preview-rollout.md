@@ -1555,7 +1555,7 @@ shipping Safari, iOS, Windows or real DNS evidence.
     5 rounds and both deterministic cases held after).
 - Full Electron suite: `svc0042-suite-1` (583.5 s, load 43 to 60) 31 passed,
   3 failed, 5 skipped or not run; the service-preview spec passed 17/17. The
-  failures: [0515](../../tests/flaky-tests/electron-and-desktop/0515-electron-nickname-reload-timeout.md)
+  failures: [9863](../../tests/flaky-tests/electron-and-desktop/9863-electron-nickname-reload-timeout.md)
   (recurrence, with [0157](../../tests/flaky-tests/electron-and-desktop/0157-electron-first-window-startup-timeout.md)
   in the first owner rerun), new [0940](../../tests/flaky-tests/previews-annotations-and-gateway/0940-annotation-late-font-fixture-reload-timeout.md)
   (an A/B of that test passed 2/2 with and without the new throttling

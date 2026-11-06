@@ -234,7 +234,7 @@ one live check (an Electron spec with a hung `close()`).
   | `Claude coordinator sandbox qualification > default-sandbox-writes` and `coordinator-sandbox-reads` | 20 | Every completed run since the test landed (#1217, 2026-10-24 17:43). Ubuntu's AppArmor bwrap profile strips capabilities from the nested user namespace the CLI's `apply-seccomp` creates, so every sandboxed command fails. The older live test only ever expected sandboxed commands to fail, so it never noticed. | CI removes the two AppArmor profiles and checks a nested namespace before the tests. The test now prints why a command failed. The product side is [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md). |
   | Runner "received a shutdown signal" about 5 minutes in | 8 | Started with #1227's own pull-request run (22:01) and stopped once #1236 changed the same tool-group animation code; pull-request runs in that window died the same way. The likely cause is a test from #1227 exhausting the runner; no runner diagnostics exist to confirm it. | None needed: gone since #1236. |
   | `native shell completion execution > zsh bashcompinit …` | 6 | Since #1246. The runner has no `zsh`; with it installed, `compinit` aborts on the world-writable completion directories because it cannot prompt. | CI installs `zsh` and `fish`; the test runs `compinit -u` and skips on a host without `zsh`. The fish test now runs on CI and checks short flags in a way fish 3.7 and 4 both answer. |
-  | `interactive preview in Chromium > resource escape …` (`Page crashed`) | 2 | Unknown ([flake 0672](../../tests/flaky-tests/design-canvas-and-artifacts/0672-preview-interactive-chromium-page-crash.md)). | Registered recurrence; open. |
+  | `interactive preview in Chromium > resource escape …` (`Page crashed`) | 2 | Unknown ([flake 9876](../../tests/flaky-tests/design-canvas-and-artifacts/9876-preview-interactive-chromium-page-crash.md)). | Registered recurrence; open. |
   | ACP composer patch/prompt race | 1 | The test assumed two concurrent requests overlap ([0875](../../tests/flaky-tests/agent-bridges/0875-acp-composer-patch-prompt-overlap-assumption.md)). | The fake agent holds the composer RPC, so the overlap is certain. |
   | ACP `401` after `spawnBridge` | 1 | Another server took the harness's released port; readiness checked only unauthenticated health ([0876](../../tests/flaky-tests/agent-bridges/0876-acp-harness-port-squatter-401.md)). | Reproduced and fixed. |
   | Claude persistence `EEXIST` | 1 | A previous test's unawaited preference write landed in the next test ([0877](../../tests/flaky-tests/agent-bridges/0877-claude-session-preference-write-crosses-tests.md)). | Shown and fixed. |
@@ -768,7 +768,7 @@ Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
 
 - [Flake registry](../../tests/flaky-tests/0000-index.md); this round:
   [0179](../../tests/flaky-tests/agent-bridges/0179-acp-harness-child-exit-publication.md),
-  [0672](../../tests/flaky-tests/design-canvas-and-artifacts/0672-preview-interactive-chromium-page-crash.md),
+  [9876](../../tests/flaky-tests/design-canvas-and-artifacts/9876-preview-interactive-chromium-page-crash.md),
   [0697](../../tests/flaky-tests/design-canvas-and-artifacts/0697-artifact-engine-firefox-favicon-sink-hit.md),
   [0875](../../tests/flaky-tests/agent-bridges/0875-acp-composer-patch-prompt-overlap-assumption.md),
   [0876](../../tests/flaky-tests/agent-bridges/0876-acp-harness-port-squatter-401.md),

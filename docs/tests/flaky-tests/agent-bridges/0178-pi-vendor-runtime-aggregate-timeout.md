@@ -844,7 +844,7 @@ timed out at 30001.93 ms in the aggregate retry's one-worker root/support group
 owning file passed alone with
 `mise run test:logged -- --name merge-pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1`
 (exit 0, 13.6 seconds). The retry command and aggregate evidence are in
-[0515](../aggregate-validation-runs/0515-idle-observation-main-merge-validation.md). No implementation,
+[9861](../aggregate-validation-runs/9861-idle-observation-main-merge-validation.md). No implementation,
 assertion, timeout or skip changed.
 
 ## Cold restart review qualification — 2026-10-21

@@ -20,7 +20,7 @@
 
 | Owner | Aggregate failure | Rerun |
 | --- | --- | --- |
-| `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | `a cold app-server child > two pre-plugin answers stay stale until late plugins are observed and confirmed`: expected `stale`, received `ready` (52.9 ms). Recurrence of [0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md). | Passed alone (30 pass, 0 fail). |
+| `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | `a cold app-server child > two pre-plugin answers stay stale until late plugins are observed and confirmed`: expected `stale`, received `ready` (52.9 ms). Recurrence of [9889](../agent-bridges/9889-codex-command-catalogue-stale-race.md). | Passed alone (30 pass, 0 fail). |
 | `apps/backend/tests/codex-subagent-cards.test.ts` | `each child keeps one card, its transcript and status across a fresh backend and a cold restart` timed out after 20,000 ms. Earlier: [0310](../native-agents-and-transcripts/0310-codex-subagent-cards-projection-wait-timeout.md), [1290](1290-idle-spec-sidebar-probe-0199-validation.md). | Passed alone (1 pass, 0 fail). |
 | `apps/backend/src/core/preview-terminal-roots.test.ts` | `the spawned local setup terminal is a managed root until it exits` timed out after 20,004 ms. | Timed out the same way on the first solo run (load average 24 to 32), then passed on the second solo run (2 pass, 0 fail, 2.8 s). |
 

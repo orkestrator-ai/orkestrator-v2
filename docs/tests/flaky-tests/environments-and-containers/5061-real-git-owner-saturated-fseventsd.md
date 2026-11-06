@@ -80,7 +80,7 @@ An earlier combined run was stopped by the runner's five-minute no-output watchd
 because `--only-failures` prints nothing for a passing file. Both files now write a line
 to stderr per detection on macOS. `console.log` would not do: the test preload suppresses it.
 
-The cases [0947](0947-worktree-git-aggregate-timeouts.md) and
+The cases [9892](9892-worktree-git-aggregate-timeouts.md) and
 [0957](0957-worktree-index-and-shared-ref-aggregate-timeouts.md) are on the same file and
 may share this cause on macOS. They stay open: no aggregate stress run was done here.
 

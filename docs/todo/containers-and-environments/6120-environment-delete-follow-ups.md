@@ -11,6 +11,7 @@ Analysed 2026-11-05 against `main` at `50d4916ca`, with the delete fix on its br
 3. **Per-step delete progress**: tell the user which step a slow delete is on. Status: open.
 4. **Bound a delete that hangs**: a delete that neither fails nor finishes spins with only its elapsed time. Status: open (depends on 3).
 5. **Watch readiness before `fseventsd` delivers**: a watch reports `established` before events are known to flow. Status: open.
+6. **Store cleanup that holds the event loop**: a delete parses every native session and rewrites the whole agent-mail document without yielding. Status: open.
 
 ### 1. Confirm the fix on the machine that reported it
 
@@ -101,6 +102,24 @@ Analysed 2026-11-05 against `main` at `50d4916ca`, with the delete fix on its br
   - **Have the helper hold `ready` until an event arrives from a private directory it writes to.**
     - Pros: `qualified` then means the stream has delivered something, and a slow host keeps polling for longer.
     - Cons: a temporary directory and repeated writes in the helper; a host that delivers nothing leaves every watch unqualified; a delivered event still does not prove later ones arrive.
+
+### 6. Store cleanup that holds the event loop
+
+**Problem.** Part of a delete's record cleanup runs on the backend's thread without yielding, and concurrent deletes run theirs as one block. On a heavy store, five deletes at once left a 0.6-1.1 s gap, or 4.4-5.2 s on a heavily loaded host.
+
+**Context.** `scripts/benchmark-delete-store-work.ts` measures it; the workload and numbers are in [environment-deletion.md](../../architecture/environment-deletion.md#the-work-a-delete-does-besides-watches). It is a fraction of a second against the tens of seconds the watch stalls cost, which is why it was not fixed with them.
+
+**Investigation.** Two calls account for nearly all of it. `deleteNativeAgentSessionsByEnvironment` (`storage-native.ts`) calls `loadNativeAgentSessions()`, which reads and parses all 2,000 sessions (146-161 ms) to find one environment's keys. `deleteAgentMailByEnvironment` (`storage-agent-mail.ts`) loads the whole agent-mail document and saves it whole through `saveSensitiveJson` (116-131 ms at about 20 MiB). A CPU profile puts the time in `readStore` and in `saveSensitiveJson`. Every other store call in the delete took under 10 ms.
+
+**Decisions.**
+
+- **How to bound it?**
+  - **Remove the whole-store passes: find an environment's native sessions from a per-environment index or the cached snapshot, and store agent mail as rows by mailbox (recommended).**
+    - Pros: the cost no longer grows with the size of the store, for every caller and not only deletes.
+    - Cons: an agent-mail layout change needs a storage migration, and the native-session sweep must keep its rule that no key can appear behind it.
+  - **Yield to the event loop between the delete's store steps.**
+    - Pros: a few lines in `deleteEnvironment`.
+    - Cons: concurrent deletes' yields are served together, so the gap still grows with the number of deletes, and the total work is unchanged.
 
 ## Current state
 

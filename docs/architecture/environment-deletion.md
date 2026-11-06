@@ -256,6 +256,73 @@ loop, and the six `untrack` calls that followed ran one after another as a singl
 54 s stall, their individual `close()` calls taking up to 18.1 s. The worktree
 removal is still the bulk of what remains, and it does not hold the loop.
 
+### The work a delete does besides watches
+
+`scripts/benchmark-delete-store-work.ts` runs the real `delete_environment`
+command in a temporary data directory with no watches, bridges or project
+checkout. Every storage call is timed, store-row writes are counted, and a 5 ms
+timer records event-loop gaps. Its store is heavy on purpose: 136 environments,
+10 terminal sessions each, 2,000 native sessions with 200 dispatched request ids
+each, 64 display tails of 1 MiB, and 200 mailboxes of 50 2 KiB messages (about
+20 MiB of agent mail's 32 MiB limit). On the same Mac at a load average of
+20-29, over five runs:
+
+| | One delete | Five at once |
+| --- | --- | --- |
+| Duration | 0.48-0.51 s | 1.5-1.6 s each |
+| Longest event-loop gap | 0.28-0.31 s | 0.61-1.10 s |
+| Store rows written | 279 | 1,380 |
+
+Earlier runs, with the host's 5- and 15-minute load averages near 67, gave gaps
+of 1.1-1.3 s for one delete (two runs) and 4.4-5.2 s for five (three runs).
+
+Two calls account for nearly all of it. `deleteNativeAgentSessionsByEnvironment`
+takes 160-176 ms, 146-161 ms of it before it first yields, parsing every native
+session to find one environment's. `deleteAgentMailByEnvironment` takes
+116-131 ms to load and rewrite the whole agent-mail document. A CPU profile puts
+that time in `readStore` and in `saveSensitiveJson`. SQLite calls are
+synchronous, so neither call gives timers a turn, concurrent deletes run their
+store tails as one block, and the gap grows with the number of deletes. Every other store call took under 10 ms per delete.
+
+What the ticket's leads came to:
+
+- **A recursive watch still open while `node_modules` is removed.** The order
+  was wrong, but the events were not the cost. Before the fix,
+  `git worktree remove` ran with its watch still open and did not stall the
+  loop. The stall came from closing the watch afterwards, which the helper now
+  does off the backend's thread.
+- **`git worktree remove --force` on a large worktree.** It is slow, 17.2 s for
+  six, and is most of what a delete still takes. It runs in a child process and
+  does not stall the loop.
+- **Store rewrites.** Partly. The environment store did not hold: its seven
+  record writes per delete took 5-10 ms in all, and each cleanup-ledger write
+  under 2 ms. The agent-mail document did hold: it is rewritten whole on each
+  delete. Its cost depends on the size of
+  the mail store, and is a fraction of a second where the watch stalls were tens
+  of seconds.
+- **Session and transcript stores.** Partly. Terminal sessions did not hold:
+  their removal takes under 5 ms. Display tails did not hold either: their
+  removal is part of the native-session call, which spends about 15 ms after its
+  parse. The native-session store did hold, through the whole-store parse
+  above. Transcript artifacts and media pins were empty in the benchmark, so it
+  does not measure them.
+- **Reconcile loops.** Did not hold. A cleanup-reconciler pass with nothing
+  pending took 0.1 ms; with entries pending it runs the same cleanup steps as a
+  delete. The activity sweep skips environments with `deletionRequestedAt`, and
+  its snapshot reads took up to 101 ms, with a longest gap of 99 ms. So the
+  `activity.reconcile-failed` batches in the reported logs were about other
+  environments' bridge reads. They are logged without a message, so the logs do
+  not say why those reads failed, and that was not established here.
+- **Later deletes waiting before their bridges stopped.** The lifecycle and
+  local-server queues are per environment, and a stuck delete holds up only its
+  own (`commands-environment-cleanup.test.ts`). The wait was the stalled loop:
+  before the fix three of six concurrent deletes took 72.1 s against 32.0 s;
+  after it all six took 15.9 s.
+
+The remaining store cost is
+[6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md)
+task 6.
+
 ## Cleanup ledger
 
 The ledger is the `environment-cleanup-ledger` store in the backend database

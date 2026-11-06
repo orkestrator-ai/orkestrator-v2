@@ -425,10 +425,10 @@ export const serviceCommands: CommandSpec[] = [
                   [
                     "address",
                     connection.browserUrl ??
-                      // A loopback-only gateway is a browser listener too, just
-                      // not one a remote machine can reach.
+                      // Local clients can remain available after a remote browser
+                      // listener fails, so keep the log hint in both cases.
                       (connection.clientUrls.length > 0
-                        ? "(loopback only; see local listeners)"
+                        ? "(no remote browser listener; see local listeners and the log)"
                         : "(no browser listener; see the log)"),
                   ],
                   ...(connection.clientUrls.length > 0

@@ -627,7 +627,7 @@ The detailed outcome is retained here so it survives squash merges (line numbers
 
 Measured on 2026-11-05 for [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md) tasks 1 and 2. No provider turn was billed; everything ran against a provider fake.
 
-**Method.** `bun scripts/benchmark-transcript-changed-read.ts` builds a `NativeAgentService` on a temporary data directory with an in-process provider fake. The fake returns freshly built rows on every read, as a parsed bridge response would, and its strings are cached so its own cost stays out of the figures. Each sample advances the fake by one streamed revision, then makes one changed read:
+**Method.** `bun scripts/benchmark-transcript-changed-read.ts --samples=1000 --warmup=100` builds a `NativeAgentService` on a temporary data directory with an in-process provider fake. The fake returns freshly built rows on every read, as a parsed bridge response would, and its strings are cached so its own cost stays out of the figures. Each sample advances the fake by one streamed revision, then makes one changed read:
 
 - a progressive read: `getTranscriptUpdate` with the token the view holds and part patches (`patchVersion: 2`), encoded as the gateway writes it (spliced where `spliceEncodedJson` exists, `JSON.stringify` otherwise);
 - or, for `legacy`, a `getProjection` read encoded with `JSON.stringify`, since that command is not spliced.
@@ -671,7 +671,7 @@ E11's legacy commit (0210) was 39% slower than before. It no longer kept the win
 | `revised` | 359 | 0.059 µs (0.016%) | 0.274 µs (0.08%) | not reached |
 | `near-full` | 240 | 0.030 µs (0.013%) | 0.174 µs (0.07%) | not reached |
 
-`recoveredHead` runs only on a recovery read, which none of these reads was. That read is a whole provider `messages` read, so a pass over its 100 rows is negligible beside it. As an upper bound, the script's `--scan-bound` times each predicate over 100 rows with no match: 0.27–0.42 µs for `firstUserMessageIndex` and 0.67–0.96 µs for a head lookup, over nine runs on `main`. Each is under 0.6% of the cheapest changed read measured (186 µs). None of the three is a meaningful share, so all three stay as they are.
+`recoveredHead` runs only on a recovery read, which none of these reads was. That read is a whole provider `messages` read, so a pass over its 100 rows is negligible beside it. As an upper bound, `bun scripts/benchmark-transcript-changed-read.ts --samples=1000 --warmup=100 --scan-bound` times each predicate over 100 rows with no match: 0.27–0.42 µs for `firstUserMessageIndex` and 0.67–0.96 µs for a head lookup, over nine runs on `main`. Each is under 0.6% of the cheapest changed read measured (186 µs). None of the three is a meaningful share, so all three stay as they are.
 
 The profile found one serialisation that neither E11 nor 0380 covers. `progressivePreviewFillsWindow` stringifies the provider's raw window on each changed read of an incomplete window under 100 rows. None of the benchmark's shapes reaches it, so it is unmeasured: [6861](../../todo/transcripts-and-observation/6861-raw-preview-window-serialisation.md).
 

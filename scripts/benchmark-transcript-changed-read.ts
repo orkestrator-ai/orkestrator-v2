@@ -327,37 +327,41 @@ async function withService<T>(
   run: (service: InstanceType<typeof NativeAgentService>) => Promise<T>,
 ): Promise<T> {
   const dataDir = mkdtempSync(path.join(tmpdir(), "ork-changed-read-bench-"));
-  const storage = new StorageService(dataDir);
-  await storage.init();
-  await storage.addEnvironment({
-    id: "env-1",
-    projectId: "project-1",
-    name: "Environment",
-    branch: "main",
-    containerId: null,
-    status: "running",
-    prUrl: null,
-    prState: null,
-    hasMergeConflicts: null,
-    createdAt: new Date(0).toISOString(),
-    networkAccessMode: "restricted",
-    order: 0,
-    environmentType: "local",
-    worktreePath: path.join(dataDir, "worktree"),
-    setupScriptsComplete: true,
-  });
-  const service = new NativeAgentService(
-    storage,
-    async (command: string) => {
-      throw new Error(`Unexpected backend command: ${command}`);
-    },
-    { provider: async () => provider, interactionMonitorMode: "disabled" },
-  );
+  let service: InstanceType<typeof NativeAgentService> | undefined;
   try {
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: path.join(dataDir, "worktree"),
+      setupScriptsComplete: true,
+    });
+    service = new NativeAgentService(
+      storage,
+      async (command: string) => {
+        throw new Error(`Unexpected backend command: ${command}`);
+      },
+      { provider: async () => provider, interactionMonitorMode: "disabled" },
+    );
     return await run(service);
   } finally {
-    await service.shutdown();
-    rmSync(dataDir, { recursive: true, force: true });
+    try {
+      await service?.shutdown();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   }
 }
 

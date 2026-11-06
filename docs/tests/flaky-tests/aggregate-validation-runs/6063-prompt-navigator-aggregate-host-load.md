@@ -76,3 +76,22 @@ mise run test:logged -- --name activity-sweep-isolated -- bun test tests/unit/ac
 Passed with exit 0 in 0.4 s. Passing output was deleted by the logged
 runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
+
+
+## Environment-deletion follow-up review recurrence — 2026-11-06
+
+Preparation at `228561646` ran `mise run test:logged -- --name
+review-default-tests -- mise run test`, with four isolated backend workers.
+Both `diff-baseline.test.ts` cases listed above timed out near 5 s
+(5,020.67 ms for the first); late Git failures were also reported between tests.
+The workspace group ended at its no-progress watchdog, so its complete totals
+are unavailable. Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-dd80c812-46c6-4f02-b538-897dbf04bdfd/validation-04.stderr.txt`.
+
+At repair commit `b32cfe416`, the unchanged complete owner passed alone:
+`mise run test:logged -- --name recorded-baseline-alone -- bun test --cwd
+apps/backend ./src/core/diff-baseline.test.ts --parallel=1 --only-failures`
+(exit 0, 13.3 s). Passing raw output was deleted; totals are not inferred.
+The repair changes deletion-command termination waiting, not baseline selection
+or the Git fixture. This establishes intermittence, not an environmental cause
+or a fix for the incomplete aggregate. No assertions, skips or timeouts changed.

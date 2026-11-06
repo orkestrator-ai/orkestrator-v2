@@ -98,3 +98,133 @@ Second-pass validation: `mise run test:logged -- --name merge-pass2-static -- mi
 - `docs/tests/flaky-tests/environments-and-containers/9837-firewall-egress-filter-startup-timeout.md`
 - `docs/tests/flaky-tests/environments-and-containers/9838-container-status-excludes-aggregate-timeout.md`
 - `docs/todo/containers-and-environments/0000-index.md`
+
+
+## Follow-up review preparation at `228561646` — 2026-11-06
+
+Original command: `mise run test:logged -- --name review-default-tests -- mise
+run test`, backend four isolated workers. The workspace ended at the no-progress
+watchdog with no closing summary, so complete totals are unavailable.
+Original evidence remains under
+`.orkestrator/review-artifacts/review-validation-dd80c812-46c6-4f02-b538-897dbf04bdfd/validation-04.stderr.txt`.
+
+`container removal safety and shared revert behavior > revert restores a tracked
+file from the base` (`apps/backend/src/core/commands-files-delete-folder.test.ts`)
+timed out at 5,031.36 ms during `git diff --cached --name-status`.
+At `b32cfe416`, the unchanged complete owner passed alone:
+`mise run test:logged -- --name recorded-revert-alone -- bun test --cwd
+apps/backend ./src/core/commands-files-delete-folder.test.ts --parallel=1
+--only-failures` (exit 0, 24.4 s). Passing raw output was deleted, so totals are
+not inferred. No assertion, skip or timeout changed; this is evidence of
+intermittence, not a demonstrated cause or repair.
+
+Readiness remains unresolved. Preparation's `a pending shell probe is clipped
+to the remaining overall deadline` took 1,893.45 ms against its 1,500 ms cap.
+The complete owner at `b32cfe416` failed alone in
+`mise run test:logged -- --name recorded-readiness-alone -- bun test --cwd
+apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures`:
+19 pass, two fail, 69 assertions (13.02 s). The same probe case took 2,996.14 ms;
+`renews an expired shell wait window and accepts readiness in the next exec`
+also returned `timed-out`. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jqbt6D/recorded-readiness-alone.log.gz`.
+These cases exercise the existing boot-wait path, not the changed deletion drain.
+A combined three-owner run had passed earlier (24.9 s); that does not erase
+the isolated failure or establish its cause. Neither assertion was changed.
+
+## Follow-up rework rerun at `3bc01ae0b` — 2026-11-06
+
+On 18 CPUs at load 36.9–41.4, the complete readiness owner passed alone three
+times in a row (10.5 s, 10.4 s, 7.9 s):
+`mise run test:logged -- --name readiness-alone-N -- bun test --cwd apps/backend
+./tests/container-readiness.test.ts --parallel=1`. It passed again in a
+nine-owner run with the listener, baseline, revert and deletion owners
+(`related-owners-combined`, 36.7 s, exit 0), which shows no hang in those
+owners at this commit. The earlier `recorded-related-owners` no-output watchdog
+(`orkestrator-test-run.ovaWog`) kept only the runner header, so which file was
+running when it fired is unknown.
+
+The failing cases time a boot-wait probe, which calls `runCommand` without
+`waitForTermination`. That path's timeout (SIGTERM, then SIGKILL and rejection
+after the 100 ms grace) is unchanged by the branch; only the drain run by a
+deletion opts into waiting for termination. The isolated failure at
+`b32cfe416` came at a similar load, so this records intermittence, not a cause.
+No assertion, timeout or skip changed.
+
+## Review findings qualification after `b5ed29dce` — 2026-11-06
+
+The review's claim that both delete-retry scenarios failed is contradicted by
+its original machine-readable results. Both specs are `ok: true`, with a
+`passed` result, in
+`output/agent-testing/qa-browser-7f4ec5d2-d39/browser/results.json`.
+The preserved `validation-07.stdout.txt` lists those scenarios as cases 152
+and 153; its three failures are instead the two CLI project-expansion cases
+and the terminal-input-resume case. The separate teardown error is the
+terminal-input trace exceeding the 64 MiB sanitization bound. Neither the
+original package nor its artifacts were modified.
+
+Both delete-retry scenarios passed again, without changing their source,
+in a fresh credential-free, Codex-only profile:
+
+- Start: `mise run dev:test --profile delete-review-r2 --fixture --no-agent-credentials --agent-platforms codex --headless`.
+- Check: `ORKESTRATOR_AGENT_TEST_PROFILE=delete-review-r2 ORKESTRATOR_AGENT_TEST_RUN_ID=delete-review-r2 mise run test:logged -- --name review-delete-retry -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts environment-delete-retry.spec.ts --workers=1`.
+- Result: two passed, zero failed/skipped/flaky, 12.7 s. Machine-readable evidence: `output/agent-testing/delete-review-r2/browser/results.json`.
+- Cleanup: `dev:stop` and `dev:reset` both succeeded; subsequent `dev:status --json` reports the profile missing with no live processes.
+
+The macOS lost-exit owner also passed in 29.8 s:
+`mise run test:logged -- --name review-macos-lost-exit -- bun test
+./packages/protocol/src/node/command-capture-reap.integration.test.ts
+--parallel=1 --only-failures`. This includes the termination-waiting abort,
+timeout and overflow cases; these ran on Darwin rather than being skipped.
+
+Added controlled real-helper exit coverage at two boundaries: the confined
+removal promise and the delete command's Retry admission. Each test observes
+SIGKILL but withholds delivery of the helper's actual exit. The promise and
+delete guard must stay pending until delivery; afterward the delete reports
+its deadline and Retry succeeds. The command test fires the real stage timer
+only after helper startup, avoiding a race against unrelated Git startup.
+No production behavior changed.
+
+The two backend owners passed together in 5.4 s:
+`mise run test:logged -- --name review-helper-guards-final -- bun test --cwd
+apps/backend ./src/core/path-safety.test.ts
+./src/core/commands-environment-cleanup.test.ts --parallel=1 --only-failures`.
+Focused backend typechecking initially found seven missing parameter types in
+these new test spies; explicit parameter tuples fixed all seven and the exact
+package typecheck passed on rerun (0.6 s). The initial artifact is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ivmWjA/review-backend-types.log.gz`.
+Web typechecking and the complete remote-row parity owner passed (0.7 s and
+1.1 s). Edited-file formatting and lint checks passed.
+
+The default suite's DOM scan included the branch-touched remote-row parity
+owner. Its four DOM absence assertions now pass booleans to `expect`, keeping
+failure diagnostics bounded, with the same assertions. The other four files
+named by the original scan are unchanged by this branch. This repairs the
+branch's contribution without rewriting unrelated tests.
+
+The exact failed preparation command was rerun after the assertion repair:
+`mise run test:logged -- --name review-default-rerun -- mise run test`.
+It exited 1 in 223.5 s. Workspace, bridges and the Codex protocol group passed;
+root/support had 3,747 pass and three fail across 196 files. The three original
+egress qualification failures did not recur. The remote-row file is absent
+from the remaining DOM scan failures.
+
+Remaining failures and scope:
+
+- DOM scan: `CoordinatorPanel.outcome.test.tsx`, `ProviderMcpSettings.test.tsx`, `ProjectHomeActivity.test.tsx` and `tests/unit/components/EnvironmentItem.test.tsx` remain; all four are unchanged by this branch. Preparation triage says `unrelated`, reason `failed-on-target-ci`; the branch-touched fifth file was repaired.
+- Test ownership: the unchanged `electron-startup-recovery.integration.test.ts` is still unowned. Preparation triage says `unrelated`, reason `failed-on-target-ci`. Neither this file nor the ownership configuration is changed by the branch.
+- Packaged-app path: the test expects `linux-arm64-unpacked`, while the helper defaults to `process.platform` and correctly returns `mac-arm64/...app/Contents/MacOS/OrkestratorV2` on this Darwin host. Both source and test are outside the diff. This is a demonstrated OS expectation mismatch, not a deletion-path failure.
+
+Rerun evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1PhcXT/review-default-rerun.log.gz`;
+inner aggregate artifacts: `orkestrator-test-run.ZzfLGH` under the same parent.
+The original review package and its output remain intact.
+
+The broader browser commands were not repaired or rerun: preparation triage
+leaves `TabLaunchOverride` (both viewports), the two CLI project-expansion
+cases and terminal-input-resume `undetermined`/`not-import-traceable`. No cause
+in the deletion diff was established. The 64 MiB terminal trace sanitization
+failure also remains unresolved. The targeted two-case deletion qualification
+is green; it does not claim those broader suites are green. No unrelated
+assertion, timeout, skip or sanitizer bound was changed to hide a failure.
+
+The evidence registry owner also passed: `mise run test:logged -- --name review-evidence-registry -- bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures` (0.2 s).

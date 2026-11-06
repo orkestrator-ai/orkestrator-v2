@@ -9,7 +9,7 @@
 
 ## Failing tests triaged `related`
 
-Each has `references-changed-path` with `changedPath: packages/cli/tests/service-install.test.ts`. That is the false match in [to-do 6601](../../../todo/coordinator-and-multi-review/6601-triage-related-from-a-directory-named-in-a-comment.md): the classifier searches each test's whole import closure for changed directories, and non-test backend and protocol modules name the directory `packages/cli` in doc comments. The four that do are `packages/protocol/src/public-api.ts:3` (reached through `public-api-resources.ts`, which the goals test imports), `packages/protocol/src/public-api-cli.ts:6`, `packages/protocol/src/node/build-commit.ts:6` and `apps/backend/src/core/bridge-runtime-install.ts:7`. Which of them each closure reaches was not traced. The classifier then names the first changed file under that directory.
+Each has `references-changed-path` with `changedPath: packages/cli/tests/service-install.test.ts`. That is the false match fixed by to-do 6601 on this branch ([failure triage](../../../architecture/review-preparation.md#failure-triage)): the classifier used to search each test's whole import closure for changed directories, and non-test backend and protocol modules name the directory `packages/cli` in doc comments. The four that do are `packages/protocol/src/public-api.ts:3` (reached through `public-api-resources.ts`, which the goals test imports), `packages/protocol/src/public-api-cli.ts:6`, `packages/protocol/src/node/build-commit.ts:6` and `apps/backend/src/core/bridge-runtime-install.ts:7`. Which of them each closure reaches was not traced. The classifier then names the first changed file under that directory.
 
 | Owner | Test | Original failure | Known case |
 | --- | --- | --- | --- |
@@ -35,4 +35,4 @@ Each ran through `mise run test:logged` as `bun --cwd=apps/backend test <file> -
 
 ## Fix
 
-None here. No assertion, deadline or fixture changed. The tests belong to other areas, and the classifier fix is task 1 of to-do 6601.
+None here. No assertion, deadline or fixture changed. The tests belong to other areas. To-do 6601 fixed the classifier match; [to-do 6920](../../../todo/coordinator-and-multi-review/6920-triage-related-through-a-widely-shared-import.md) carries the separate follow-up for widely shared changed imports.

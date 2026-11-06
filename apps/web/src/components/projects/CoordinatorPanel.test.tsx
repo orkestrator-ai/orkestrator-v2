@@ -2019,10 +2019,10 @@ describe("CoordinatorPanel", () => {
           await screen.findByRole("button", { name: "Open api-fix" });
           expect(screen.getByRole("button", { name: /^Pause$/ })).toBeTruthy();
           expect(screen.getByText("Coordinator work records are nearly full.")).toBeTruthy();
-          expect(screen.queryByRole("complementary", { name: /^Work$/ })).toBeNull();
-          expect(screen.queryByRole("button", { name: /^(Show|Hide) work$/i })).toBeNull();
-          expect(document.querySelector("[data-coordinator-work]")).toBeNull();
-          expect(screen.queryByText(/next wake/i)).toBeNull();
+          expect(screen.queryByRole("complementary", { name: /^Work$/ }) === null).toBe(true);
+          expect(screen.queryByRole("button", { name: /^(Show|Hide) work$/i }) === null).toBe(true);
+          expect(document.querySelector("[data-coordinator-work]") === null).toBe(true);
+          expect(screen.queryByText(/next wake/i) === null).toBe(true);
           fireEvent.click(screen.getByRole("button", { name: "Open api-fix" }));
           await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(worker.id));
         } finally {

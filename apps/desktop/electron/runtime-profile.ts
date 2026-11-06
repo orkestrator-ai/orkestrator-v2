@@ -57,6 +57,14 @@ export type RuntimeProfile = {
   agentToolsPort?: number;
 };
 
+/** Only isolated agent-test launches may pin the backend's agent tools port. */
+export function agentToolsPortForRuntime(
+  flavor: RuntimeFlavor,
+  profile: Pick<RuntimeProfile, "agentToolsPort"> | null | undefined,
+): number | undefined {
+  return flavor === "agent-test" ? profile?.agentToolsPort : undefined;
+}
+
 /**
  * Ports an agent-test profile's agent tools server must never take: the
  * installed app's fixed gateway and control ports (34121, 34122), and 45507,

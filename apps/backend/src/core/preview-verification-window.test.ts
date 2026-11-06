@@ -8,7 +8,7 @@ const PORT = 3000;
 
 /**
  * A new upstream connection inside the registry's verification window
- * (docs/todo/previews-and-annotations/3230-restart-inside-verification-window.md).
+ * (task 3 of docs/todo/previews-and-annotations/0045-preview-service-discovery.md).
  * The clock never advances unless a test says so, so every acquisition below is
  * inside the window; the host's `lsof` and `ps` are scripted and counted.
  */

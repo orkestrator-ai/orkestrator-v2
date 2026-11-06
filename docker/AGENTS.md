@@ -48,9 +48,17 @@ Prebuilt bridge servers, so a container never builds them at runtime:
   they run as `node`, and code `node` could replace would see every token presented
   to the bridge.
 - `/run/orkestrator-bridge` holds each bridge's token, mode 700 root
-  (`bridge-credential=1`). Only the backend's root exec reads it; a bridge gets a
-  hash (`apps/backend/src/core/container-bridge-credential.ts`). Never read a
-  `node`-writable path as root to look for one: `node` can make it a symlink.
+  (`bridge-credential=1`), and with `bridge-launch=1` the private half of its
+  authority key. Only the backend's root exec reads it; a bridge gets a hash and
+  a public key (`apps/backend/src/core/container-bridge-credential.ts`). Never
+  read a `node`-writable path as root to look for one: `node` can make it a
+  symlink.
+- `/usr/local/bin/orkestrator-bridge-launch` (`bridge-launch=1`) starts a bridge
+  as `node` under `env -i`, with a fixed `PATH`, from `/`, with only the values
+  the backend gives it on stdin. It must stay root-owned, run under `/bin/sh`
+  (dash reads no startup file; bash would read `$BASH_ENV`), and call every
+  program by a root-owned path. Never make it source anything `node` can write
+  ([agent-approvals.md](../docs/architecture/agent-approvals.md#fixed-launch-bridge-launch1)).
 
 Keep `COPY --chown=node:node patches /opt/bridge-build/patches` before the
 filtered `bun install`: Bun validates root `patchedDependencies` even when the

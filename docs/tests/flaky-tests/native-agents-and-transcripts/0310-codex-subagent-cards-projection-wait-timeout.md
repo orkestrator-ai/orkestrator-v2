@@ -286,3 +286,45 @@ then passed with exit 0 in 1.4 s. The interrupted aggregate's original raw evide
 is `orkestrator-test-run.20KKVR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
 under the host temporary directory. Contention is a hypothesis; no host load was
 measured. This observation does not establish a fix.
+
+## Storage/mail review recurrence — 2026-11-06
+
+The exact recorded command, `mise run test:logged -- --name review-default-tests -- mise run test`,
+recurred on the storage/mail branch (`023c7a2ce`, followed by the unchanged-test
+classification rename `ee92c4741`). The workspace reserved six slots; backend
+used four isolated workers alongside two web workers and the root group.
+The completed backend totals were 16,613 pass, 138 skip, 4 fail and 2 errors
+across 16,755 tests in 1,109 files (670.51 s execution). The full command
+finished with exit 1 in 1,499.6 s; workspace and root failed, while bridges
+and the protocol lockfile passed.
+
+Evidence: `workspace-web-backend-desktop-web-public-cli-protocol-toolchain` in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KcOGqn`;
+outer wrapper `orkestrator-test-run.uRCFAT` under the same temporary root.
+
+`Codex sub-agent cards through the bridge and backend projection > each child
+keeps one card, its transcript and status across a fresh backend and a cold
+restart` failed after 32,543.54 ms in the projection wait at line 132. The last
+projection still had pending child cards; fixture bridge stderr also reported
+`mcpServerStatus/list` as an unknown method. This does not establish that the
+method error caused the failed wait.
+
+The unchanged complete owner passed alone, exit 0 in 1.7 s:
+
+```sh
+mise run test:logged -- --name findings-codex-cards -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures
+```
+
+Passing logs were removed; isolated case counts are not inferred. No bridge,
+projection code, assertion, deadline or skip changed. The timeout variant
+remains open; no cause or fix is established by this observation.
+
+## Wait-timeout variant fixed — 2026-11-06 (to-do 4960 task 2 review repair)
+
+- **Recorded failure:** review preparation's `mise run test:logged -- --name review-default-tests -- mise run test` at `32c1e126c` failed this test at line 132 after 31,241.89 ms: `Failed waiting for three child cards and the rejected spawn: TimeoutError`. Backend: 16,614 pass, 138 skip, 1 fail across 1,110 files (314.18 s). In the last projection the `lint_check` child had no name and no actions while Grace and Linus were hydrated. Evidence: `.orkestrator/review-artifacts/review-validation-58dd6eff-5cc0-4544-bf61-603faa8eef78/validation-04.stderr.txt`. The branch changed only backend change-tracking restore code, which this test does not reach.
+- **Reproduced on the branch:** `mise run test:logged -- --name codex-cards-repeat -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --rerun-each=20 --parallel=1 --only-failures` at load average 43: 19 passed, 1 failed (run 9, 30,478 ms). That time the `unit_check` child stayed unhydrated, so any child can.
+- **Root cause (codex bridge):** a sub-agent card gets its name and actions only from a transcript probe of the child's rollout. The probe ran only inside a publish, and a publish followed only a parent-stream event, at most once per `SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS` (2 s). The fake, like real Codex, sends the spawns as one burst and then nothing until `finish`. When the last probe of the burst could not yet resolve a child's rollout (for example a throttled probe, or a lookup that cached a miss), no later event triggered another probe. The card stayed without its name until the turn ended, well past the 30 s wait. The same gap affected real turns: a running child's progress did not appear while the parent was quiet (a `wait`).
+- **Fix:** `scheduleSubagentProbe` (`bridges/codex-bridge/src/app-server-runtime-rows.ts`), called after every publish in `publishAssistantMessage`. While any card of a running turn is unsettled, it arms one follow-up publish a probe interval later, and cancels it once the cards settle, the turn ends or the thread is released. The test's wait, assertions and timeout are unchanged.
+- **Regression test:** `sub-agent probes while the parent is quiet` in `bridges/codex-bridge/src/app-server-runtime-rows.test.ts`. With the follow-up disabled, the card never hydrates and the test fails at its 5 s wait. With the fix it passes.
+- **Stress verification:** `mise run test:logged -- --name codex-cards-repeat-fixed -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --rerun-each=60 --parallel=1 --only-failures` at load average 39 to 43: 60 passed, 0 failed (77.8 s). The whole codex-bridge suite (`test:bridge`, two workers) passed.
+- **Status:** still open. All three named variants now have a fix: the wait timeout here, partial hydration (2026-11-05) and `recovering` (2026-11-03). The 15.2 s aggregate failure of 2026-11-05 has no recorded assertion, so this case stays open until a soak passes or that failure is explained.

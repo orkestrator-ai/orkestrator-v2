@@ -159,6 +159,41 @@ Inside the local-server queue:
 A successful deletion then schedules a reconcile pass for whatever earlier
 deletions left pending.
 
+`deleteEnvironment` lives in `environment-delete.ts`. As it reaches each stage
+it records which one on the environment record (`deletionStep`):
+`stopping-work` (with the tombstone), `terminals`, `workspace-files`,
+`container`, `local-servers`, `worktree` and `records`
+(`ENVIRONMENT_DELETION_STEPS` in `@orkestrator/protocol/node-summaries`). The
+record write is best-effort: a failed one never stops the delete.
+
+The two stages whose work runs in child processes, `container` (the drain and
+the `container`, `volumes` and `network` steps) and `worktree` (the `worktree`
+and `branch` steps), have a deadline (`environment-deletion-steps.ts`): 10 and
+20 minutes. When one fires, the stage's signal kills every command it is
+running, including the confined-removal helper, and starts no new one. The
+command runner uses `waitForTermination` and `waitForDescendants` for these
+stages: cancellation, command timeouts and output overflow retain the delete
+guard until leader exit (or the lost-exit zombie fallback) and no live members
+of the private process group are confirmed. Unknown termination keeps the guard
+held; sending SIGKILL alone never admits a retry. The confined-removal helper
+also waits for exit. The delete's reason is a fixed message naming the stage
+("Deletion stopped while removing the worktree: it took longer than 20 min. Retry to continue."). The
+ledger keeps the interrupted step pending. Each command also keeps its own
+timeout; the deadline requests cancellation of the stage as a whole. Waiting
+for confirmed termination can extend beyond that deadline.
+
+This confirms local Docker CLI termination only. Docker may continue a drain or
+removal request it already accepted after its client is killed. No new local
+command starts after cancellation. Interrupted resource steps remain in the
+ledger, and Retry probes current daemon state and ownership before continuing;
+already-absent containers, volumes and networks are treated as removed. A CLI
+exit is not a claim that daemon-side work has stopped.
+
+The deadlines are generous on purpose: six fixture worktrees of 75,608 files took 17.2 s to remove together
+on a loaded Mac, and a deadline that fires on a genuinely large tree only makes
+the user retry the same work. Stages that run in the backend itself (terminal
+teardown, store writes) have no deadline: nothing could prove them stopped.
+
 The tombstone survives a crash. At startup, after orphaned local servers and
 claude-tmux runtimes are reaped, every environment still marked `deleting` is
 re-admitted to the ordinary delete path, which is idempotent.
@@ -182,10 +217,23 @@ filters keep fencing them. `deleteFailure` is a fixed, content-free message; raw
 errors stay on the owning machine. Rows suppress the spinner when that field is
 present. The bound machine view uses the same failure and tombstone helpers.
 
-A delete with no failure past two minutes says so under its name ("Still
-deleting after N min", from `lifecycleOperationStartedAt`, relayed as
-`deletingSince`). Which step it is on is not shown; see
-[6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md).
+A delete with no failure past two minutes says so under its name, with the
+stage it is on ("Still deleting after 4 min: removing the worktree", from
+`lifecycleOperationStartedAt` and `deletionStep`, relayed as `deletingSince` and
+`deletingStep`). `environmentDeletionStep` answers only for a running delete
+and only for a stage this version knows: a failed delete shows its failure
+instead, and a stage a newer machine relays is left out rather than shown raw.
+A failed delete keeps `deletionStep`, so the record still says where it stopped.
+
+An agent-test profile (`ORKESTRATOR_AGENT_TEST_ISOLATED=1`) can stage a real
+failure on demand (`agent-test-fixtures.ts`): while
+`<data dir>/agent-test-fixtures/terminal-survives-terminate/<environment id>`
+exists, that environment's terminals are left running through a delete and
+reported as survivors, which is how a process outliving SIGKILL fails it.
+Removing the marker lets the next attempt terminate them. Outside agent-test
+profiles the directory is never consulted.
+`e2e/agent-testing/environment-delete-retry.spec.ts` uses it to delete from
+the row's menu, see the failure across a reload and finish with **Retry**.
 
 `scheduleMergeCleanupRecovery`, called by the PR monitor on every poll, stands
 aside while a merge or delete in this process holds the environment: the owner
@@ -223,8 +271,19 @@ The helper takes the blocking out of the backend; it does not make `fseventsd`
 any faster. With it at 100% of a core, independent Bun and Node processes writing
 one new file a second each saw their first event 72 s in, and about 44 events for
 the first 107 files, so `established` does not prove that a later change will be
-reported ([6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md),
-task 5). Events stay hints, and the owner's safety scan covers what they miss.
+reported. Events stay hints, and the owner's safety scan (every 120 s for a
+local worktree) covers what they miss.
+
+`established` deliberately stays "the helper's `fs.watch` returned" rather than
+"an event has arrived" (todo 6120, task 5). On 2026-11-06, on an 18-core Mac
+(macOS 27.2, load average about 14, `fseventsd` sampled at 3-58%), 20 watches
+through the real helper, each writing a new file every 20 ms from the moment
+`established` resolved, missed one of 5,000 files: the first file of one watch,
+written 22 ms after `established`. The first event reached the backend 38-102 ms
+after `established`. The gap a probe write would close is tens of milliseconds
+on an ordinary host, while under a saturated `fseventsd` events are lost after
+the stream is running as well, which only the safety scan covers. A probe would
+also leave every watch unqualified on a host that delivers nothing.
 `watch-host-events.live.test.ts` proves delivery through the real helper by
 repeating each change until an event names it.
 

@@ -54,6 +54,10 @@ import {
   rolloutMcpToolCallParts,
 } from "./code-mode-mcp-calls.js";
 import {
+  ROLLOUT_COMMAND_EXECUTION_ITEM_TYPE,
+  rolloutCommandExecutionParts,
+} from "./code-mode-commands.js";
+import {
   isAuthoritativeAgentMessagePhase,
   visibleCommentaryText,
 } from "../messages/agent-message.js";
@@ -1265,11 +1269,12 @@ export const MAX_OPEN_CODE_MODE_CELLS = 256;
 /**
  * A code-mode `exec` cell between its call and its output.
  *
- * Live, app-server streams each MCP call the cell makes as an item and never
- * the cell itself (`RefusedCellTail` adds it only when nothing else shows
- * it). A reload matches that: the rollout's `McpToolCall` records render
- * through the live renderer, and a cell whose only recorded work was MCP calls
- * drops its `exec` row unless its output reports a refusal.
+ * Live, app-server streams each MCP call and each command the cell makes as
+ * an item and never the cell itself (`RefusedCellTail` adds it only when
+ * nothing else shows it). A reload matches that: the rollout's `McpToolCall`
+ * and `CommandExecution` records render through the live renderer under the
+ * live item's id, and a cell whose only recorded work was such calls drops its
+ * `exec` row unless its output reports a refusal.
  */
 interface CodeModeCell {
   callId: string;
@@ -1280,7 +1285,9 @@ interface CodeModeCell {
   /** Calls read from the source, shown only if the rollout recorded none for the cell. */
   sourceCalls: Array<{ partIndex: number; callee: string; replaced: boolean }>;
   sawMcpRecord: boolean;
-  /** Something besides an MCP call was recorded while it ran, or it is ambiguous. */
+  /** A command it ran was recorded and is shown in its row. */
+  sawCommandRecord: boolean;
+  /** Something besides an MCP call or command was recorded while it ran, or it is ambiguous. */
   keepExecRow: boolean;
 }
 
@@ -1426,6 +1433,8 @@ async function replayPersistedRollout(
     string,
     { message: NormalizedMessage; partIndexes: number[] }
   >();
+  /** Call ids of the current turn's call records, cleared when the turn changes. */
+  const turnCallIds = new Set<string>();
   // `asNonEmptyString` rather than `??`: a rollout whose `session_meta` carries
   // an empty `cwd` would otherwise resolve every patch path relatively.
   const transcriptCwd = asNonEmptyString(meta.cwd) ?? getWorkingDirectory();
@@ -1551,6 +1560,17 @@ async function replayPersistedRollout(
         ? { ...settled, toolState: "failure" }
         : settled;
     }
+    if (
+      cell.sawCommandRecord &&
+      cell.sourceCalls.length === 0 &&
+      !cell.keepExecRow &&
+      !outcome?.refused
+    ) {
+      // Its commands are on screen as live showed them; a late output must
+      // not write the cell back in.
+      toolPartsByCallId.delete(cell.callId);
+      dropPart(cell.message, cell.execPartIndex);
+    }
   };
 
   const settleOpenCells = (): void => {
@@ -1586,13 +1606,38 @@ async function replayPersistedRollout(
       callees: codeModeMcpCallees(source),
       sourceCalls,
       sawMcpRecord: false,
+      sawCommandRecord: false,
       keepExecRow: false,
     });
+  };
+
+  /**
+   * A command a code-mode cell ran, shown in the cell's row under the live
+   * item's id. Anything it cannot pin to exactly one cell keeps the old reload:
+   * the cells keep their `exec` rows, which stand in for it.
+   */
+  const visitCommandRecord = (item: Record<string, unknown>): void => {
+    const open = [...openCells.values()];
+    const parts = rolloutCommandExecutionParts(item);
+    const id = asNonEmptyString(item.id);
+    // A direct shell call shares its id with its own call record, already on screen.
+    const direct = id !== undefined && turnCallIds.has(id);
+    if (!parts || direct || open.length !== 1) {
+      for (const cell of open) cell.keepExecRow = true;
+      return;
+    }
+    const cell = open[0]!;
+    cell.sawCommandRecord = true;
+    cell.message.parts.push(...parts);
   };
 
   const visitCompletedItem = (item: unknown, timestamp: string): void => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return;
     const fields = item as Record<string, unknown>;
+    if (fields.type === ROLLOUT_COMMAND_EXECUTION_ITEM_TYPE) {
+      visitCommandRecord(fields);
+      return;
+    }
     if (fields.type !== ROLLOUT_MCP_TOOL_CALL_ITEM_TYPE) {
       if (typeof fields.type === "string" && !NON_TOOL_TURN_ITEM_TYPES.has(fields.type)) {
         for (const cell of openCells.values()) cell.keepExecRow = true;
@@ -1718,6 +1763,7 @@ async function replayPersistedRollout(
     if (recordTurnId && recordTurnId !== currentTurnId) {
       settleOpenCells();
       currentTurnId = recordTurnId;
+      turnCallIds.clear();
       typedPromptConsumed = false;
       currentTurnModel = undefined;
       closeAssistantRow();
@@ -1788,6 +1834,11 @@ async function replayPersistedRollout(
     }
 
     if (ROLLOUT_TOOL_CALL_TYPES.has(String(payload.type))) currentRowCalledTool = true;
+
+    if (ROLLOUT_TOOL_CALL_TYPES.has(String(payload.type))) {
+      const callId = asNonEmptyString(payload.call_id);
+      if (callId) turnCallIds.add(callId);
+    }
 
     if (payload.type === "function_call" || payload.type === "custom_tool_call") {
       const assistantMessage = ensureAssistantMessage(timestamp);

@@ -725,9 +725,16 @@ is first written. On a generated ledger of 2 million file rows (666 MB) the
 move took about 8 s with secure deletion disabled (a historical measurement;
 the corrected migration keeps it enabled and has not been remeasured); the hourly
 copy afterwards was 48 KB in 19 ms. The pages the ledger freed are returned to
-the filesystem after start-up, 4 MiB at a time with the event loop free
-between steps (about 30 ms each), by the snapshot check's upkeep
-(`runDatabaseUpkeep`).
+the filesystem after start-up by the snapshot check's upkeep
+(`runDatabaseUpkeep`, every five minutes after the copies). It runs
+`PRAGMA optimize` on the backend's own connection, whose queries that reads,
+and, when there are free pages, starts a child process under the copy's
+supervisor (`releaseFreePagesInChildProcess`) with its own connection and the
+backend's `synchronous`, `secure_delete` and `journal_size_limit`. The child
+returns at most 1 GiB per check, 1 MiB per transaction, checkpoints its own
+frames after each one (so the backend's next commit does not pay for them),
+pauses 5 ms between them and stops when the database is busy. In-process,
+those steps had held the event loop 30–190 ms each (to-do 1202 task 7).
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

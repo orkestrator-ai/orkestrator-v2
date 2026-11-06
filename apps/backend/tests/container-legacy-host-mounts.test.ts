@@ -16,7 +16,7 @@ import {
 import { resetResourceCaches } from "../src/core/container-resources";
 import { rebuildPreview } from "../src/core/container-replacement";
 import { previewDockerCleanup } from "../src/core/docker-cleanup-preview";
-import { legacyExposures } from "../src/core/docker-cleanup-legacy-runtimes";
+import { legacyExposures } from "../src/core/legacy-runtime-shape";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
 import { environmentInputStatus } from "../src/core/portable-input-status";
@@ -258,6 +258,7 @@ case "$1" in
   cp) ${NO_MANIFEST} ;;
   inspect)
     case "$*" in
+      *.Mounts*) printf '<no value>\\t<no value>\\t%s\\n' '${LEGACY_MOUNTS}' ;;
       *orkestrator-inputs-revision*) printf '<no value>\\n' ;;
       *orkestrator-owner*) printf '${owner}\\trunning\\torkestrator-v2\\tlegacy-runtime\\n' ;;
       *) printf 'running\\n' ;;
@@ -415,6 +416,88 @@ exit 0
       const preview = await previewDockerCleanup(context);
       expect(preview.legacyRuntimes).toEqual([]);
       expect(preview.legacyRuntimesUnchecked).toBe(0);
+    });
+  });
+
+  for (const networkPolicy of ["", "3"]) {
+    test(`a staged revision with unreadable mounts uses network policy ${networkPolicy || "absent"}`, async () => {
+      const context = reviewContext([
+        lifecycleEnvironment({ id: "staged", name: "Staged", containerId: "staged-container" }),
+      ]);
+      await withDockerScript(
+        `#!/bin/sh
+case "$1" in
+  inspect) printf 'rev-2\\t${networkPolicy}\\tnot json\\n' ;;
+esac
+exit 0
+`,
+        async () => {
+          const preview = await previewDockerCleanup(context);
+          expect(preview.legacyRuntimes).toEqual(
+            networkPolicy
+              ? []
+              : [
+                  {
+                    environmentId: "staged",
+                    environmentName: "Staged",
+                    containerId: "staged-container",
+                    exposures: ["shared-bridge"],
+                    busy: false,
+                  },
+                ],
+          );
+          expect(preview.legacyRuntimesUnchecked).toBe(0);
+        },
+      );
+    });
+  }
+
+  test("the inputs section reads the same evidence, and Docker's silence is unknown", async () => {
+    const environments = [
+      lifecycleEnvironment({ id: "a", containerId: "legacy-container" }),
+      lifecycleEnvironment({ id: "b", containerId: "bridge-container" }),
+      lifecycleEnvironment({ id: "d", containerId: "empty-container" }),
+      lifecycleEnvironment({ id: "e", containerId: "gone-container" }),
+      lifecycleEnvironment({ id: "f", containerId: "mystery-container" }),
+      lifecycleEnvironment({ id: "u", containerId: "unparsable-container" }),
+      lifecycleEnvironment({ id: "g", containerId: null }),
+    ];
+    const context = reviewContext(environments);
+    Object.assign(context.storage, {
+      loadConfig: async () => ({ global: { enabledAgentPlatforms: [] } }),
+    });
+    const script = reviewScript.replace(
+      "    esac ;;",
+      "      *unparsable-container*) printf '\\t\\tnot json\\n' ;;\n    esac ;;",
+    );
+    await withDockerScript(script, async () => {
+      const modes: Record<string, string> = {};
+      for (const environment of environments) {
+        const status = await environmentInputStatus(environment.id, context);
+        modes[environment.id] = status.mode;
+        // Nothing about the mounts' host paths leaves the backend.
+        expect(JSON.stringify(status)).not.toContain("/home/someone");
+      }
+      expect(modes).toEqual({
+        // No label and a bind at an old mount point: what the review lists.
+        a: "host-mounts",
+        // A revision label and no record of it: the record is unavailable.
+        b: "unknown",
+        // No label but no old bind either: nothing was mounted.
+        d: "none",
+        // Docker says the container is gone.
+        e: "none",
+        // Docker did not answer, or answered something unreadable.
+        f: "unknown",
+        u: "unknown",
+        g: "none",
+      });
+      const preview = await previewDockerCleanup(context);
+      expect(
+        (preview.legacyRuntimes ?? [])
+          .filter((row) => row.exposures.includes("host-mounts"))
+          .map((row) => row.environmentId),
+      ).toEqual(["a"]);
     });
   });
 

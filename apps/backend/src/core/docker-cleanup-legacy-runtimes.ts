@@ -3,82 +3,28 @@ import type {
   LegacyRuntimeRow,
 } from "@orkestrator/protocol/container-recovery";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
-import { DOCKER_LABEL_INPUTS_REVISION, DOCKER_LABEL_NETWORK_POLICY } from "./constants.js";
 import { MAX_CLEANUP_CANDIDATES, type ProtectionSnapshot } from "./docker-cleanup-inventory.js";
 import { mapWithConcurrency } from "./environment-process-usage.js";
-import { runCommand } from "./shell.js";
+import { inspectRuntimeShape, legacyExposures } from "./legacy-runtime-shape.js";
 
 /**
  * Environments whose runtime still has an older shape: whole host agent homes
  * bound in, or network policy 1. They stay as they are until the user rebuilds
- * them, so the cleanup review lists them in one place. Only reads Docker.
+ * them, so the cleanup review lists them in one place. Only reads Docker; the
+ * shape itself is defined in `legacy-runtime-shape.ts`.
  */
-
-/** Where images from before staged inputs took each host home or file. */
-const LEGACY_HOST_MOUNT_TARGETS = new Set([
-  "/claude-config",
-  "/claude-config.json",
-  "/codex-home",
-  "/grok-home",
-  "/grok-config",
-  "/pi-config",
-  "/opencode-config",
-  "/opencode-data",
-  "/opencode-state/model.json",
-  "/tmp/gitconfig",
-]);
 
 const INSPECT_CONCURRENCY = 8;
-
-function labelValue(value: string | undefined): string {
-  return value && value !== "<no value>" ? value : "";
-}
-
-/**
- * Staged inputs bind the same targets from a private revision, so a target
- * counts only on a runtime with no revision label. The mount sources are host
- * paths and never leave this function.
- */
-export function legacyExposures(
-  inputsRevision: string,
-  networkPolicy: string,
-  mountsJson: string,
-): LegacyRuntimeExposure[] {
-  const mounts = JSON.parse(mountsJson) as Array<{ Type?: unknown; Destination?: unknown }>;
-  const hostMounts =
-    !inputsRevision &&
-    mounts.some(
-      (mount) =>
-        mount.Type === "bind" &&
-        typeof mount.Destination === "string" &&
-        LEGACY_HOST_MOUNT_TARGETS.has(mount.Destination),
-    );
-  return [
-    ...(hostMounts ? (["host-mounts"] as const) : []),
-    ...(networkPolicy ? [] : (["shared-bridge"] as const)),
-  ];
-}
 
 async function inspectExposures(
   containerId: string,
 ): Promise<LegacyRuntimeExposure[] | "missing" | "unchecked"> {
+  const shape = await inspectRuntimeShape(containerId);
+  if (typeof shape === "string") return shape;
   try {
-    const { stdout } = await runCommand(
-      "docker",
-      [
-        "inspect",
-        "-f",
-        `{{ index .Config.Labels "${DOCKER_LABEL_INPUTS_REVISION}" }}\t{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ json .Mounts }}`,
-        containerId,
-      ],
-      { timeoutMs: 10_000 },
-    );
-    // Only the end: an absent label is an empty leading field.
-    const [inputsRevision, networkPolicy, mountsJson = ""] = stdout.trimEnd().split("\t");
-    return legacyExposures(labelValue(inputsRevision), labelValue(networkPolicy), mountsJson);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return /no such (object|container)/i.test(message) ? "missing" : "unchecked";
+    return legacyExposures(shape.inputsRevision, shape.networkPolicy, shape.mountsJson);
+  } catch {
+    return "unchecked";
   }
 }
 

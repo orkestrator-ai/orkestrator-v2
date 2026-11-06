@@ -445,7 +445,12 @@ which builds the new instance from disk. Stored sessions are kept (proven on
 the pinned binary by `mise run verify:opencode:mcp-live`). OpenCode 1.19.4
 caches the user files in `$XDG_CONFIG_HOME/opencode` for the server's
 lifetime (`instance.dispose` and `global.dispose` both keep them), so saves to
-those stay `restart-required`; so do container servers.
+those stay `restart-required`; so do container servers. There is deliberately
+no "restart OpenCode to apply" action: restarting the server drops every
+pending question and permission in the environment, a bigger step than apply
+takes anywhere else. `mise run verify:opencode:mcp-live` fails if a bump stops
+caching the user files, which is when to plan them for the in-place reload
+instead.
 
 **Claude MCP sign-in.** Claude delivers an MCP server's sign-in link through
 the CLI's `onElicitation`, which parks it as an `mcp-url` card in the
@@ -486,7 +491,10 @@ request that waits for the browser's callback (`mcp.auth.authenticate`, or
 no waiter, and it refuses the redirect. The live panel therefore offers no
 OpenCode sign-in: a `needs-auth` row carries the hint `opencode mcp auth
 <server>`, run where the environment's OpenCode runs, and a sign-in request
-from an older renderer is refused with the same text.
+from an older renderer is refused with the same text. The panel deliberately
+does not drive `mcp.auth.authenticate` either: it opens the browser on the
+machine running OpenCode and holds the request for up to five minutes, which
+is wrong for a remote browser or a container.
 
 **Fan-out.** One apply schedules and tracks up to 256 runtimes
 (`runtimesTrackedPerOperation`) and advances every one of them: every tracked

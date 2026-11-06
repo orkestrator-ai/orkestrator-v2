@@ -192,7 +192,13 @@ export function chatMessage(step: FakeStep, id: number) {
   };
 }
 
-function chatResponse(body: ChatBody, id: number, step: FakeStep): Response {
+function chatResponse(
+  body: ChatBody,
+  id: number,
+  step: FakeStep,
+  ResponseType = Response,
+): Response {
+  const Response = ResponseType;
   const model = String(body.model ?? "mcpq-1");
   const message = chatMessage(step, id);
   const finish = message.toolCall ? "tool_calls" : "stop";
@@ -411,7 +417,9 @@ type SocketData = {
   names: Map<string, string>;
 };
 
-function serve(): void {
+/** The caller owns shutdown. Tests pass Bun's native Response under the DOM preload. */
+export function serveMcpFakeModel(ResponseType = Response) {
+  const Response = ResponseType;
   let counter = 0;
   const server = Bun.serve<SocketData>({
     hostname: "127.0.0.1",
@@ -436,7 +444,7 @@ function serve(): void {
           const step = scriptedStep(state);
           shapes("chat", state.tools, step);
           if (step.kind === "text" && step.delayMs) await sleep(step.delayMs);
-          return chatResponse(body, counter, step);
+          return chatResponse(body, counter, step, ResponseType);
         }
         if (pathname.endsWith("/messages")) {
           const body = await readJson<AnthropicBody>(request);
@@ -509,7 +517,10 @@ function serve(): void {
       },
     },
   });
-  console.log(`http://127.0.0.1:${server.port}`);
+  return server;
 }
 
-if ((import.meta as { main?: boolean }).main) serve();
+if ((import.meta as { main?: boolean }).main) {
+  const server = serveMcpFakeModel();
+  console.log(`http://127.0.0.1:${server.port}`);
+}

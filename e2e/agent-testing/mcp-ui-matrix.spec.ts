@@ -1085,14 +1085,14 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
       const { projection, liveServers, statusOf, inExpandedPanel, clickInPanel, mcpPanel } =
         liveSession(page, call, identity);
       /** The whole list, as the session reports it: two project rows and the injected one. */
-      const expectSessionInventory = async (where: string, late: string) => {
+      const expectSessionInventory = async (where: string, late: string, includeOk = true) => {
         const servers = await liveServers();
         record(`inventory-${where}`, describeServers(servers));
         expect(
           Object.fromEntries(servers.map((server) => [server.id, [server.scope, server.status]])),
           `${where}: the session's list`,
         ).toEqual({
-          "mcpui-ok": ["project", "connected"],
+          ...(includeOk ? { "mcpui-ok": ["project", "connected"] } : {}),
           "mcpui-late": ["project", late],
           orkestrator: ["orkestrator", "connected"],
         });
@@ -1192,16 +1192,46 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
         // server logs its own exit when the CLI closes its stdin. A bridge
         // restart would also end the CLI, but drops the session's list too.
         const started = Date.now();
+        let lastProgress = started;
         await expect
-          .poll(() => exits("mcpui-ok"), {
-            timeout: CLI_EXIT_WAIT_MS,
-            intervals: [5_000],
-            message: "the bridge never released the idle CLI",
-          })
+          .poll(
+            () => {
+              // The real idle window exceeds test:logged's silence budget. Keep
+              // this bounded poll observable without a separate timer to dispose.
+              const now = Date.now();
+              if (now - lastProgress >= 30_000) {
+                console.log(
+                  `[mcp-ui] waiting for idle CLI release: ${Math.round((now - started) / 1000)}s`,
+                );
+                lastProgress = now;
+              }
+              return exits("mcpui-ok");
+            },
+            {
+              timeout: CLI_EXIT_WAIT_MS,
+              intervals: [5_000],
+              message: "the bridge never released the idle CLI",
+            },
+          )
           .toBeGreaterThan(0);
         record("cli-exit", `after ${Math.round((Date.now() - started) / 1000)} s idle`);
         const before = await liveServers();
         record("after-exit", describeServers(before));
+        // Save only while no CLI is running. The probe must merge only its
+        // reconnect target, retaining the now-removed row until a real CLI report.
+        await mcp.remove(target.targetId, "project", "mcpui-ok");
+        const saved = await mcp.source(target.targetId, "project");
+        expect(
+          readFileSync(
+            writableSourcePath(saved, {
+              flavor: status.flavor,
+              dataDir: status.dataDir!,
+              worktree,
+            })!,
+            "utf8",
+          ),
+        ).not.toContain('"mcpui-ok"');
+        await expectSessionInventory("retained-after-save", "connected");
         const okStarts = starts("mcpui-ok");
         const lateStarts = starts("mcpui-late");
         const result = await call<unknown>("perform_native_agent_mcp_action", {
@@ -1235,16 +1265,17 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
       await test.step("the next turn's CLI report replaces the merged list, also after a reload", async () => {
         const okStarts = starts("mcpui-ok");
         await replyTurn("AGAIN");
-        expect(starts("mcpui-ok"), "no new CLI started the servers").toBeGreaterThan(okStarts);
+        expect(starts("mcpui-ok"), "the new CLI started the removed server").toBe(okStarts);
         await expect.poll(() => statusOf("mcpui-late"), { timeout: 60_000 }).toBe("connected");
-        await expectSessionInventory("after-next-turn", "connected");
+        await expectSessionInventory("after-next-turn", "connected", false);
         await loadAppWithDevRetry(page, testInfo, () => page.reload());
         await openEnvironment(page, project!.name, environment.name);
         const panel = await mcpPanel();
         await expect(panel).not.toContainText("down");
-        await expect(panel).toContainText("3 servers");
+        await expect(panel).toContainText("2 servers");
+        await expect(panelRow(panel, "mcpui-ok")).toHaveCount(0);
         await panelMatchesBackend(panel);
-        await expectSessionInventory("after-reload", "connected");
+        await expectSessionInventory("after-reload", "connected", false);
         await shot("after-reload");
       });
     } finally {

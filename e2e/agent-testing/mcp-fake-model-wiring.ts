@@ -32,7 +32,7 @@ export function isFakeModelPlatform(platform: string): platform is FakeModelPlat
   return platform === "claude" || platform === "codex" || platform === "pi";
 }
 
-function inside(dataDir: string, file: string): string {
+export function insideProfile(dataDir: string, file: string): string {
   const root = path.resolve(dataDir);
   const resolved = path.resolve(file);
   if (!resolved.startsWith(`${root}${path.sep}`)) {
@@ -77,7 +77,7 @@ export function fakePiModels(baseUrl: string) {
 function configure(platform: FakeModelPlatform, dataDir: string, origin: string): string[] {
   const credentials = path.join(dataDir, "agent-credentials");
   if (platform === "claude") {
-    const file = inside(dataDir, path.join(credentials, "claude", "settings.json"));
+    const file = insideProfile(dataDir, path.join(credentials, "claude", "settings.json"));
     mkdirSync(path.dirname(file), { recursive: true });
     const earlier = existsSync(file)
       ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>)
@@ -94,7 +94,7 @@ function configure(platform: FakeModelPlatform, dataDir: string, origin: string)
     return [file];
   }
   if (platform === "codex") {
-    const file = inside(dataDir, path.join(credentials, "codex", "config.toml"));
+    const file = insideProfile(dataDir, path.join(credentials, "codex", "config.toml"));
     mkdirSync(path.dirname(file), { recursive: true });
     // A top-level key, so it goes before any table Codex or the editor added.
     const earlier = existsSync(file)
@@ -107,7 +107,10 @@ function configure(platform: FakeModelPlatform, dataDir: string, origin: string)
   }
   // Agent-test backends run with HOME=<dataDir>/agent-credentials/home, and a
   // local Pi bridge uses Pi's default `~/.pi/agent` under it.
-  const file = inside(dataDir, path.join(credentials, "home", ".pi", "agent", "models.json"));
+  const file = insideProfile(
+    dataDir,
+    path.join(credentials, "home", ".pi", "agent", "models.json"),
+  );
   if (existsSync(file)) {
     const existing = JSON.parse(readFileSync(file, "utf8")) as { providers?: object };
     if (Object.keys(existing.providers ?? {}).some((name) => name !== FAKE_PI_PROVIDER)) {
@@ -145,7 +148,7 @@ export async function startMcpFakeModel(
       : platform === "codex"
         ? path.join(credentials, "codex", "config.toml")
         : path.join(credentials, "home", ".pi", "agent", "models.json");
-  const restore = snapshotFixtureFiles([inside(dataDir, planned)]);
+  const restore = snapshotFixtureFiles([insideProfile(dataDir, planned)]);
   const model = await startModel(FAKE_MODEL, options);
   let files: string[];
   try {

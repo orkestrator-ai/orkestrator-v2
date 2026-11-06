@@ -49,6 +49,7 @@ import type {
 } from "@orkestrator/protocol/mcp-management";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { watchEventStream } from "./event-stream-outage";
+import { observeCodexReloads } from "./mcp-codex-reload-observer";
 import { FIXTURE_SERVER } from "./mcp-apply-inactive-support";
 import { grantCodexProjectTrust, writableSourcePath } from "./mcp-apply-live-safety";
 import { startMcpFakeModel, type McpFakeModelHandle } from "./mcp-fake-model-wiring";
@@ -203,6 +204,7 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
         .filter((entry) => entry === line).length;
 
     let fake: McpFakeModelHandle | undefined;
+    const reloads = observeCodexReloads(status.dataDir!, runDir);
     const environments: Environment[] = [];
     let invoke: Invoke | undefined;
     try {
@@ -477,6 +479,8 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
       const pid = await bridgePid();
       expect(pid, "A's Codex bridge is running").toBeTruthy();
       let addOperationId = "";
+      const beforeAdd = reloads.count(worktreeA!);
+      let afterAdd = beforeAdd;
 
       await test.step("one save plans both threads of A's app-server, and nothing in B", async () => {
         const saved = await saveAndApply({
@@ -513,6 +517,8 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
         expect(generations.size, "each thread names its own generation").toBe(2);
         expect(await bridgePid(), "the reload replaced the bridge").toBe(pid);
         expect(markerLines("call mcpqa 1")).toBe(0);
+        afterAdd = reloads.count(worktreeA!);
+        expect(afterAdd - beforeAdd, "one process-wide reload for the add").toBe(1);
       });
 
       await test.step("A1's turn while A is inactive and the stream is down proves only A1", async () => {
@@ -546,6 +552,10 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
         expect(markerLines("call mcpqa 1")).toBe(2);
         expect(await bridgePid(), "the bridge changed between the two threads").toBe(pid);
         record("applied", describe(await operation(addOperationId)));
+        expect(
+          reloads.count(worktreeA!) - beforeAdd,
+          "duplicate add reload after thread turns",
+        ).toBe(1);
       });
 
       await test.step("after a hard reload the card reads saved and loaded", async () => {
@@ -558,6 +568,8 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
       });
 
       await test.step("a removal: both threads wait, then each finds the tool gone", async () => {
+        const beforeRemove = reloads.count(worktreeA!);
+        expect(beforeRemove).toBe(afterAdd);
         const current = await snapshot(targetA.targetId);
         const definition = current.definitions.find(
           (candidate) => candidate.sourceId === project.sourceId && candidate.name === "mcpqa",
@@ -572,6 +584,10 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
         const operationId = saved.operation.operationId;
         await waitFor(operationId, a1, "pending-next-turn", "A1 never left the reload");
         await waitFor(operationId, a2, "pending-next-turn", "A2 never left the reload");
+        expect(
+          reloads.count(worktreeA!) - beforeRemove,
+          "one process-wide reload for removal",
+        ).toBe(1);
         for (const who of [a1, a2]) {
           const absent = nonce("MCPQXNOTOOL");
           await turn(who, absentPrompt("mcpqa", absent), absent);
@@ -586,6 +602,10 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
         expect(markerLines("call mcpqa 1"), "the removed server was called").toBe(2);
         expect(await bridgePid(), "the bridge changed during the removal").toBe(pid);
         record("removed", describe(await operation(operationId)));
+        expect(
+          reloads.count(worktreeA!) - beforeRemove,
+          "duplicate removal reload after turns",
+        ).toBe(1);
       });
     } finally {
       await context.setOffline(false).catch(() => undefined);
@@ -593,7 +613,11 @@ test.describe("live MCP apply in an inactive environment (codex, process-wide)",
         await invoke?.("stop_environment", { environmentId: created.id }).catch(() => undefined);
         await invoke?.("delete_environment", { environmentId: created.id }).catch(() => undefined);
       }
-      await fake?.stop();
+      try {
+        await fake?.stop();
+      } finally {
+        reloads.stop();
+      }
     }
   });
 });

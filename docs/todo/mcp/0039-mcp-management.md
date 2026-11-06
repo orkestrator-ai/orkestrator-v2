@@ -587,6 +587,7 @@ succeeds and the CLI stays warm. Run `mcp0039-fake-t13`: 1 passed, 619 s, at
   After the release the retained rows read `connected` with no CLI running;
   task 14 only covers rows left `connecting`.
 
+### 14. Claude MCP rows read unknown after a refused CLI exits
 
 **Problem.** When a Claude CLI exits before any status read reaches it, the
 bridge now serves its retained `connecting` rows as `unknown`, on the session,
@@ -1562,6 +1563,51 @@ directory and were deleted with it.
   session on a real signed-in account is still unrun.
 
 ## Assumptions and decisions
+
+### 2026-11-06 review repairs: tasks 7, 13 and qualification harness
+
+**Task 7: count actual reload requests.** The Codex inactive scenario now
+wraps only the disposable profile's activation symlinks with a stdio tap
+that forwards requests to the real pinned app-server. It records only the
+working directory of `config/mcpServer/reload` requests, never request bodies.
+The add and removal each require exactly one request, both after apply settles
+and after the two thread turns. Counting bridge PIDs would miss repeated
+reloads within that bridge. The original activation links are restored during
+cleanup, after the fixture environments stop.
+
+**Task 13: distinguish retained inventory from a fresh report.** While the
+Claude CLI is stopped, the case saves removal of `mcpui-ok` without applying
+it. The probe reconnect must retain that row while changing only its target.
+The next real CLI report must remove `mcpui-ok`; the backend and reloaded panel
+must then show two servers. The original recorded run earlier in this document had three identical
+rows before and after the next turn; it established continuity but did not
+prove replacement. This stricter case addresses that coverage gap. The idle-release poll emits
+a content-free progress line every 30 seconds: the initial logged rerun was
+killed by the runner's five-minute silence watchdog while waiting for the
+real ten-minute idle window. The wait retains its existing deadline.
+
+**Tasks 5, 6, 7 and 13: harness coverage.** Direct loopback tests cover Messages and chat SSE tool
+arguments, stop reasons and final replies, plus Responses WebSocket prewarm,
+remembered tool offers, continuations and replacement offers. Profile wiring
+tests cover all three providers, exact restoration of existing bytes and modes,
+removal of newly created files, refusal of unrelated Pi providers, invalid
+configuration cleanup and the inside-profile path guard. These complement the
+opt-in real-runtime cases without requiring a login or billed request.
+
+**Task 14 record.** Restored the missing task heading before its Problem
+paragraph; the task status and existing evidence are unchanged.
+
+**Review validation.** The direct suite has 27 passing tests (13 added). The
+strengthened Codex inactive scenario passed on profile `mcp-review-fixes`
+(80.8 s including the task runner); its marker recorded two reload RPCs in
+all, and both profile activation links were restored. The strengthened Claude
+reconnect scenario then passed with the distinct inventories (655.8 s including
+the task runner), after adding progress output and rerunning the exact command
+that first hit the silence watchdog. Focused e2e typechecking,
+lint and formatting passed. The original preparation's broad red checks were
+not rerun: the source-guard failure has target-branch CI evidence; the other
+full-suite and browser failures remain undetermined in the captured triage
+and are left to the verifier, rather than attributed to the test-only diff.
 
 ### 2026-11-06: tasks 5, 6, 7, 9 and 13 with fake models
 

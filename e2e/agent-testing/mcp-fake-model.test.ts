@@ -1,4 +1,26 @@
 import { describe, expect, test } from "bun:test";
+import { nativeWebPlatform } from "../../tests/register-dom";
+import { spawn, type ChildProcess } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  FAKE_PI_MODEL_REF,
+  fakePiModels,
+  insideProfile,
+  startMcpFakeModel,
+} from "./mcp-fake-model-wiring";
+import { observeCodexReloads } from "./mcp-codex-reload-observer";
 import { PROBE_UNAVAILABLE, probePrompt, probeResult } from "./mcp-apply-live-support";
 import {
   anthropicContent,
@@ -7,6 +29,7 @@ import {
   chatRequest,
   responsesOutputItem,
   responsesRequest,
+  serveMcpFakeModel,
 } from "./mcp-fake-model";
 import {
   BUSY_TEXT_DELAY_MS,
@@ -15,6 +38,9 @@ import {
   offeredToolName,
   scriptedStep,
 } from "./mcp-fake-model-script";
+
+// Keep loopback fetch and server responses on Bun's native Web APIs under the DOM preload.
+const { fetch, Response } = nativeWebPlatform;
 
 const LIVE_PROMPT = probePrompt("mqu0_alpha", "MQ1234");
 const INACTIVE_PROMPT =
@@ -307,3 +333,318 @@ describe("Responses adapter", () => {
     });
   });
 });
+
+// Exercise wire framing over a real loopback socket, not just adapter objects.
+describe("streaming wire protocols", () => {
+  test("Messages SSE carries tool input, tool-use stop and the final text", async () => {
+    const server = serveMcpFakeModel(Response);
+    try {
+      const post = async (messages: unknown[]) => {
+        const response = await fetch(`${server.url}v1/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            stream: true,
+            model: "fixture",
+            tools: [{ name: "mcp__mqu0_alpha__probe" }],
+            messages,
+          }),
+        });
+        expect(response.headers.get("content-type")).toContain("text/event-stream");
+        return sse(await response.text());
+      };
+      const messages = [{ role: "user", content: LIVE_PROMPT }];
+      const events = await post(messages);
+      const start = events.find((e) => e.type === "content_block_start")!;
+      expect(start.content_block).toMatchObject({
+        type: "tool_use",
+        name: "mcp__mqu0_alpha__probe",
+      });
+      const input = events
+        .filter((e) => e.type === "content_block_delta")
+        .map((e) => e.delta.partial_json ?? "")
+        .join("");
+      expect(JSON.parse(input)).toEqual({ nonce: "MQ1234" });
+      expect(events.find((e) => e.type === "message_delta")?.delta.stop_reason).toBe("tool_use");
+      expect(events.at(-1)?.type).toBe("message_stop");
+      const line = probeResult("mqu0_alpha", "v1", "MQ1234");
+      const final = await post([
+        ...messages,
+        { role: "assistant", content: [{ ...start.content_block, input: JSON.parse(input) }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: start.content_block.id, content: line }],
+        },
+      ]);
+      expect(
+        final
+          .filter((e) => e.type === "content_block_delta")
+          .map((e) => e.delta.text ?? "")
+          .join(""),
+      ).toBe(line);
+      expect(final.find((e) => e.type === "message_delta")?.delta.stop_reason).toBe("end_turn");
+    } finally {
+      await server.stop(true);
+    }
+  }, 30_000);
+
+  test("chat SSE carries function arguments, finish reasons, usage and DONE", async () => {
+    const server = serveMcpFakeModel(Response);
+    try {
+      const post = async (messages: unknown[]) => {
+        const response = await fetch(`${server.url}v1/chat/completions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            stream: true,
+            model: "fixture",
+            tools: [{ function: { name: "mcp_mqu0_alpha_probe" } }],
+            messages,
+          }),
+        });
+        expect(response.headers.get("content-type")).toContain("text/event-stream");
+        const text = await response.text();
+        expect(text.trimEnd().endsWith("data: [DONE]")).toBe(true);
+        return sse(text);
+      };
+      const messages = [{ role: "user", content: LIVE_PROMPT }];
+      const chunks = await post(messages);
+      const call = chunks[0]!.choices[0].delta.tool_calls[0];
+      expect(call).toMatchObject({
+        index: 0,
+        type: "function",
+        function: { name: "mcp_mqu0_alpha_probe" },
+      });
+      expect(JSON.parse(call.function.arguments)).toEqual({ nonce: "MQ1234" });
+      expect(chunks.at(-1)?.choices[0].finish_reason).toBe("tool_calls");
+      expect(chunks.at(-1)?.usage.total_tokens).toBe(2);
+      const line = probeResult("mqu0_alpha", "v1", "MQ1234");
+      const final = await post([
+        ...messages,
+        { role: "assistant", tool_calls: [call] },
+        { role: "tool", tool_call_id: call.id, content: line },
+      ]);
+      expect(final[0]!.choices[0].delta.content).toBe(line);
+      expect(final.at(-1)?.choices[0].finish_reason).toBe("stop");
+    } finally {
+      await server.stop(true);
+    }
+  }, 30_000);
+
+  test("Responses prewarm remembers namespaced tools across frames and replaces offers", async () => {
+    const server = serveMcpFakeModel(Response);
+    const socket = new WebSocket(`${server.url.toString().replace("http:", "ws:")}v1/responses`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.addEventListener("open", () => resolve(), { once: true });
+        socket.addEventListener("error", () => reject(new Error("socket failed")), { once: true });
+      });
+      const exchange = (frame: unknown) =>
+        new Promise<any[]>((resolve, reject) => {
+          const events: any[] = [];
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(new Error("no response.completed"));
+          }, 5_000);
+          const cleanup = () => {
+            clearTimeout(timer);
+            socket.removeEventListener("message", onMessage);
+          };
+          const onMessage = (message: MessageEvent) => {
+            const event = JSON.parse(String(message.data));
+            events.push(event);
+            if (event.type === "response.completed") {
+              cleanup();
+              resolve(events);
+            }
+          };
+          socket.addEventListener("message", onMessage);
+          socket.send(JSON.stringify({ type: "response.create", ...(frame as object) }));
+        });
+      const prewarm = await exchange({
+        generate: false,
+        tools: [
+          {
+            type: "namespace",
+            name: "mcp__mqu0_alpha__",
+            tools: [{ type: "function", name: "probe" }],
+          },
+        ],
+      });
+      expect(prewarm.map((e) => e.type)).toEqual(["response.created", "response.completed"]);
+      const generated = await exchange({ input: [{ role: "user", content: LIVE_PROMPT }] });
+      const item = generated.find((e) => e.type === "response.output_item.done")!.item;
+      expect(item).toMatchObject({
+        type: "function_call",
+        namespace: "mcp__mqu0_alpha__",
+        name: "probe",
+        arguments: '{"nonce":"MQ1234"}',
+      });
+      const line = probeResult("mqu0_alpha", "v1", "MQ1234");
+      const continuation = await exchange({
+        input: [{ type: "function_call_output", call_id: item.call_id, output: line }],
+      });
+      expect(
+        JSON.stringify(continuation.find((e) => e.type === "response.output_item.done")!.item),
+      ).toContain(line);
+      await exchange({ generate: false, tools: [{ type: "function", name: "unrelated" }] });
+      const replaced = await exchange({ input: [{ role: "user", content: LIVE_PROMPT }] });
+      expect(
+        JSON.stringify(replaced.find((e) => e.type === "response.output_item.done")!.item),
+      ).toContain(PROBE_UNAVAILABLE);
+    } finally {
+      socket.close();
+      await server.stop(true);
+    }
+  }, 30_000);
+});
+
+// Only JSON data frames are returned; DONE is checked separately above.
+function sse(body: string): any[] {
+  return body
+    .split("\n")
+    .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+    .map((line) => JSON.parse(line.slice(6)));
+}
+
+describe("isolated profile wiring", () => {
+  for (const platform of ["claude", "codex", "pi"] as const) {
+    for (const existing of [false, true]) {
+      test(`${platform}: rewrite and restore ${existing ? "existing bytes and mode" : "an absent file"}`, async () => {
+        const root = mkdtempSync(path.join(tmpdir(), "mcp-wiring-"));
+        const file = platformFile(root, platform);
+        const original =
+          platform === "claude"
+            ? '{ "env": {"KEPT":"yes"}, "permissions": {"allow": []} }\n'
+            : platform === "codex"
+              ? 'openai_base_url = "http://old.invalid"\n[projects.fixture]\ntrust_level = "trusted"\n'
+              : '{ "providers": {"mcpq-fake": {"old": true}} }\n';
+        let handle: Awaited<ReturnType<typeof startMcpFakeModel>> | undefined;
+        try {
+          if (existing) {
+            mkdirSync(path.dirname(file), { recursive: true });
+            writeFileSync(file, original, { mode: 0o640 });
+          }
+          handle = await startMcpFakeModel(platform, root);
+          expect(handle.files).toEqual([path.relative(root, file)]);
+          const contents = readFileSync(file, "utf8");
+          if (!existing) expect(statSync(file).mode & 0o777).toBe(0o600);
+          if (platform === "claude") {
+            const configured = JSON.parse(contents);
+            expect(configured.env.ANTHROPIC_BASE_URL).toBe(handle.origin);
+            expect(configured.env.ANTHROPIC_API_KEY).toBe("fixture-only-not-a-key");
+            if (existing) {
+              expect(configured.env.KEPT).toBe("yes");
+              expect(configured.permissions).toEqual({ allow: [] });
+            }
+          } else if (platform === "codex") {
+            expect(contents.split("\n")[0]).toBe(`openai_base_url = "${handle.origin}/v1"`);
+            expect(contents.match(/^openai_base_url/gm)).toHaveLength(1);
+            if (existing) expect(contents).toContain('[projects.fixture]\ntrust_level = "trusted"');
+          } else {
+            expect(handle.model).toBe(FAKE_PI_MODEL_REF);
+            expect(JSON.parse(contents)).toEqual(fakePiModels(`${handle.origin}/v1`));
+          }
+          const origin = handle.origin;
+          await handle.stop();
+          handle = undefined;
+          if (existing) {
+            expect(readFileSync(file, "utf8")).toBe(original);
+            expect(statSync(file).mode & 0o777).toBe(0o640);
+          } else expect(existsSync(file)).toBe(false);
+          await expect(fetch(origin)).rejects.toThrow();
+        } finally {
+          await handle?.stop();
+          rmSync(root, { recursive: true, force: true });
+        }
+      }, 30_000);
+    }
+  }
+
+  test("inside-profile guard rejects the root, traversal and sibling prefixes", () => {
+    const root = path.resolve(tmpdir(), "mcp-profile");
+    expect(insideProfile(root, path.join(root, "agent-credentials", "settings.json"))).toBe(
+      path.join(root, "agent-credentials", "settings.json"),
+    );
+    for (const candidate of [root, path.join(root, "..", "outside"), `${root}-sibling/file`]) {
+      expect(() => insideProfile(root, candidate)).toThrow("escapes");
+    }
+  });
+
+  for (const [platform, original, error] of [
+    ["pi", '{"providers":{"someone-else":{"apiKey":"placeholder"}}}\n', "other providers"],
+    ["claude", "invalid json\n", "JSON"],
+  ] as const) {
+    test(`${platform}: configuration refusal restores bytes and stops its model`, async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "mcp-refusal-"));
+      const file = platformFile(root, platform);
+      let child: ChildProcess | undefined;
+      try {
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, original);
+        const spawnModel = ((...args: Parameters<typeof spawn>) => {
+          child = spawn(...args);
+          return child;
+        }) as typeof spawn;
+        await expect(startMcpFakeModel(platform, root, { spawnModel })).rejects.toThrow(
+          new RegExp(error),
+        );
+        expect(readFileSync(file, "utf8")).toBe(original);
+        expect(child).toBeDefined();
+        expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }, 30_000);
+  }
+});
+
+function platformFile(root: string, platform: string) {
+  return path.join(
+    root,
+    "agent-credentials",
+    ...(platform === "pi"
+      ? ["home", ".pi", "agent", "models.json"]
+      : [platform, platform === "claude" ? "settings.json" : "config.toml"]),
+  );
+}
+
+test("Codex reload observer forwards frames, counts only RPC methods and restores activation", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "mcp-observer-"));
+  const bin = path.join(root, "toolchains", "bin", "fixture");
+  const binary = path.join(root, "real-codex.ts");
+  let observer: ReturnType<typeof observeCodexReloads> | undefined;
+  try {
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      binary,
+      `#!${process.execPath}\nimport { createInterface } from "node:readline";\ncreateInterface({ input: process.stdin }).on("line", line => console.log(line));\n`,
+      { mode: 0o700 },
+    );
+    const link = path.join(bin, "codex");
+    symlinkSync(binary, link);
+    observer = observeCodexReloads(root, root);
+    const frames =
+      [
+        { id: 1, method: "config/mcpServer/reload" },
+        { id: 2, method: "thread/start", params: { prompt: '"method":"config/mcpServer/reload"' } },
+        { id: 3, method: "config/mcpServer/reload" },
+      ]
+        .map((frame) => JSON.stringify(frame))
+        .join("\n") + "\n";
+    const child = Bun.spawn([link], { cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    child.stdin.write(frames);
+    child.stdin.end();
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
+    expect(output).toBe(frames);
+    expect(observer.count(root)).toBe(2);
+    expect(readFileSync(path.join(root, "codex-reloads.jsonl"), "utf8")).not.toContain("prompt");
+    observer.stop();
+    observer = undefined;
+    expect(readlinkSync(link)).toBe(binary);
+  } finally {
+    observer?.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);

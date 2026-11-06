@@ -1741,6 +1741,7 @@ export async function deleteEnvironment(
         await removeOpenCodeCommandChangeJournals(storage.getDataDir(), environmentId);
       }
       context.nativeAgents?.forgetEnvironmentCommandCatalogues?.(environmentId);
+      context.nativeAgents?.forgetEnvironmentProjections?.(environmentId);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);

@@ -1891,6 +1891,15 @@ export class NativeAgentService {
     return { ...result, projection: await this.projections.refreshProjection(input, true) };
   }
 
+  /**
+   * Called when an environment is deleted, after its session records went;
+   * never on tab close, unmount or switch. Drops the projection caches of its
+   * sessions, which nothing can read again.
+   */
+  forgetEnvironmentProjections(environmentId: string): void {
+    this.projections.forgetEnvironment(environmentId);
+  }
+
   /** Called when an environment is deleted; never on tab unmount or switch. */
   forgetEnvironmentCommandCatalogues(environmentId: string): void {
     this.catalogs.forgetEnvironmentCommands(environmentId);

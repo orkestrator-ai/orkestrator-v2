@@ -4940,6 +4940,45 @@ export class NativeAgentTranscriptProjection {
     }
   }
 
+  /**
+   * Releases what this projection keeps for a deleted environment's sessions:
+   * their cached views and sync revisions, history, tool details, projected
+   * rows, direct pages and progressive reads. Called when an environment is
+   * deleted, after its session records went; never on tab close, unmount or
+   * switch. The caches are rebuildable, but without this a deleted
+   * environment's views stayed resident until LRU churn pushed them out
+   * (1,024 projections, 4,096 revision counters), so memory grew with every
+   * environment ever deleted (todo 7100 task 1).
+   *
+   * Sessions are found through the cached projections' own inputs, since a
+   * session key is a hash. A read still in flight is fenced by the epoch bump
+   * in {@link invalidateProjection}; its epoch is reclaimed once it settles.
+   */
+  forgetEnvironment(environmentId: string): number {
+    const sessionKeys = new Set<string>();
+    for (const entry of this.projectionCache.values()) {
+      if (entry.input.environmentId !== environmentId) continue;
+      sessionKeys.add(
+        nativeAgentSessionStorageKey(
+          entry.input.environmentId,
+          entry.input.agent,
+          entry.input.logicalSessionKey,
+        ),
+      );
+    }
+    for (const sessionKey of sessionKeys) {
+      this.invalidateProjection(sessionKey);
+      this.projectionRevisions.delete(sessionKey);
+      for (const candidate of Array.from(this.progressiveReadEpochs.keys())) {
+        if (candidate.startsWith(`${sessionKey}\0`) && !this.progressiveReads.has(candidate))
+          this.progressiveReadEpochs.delete(candidate);
+      }
+      this.pruneProjectionEpoch(sessionKey);
+      this.pruneProjectionEpoch(`${sessionKey}\0sync-v1`);
+    }
+    return sessionKeys.size;
+  }
+
   invalidateProjection(key: string): void {
     this.stopNotices.delete(key);
     const keys = [key, `${key}\0sync-v1`];

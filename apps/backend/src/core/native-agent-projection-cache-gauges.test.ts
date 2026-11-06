@@ -56,3 +56,52 @@ test("a projected session shows in the projection gauges, content-free, until sh
   );
   expect(projectionSources()).toBe(before);
 });
+
+test("deleting an environment releases its sessions' projection caches, and only its own", async () => {
+  const stub = createProviderStub("codex", {
+    interactiveSnapshot: async () => ({
+      status: "idle",
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: "reply",
+          parts: [{ type: "text", content: "reply" }],
+          createdAt: "2026-11-05T10:00:00.000Z",
+        },
+      ],
+    }),
+  });
+  const gauges = () =>
+    recurringWorkDiagnostics().caches.find((cache) => cache.name === "native-projection")!.gauges;
+  await withService(
+    { prefix: "orkestrator-native-forget-env-", provider: async () => stub.provider },
+    async ({ service }) => {
+      await service.ensureSession(identity);
+      await service.getProjection(identity);
+      const held = gauges();
+      expect(held.projections).toBeGreaterThanOrEqual(1);
+      expect(held.projectionRevisions).toBeGreaterThanOrEqual(1);
+
+      // Another environment's deletion leaves this one's caches alone.
+      service.forgetEnvironmentProjections("env-other");
+      expect(gauges()).toEqual(held);
+
+      service.forgetEnvironmentProjections("env-1");
+      expect(gauges()).toMatchObject({
+        projections: 0,
+        projectionSync: 0,
+        projectionRevisions: 0,
+        projectionHistory: 0,
+        projectionEpochs: 0,
+        projectionMissingSince: 0,
+        toolDetails: 0,
+        projectedMessages: 0,
+        projectedMessageSessions: 0,
+        progressiveTranscripts: 0,
+        progressiveReadEpochs: 0,
+        directHistoryPages: 0,
+      });
+    },
+  );
+});

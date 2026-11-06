@@ -73,3 +73,16 @@ result; the owner and hook implementation are unchanged by the egress branch.
 passed with exit 0 in 2.1 s. The original failure remains in the logged workspace
 artifact (`orkestrator-test-run.LAWw4i` under the host temporary directory).
 No cause or fix is established by the isolated pass.
+
+## To-do 6602 preparation recurrence, 2026-11-06
+
+Preparation at `87105bf47` (branch `macos-service-install-a16e2242456d-r1`, which
+changes only a CLI test, one e2e spec, its fixture host and documents) failed the
+exact owner test with `working 4 0` instead of `working 20 0` (1,588.96 ms) in
+`mise run test:logged -- --name review-default-tests -- mise run test`. Triage
+called it `related` through the false match in to-do 6601; see case
+[6880](../aggregate-validation-runs/6880-service-install-branch-backend-owners-under-load.md).
+`mise run test:logged -- --name claude-state-signal-integration -- bun
+--cwd=apps/backend test tests/claude-state-signal-integration.test.ts
+--only-failures` passed in 0.7 s (exit 0) at a load of about 16. No
+implementation, assertion or timeout changed.

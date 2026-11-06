@@ -17,6 +17,8 @@ Analysed 2026-11-05 against `main` at `41f9eb638`.
 
 **Investigation.** The match is a doc comment, `packages/protocol/src/web-annotations.ts:346`: "for example `apps/web`;". A static walk of the eight owning test files found that each closure imports no changed file, and that this comment is the only directory reference in each. `changedPath` then names the first changed file under the directory, which makes the verdict read as though the test referred to that file. The existing test, "a test that names a changed path is related" in `validation-failure-classifier.test.ts`, uses a literal in the test file itself, so it does not pin the wider behaviour.
 
+It recurred on 2026-11-06 for a different directory. The to-do 6602 branch changed only `packages/cli/tests/service-install.test.ts`, one e2e spec, its fixture host and documents. Five backend failures were triaged `related` with `changedPath: packages/cli/tests/service-install.test.ts`. No module imports that test file. Doc comments naming `packages/cli` exist in `packages/protocol/src/public-api.ts`, `public-api-cli.ts`, `node/build-commit.ts` and `apps/backend/src/core/bridge-runtime-install.ts`. Flake case 6880 records it.
+
 **Decisions.**
 
 - **Which files may name a changed path?**

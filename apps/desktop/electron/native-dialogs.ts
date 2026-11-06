@@ -16,7 +16,7 @@ const desktopLog = createLogger("desktop");
  * tasks and no Node, so the windows, their IPC, remote clients and the reader
  * of the backend's stdout all freeze. macOS may refuse to bring the alert to
  * the front, so it can wait behind other apps for hours (see
- * docs/todo/cross-cutting/0880-desktop-main-thread-held-by-modal-dialog.md).
+ * task 7 of docs/todo/cross-cutting/0741-backend-responsiveness-under-load.md).
  *
  * So on macOS every dialog gets a parent. Any window will do, whatever its
  * state: a sheet on a minimized or hidden window brings it back. With no window

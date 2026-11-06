@@ -13,16 +13,20 @@ against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 Task 10 rechecked against `main` at `281de1a17` (2026-11-06), with live
 evidence from Linux that day; see [Long soak](#long-soak-2026-11-06-linux).
+Tasks 1, 2, 7 and 19 to 21 rechecked against `main` at `c1724ab74`
+(2026-11-06), with live evidence from macOS that day; see
+[macOS watcher, change-to-visible and remote freshness](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos)
+and [Event-stream reader inventory](#event-stream-reader-inventory-2026-11-06).
 
 ### Tasks
 
-1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: open.
-2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open.
+1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: open (2026-11-06: not attempted in the macOS run; what extending task 10's soak driver needs is in its subsection).
+2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: partly done (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, [7201](7201-explicit-refresh-behind-running-scan.md); turn completion, activity and queued prompts were measured client-side by task 11; the approval, mail, PR and workflow rows wait for tasks 1 and 5).
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
 5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open.
 6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
-7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: partly done (the `dev:test` save-detection run passed).
+7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts`, in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open.
 9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open.
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
@@ -34,9 +38,9 @@ evidence from Linux that day; see [Long soak](#long-soak-2026-11-06-linux).
 16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines).
 17. **View PR stale marker with a real PR**: a failed PR read shows the stale marker and last-check tooltip, which clear on the next good read. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs GitHub credentials).
 18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open.
-19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: open.
-20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: open.
-21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: open.
+19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: done (2026-11-06: qualified on a legacy container record on macOS, `changes-remote-freshness.spec.ts`; it found that the Changes tab's Refresh never asked a container for its remote, fixed, decision M3).
+20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in [7200](7200-event-stream-reader-gaps.md), two fixed with tests).
+21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: done (2026-11-06).
 
 ### 1. Busy live profile
 
@@ -63,6 +67,19 @@ evidence from Linux that day; see [Long soak](#long-soak-2026-11-06-linux).
     - Pros: one self-contained run.
     - Cons: duplicates 0051's harness work.
 
+**Outcome (2026-11-06, not done).** Rechecked on `c1724ab74`; the
+references above hold. The busy profile was not attempted in the macOS run.
+The fake-model soak driver from task 10 (`recurring-live-ab.ts --soak-cycles`)
+drives profile lifecycle and opens idle fake-model Pi sessions; extending it
+to this workload needs, at least: a scripted turn and a held approval against
+the fake model (task 11's `multi-client-restarts-live.spec.ts` already does
+both for Claude, and a queued prompt), a workflow that completes without a
+real provider, 10 environments, 0 to 2 Playwright clients attached for the
+whole run, and the outage link from `client-outage-support.ts`. That is a new
+driver phase plus a client harness, larger than this run's remaining scope;
+it stays open with the recommendation unchanged (one CLI-and-Playwright busy
+phase in `recurring-live-ab.ts`). No real provider or login is needed.
+
 ### 2. Client-side change-to-visible latency
 
 **Problem.** Freshness was measured only from a write to the backend `diff-scan` counter moving. That is a lower bound; the budgets in [recurring-work.md](../../architecture/recurring-work.md#latency-budgets) are about what the user sees.
@@ -80,6 +97,20 @@ evidence from Linux that day; see [Long soak](#long-soak-2026-11-06-linux).
   - **Timestamp the renderer's store update and report it through the metrics endpoint.**
     - Pros: precise, and no browser driver needed.
     - Cons: misses paint time and adds renderer instrumentation.
+
+**Outcome (2026-11-06).** Rechecked on `c1724ab74`: still no client-side
+probe existed. The recommended option was taken:
+`e2e/agent-testing/change-to-visible-latency.spec.ts` writes a file into a
+watched local worktree or a container and times, in the Playwright process,
+until the page shows the sidebar badge, a Changes row and an All files
+entry, and after an explicit Refresh. Container probes start at random
+offsets in the 15 s scan interval. On macOS every row it covers was within
+budget except the container Changes refresh, whose p95 is pulled over 1 s by
+refreshes that follow a scan already running (decision M6,
+[7201](7201-explicit-refresh-behind-running-scan.md)). See [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos). The other
+budget rows need a live turn, approvals, mail, PRs or workflows; task 11
+already measured turn completion, the activity indicator and queued prompts
+on two clients, and the rest belong with tasks 1 and 5.
 
 ### 3. Container fetch policy live
 
@@ -214,6 +245,28 @@ lost the selection to a seeded terminal; fixed (decision 23). See
   - **Rely on the injected-watcher unit tests.**
     - Pros: free.
     - Cons: does not show how real FSEvents behaves.
+
+**Outcome (2026-11-06).** Rechecked on `c1724ab74`: the references above
+hold (the injectable `watch` now sits behind `watch-host.ts`, the helper
+process that holds a macOS backend's directory watches). The recommended
+option was taken, at three levels:
+
+- `scripts/worktree-watcher-live.ts` drives the backend's own
+  `startWorktreeWatcher` against real FSEvents in a temporary repository:
+  single saves, bursts of 1,000 to 50,000 files, a commit of all of them,
+  the helper killed, the root removed and recreated, a missing root.
+- The burst and helper-loss cases of `change-to-visible-latency.spec.ts` on a
+  `dev:test` profile, measured at the browser's badge.
+- `watcher-packaged-electron.spec.ts`, run by
+  `mise run test:agent:electron:packaged` on a `package:mac:unpacked:test`
+  build: the packaged app's bundled Bun spawns the helper, a save reaches the
+  badge, a 20,000-file burst converges, and a killed helper falls back to
+  polling and is replaced.
+
+Every burst ended with a hint after its last write, the badge always returned
+to its exact count, and every helper loss fell back to polling within 50 to
+325 ms and re-attached on the 30 s retry. See [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos). The run corrected two
+assumptions of the probes rather than the product (decisions M1 and M2).
 
 ### 8. iOS hidden pause and resume
 
@@ -536,6 +589,22 @@ commit and viewports without repository contents, then stop/reset the profile.
 freshness separate from PR freshness, but needs fixture Git setup. Treating task
 17 as coverage is cheaper but exercises a different state source.
 
+**Outcome (2026-11-06).** Done on macOS with
+`e2e/agent-testing/changes-remote-freshness.spec.ts`. A new container
+compares against its creation commit: remote `not-required`, no strip, as
+expected. The legacy case used a record made the way decision 12 made one.
+Its first run found a defect: since the Changes tab is served by the change
+projection, its Refresh went to `changes_refresh`, which rescanned without
+telling the container fetch policy, so it never fetched the base (the
+fetch counter stayed at one fetch per backend start). Fixed (decision M3).
+After the fix every step agreed with the backend: a fetch kept it `current`
+with no strip; a broken origin made it `stale` (`no-remote`) with "Base may
+be behind remote" in 352 ms; a switch away and back and a reload showed the
+same state; restoring the origin and refreshing cleared the strip in 702 ms,
+and the list then compared against the advanced remote. `unknown` ("Base not
+fetched yet") was not reached: the first scan after a start fetches at once.
+See [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos).
+
 ### 20. Other event-stream readers
 
 **Problem.** Retired 0051 said its silent-drop and lock-step reconnect fixes
@@ -554,6 +623,20 @@ follow-ups for missing guarantees; close only with a per-reader disposition.
 **Decisions.** Inventory before changing readers (recommended): identifies real
 gaps without assuming identical transports, but requires tracing ownership.
 Applying the same patch everywhere is quicker but may duplicate existing logic.
+
+**Outcome (2026-11-06).** Done. Every long-lived reader outside the browser
+gateway and Electron clients was traced and given a disposition; see
+[Event-stream reader inventory](#event-stream-reader-inventory-2026-11-06).
+Three gaps and one possible gap went to [7200](7200-event-stream-reader-gaps.md).
+Two were fixed with tests in the same change: the desktop connection
+manager's reconnect ladder now spreads its retries (7200 task 2), and a v2
+preview tunnel session that answers no pings for about 30 s is destroyed
+instead of staying selectable (7200 task 3). OpenCode's stream (task 1) needs
+a live `opencode serve` to see what it sends while idle, and the terminal
+socket (task 4) is a design choice; both stay open there. The silent-drop
+and immediate-error paths were exercised in fixtures for the two fixed
+readers only (scripted sockets and timers); the others either already have
+tests for their watchdogs or are not stream reconnect owners.
 
 ### 21. Retired to-do pointers in source comments
 
@@ -586,6 +669,13 @@ retired paths and run the checks required for the files changed:
 the ticket's boundary and preserves every destination, but the comments stay
 stale until that work lands. Editing source now fixes navigation immediately but
 breaks the docs-only constraint.
+
+**Outcome (2026-11-06).** Done in this code-allowed change: all five
+comments point at the destinations above, and `git grep` over `apps/`,
+`bridges/`, `packages/`, `scripts/`, `e2e/` and `tests/` finds no other
+reference to `0051-client-reconnect-and-freshness`,
+`3230-restart-inside-verification-window`,
+`0880-desktop-main-thread-held-by-modal-dialog` or "0241 task 5".
 
 #852 changed how often the app collects and reads facts: shared worktree
 snapshots, a container fetch policy, lifecycle-aware PR monitoring, the client
@@ -1093,6 +1183,134 @@ showing the result.
   clicks are bounded at 5 s. The renderer URL changes on every profile
   restart, so the older-backend case runs first.
 
+### macOS watcher, change-to-visible and remote freshness (2026-11-06, macOS)
+
+Host: macOS (Darwin 27.2.0, arm64), Bun 1.4.4, Docker Desktop. Browser runs
+used a credential-free `dev:test` profile of this branch
+(`--fixture --fixture-environments local,container --no-agent-credentials
+--agent-platforms pi`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), headless
+Chromium at 1400×900, and were reset afterwards. The packaged run used a
+`package:mac:unpacked:test` build of this branch (made before the decision
+M3 fix, which does not touch the watcher) on a throwaway profile under a
+temporary root. No provider turn, login, GitHub call or firewall change.
+Times are wall-clock from the write (or the click) to what the probe saw;
+the watched-badge budget runs from when the save settles, 400 ms later, so
+its bound from the write is 2.4 s (decision M1).
+
+**Watcher alone** (`bun scripts/worktree-watcher-live.ts`, the backend's
+`startWorktreeWatcher` and helper program, real FSEvents):
+
+| Case | Result |
+| --- | --- |
+| 20 single saves, write to hint | p50 464 ms, p95 465 ms (400 ms of it is the settle) |
+| Burst 1,000 / 5,000 files | 1 hint each, no overflow; last hint 413 / 247 ms after the last write |
+| Burst 20,000 / 50,000 files | 3 / 5 hints, 1 / 4 of them overflow (no paths); last hint 500 / 323 ms after the last write |
+| `git add` and commit of every burst file (21.8 s) | 1 metadata hint, 454 ms after it ended |
+| Helper killed | every watch errored within 3 ms (`EWATCHHOST`); a new watcher spawned a new helper, qualified in 24 ms, saw a save in 457 ms |
+| Watched root removed, then recreated | no error, 1 hint; the old watch still reported the recreated path (first hint 459 ms) |
+| Missing root | not watched, `ENOENT` |
+
+Every burst's last hint came after its last write (`finalCovered`), so no
+final change was lost to coalescing or overflow.
+
+**In a browser** (`change-to-visible-latency.spec.ts`, full run, then a second
+run of the container case):
+
+| Row (budget, p95) | Samples | p50 | p95 | Max |
+| --- | --- | --- | --- | --- |
+| Local badge, watched (2 s after settling: 2.4 s from the write) | 30 | 655 ms | 1.38 s | 1.43 s |
+| Local Changes row, panel open (6 s) | 15 | 960 ms | 1.43 s | 1.43 s |
+| Local All files entry (6 s) | 15 | 563 ms | 578 ms | 578 ms |
+| Container badge (20 s) | 30 / 30 | 687 / 735 ms | 1.49 / 1.73 s | 1.63 / 2.72 s |
+| Container Changes row (6 s) | 15 / 15 | 665 / 746 ms | 755 ms / 1.76 s | 755 ms / 1.76 s |
+| Container All files entry (6 s) | 15 / 15 | 727 / 755 ms | 1.63 / 2.76 s | 1.63 / 2.76 s |
+| Container Changes after Refresh (1 s) | 15 / 15 | 543 / 425 ms | **2.23 / 1.30 s** | 2.23 / 1.30 s |
+| Container All files after Refresh (1 s) | 15 / 15 | 462 / 312 ms | 881 / 414 ms | 881 / 414 ms |
+
+The container rows are far inside their budgets because the container's own
+change signal announces a write; the 15 s poll is only a backstop. The one
+miss is the Changes refresh: 14 of the second run's 15 refreshes took 317 to
+635 ms and one 1.30 s, a refresh that followed a scan already running
+(decision M6, [7201](7201-explicit-refresh-behind-running-scan.md)).
+
+- **Bursts at the badge.** 2,000 files (exactly the untracked line-count
+  cap): `+2,000` in 714 ms. 5,000 and 20,000 files: the badge turned
+  approximate ("Too many untracked files to count them all") 1.7 s and at
+  once after the last write (the 20,000 burst took 3.9 s to write and was
+  capped part-way). After each burst was removed, the badge was back to its
+  exact earlier count in 1.87, 2.02 and 2.87 s.
+- **Lost helper on `dev:test`.** The helper (identified as the profile
+  backend's child by pid, parent and start time) was killed: the watched
+  gauge fell from 2 to 1 within 325 ms, two saves while polling showed in
+  11.3 and 11.3 s (unwatched budget 20 s), the 30 s retry re-attached at
+  30.8 s with a new helper, and the next save showed in 1.39 s.
+
+**Packaged app** (`watcher-packaged-electron.spec.ts`, `app.isPackaged` true,
+`userData` the throwaway profile):
+
+- The new local environment was watched 49 ms after it started.
+- 20 back-to-back saves: p50 2.05 s, p95 2.08 s from the write, 1.65 to 1.68 s
+  after settling, inside the 2 s budget. They are slower than on `dev:test`
+  because each save starts as soon as the previous one is shown, so each
+  waits out `LOCAL_SCAN_MIN_GAP_MS` (2 s from the previous scan's end); the
+  `dev:test` probes paused 0.5 to 2 s between saves. The budget table now
+  names the gap.
+- 20,000 files: capped badge 406 ms after the last write; exact again 2.03 s
+  after removal.
+- The helper was the bundled Bun inside `OrkestratorV2.app`. Killed: polling
+  within 50 ms, a save shown in 15.0 s, re-attached at 30.1 s with a
+  replacement helper, the next save in 2.12 s.
+
+**Changes-tab remote freshness** (`changes-remote-freshness.spec.ts`, after
+the decision M3 fix). A new container: comparison base a commit, remote
+`not-required`, no strip. The legacy record (createdFromCommit removed from
+the profile's own `orkestrator.sqlite` with the profile stopped, restarted
+without `--fixture`; it compared against `main`):
+
+| Step | Backend `remote` | Strip | Time |
+| --- | --- | --- | --- |
+| Changes opened | `current` | none | |
+| Refresh | `current` | none | 529 ms (a fetch ran) |
+| Remote advanced from a second checkout, no fetch | `current` | none | |
+| Origin URL broken in the container, Refresh | `stale`, `no-remote` | "Base may be behind remote" | backend 322 ms, strip 352 ms |
+| Another failed fetch while the page showed the local environment, then back | `stale` | same | 291 ms after returning |
+| Reload | `stale` | same | 18 ms after the panel opened |
+| Origin restored, Refresh | `current` | none | strip cleared 702 ms; the list compared with the advanced remote at 810 ms |
+
+Fetch counters at the end: `started` 5, `completed` 3, `failed` 2. Before
+the fix the same steps left `started` at 1 (the start-up fetch) and the
+backend `current` throughout.
+
+### Event-stream reader inventory (2026-11-06)
+
+Task 20, read against `main` at `c1724ab74`. "Covered" means a silence bound
+the peer's keepalive keeps from firing, a bounded backoff and jitter, each
+with code and a test. Readers of a child process's stdio are not reconnect
+owners: the child's exit is the signal.
+
+| Reader | Transport | Silence | Backoff, spread | Disposition |
+| --- | --- | --- | --- | --- |
+| Bridge observation stream, Claude and Codex (`http-bridge-observation-stream.ts`) | SSE | 75 s (`BRIDGE_OBSERVATION_STREAM_SILENCE_MS`) against 30 s bridge keepalives | 1 to 30 s, `ReconnectBackoff` | Covered |
+| Federation node event stream (`nodes/node-event-stream.ts`) | SSE | 75 s (`NODE_EVENT_STREAM_IDLE_MS`) against the gateway's 25 s keepalive | 1 to 30 s, `ReconnectBackoff` | Covered |
+| `NodeLink` route heartbeat (`nodes/node-link.ts`) | HTTP probe every 30 s | a failed probe | 2 to 60 s, `ReconnectBackoff` | Covered |
+| Desktop relayed stream (`backend-process.ts`) | SSE | 60 s (`GATEWAY_STREAM_SILENCE_LIMIT_MS`) | `ReconnectBackoff` | Covered (part of the Electron client) |
+| Web filtered streams, shared terminal and relayed (`web-gateway.ts`) | EventSource or SSE | none of their own | `createStreamBackoff`, jittered | Another layer: the main stream's watchdog drops them (`dropSilentStreams`) |
+| `FetchEventSource` polyfill (`gateway-auth-transport.ts`) | SSE | none; reports an error and closes | none | Another layer: `web-gateway.ts` owns reconnects |
+| Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Mostly covered; a stall while the page stays visible is [7200](7200-event-stream-reader-gaps.md) task 4 |
+| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | **none** | 1 to 30 s, jittered | Gap: 7200 task 1 (needs a live `opencode serve`) |
+| Desktop `ReconnectScheduler` (`connection-scheduling.ts`) | route and handover attempts, not a stream | n/a | 1, 2, 5, 10, 30, 60 s, **no jitter** | Gap, fixed: 7200 task 2 |
+| Desktop preview tunnel, v1 stream and v2 session (`preview-tunnel-client.ts`, `preview-tunnel-session.ts`) | WebSocket | pinged every 15 s, **pong ignored**; a stream-open timeout retires only that stream | opened per request | Gap, fixed for v2: 7200 task 3 (v1 deliberately left, decision T3 there) |
+| Codex app-server JSONL (`jsonl-rpc-client.ts`) | stdio child | stream end; 60 s request timeouts | supervisor 250 ms to 10 s with jitter and a circuit breaker | Not applicable (child exit) |
+| ACP agent (`acp-context.ts`) and Claude SDK frames | stdio child | exit and stream errors; Claude's runtime idle detach | reattach on demand | Not applicable |
+| Cursor SDK run stream (`cursor-bridge/src/prompt.ts`) | in-process SDK | the turn's `PROMPT_TIMEOUT_MS` | none | Another layer: the Cursor SDK; not a reconnect owner |
+| Docker events (`container-oom-events.ts`) and container log followers | `docker` stdio | exit | events: 1 to 60 s doubling, one per backend | Not applicable |
+| Gateway preview proxy (`gateway-proxy.ts`) | HTTP or SSE pass-through | body idle timer | none | Not applicable (the end client reconnects) |
+| CLI `--follow` (`packages/cli`) | polling | n/a | n/a | Not applicable |
+| iOS wrapper | WKWebView | n/a | n/a | Another layer: it hosts the web client |
+
+Pi, Grok and Cursor bridges publish no event stream to the backend; their
+groups keep the full activity sweep cadence (`http-bridge-observation-stream.ts`).
+
 ## Outstanding work
 
 ### Qualification
@@ -1113,7 +1331,13 @@ credentials or a platform CI lacks are batched in
     a scripted UI or a fault injector that `recurring-live-ab.ts` does not
     have;
   - change-to-visible as a client sees it (the script stops at backend
-    detection), for every row of the latency budgets;
+    detection), for every row of the latency budgets. Done 2026-11-06 on
+    macOS for the diff badge and Files panel rows (see
+    [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos));
+    the container Changes refresh tail needs a decision
+    ([7201](7201-explicit-refresh-behind-running-scan.md)), and the rows that
+    need a live turn, approvals, mail, PRs or workflows go with the busy
+    profile and live GitHub;
   - ~~the container fetch policy live~~. Done 2026-11-01 on Linux: a
     missing-baseline recovery fetch, an explicit refresh and the routine policy
     on a legacy record, all on a real container (see
@@ -1125,10 +1349,12 @@ credentials or a platform CI lacks are batched in
 - Live GitHub: terminal discovery cadence, replacement and reopen discovery,
   admission queue delay under real `gh` latency, and rate-limit cooldown.
 - Live providers: see [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md).
-- macOS: recursive `fs.watch` (`worktree-watcher.ts`) detects a save in a
+- ~~macOS: recursive `fs.watch` (`worktree-watcher.ts`) detects a save in a
   watched worktree in under 1 s (Live evidence), with Electron under
   `dev:test` and Docker Desktop. Still owed: a packaged Electron app, and the
-  watcher's burst-overflow and failure-to-polling paths on macOS.
+  watcher's burst-overflow and failure-to-polling paths on macOS.~~ Done
+  2026-11-06 (task 7; see
+  [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos)).
 - iOS: the `apps/ios` wrapper running the web client, checking the read
   coordinator's hidden pause and resume across backgrounding and screen lock.
 - A real host suspend and resume against `HostSuspendDetector`.
@@ -1795,8 +2021,93 @@ with other tasks' decisions.
   fake-model tests (9/9), the documentation task-surface guard and Playwright
   spec loading. Earlier review-wide failures remain separately recorded.
 
+### Tasks 1, 2, 7 and 19 to 21 on macOS (2026-11-06)
+
+Recorded by the worker that ran these tasks on macOS. Numbered Mn so they do
+not collide with other tasks' decisions.
+
+- **M1 Where the watched-badge budget starts (tasks 2 and 7).** The budget is
+  "≤ 2 s after the save settles", and the probes time from the write.
+  Options: compare against 2 s from the write (strict, but not the budget:
+  it failed 19 of 20 packaged saves that met it); move the clock to the
+  settle (needs the backend's settle time in the browser); or compare
+  against 2 s plus the 400 ms `WATCH_SETTLE_MS` from the write. Chosen: the
+  last, in both specs, asserted on the p95 of 20 saves rather than on each
+  one. Why: it is the documented budget measured from what a probe can see.
+  The run also showed that back-to-back saves wait out the 2 s
+  `LOCAL_SCAN_MIN_GAP_MS`, which the budget table's "Nominal today" did not
+  mention; it now does.
+- **M2 What "a burst converged" means past the scan cap (task 7).** The
+  backend line-counts at most `UNTRACKED_SCAN_MAX_FILES` (2,000) untracked
+  files per scan and marks the count approximate, so a burst over 2,000 can
+  never show `+N`; the first probes waited for that and timed out. Options:
+  read the backend's projection (not what the client sees); or count the
+  burst as shown when the badge turns approximate and prove coverage by
+  removing it and waiting for the exact earlier count. Chosen: the second.
+  Why: an exact return after a mass removal is only possible if the last
+  events were seen, and both checks are on the page.
+- **M3 The Changes tab's Refresh never fetched a container's base (task 19,
+  bug, fixed).** The Changes tab is served by the change projection, whose
+  Refresh calls `changes_refresh`; that asked the scan owner for a rescan
+  (`DiffStatsService.refresh`) and never invalidated the container fetch
+  policy, unlike `get_git_status` and `refresh_environment_diff_stats`. On a
+  legacy container the user's Refresh could not move a stale or moved base;
+  only the 5 to 30 min cooldown could. Options: invalidate in the
+  `changes_refresh` command (needs an async storage read per refresh); or
+  give `DiffStatsTracking` one `refreshExplicitly(environmentId)` that
+  invalidates a tracked container's fetch records as `explicit` and then
+  scans, used by both explicit commands. Chosen: the second, wired through a
+  separate `requestExplicitEnvironmentRefresh` so that change tracking's
+  other rescan (after a restore) does not ask for a fetch. Why: one place
+  decides what an explicit refresh means, and the order (invalidate, then
+  scan) is what lets the scan find the fetch due. Tests:
+  `diff-stats-explicit-refresh.test.ts` and "a manual refresh asks the scan
+  owner for an explicit refresh, not a plain rescan" in
+  `change-tracking/service-environment.test.ts`; the live spec now passes.
+- **M4 How to fail a remote read (task 19).** Options: a firewall or network
+  change (forbidden here); stopping the bind-mounted origin; or pointing the
+  container's `origin` at a missing path for that step and restoring it in
+  `finally`. Chosen: the URL. Why: it is local to the container, needs no
+  privilege and is undone by the spec itself. It yields the `no-remote`
+  category; `auth`, `network` and `timeout` failures were not exercised.
+  The legacy record was made by hand as in decision 12.
+- **M5 Signalling the watch helper (task 7).** The helper is a `bun -e`
+  child of the backend. Options: find it by name (forbidden on a shared
+  host); or take the backend pid from `dev:status` (or the packaged app's
+  own process tree) and signal only a child of it whose pid, parent and start
+  time are re-read just before the signal. Chosen: the second. The watcher
+  script signals only the helper it spawned.
+- **M6 The container refresh tail (task 2).** The Changes refresh follows a
+  scan already running and then needs its own, so about one refresh in
+  fifteen took 1.3 to 2.2 s against a 1 s budget. This is deliberate (a
+  running scan may predate the click), so it is a budget decision, not a
+  defect fixed here: [7201](7201-explicit-refresh-behind-running-scan.md)
+  holds the options, recommending a budget amendment.
+- **M7 Task 1 not attempted.** Extending task 10's fake-model soak driver
+  to the busy profile needs a fake-model turn and approval phase, a
+  workflow that completes without a provider, 10 environments and attached
+  clients. That is a harness of its own, larger than this run; nothing in it
+  needs a real provider, so it stays open rather than blocked.
+- **M8 Which reader gaps to fix now (task 20).** The inventory found four
+  ([7200](7200-event-stream-reader-gaps.md)). Fixed with tests: the desktop
+  reconnect ladder's lock-step retries (each delay now drawn from the upper
+  half of its rung) and the v2 preview tunnel's ignored pongs (two unanswered
+  pings destroy the session). Left: OpenCode's silent stream, which needs a
+  live `opencode serve` to see what it sends while idle, and the terminal
+  socket's visible-page stall, a traffic-versus-detection choice.
+- **M9 Long, quiet live specs and `test:logged`.** The runner ends a command
+  that prints nothing for 5 min; the container probe loop is quieter than
+  that, which is what killed the first two runs. Options: raise
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS` per run, or have the spec print a
+  content-free line a minute. Chosen: the line, in both new browser specs, so
+  the documented command works as written.
+
 ## Related
 
+- [7200-event-stream-reader-gaps.md](7200-event-stream-reader-gaps.md): the
+  reader gaps task 20 found, two fixed.
+- [7201-explicit-refresh-behind-running-scan.md](7201-explicit-refresh-behind-running-scan.md):
+  the container Changes refresh tail task 2 measured.
 - [7100-long-soak-follow-ups.md](7100-long-soak-follow-ups.md): what task 10's
   long soak left (containers, a browser reader, three projection maps
   without eviction).

@@ -1,6 +1,6 @@
 # Coordinator browser navigation timeouts during merge validation
 
-- **ID:** 9836
+- **ID:** 7150
 - **Status:** open
 - **Date observed:** 2026-11-06
 - **Files:** `e2e/CoordinatorPaneTree.spec.ts`; `e2e/FloatingNotices.spec.ts`

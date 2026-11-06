@@ -1,6 +1,6 @@
 # Evidence body rename has not happened at the aggregate assertion
 
-- **ID:** 9835
+- **ID:** 9836
 - **Status:** open
 - **Date observed:** 2026-11-06
 - **Test:** `EvidenceBodyStore.put > syncs the file before the rename, then the directories, before resolving`

@@ -156,6 +156,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/launcher.test.ts",
   ],
   "packages/protocol": [
+    "src/node/command-capture-reap.integration.test.ts",
     "src/node/workspace-change-probe.test.ts",
     "src/node/preview-forward.test.ts",
   ],

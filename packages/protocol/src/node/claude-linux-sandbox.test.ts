@@ -107,6 +107,21 @@ describe("Claude Linux sandbox probe", () => {
     expect(status.reason).toContain("bwrap and socat are missing");
   });
 
+  test("missing programs in a container do not advise installing them (todo 0190)", () => {
+    const outside = probeClaudeLinuxSandbox({ onPath: () => false, inContainer: () => false });
+    if (outside.available) throw new Error("expected a failure");
+    expect(outside.reason).toContain("Install the bubblewrap and socat packages.");
+    expect(outside.reason).not.toContain("container");
+
+    const inside = probeClaudeLinuxSandbox({ onPath: () => false, inContainer: () => true });
+    expect(inside).toMatchObject({ available: false, failure: "missing-programs" });
+    if (inside.available) throw new Error("expected a failure");
+    expect(inside.reason).toContain("bwrap and socat are missing");
+    expect(inside.reason).not.toContain("Install the bubblewrap and socat packages");
+    expect(inside.reason).toContain("This is a container, so installing them would not be enough");
+    expect(inside.reason).toContain("user namespaces");
+  });
+
   test("without unshare the nested namespace cannot be checked, so the host fails closed", () => {
     const { calls, run } = recordingRunner({ nested: true });
     const status = probeClaudeLinuxSandbox({ onPath: (name) => name !== "unshare", run });

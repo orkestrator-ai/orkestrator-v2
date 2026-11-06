@@ -6,13 +6,14 @@ Found on 2026-10-26 while doing
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Task 3 updated
+2026-11-06 against `main` at `c1724ab74`, after its container half was run.
 
 ### Tasks
 
 1. **Choose and implement the behaviour**: code item 1, one deliberate behaviour for `readOnly` turns where the CLI sandbox cannot run commands, and where the boundary is shown. Status: done 2026-10-28 (option (b), shown in Agent Info and on the Multi Review reviewer and consolidation step; decisions A1 to A9).
 2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: done 2026-10-28 on macOS; the Linux-only live case is under "Needs verification".
-3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: open. The "before" run was not done (A10); the code answers the open question.
+3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: open (depends on a stock Ubuntu host). Container half done 2026-11-06 on beelink with a fake Messages API: two full Multi Reviews completed and one defect in the reason text was fixed (A12 to A17); the stock-Ubuntu half is open.
 
 ### 1. Choose and implement the behaviour
 
@@ -72,6 +73,79 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Context.** Batched in 0031 (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:202`) with 0145.
 
 **Investigation.** The open question is answered by the code: a container environment's reviewers run in the container. `bridgeConnection` starts `start_claude_server` for any non-local environment (`apps/backend/src/core/multi-review-service.ts:4993-5020`). The image ships neither `bwrap` nor `socat` (no match in `docker/Dockerfile`). So today every Claude read-only report turn in a container environment should be refused by the CLI. That is a user-visible failure in normal use, which is why the file rates High. Nothing in the code suggests these turns run on the host instead.
+
+**Investigation (2026-11-06, container half).** Run on beelink (Arch Linux,
+kernel 7.1.8, rootful Docker Engine 29.9.2, ufw with a default-deny input
+policy) in the isolated profile `r0190c`: `--fixture --fixture-environments
+local,container --no-agent-credentials --agent-platforms claude --headless`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the image built from this
+checkout, and the test-only Docker shim on `PATH` as
+[7041](../containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md)
+describes (the fixture network came up on a `/29` from it). No login and no
+billed turn: the image's real `claude` 2.1.314 talked to
+`e2e/agent-testing/container-fake-claude-api.ts` on the container's loopback.
+Every step of the review was Claude (`haiku` selection): preparation, one
+reviewer and consolidation, all in the container.
+- **Before.** The pinned CLI in the same container, given the old block
+  (`sandbox: { enabled: true, failIfUnavailable: true }`), refused before any
+  model call: `Error: sandbox required but unavailable: … bubblewrap (bwrap)
+  not installed, socat not installed … sandbox.failIfUnavailable is set —
+  refusing to start without a working sandbox.` With the new block
+  (`enabled: false`) the same prompt was answered.
+- **After, structured-output transport.** The review reached `ready`. The
+  fake scripts each step: `ls -la` (or `git rev-parse HEAD` for the plan),
+  then `touch /tmp/…`, then the result. In the reviewer's and
+  consolidation's read-only turns `ls -la` ran (no `apply-seccomp` or other
+  failure) and `touch` was refused by the read-only hook; in the writable
+  preparation turn both ran. Both read-only steps recorded
+  `commandSandboxOff` with the probe's `missing-programs` reason, and the
+  reviewer's inspector showed it as a warning note in the real UI. While a
+  restarted reviewer's turn ran, the bridge's `GET /session/:id` reported
+  `policy.sandbox: "none"` with the read-only note and
+  `readOnlyCommandSandbox.state: "off"`, which is what Agent Info renders.
+- **After, the default tool transport.** Also `ready`. The CLI defers MCP
+  tools, so each step loaded `submit_<kind>` with `ToolSearch`, then read,
+  tried to write and submitted; all three submissions were accepted, the
+  reviewer's and consolidation's `touch` were refused, and both recorded the
+  note.
+- **What the run needed on this host.** beelink's ufw drops TCP from
+  Docker's ranges to the profile's agent tools port
+  ([7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)).
+  The bridge then refuses every turn after a session's first with 409
+  "Claude required MCP server is not connected", so without a workaround
+  even the structured-output review failed at preparation's correction turn
+  ([7360](../containers-and-environments/7360-container-claude-reviews-without-agent-tools.md)
+  task 1). The run carried the container's agent-tools traffic to the
+  backend's loopback over `docker exec` stdio
+  (`e2e/agent-testing/container-agent-tools-relay.ts`), with a DNAT rule in
+  the fixture's own egress-gateway namespace sending the unchanged
+  `host.docker.internal` address to it. A `/etc/hosts` edit does not work:
+  the backend rewrites a changed alias at every bridge start. No host
+  firewall, route or Docker setting was changed.
+- **Defect found and fixed.** In a container the note said "Install the
+  bubblewrap and socat packages." That cannot help: the container also
+  refuses user namespaces (`unshare --user` failed with "Operation not
+  permitted" in the fixture), so bubblewrap would fail at the next stage.
+  The probe now says so when it runs in a container (A16).
+- The Linux run of the live suite passed on beelink: 19 of 19,
+  `read-only-required-refused` included (`bun test
+  ./src/conformance-coordinator-sandbox-live.test.ts --preload
+  ../../tests/setup-node.ts` in `bridges/claude-bridge`, with
+  `ORKESTRATOR_POLICY_CLAUDE_PATH` set to the profile's seeded 2.1.314 so
+  nothing read the production toolchain directory).
+
+**Stock-Ubuntu half: what it needs.** An Ubuntu 24.04 or 26.04 desktop or
+VM with AppArmor enabled and the stock `bwrap-userns-restrict` profile,
+bubblewrap and socat installed, this checkout and Bun. Run the same profile
+as above but with a local environment (`--fixture` alone): local reviewers
+run on the host, where the probe answers `nested-user-namespace`. The fake
+API then has to run on the host and the profile's Claude has to be pointed
+at it, which the container recipe does not cover (the host CLI reads the
+profile's own Claude config). Check that a reviewer's `ls -la` runs with no
+`apply-seccomp` failure, `touch` is refused, and the note names AppArmor.
+No container, relay or Docker shim is needed for it. An Ubuntu host with a
+default-deny firewall does not block it either: local environments reach
+the agent tools port on loopback.
 
 **Decisions.**
 
@@ -144,6 +218,13 @@ Updated 2026-10-28 on branch `todo-0190-claude-read-only-no-sandbox`, based on
   non-local environment, `apps/backend/src/core/multi-review-service.ts`), so
   a Claude consolidation model or a Claude reviewer in a packaged review was
   refused there.
+- **Container qualification (2026-11-06).** A full Multi Review with Claude
+  for every step completed in a container on beelink, on both result
+  transports, with the fake Messages API: read-only turns ran reading
+  commands, the hook refused writes, and the note reached the reviewer and
+  consolidation inspectors and Agent Info (task 3). In a container the
+  `missing-programs` reason no longer advises installing the programs
+  (`probeClaudeLinuxSandbox`, `packages/protocol/src/node/claude-linux-sandbox.ts`).
 - macOS: Seatbelt always starts; not affected (the turn still asks for it).
 - Durable description: "Read-only review turns without a working sandbox" in
   [`docs/architecture/coordinator.md`](../../architecture/coordinator.md).
@@ -184,12 +265,14 @@ Updated 2026-10-28 on branch `todo-0190-claude-read-only-no-sandbox`, based on
 
 ### Qualification
 
-- A Multi Review run with a Claude reviewer in a container environment and on
-  a stock Ubuntu host, before and after the change. Batch with
+- [x] Container half, 2026-11-06 (task 3): before reproduced with the pinned
+  CLI in the container, after run twice to `ready`. See task 3's
+  investigation.
+- [ ] A Multi Review run with a Claude reviewer on a stock Ubuntu host, after
+  the change (task 3, "what it needs"). Batch with
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-  The "before" half can no longer be run from this branch; `main` before it
-  merges, or the `read-only-required-refused` live case on Linux, stands in
-  for it (A10).
+  Its "before" (every Bash call failing in `apply-seccomp`) was seen on
+  2026-10-26 under 0145 and needs no rerun (A17).
 
 ## Constraints and rationale
 
@@ -286,6 +369,57 @@ Made 2026-10-28 while implementing.
   is on by default for every Claude read-only turn on Linux and has not run
   on the real stack.
 
+Made 2026-11-06 while running task 3's container half on beelink.
+
+- **A12 (task 3). Model backend.** Options: a real Claude login staged into
+  the profile; the fake Messages API that 0020 used on this host, extended
+  for Multi Review. **Chosen: the fake API**, as the ticket required. It now
+  scripts a Multi Review step: a reading command, a writing command, then the
+  result through whichever channel the turn offers (`StructuredOutput`, or
+  the `submit_<kind>` MCP tool after loading it with `ToolSearch`), built as
+  the smallest instance of that tool's own schema. Pros: no login, no cost,
+  repeatable; the CLI, hook, bridge, backend and UI are all real, and the
+  scripted write proves the hook still refuses. Cons: a report with no
+  findings exercises no finding rendering; a CLI release that changes its
+  tool loading can break the fixture (it then fails, it does not pass).
+- **A13 (task 3). The "before" run (supersedes A10).** Options: check out
+  `main` before the change and run a review; reproduce the CLI's refusal in
+  the same container. **Chosen: reproduce it with the pinned CLI** and the
+  old sandbox block against the fake API. Why: the before behaviour is the
+  CLI's own refusal, which needs no Orkestrator code; a second image build
+  from an older commit would add nothing. Cons: not a whole Multi Review on
+  the old code.
+- **A14 (task 3). Unreachable agent tools port.** Options: change ufw (the
+  ticket forbade it); use the production port (the user's running
+  installation); give up and record the 409; relay the container's traffic
+  to the backend's loopback over `docker exec` stdio. **Chosen: the relay**
+  (`e2e/agent-testing/container-agent-tools-relay.ts`), with a DNAT rule in
+  the fixture's own egress-gateway namespace, removed after the run. Why:
+  the agent-tools peer filter admits loopback, so the product path is
+  unchanged from the bridge to the backend; only the hop the host firewall
+  drops is replaced. Cons: a test-only change inside the fixture's network
+  namespace; the defect it works around is tracked in 7360 task 1.
+- **A15 (task 3). Result transports.** Options: the structured-output
+  transport only (no MCP submission needed); the default tool transport
+  only; both. **Chosen: both**, structured output first (switched off the
+  tool rollout in the profile with `set_workflow_result_tools_rollout`) and
+  then the default. Why: the first proves the read-only path without the
+  agent tools hop; the second is what users run.
+- **A16 (task 3). The container reason text.** Options: leave "Install the
+  bubblewrap and socat packages" in every case; say in a container that
+  installing them is not enough. **Chosen: the second**, detected the way the
+  bridge already detects its executor (`/.dockerenv` or
+  `/run/.containerenv`), injectable for tests
+  (`claude-linux-sandbox.test.ts`). Why: in Orkestrator's containers
+  `unshare --user` is refused, so following the advice would only move the
+  failure to the user-namespace stage; the note is shown on every reviewer
+  card in a container, so wrong advice there reaches every container user.
+  Cons: none found; the `missing-programs` failure code and the rest of the
+  sentence are unchanged.
+- **A17 (task 3). Ubuntu half.** Left open as the ticket asked, with what it
+  needs written in task 3. Its "before" (Bash failing in `apply-seccomp`) was
+  observed under 0145 on 2026-10-26, so only "after" is needed there.
+
 ## Open questions
 
 - Answered by the code (2026-10-27): Multi Review's Claude reviewers and
@@ -294,20 +428,12 @@ Made 2026-10-28 while implementing.
 
 ## Needs verification
 
-- The container case on a real environment, before (on `main` before this
-  merges) and after: a Multi Review with a Claude consolidation model and a
-  Claude reviewer in a packaged review, in an isolated profile with
-  `--fixture-environments local,container` and a throwaway Claude login. After:
-  the reviews complete, the reviewer and consolidation inspectors show the
-  sandbox note, and Agent Info for a running reviewer says "No sandbox".
+- Agent Info's rendering for a running read-only reviewer in a container.
+  The bridge's reported policy it renders (`sandbox: "none"` with the note)
+  was observed on 2026-11-06, but the Agent Info panel itself was not opened.
 - A stock Ubuntu 24.04 or 26.04 host with AppArmor's `bwrap-userns-restrict`:
   the probe answers `nested-user-namespace`, the read-only turn runs Bash
   commands (no `apply-seccomp` failure) and shows the note.
-- The Linux run of the live suite
-  (`bun test --cwd bridges/claude-bridge ./src/conformance-coordinator-sandbox-live.test.ts --preload ../../tests/setup-node.ts --parallel=1`),
-  including `read-only-required-refused` and the staged `PATH` (a shell and
-  `cat`/`uniq` only) on a real Linux host; on macOS only the two
-  `read-only-unavailable-*` cases ran.
 - Windows (A5): that a read-only turn there runs on the hook alone.
 
 ## Related

@@ -188,6 +188,10 @@ function explicitOwners(file: string): string[] {
   const owners: string[] = [];
   if (/^e2e\/(?!agent-testing\/)/.test(file)) owners.push("browser");
   if (/^e2e\/agent-testing\/.*\.spec\.ts$/.test(file)) owners.push("agent-browser/electron");
+  // Opt-in live qualifications run by hand: they need host facilities (user
+  // and network namespaces, Playwright Chromium) that CI runners do not grant.
+  if (/^e2e\/agent-testing\/.*\.integration\.test\.ts$/.test(file))
+    owners.push("agent opt-in qualification");
   if (file.startsWith("test-fixtures/test-diagnostics/")) owners.push("diagnostic fixture");
   return owners;
 }

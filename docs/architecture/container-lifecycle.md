@@ -1331,15 +1331,14 @@ saved port). `listenAgentTools` therefore:
 - After a wildcard bind, also binds `127.0.0.1:<port>` with the same handler
   and peer gate, for the server's lifetime. On macOS that succeeds when the
   address is free and then stops any later process from taking it.
-- When that bind is refused, applies the OS's overlap rule, measured once per
-  process on an ephemeral port (`loopbackOverlapsWildcard`). Linux refuses a
-  loopback bind beside the process's own wildcard listener, and refuses one
-  from another process just as much, so there the wildcard bind already
-  proved loopback free and keeps it: one listener. Where overlap is allowed,
-  the refusal means another process holds the address: the port is released,
-  `[docker.reachability] port.loopback-taken` is logged, and an ephemeral
-  port is tried (up to three). The new port is saved, and containers follow
-  it through the `host-service-ports` repair above.
+- When that bind is refused on Linux, keeps the wildcard listener: Linux's
+  exclusive wildcard bind already owns loopback and prevents later takeover.
+  Every other platform must acquire both listeners. A runtime overlap probe
+  cannot safely establish exclusivity, because a competing process can win
+  the probe's loopback port and produce the same `EADDRINUSE` as Linux.
+  The port is released, `[docker.reachability] port.loopback-taken` is logged,
+  and an ephemeral port is tried (up to three). The new port is saved, and
+  containers follow it through the `host-service-ports` repair above.
 - Treats an explicit `start(port)` as exact: a held loopback address fails the
   start with `EADDRINUSE` instead of moving.
 

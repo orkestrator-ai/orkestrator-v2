@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "./agent-tools.js";
 import { bindListener, closeListeners } from "./agent-tools-listen.js";
@@ -64,9 +64,13 @@ async function toolsList(url: string, token: string): Promise<number> {
 }
 
 /** Every byte a raw loopback connection receives before it closes. */
-function exchange(port: number): Promise<string> {
+function exchange(
+  port: number,
+  host = "127.0.0.1",
+  request = "GET /mcp HTTP/1.1\r\nHost: agent-tools\r\nConnection: close\r\n\r\n",
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const socket = connect({ host: "127.0.0.1", port });
+    const socket = connect({ host, port });
     let received = "";
     const timer = setTimeout(() => {
       socket.destroy();
@@ -82,7 +86,7 @@ function exchange(port: number): Promise<string> {
       resolve(received);
     });
     socket.on("connect", () => {
-      socket.write("GET /mcp HTTP/1.1\r\nHost: agent-tools\r\nConnection: close\r\n\r\n");
+      socket.write(request);
     });
   });
 }
@@ -173,10 +177,56 @@ describe("agent tools port held on loopback by another process", () => {
     expect(stray.authorizations).toEqual([]);
   });
 
-  test("the peer gate decides loopback connections on every listener", async () => {
+  test("failed port persistence releases every listener and startup recovers", async () => {
+    const tools = agentTools();
+    let attemptedPort = 0;
+    const record = spyOn(workflowResults, "recordCapabilityPort").mockImplementationOnce(
+      async (port) => {
+        attemptedPort = port;
+        // Persistence runs after ownership has been acquired. On macOS both
+        // addresses are served by distinct listeners; on Linux one owns both.
+        for (const host of ["0.0.0.0", "127.0.0.1"]) {
+          const competing = createServer();
+          try {
+            await expect(bindListener(competing, port, host)).rejects.toMatchObject({
+              code: "EADDRINUSE",
+            });
+          } finally {
+            await closeListeners([competing]);
+          }
+        }
+        throw new Error("injected persistence failure");
+      },
+    );
+    try {
+      await expect(tools.start()).rejects.toThrow("injected persistence failure");
+      expect(attemptedPort).toBeGreaterThan(0);
+      expect(tools.servicePort()).toBeNull();
+      // Test each address independently so Linux's exclusivity does not
+      // disguise a listener leaked by failed startup.
+      for (const host of ["0.0.0.0", "127.0.0.1"]) {
+        const released = createServer();
+        try {
+          await bindListener(released, attemptedPort, host);
+        } finally {
+          await closeListeners([released]);
+        }
+      }
+    } finally {
+      record.mockRestore();
+    }
+    await tools.start(attemptedPort);
+    expect(tools.servicePort()).toBe(attemptedPort);
+    expect(workflowResults.capabilityPort()).toBe(attemptedPort);
+    const host = tools.connection("env-1", "project-1", "host");
+    expect(await toolsList(host.url, host.token)).toBe(200);
+  });
+
+  test("both wildcard and loopback listeners suppress automatic replies and enforce peer admission", async () => {
     const refusals: string[] = [];
+    let verdict: "reload" | "refuse" = "refuse";
     const gate: AgentToolsPeerGate = {
-      verdict: () => "refuse",
+      verdict: () => verdict,
       admits: async () => false,
       recordRefusal: (address) => {
         refusals.push(String(address));
@@ -186,11 +236,33 @@ describe("agent tools port held on loopback by another process", () => {
     const tools = agentTools(gate);
     await tools.start();
     const port = tools.servicePort()!;
-    // Each loopback call lands on whichever listener the kernel picks; both
-    // must close it without a byte, as the wildcard listener always has.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      expect(await exchange(port)).toBe("");
+    const wildcardHost =
+      Object.values(networkInterfaces())
+        .flat()
+        .find((entry) => entry?.family === "IPv4" && !entry.internal)?.address ?? "127.0.0.2";
+    // Confirm the non-127.0.0.1 connection reaches the primary listener,
+    // including on macOS where the second listener owns 127.0.0.1.
+    let wildcardAccepts = 0;
+    tools["listeners"][0]!.on("connection", () => {
+      wildcardAccepts += 1;
+    });
+    const requests = [
+      "GET /mcp HTTP/1.1\r\nHost: agent-tools\r\nConnection: close\r\n\r\n",
+      "INVALID HTTP\r\n\r\n",
+      "POST /mcp HTTP/1.1\r\nHost: agent-tools\r\nExpect: 100-continue\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+      "POST /mcp HTTP/1.1\r\nHost: agent-tools\r\nExpect: unsupported\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    ];
+    for (const decision of ["refuse", "reload"] as const) {
+      verdict = decision;
+      for (const host of ["127.0.0.1", wildcardHost]) {
+        for (const request of requests) {
+          expect(await exchange(port, host, request)).toBe("");
+        }
+      }
     }
-    expect(refusals.length).toBeGreaterThanOrEqual(3);
+    expect(wildcardAccepts).toBeGreaterThanOrEqual(8);
+    // Malformed HTTP is destroyed by clientError before request admission
+    // when the accept-time verdict is reload: two of the sixteen calls.
+    expect(refusals).toHaveLength(14);
   });
 });

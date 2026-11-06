@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import type { Server } from "node:http";
 
 /** The address host agents are handed (`http://127.0.0.1:<port>/mcp`). */
 export const AGENT_TOOLS_LOOPBACK_HOST = "127.0.0.1";
@@ -24,6 +24,8 @@ export interface AgentToolsListenOptions {
   exact: boolean;
   /** Test seam for the platform's bind rules; defaults to `server.listen`. */
   bind?: BindListener;
+  /** Test seam for the kernel rule; only Linux has exclusive wildcard binds. */
+  platform?: NodeJS.Platform;
   /** Told when a port is given up because another process owns its loopback address. */
   onLoopbackTaken?: (port: number) => void;
 }
@@ -71,53 +73,6 @@ function boundPort(server: Server): number | null {
 }
 
 /**
- * Whether this OS lets one process listen on `127.0.0.1:<port>` beside its own
- * wildcard listener on the same port, measured once on an ephemeral port.
- *
- * macOS (BSD rules) allows it, and allows it across processes too, which is
- * the defect this module exists for. Linux refuses it, and refuses it across
- * processes equally, so there a successful wildcard bind already proves no
- * other listener holds the loopback address, and none can take it later.
- */
-export async function loopbackOverlapsWildcard(
-  bind: BindListener = bindListener,
-  wildcardHost = "0.0.0.0",
-): Promise<boolean> {
-  const wildcard = createServer();
-  const loopback = createServer();
-  try {
-    await bind(wildcard, 0, wildcardHost);
-    const port = boundPort(wildcard);
-    if (port === null) throw new Error("Agent tools overlap check did not receive a TCP port");
-    try {
-      await bind(loopback, port, AGENT_TOOLS_LOOPBACK_HOST);
-      return true;
-    } catch (error) {
-      if ((error as { code?: unknown }).code === "EADDRINUSE") return false;
-      throw error;
-    }
-  } finally {
-    await closeListeners([loopback, wildcard]);
-  }
-}
-
-/** The measured rule per wildcard host; it is a property of the OS, so it never changes. */
-const measuredOverlap = new Map<string, Promise<boolean>>();
-
-function overlapRule(bind: BindListener | undefined, wildcardHost: string): Promise<boolean> {
-  if (bind) return loopbackOverlapsWildcard(bind, wildcardHost);
-  let measured = measuredOverlap.get(wildcardHost);
-  if (!measured) {
-    measured = loopbackOverlapsWildcard(bindListener, wildcardHost).catch((error: unknown) => {
-      measuredOverlap.delete(wildcardHost);
-      throw error;
-    });
-    measuredOverlap.set(wildcardHost, measured);
-  }
-  return measured;
-}
-
-/**
  * Listens for the agent tools server so that host agents' `127.0.0.1:<port>`
  * always reaches this process.
  *
@@ -126,13 +81,12 @@ function overlapRule(bind: BindListener | undefined, wildcardHost: string): Prom
  * then hands every loopback connection (and the bearer token in it) to the
  * more specific bind. So after a wildcard bind this also binds
  * `127.0.0.1:<port>` itself, which both proves the address free and stops a
- * later process from taking it. Where that second bind is refused, the OS's
- * overlap rule decides: an OS that refuses the overlap within one process
- * (Linux) refuses it between processes too, so the wildcard listener alone
- * owns loopback; an OS that allows it means another process holds the
- * address. A port whose loopback belongs to someone else is released and an
- * ephemeral one tried instead, unless the port is exact. Nothing is ever sent
- * to the other process.
+ * later process from taking it. On Linux, the kernel's exclusive wildcard
+ * bind already owns loopback: refusal of the second bind is expected. Every
+ * other platform must acquire both listeners or give up the port. A runtime
+ * overlap probe cannot establish exclusivity: another process can win its
+ * loopback port and produce the same EADDRINUSE as Linux's kernel rule.
+ * Nothing is ever sent to the other process.
  */
 export async function listenAgentTools(
   options: AgentToolsListenOptions,
@@ -172,14 +126,9 @@ export async function listenAgentTools(
         throw error;
       }
     }
-    let overlaps: boolean;
-    try {
-      overlaps = await overlapRule(options.bind, options.bindAddress);
-    } catch (error) {
-      await closeListener(primary);
-      throw error;
+    if ((options.platform ?? process.platform) === "linux") {
+      return { port, servers: [primary] };
     }
-    if (!overlaps) return { port, servers: [primary] };
     await closeListener(primary);
     lastTaken = new AgentToolsLoopbackTakenError(port);
     options.onLoopbackTaken?.(port);

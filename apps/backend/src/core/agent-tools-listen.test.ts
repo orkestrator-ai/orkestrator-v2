@@ -6,7 +6,6 @@ import {
   bindListener,
   closeListeners,
   listenAgentTools,
-  loopbackOverlapsWildcard,
   type BindListener,
 } from "./agent-tools-listen.js";
 
@@ -198,6 +197,7 @@ describe("listenAgentTools under Linux bind rules", () => {
       preferredPort: saved,
       exact: false,
       bind,
+      platform: "linux",
       onLoopbackTaken: (port) => taken.push(port),
     });
     expect(listeners.port).toBe(saved);
@@ -215,6 +215,7 @@ describe("listenAgentTools under Linux bind rules", () => {
       preferredPort: stray.port,
       exact: false,
       bind,
+      platform: "linux",
     });
     expect(listeners.port).not.toBe(stray.port);
     expect(await hostAgentCall(listeners.port)).toBe(200);
@@ -222,20 +223,106 @@ describe("listenAgentTools under Linux bind rules", () => {
   });
 });
 
-describe("loopbackOverlapsWildcard", () => {
-  test("matches this platform's bind rules", async () => {
-    // macOS (BSD) lets a loopback listener sit beside a wildcard one on the
-    // same port; Linux refuses it.
-    expect(await loopbackOverlapsWildcard()).toBe(process.platform !== "linux");
-  });
-
-  test("is false under Linux bind rules", async () => {
-    expect(await loopbackOverlapsWildcard(linuxBindRules())).toBe(false);
-  });
-});
-
 test("AgentToolsLoopbackTakenError carries EADDRINUSE so exact-port callers retry", () => {
   const error = new AgentToolsLoopbackTakenError(4242);
   expect(error.code).toBe("EADDRINUSE");
   expect(error.message).toContain("4242");
+});
+
+/** Socket-free BSD model: wildcard can coexist with a foreign loopback. */
+function contestedBind(loopbackError = "EADDRINUSE", allTaken = false) {
+  const active = new Map<Server, { host: string; port: number }>();
+  const calls: Array<{ host: string; port: number }> = [];
+  let nextPort = 49192;
+  const bind: BindListener = async (server, requestedPort, host) => {
+    const port = requestedPort || nextPort++;
+    calls.push({ host, port });
+    if (host === AGENT_TOOLS_LOOPBACK_HOST && (allTaken || port <= 49192)) {
+      throw Object.assign(new Error("contested loopback"), { code: loopbackError });
+    }
+    active.set(server, { host, port });
+    server.address = () => ({ address: host, family: "IPv4", port });
+    server.close = (callback) => {
+      active.delete(server);
+      callback?.();
+      return server;
+    };
+    server.closeAllConnections = () => undefined;
+  };
+  return { bind, active, calls };
+}
+
+describe("contested loopback fail-closed handling", () => {
+  test("a contested former probe port cannot authorize the unsafe saved port or poison later starts", async () => {
+    const model = contestedBind();
+    const options = {
+      create: ours,
+      bindAddress: "0.0.0.0",
+      preferredPort: 49191,
+      exact: false,
+      platform: "darwin" as const,
+      bind: model.bind,
+    };
+    const first = await listenAgentTools(options);
+    // Both the saved port and the ephemeral port the former overlap probe
+    // would have used are occupied. Neither may establish exclusivity.
+    expect(first.port).toBe(49193);
+    expect(first.servers).toHaveLength(2);
+    expect(Array.from(model.active.values()).map(({ port }) => port)).toEqual([49193, 49193]);
+    await closeListeners(first.servers);
+    const second = await listenAgentTools(options);
+    expect(second.port).toBe(49194);
+    expect(second.servers).toHaveLength(2);
+    expect(model.calls.filter(({ port }) => port === 49191)).toHaveLength(4);
+  });
+
+  test("exhausting the saved port and three ephemeral candidates closes every listener", async () => {
+    const model = contestedBind("EADDRINUSE", true);
+    const taken: number[] = [];
+    await expect(
+      listenAgentTools({
+        create: ours,
+        bindAddress: "0.0.0.0",
+        preferredPort: 49191,
+        exact: false,
+        platform: "darwin",
+        bind: model.bind,
+        onLoopbackTaken: (port) => taken.push(port),
+      }),
+    ).rejects.toBeInstanceOf(AgentToolsLoopbackTakenError);
+    expect(taken).toEqual([49191, 49192, 49193, 49194]);
+    expect(model.calls).toHaveLength(8);
+    expect(model.active.size).toBe(0);
+  });
+
+  test("a non-EADDRINUSE loopback error closes the primary and propagates without retry", async () => {
+    const model = contestedBind("EACCES");
+    await expect(
+      listenAgentTools({
+        create: ours,
+        bindAddress: "0.0.0.0",
+        preferredPort: 49191,
+        exact: false,
+        platform: "darwin",
+        bind: model.bind,
+      }),
+    ).rejects.toMatchObject({ code: "EACCES" });
+    expect(model.calls).toHaveLength(2);
+    expect(model.active.size).toBe(0);
+  });
+
+  test("unqualified platforms require loopback ownership too", async () => {
+    const model = contestedBind();
+    await expect(
+      listenAgentTools({
+        create: ours,
+        bindAddress: "0.0.0.0",
+        preferredPort: 49191,
+        exact: true,
+        platform: "freebsd",
+        bind: model.bind,
+      }),
+    ).rejects.toBeInstanceOf(AgentToolsLoopbackTakenError);
+    expect(model.active.size).toBe(0);
+  });
 });

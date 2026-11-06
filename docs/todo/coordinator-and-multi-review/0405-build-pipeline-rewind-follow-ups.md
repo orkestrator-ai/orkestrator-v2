@@ -16,9 +16,9 @@ listed as done and covered by "Assumptions and decisions" below. Item 7 was
 run against a real container on 2026-11-01 (rechecked against `main` at
 `93b99bfb`) and is done. Item 8's WebKit half was run on 2026-11-06
 (against `main` at `e6c3da899`) and passes; it found and fixed one WebKit-only
-fault in the graph's fullscreen. What is left is live qualification: two runs
-that need provider logins (and, for item 2, a GitHub repository), and item 8's
-physical phone. Since #1376 the Git side
+fault in the graph's fullscreen. What is left is live qualification: three runs
+that need provider logins (items 1, 2 and 9; item 2 also needs a GitHub
+repository), and item 8's physical phone. Since #1376 the Git side
 moved to `workspace-code-rewind.ts`, shared with graph runs' code rewinds
 (#1436), the reset became a journaled intent finished under the environment's
 exclusive mutation fence, and worktree reads retry once without fsmonitor
@@ -35,6 +35,7 @@ exclusive mutation fence, and worktree reads retry once without fsmonitor
 6. **Package-only restart on the single-review path**: "Prepare package again". Status: done.
 7. **Code rewind in a container environment**: `git update-ref` and `git reset --hard` through `docker exec`. Status: done.
 8. **Stacked bypass on WebKit and a physical phone**. Status: open (the WebKit half done 2026-11-06; the physical phone not run).
+9. **Delete a pipeline whose code rewind can never finish, in a real container**: Pause and Cancel refuse with the rewind message, and Delete removes the pipeline. Moved from to-do 2120 (deleted 2026-11-06). Status: open (needs a live provider).
 
 ### 1. A real rewind end to end
 
@@ -148,7 +149,7 @@ The live test is opt-in like the other live Docker suites (`RUN_LIVE_DOCKER_TEST
 
 **Decisions.** Decisions 9 to 11 below. Deleting a pipeline whose journaled
 reset cannot finish is refused too; that is
-[2120](2120-build-pipeline-pending-code-rewind-blocks-delete.md).
+2120 (deleted 2026-11-06; its live check is task 9).
 
 ### 8. Stacked bypass on WebKit and a physical phone
 
@@ -182,6 +183,40 @@ The physical phone was not run: this worker had no phone and must open no window
   - **Close it on the WebKit result.**
     - Pros: matches the decision above, which asked for the phone only if WebKit differed.
     - Cons: the ticket that ran the WebKit half asked for the phone part to stay open.
+
+### 9. Delete a pipeline whose code rewind can never finish, in a real container
+
+**Problem.** A confirmed "Rewind code to here…" whose reset can never run (the
+container stopped, the workspace recreated, the branch moved) used to block
+deleting the pipeline. Delete now works without waiting, but only unit tests
+prove it.
+
+**Context.** Moved from to-do 2120 (deleted 2026-11-06). `remove` and
+`deleteWithPendingCodeRewind` are in
+`apps/backend/src/core/build-pipeline-service-lifecycle.ts`, tested in
+`build-pipeline-service-rewind-follow-ups.test.ts`; the behaviour is in
+[`build-pipeline-view.md`](../../architecture/build-pipeline-view.md).
+
+**Investigation.** Steps:
+
+1. On a `dev:test` profile with a container environment, run a build pipeline
+   and confirm "Rewind code to here…" on a step.
+2. Before the reset runs, stop the container, then recreate its workspace or
+   move the branch by hand.
+3. Check that Pause and Cancel refuse with "The code rewind to … has not
+   finished".
+4. Delete the pipeline from the UI. Check that it disappears, and that its
+   Kanban ticket moves back with no completion comment.
+
+**Decisions.**
+
+- **Run it with task 1 or alone?**
+  - **On task 1's profile, after its rewind run (recommended).**
+    - Pros: the pipeline and provider are already there.
+    - Cons: needs a container environment in that profile.
+  - **Alone.**
+    - Pros: smaller run.
+    - Cons: a second billed pipeline.
 
 ## Current state
 
@@ -447,13 +482,13 @@ Decisions made on 2026-11-01 while running item 7.
     cancels an active pipeline first); a container whose workspace was lost,
     not just stopped, leaves the reset refused for good ("the branch moved"),
     and only deleting the environment clears it. Recorded as
-    [2120](2120-build-pipeline-pending-code-rewind-blocks-delete.md).
+    2120 (deleted 2026-11-06; task 9).
 
 ## Related
 
 - [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step): the design
 - [0315-build-pipeline-flow-graph.md](0315-build-pipeline-flow-graph.md): the flow graph's own live qualification
-- [2120-build-pipeline-pending-code-rewind-blocks-delete.md](2120-build-pipeline-pending-code-rewind-blocks-delete.md): a reset that cannot finish blocks deleting its pipeline
+- `2120-build-pipeline-pending-code-rewind-blocks-delete.md` (deleted 2026-11-06): a reset that cannot finish blocks deleting its pipeline
 - [6960-multi-review-package-reader-webkit-width-scroll.md](6960-multi-review-package-reader-webkit-width-scroll.md): a WebKit-only fault the item 8 run found outside the pipeline graph
 - [0860-multi-review-inspector-webkit-divergences.md](0860-multi-review-inspector-webkit-divergences.md): the other WebKit divergences, whose real-Safari check pairs with item 8's phone
 

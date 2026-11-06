@@ -421,6 +421,12 @@ for (const port of [18080, 18081, 18082]) {
 }
 `;
 
+/**
+ * 0 when the peer echoed a probe, 1 otherwise. A TCP probe's first write is a
+ * whole line: on an `egress-filter=1` gateway the name checks hold a partial
+ * printable line, which could still be an HTTP request, until its newline
+ * arrives, so a bare word would never reach the peer. UDP is not name-checked.
+ */
 async function echoProbe(
   containerId: string,
   protocol: "tcp" | "udp",
@@ -430,8 +436,8 @@ async function echoProbe(
     protocol === "tcp"
       ? `
     const socket = require("node:net").connect(${port}, "firewall-peer.test");
-    socket.on("connect", () => socket.write("probe"));
-    socket.on("data", data => process.exit(data.toString() === "probe" ? 0 : 2));
+    socket.on("connect", () => socket.write("probe\\n"));
+    socket.on("data", data => process.exit(data.toString() === "probe\\n" ? 0 : 2));
     socket.on("error", () => process.exit(1));
     setTimeout(() => process.exit(1), 2000);
   `
@@ -452,7 +458,7 @@ async function heldEcho(containerId: string, port: number, tag: string): Promise
     let first = true;
     const finish = result => { fs.writeFileSync("/tmp/${tag}.second", result); process.exit(0); };
     socket.on("error", () => finish("closed"));
-    socket.on("connect", () => socket.write("first"));
+    socket.on("connect", () => socket.write("first\\n"));
     socket.on("data", data => {
       if (first) { first = false; fs.writeFileSync("/tmp/${tag}.first", data); }
       else finish(data.toString());
@@ -460,7 +466,7 @@ async function heldEcho(containerId: string, port: number, tag: string): Promise
     const poll = setInterval(() => {
       if (!fs.existsSync("/tmp/${tag}.go")) return;
       clearInterval(poll);
-      socket.write("second");
+      socket.write("second\\n");
       setTimeout(() => finish("timeout"), 2000);
     }, 50);
     setTimeout(() => finish("expired"), 30000);

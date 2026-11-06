@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `6e796ca32`. Found while building [5100](5100-prompt-queue-row-writes.md).
+Analysed 2026-11-05 against `main` at `6e796ca32`. Found while building 5100.
 
 ### Tasks
 
@@ -32,7 +32,7 @@ A scan must apply the same claim recovery and validation as `loadPromptQueues`, 
 
 ## Related
 
-- [5100](5100-prompt-queue-row-writes.md)
+- `5100-prompt-queue-row-writes.md` (deleted 2026-11-06)
 - [5101](5101-store-size-and-write-rate-live.md)
 
 ## Assumptions and decisions

@@ -64,16 +64,26 @@ function runClone(
   dest: string,
   mirrorVariable: string | null = mirror,
   url = remoteUrl,
+  { removeMirrorBeforeClone = false } = {},
 ): { code: number | null; stdout: string; stderr: string } {
+  // Removing the mirror inside the first clone reproduces the race between the
+  // script's check and Git opening the reference.
+  const race = removeMirrorBeforeClone
+    ? `git() { if [ "$1" = clone ] && [ -d "$ORKESTRATOR_GIT_MIRROR_UNDER_TEST" ]; then rm -rf "$ORKESTRATOR_GIT_MIRROR_UNDER_TEST"; fi; command git "$@"; }`
+    : "";
   const harness = `
 set -e
 YELLOW=""; NC=""
 eval "$(sed -n '/^git_mirror_problem() {/,/^}$/p; /^report_git_mirror_outcome() {/,/^}$/p; /^clone_from_git_mirror() {/,/^}$/p; /^clone_repository() {/,/^}$/p' "$1")"
+${race}
 clone_repository "$2" "$3"
 `;
   const env: NodeJS.ProcessEnv = { ...gitEnv };
   delete env.ORKESTRATOR_GIT_MIRROR;
   if (mirrorVariable !== null) env.ORKESTRATOR_GIT_MIRROR = mirrorVariable;
+  if (removeMirrorBeforeClone && mirrorVariable !== null) {
+    env.ORKESTRATOR_GIT_MIRROR_UNDER_TEST = mirrorVariable;
+  }
   const result = spawnSync("bash", ["-c", harness, "--", setupScript, url, dest], {
     encoding: "utf8",
     env,
@@ -197,6 +207,25 @@ describe("clone from the project's Git mirror", () => {
     expect(remoteSentObjects()).toBe(false);
   });
 
+  test("a mirror removed between the check and the clone still leaves a whole clone", () => {
+    buildMirror();
+    rmSync(packLog, { force: true });
+    const dest = join(root, "env");
+
+    const { code, stdout } = runClone(dest, mirror, remoteUrl, { removeMirrorBeforeClone: true });
+
+    expect(code).toBe(0);
+    expect(existsSync(mirror)).toBe(false);
+    // Reported, so the backend logs that the history came from the remote.
+    expect(outcome(stdout)).toBe("vanished");
+    expect(stdout.match(/ORKESTRATOR_GIT_MIRROR:/g)?.length).toBe(1);
+    expect(stdout).toContain("Git mirror went away during the clone");
+    expect(remoteSentObjects()).toBe(true);
+    expect(git(dest, ["log", "-1", "--format=%s"])).toBe("change two.txt");
+    expect(existsSync(join(dest, ".git", "objects", "info", "alternates"))).toBe(false);
+    git(dest, ["fsck", "--full"]);
+  });
+
   test("the mirror is not written to", () => {
     buildMirror();
     const files = () => git(mirror, ["--git-dir=.", "count-objects", "-v"]);
@@ -306,6 +335,12 @@ describe("fallback to the ordinary clone", () => {
 });
 
 describe("image contract", () => {
+  test("the mirror clone uses --reference-if-able with --dissociate", () => {
+    const setup = readFileSync(setupScript, "utf8");
+    expect(setup).toContain('git clone --no-tags --reference-if-able "$mirror" --dissociate');
+    expect(setup).not.toMatch(/git clone[^\n]*--reference "/);
+  });
+
   test("the script declares the capability the backend gates the mount on", () => {
     const setup = readFileSync(setupScript, "utf8");
     expect(setup).toContain(

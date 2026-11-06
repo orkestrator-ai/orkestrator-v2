@@ -5,6 +5,7 @@ import path from "node:path";
 import { CommandFailedError, runCommand } from "./shell.js";
 import {
   parseReviewWorktreeFingerprint,
+  reviewWorktreeProbeArgs,
   reviewWorktreeProbeReasonCode,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
 } from "./review-worktree-fingerprint.js";
@@ -193,6 +194,18 @@ test("rejects malformed fingerprint envelopes", () => {
   }
 });
 
+test("the probe's own budget ends before the backend's command timeout", () => {
+  expect(reviewWorktreeProbeArgs(false, 30_000)).toEqual([
+    "-e",
+    REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
+    "budget-ms=25000",
+  ]);
+  expect(reviewWorktreeProbeArgs(true, 120_000).slice(2)).toEqual([
+    "fingerprint",
+    "budget-ms=115000",
+  ]);
+});
+
 test("accepts an envelope with no fingerprint", () => {
   expect(
     parseReviewWorktreeFingerprint(JSON.stringify({ head: "1".repeat(40), status: "" })),
@@ -201,76 +214,103 @@ test("accepts an envelope with no fingerprint", () => {
 
 for (const interpreter of INTERPRETERS) {
   test.skipIf(process.platform === "win32")(
-    `timeout reaps a blocking fsmonitor hook and descendants before fallback (${interpreter})`,
+    `never runs the worktree's fsmonitor hook or takes optional locks (${interpreter})`,
     async () => {
       const root = await fixture();
-      const hook = path.join(root, ".git", "blocking-hook.cjs");
-      const pids = path.join(root, ".git", "hook-pids");
-      await fs.writeFile(
-        hook,
-        `#!/usr/bin/env node
-const fs = require("node:fs");
-const { spawn } = require("node:child_process");
-process.on("SIGTERM", () => {});
-fs.appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
-if (process.argv[2] !== "descendant") {
-  spawn(process.execPath, [__filename, "descendant"], { stdio: "inherit" });
-}
-// Safety bound if the regression fails; the test must never leak forever.
-setTimeout(() => process.exit(0), 8000);
-`,
-        { mode: 0o755 },
-      );
+      const marker = path.join(root, ".git", "hook-ran");
+      const hook = path.join(root, ".git", "fsmonitor-hook.sh");
+      await fs.writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
       await runCommand("git", ["config", "core.fsmonitor", hook], { cwd: root });
-      const bin = path.join(root, ".git", "bin");
-      await fs.mkdir(bin);
       const log = path.join(root, ".git", "git-calls");
-      const realGit = (await runCommand("which", ["git"])).stdout.trim();
-      await fs.writeFile(
-        path.join(bin, "git"),
-        `#!/bin/sh
-printf '%s\\n' "$*" >> '${log}'
-exec '${realGit}' "$@"
-`,
-        { mode: 0o755 },
-      );
+      const bin = await fakeGitBin(root, `printf '%s\\n' "$*" >> '${log}'\nexec "$REAL_GIT" "$@"`);
       await fs.writeFile(path.join(root, "tracked.txt"), "dirty\n");
-      const started = Date.now();
       const result = await runCommand(
         interpreter,
-        [
-          "-e",
-          REVIEW_WORKTREE_FINGERPRINT_SCRIPT.replace(
-            "const STATUS_TIMEOUT_MS = 10000;",
-            "const STATUS_TIMEOUT_MS = 1500;",
-          ),
-          "fingerprint",
-        ],
+        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "fingerprint"],
         {
           cwd: root,
-          timeoutMs: 6000,
-          env: { PATH: `${bin}:${process.env.PATH}`, GIT_OPTIONAL_LOCKS: "0" },
+          timeoutMs: 30_000,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
         },
       );
-      expect(Date.now() - started).toBeLessThan(6000);
-      expect(result.stderr).toBe("");
       expect(parseReviewWorktreeFingerprint(result.stdout).status).toContain("tracked.txt");
       const calls = (await fs.readFile(log, "utf8")).trim().split("\n");
-      const blockedStatus = calls.findIndex((args) => args.startsWith("status "));
-      expect(blockedStatus).toBeGreaterThanOrEqual(0);
-      expect(calls.slice(blockedStatus + 1).length).toBeGreaterThanOrEqual(4);
+      expect(calls.some((args) => args.includes(" status "))).toBe(true);
+      for (const args of calls) {
+        expect(args.startsWith("--no-optional-locks -c core.fsmonitor=false ")).toBe(true);
+      }
       expect(
-        calls.slice(blockedStatus + 1).every((args) => args.startsWith("-c core.fsmonitor=false ")),
-      ).toBe(true);
-      const hookPids = (await fs.readFile(pids, "utf8")).trim().split("\n");
-      expect(hookPids).toHaveLength(2);
-      for (const pid of hookPids) {
-        // A zombie has exited and holds no pipes; init may not have reaped it yet.
-        const state = await runCommand("ps", ["-p", pid, "-o", "stat="]).then(
-          (result) => result.stdout.trim(),
-          () => "",
-        );
-        expect(state === "" || state.startsWith("Z")).toBe(true);
+        await fs.stat(marker).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    `stops a blocked git and its descendant at its budget (${interpreter})`,
+    async () => {
+      const root = await fixture();
+      const pidFile = path.join(root, ".git", "status-pid");
+      // Keep the fake Git alive as the group leader, with a separate long-lived
+      // child. Killing just Git must fail this regression test. Both processes
+      // are bounded even if cleanup regresses.
+      const bin = await fakeGitBin(
+        root,
+        `case " $* " in *" status "*) sleep 30 & child=$!; printf '%s\\n' "$$" "$child" > '${pidFile}'; wait "$child"; exit;; esac\nexec "$REAL_GIT" "$@"`,
+      );
+      const started = Date.now();
+      const error = await runCommand(
+        interpreter,
+        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "budget-ms=1500"],
+        {
+          cwd: root,
+          timeoutMs: 10_000,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        },
+      ).then(
+        () => null,
+        (failure: unknown) => failure,
+      );
+      expect(Date.now() - started).toBeLessThan(8_000);
+      expect(error).toBeInstanceOf(CommandFailedError);
+      expect((error as CommandFailedError).timedOut).toBe(false);
+      expect(reviewWorktreeProbeReasonCode(String((error as CommandFailedError).stderr))).toBe(
+        "timeout",
+      );
+      const pids = (await fs.readFile(pidFile, "utf8")).trim().split("\n");
+      expect(pids).toHaveLength(2);
+      expect(new Set(pids).size).toBe(2);
+      for (const pid of pids) {
+        expect(pid).toMatch(/^[1-9][0-9]*$/);
+        // A zombie has exited; init may not have reaped it yet. Give a child
+        // scheduled after its parent a bounded interval to observe SIGKILL.
+        const deadline = Date.now() + 1_000;
+        let state: string;
+        do {
+          state = await runCommand("ps", ["-p", pid, "-o", "stat="], {
+            timeoutMs: 1_000,
+          }).then(
+            (result) => result.stdout.trim(),
+            (failure: unknown) => {
+              if (
+                failure instanceof CommandFailedError &&
+                failure.exitCode === 1 &&
+                !failure.timedOut &&
+                failure.stderr.trim() === ""
+              )
+                return "";
+              throw failure;
+            },
+          );
+          if (state === "" || state.startsWith("Z")) break;
+          await Bun.sleep(20);
+        } while (Date.now() < deadline);
+        expect({ pid, stopped: state === "" || state.startsWith("Z") }).toEqual({
+          pid,
+          stopped: true,
+        });
       }
     },
     15_000,
@@ -370,7 +410,7 @@ for (const interpreter of INTERPRETERS) {
       const root = await fixture();
       const bin = await fakeGitBin(
         root,
-        `case "$1" in diff) head -c 4096 /dev/zero; exec sleep 30 ;; *) exec "$REAL_GIT" "$@" ;; esac`,
+        `case " $* " in *" diff "*) head -c 4096 /dev/zero; exec sleep 30 ;; *) exec "$REAL_GIT" "$@" ;; esac`,
       );
       const started = Date.now();
       await expect(

@@ -320,6 +320,28 @@ function SlowDeleteNotice({
   );
 }
 
+/**
+ * ⌘⌫ / Ctrl+Backspace (or the Delete key with either modifier) on a focused
+ * row asks to delete it. Either modifier is accepted on every platform, as
+ * with ⌘K, because a desktop shell may keep the Super key for itself.
+ */
+export function isDeleteRowChord(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return (
+    (event.key === "Backspace" || event.key === "Delete") &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+const DELETE_ROW_KEYSHORTCUTS = "Meta+Backspace Control+Backspace Meta+Delete Control+Delete";
+
 /** The row's action list, the same for every row; disabled states come from the model. */
 export function environmentRowMenuItems(
   model: EnvironmentRowModel,
@@ -515,6 +537,8 @@ export function EnvironmentRow({
     if (!model.selectable && (event.shiftKey || event.metaKey || event.ctrlKey)) return;
     onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
   };
+  // A multi-selection has its own bulk delete, so the chord never deletes just this row.
+  const canRequestDelete = !model.menu.deleteDisabled && !multiSelectActive;
 
   return (
     <>
@@ -560,8 +584,16 @@ export function EnvironmentRow({
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   activate(event);
+                  return;
+                }
+                if (isDeleteRowChord(event)) {
+                  event.preventDefault();
+                  // Opens the same confirmation as the menu's Delete; holding
+                  // the keys must not reopen it behind the dialog.
+                  if (canRequestDelete && !event.repeat) setDeleteOpen(true);
                 }
               }}
+              aria-keyshortcuts={canRequestDelete ? DELETE_ROW_KEYSHORTCUTS : undefined}
               onMouseEnter={tooltip.show}
               onMouseLeave={tooltip.hide}
               onFocus={tooltip.show}

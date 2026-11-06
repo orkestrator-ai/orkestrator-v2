@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import { claimSidebarAction, releaseSidebarAction } from "@/stores/sidebarActionStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
@@ -402,5 +403,56 @@ describe("EnvironmentItem change badge", () => {
     useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
     renderItem();
     expect(document.querySelector("[data-freshness]") === null).toBe(true);
+  });
+});
+
+describe("EnvironmentItem delete shortcut", () => {
+  test("⌘⌫ on the focused row asks first and deletes only once confirmed", () => {
+    callbacks.onDelete.mockClear();
+    renderItem();
+    const row = screen.getByRole("button", { name: /Pulsing icon/ });
+    row.focus();
+
+    expect(fireEvent.keyDown(row, { key: "Backspace", metaKey: true })).toBe(false);
+    expect(screen.getByRole("alertdialog", { name: "Delete Environment" })).toBeTruthy();
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(callbacks.onDelete).toHaveBeenCalledWith("env-1");
+  });
+
+  test("Ctrl+Backspace asks too, and cancelling deletes nothing", async () => {
+    callbacks.onDelete.mockClear();
+    renderItem();
+    const row = screen.getByRole("button", { name: /Pulsing icon/ });
+
+    fireEvent.keyDown(row, { key: "Backspace", ctrlKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+  });
+
+  test("plain, shifted and held Backspace do not ask", () => {
+    renderItem();
+    const row = screen.getByRole("button", { name: /Pulsing icon/ });
+
+    expect(fireEvent.keyDown(row, { key: "Backspace" })).toBe(true);
+    fireEvent.keyDown(row, { key: "Backspace", metaKey: true, shiftKey: true });
+    fireEvent.keyDown(row, { key: "Backspace", metaKey: true, repeat: true });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("a row whose Delete is disabled does not ask", () => {
+    claimSidebarAction("env-1");
+    try {
+      renderItem();
+      const row = screen.getByRole("button", { name: /Pulsing icon/ });
+
+      expect(row.getAttribute("aria-keyshortcuts")).toBeNull();
+      fireEvent.keyDown(row, { key: "Backspace", metaKey: true });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      releaseSidebarAction("env-1");
+    }
   });
 });

@@ -2,6 +2,8 @@
 
 ## Task analysis
 
+Analysed 2026-11-06 against main at 37d0966ff9cf02ff55693c21edcd8506a8b8beae.
+
 Analysed 2026-10-27 against `main` at `863b5782`.
 
 Checked against `main` at `00a0cb82` (2026-10-25); tasks 3 and 4 rechecked
@@ -24,7 +26,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 ### Tasks
 
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: done (2026-11-06: `recurring-live-ab.ts --busy-rounds` on Linux with a fake model, keyed and rollback arms, 0 to 2 headless clients; every obligation kept in 17 of 18 rounds, the 18th lost to a client page that never loaded (a harness fault; such a page is now reloaded, and a second run's 12 client rounds all passed); the keyed drivers met every budget row the profile reaches, and the rollback drivers missed workflow progress; decisions B1 to B9, follow-ups in [7202](7202-busy-profile-follow-ups.md)).
-2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open (depends on 5) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, [7201](7201-explicit-refresh-behind-running-scan.md); turn completion, activity and queued prompts measured client-side by task 11; the approval, mail and workflow rows measured by task 1's busy profile on Linux, all within budget; only the four PR rows are left, for task 5).
+2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open (workflow client visibility and live GitHub remain) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, [7201](7201-explicit-refresh-behind-running-scan.md); turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux; workflow client visibility and the four PR rows remain open).
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
 5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open (needs GitHub credentials and a disposable repository, which the 2026-11-06 Linux run was not allowed to use; it no longer waits on anything else).
@@ -35,7 +37,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
 12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (depends on 5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5; the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
-13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (depends on 5) (2026-11-06: the `backend-activity`, `native-queues` and `multi-review` domains have the busy-profile and soak evidence decision 1 asks for and can be removed, decision B8; `feature-planning`, `build-pipeline` and observation sharing still wait for task 5 and 0049).
+13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (depends on 5) (2026-11-06: the `backend-activity` and `native-queues` domains have busy-profile and soak evidence; Multi Review needs fresh timing after the review repair below (decision B8 is superseded for that domain); `feature-planning`, `build-pipeline` and observation sharing still wait for task 5 and 0049).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
 16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines and a scoped firewall rule; the 2026-11-06 run could change neither the host's firewall nor its network).
@@ -1489,7 +1491,7 @@ the command's return otherwise.
 | Turn completion visible after the approval: reply row in the open tab, client run (≤ 3 s) | client | 101 / 104 ms (3) | 97 / 100 ms (3) |
 | Queued prompt dispatched after the turn ends (≤ 3 s) | backend | 1.55 / 1.63 s (9) | 1.26 / 2.10 s (8) |
 | Background indicator idle after the queued turn (≤ 4 s) | client | 44 / 51 ms (3) | 328 ms / 2.38 s (3) |
-| Workflow progress after a result (≤ 3 s) | backend | 84 / 157 ms (18) | **3.51 / 4.05 s (16)** |
+| Workflow progress after a result (withdrawn: callback pairing was unreliable) | backend | 84 / 157 ms (18) | **3.51 / 4.05 s (16)** |
 | Validation plan result to reviewing (runs the plan) | backend | 2.18 / 5.78 s (9) | 5.66 / 8.30 s (8) |
 | Multi Review launch to `ready` | backend | 4.79 / 8.47 s (9) | 15.9 / 18.2 s (8) |
 | 200-file burst in all 10: change badge (2.4 s from the write) | client | 506 / 519 ms (90) | 628 / 701 ms (80) |
@@ -1573,8 +1575,9 @@ credentials or a platform CI lacks are batched in
     [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos));
     the container Changes refresh tail needs a decision
     ([7201](7201-explicit-refresh-behind-running-scan.md)); the turn,
-    approval, mail and workflow rows were done 2026-11-06 by the busy
-    profile; the PR rows go with live GitHub;
+    approval and mail rows were done 2026-11-06 by the busy
+    profile; workflow visibility remains open (only backend state was read);
+    the PR rows go with live GitHub;
   - ~~the container fetch policy live~~. Done 2026-11-01 on Linux: a
     missing-baseline recovery fetch, an explicit refresh and the routine policy
     on a legacy record, all on a real container (see
@@ -2543,3 +2546,18 @@ collide with other tasks' decisions.
   `../architecture/recurring-work.md` with current cadences; findings F01 to
   F10 shipped; B19 and B20 are measured candidates above; B18 is in
   `container-state-observation.md`)
+
+## Assumptions and decisions
+
+### Review repair: task 2 workflow visibility
+
+**Problem.** The busy clients stay on the approval tab and do not observe review progress.
+**Context.** Backend `review.get` observations cannot complete a client-visible latency row.
+**Investigation.** The original workflow timings also paired delayed model callbacks with the next timestamp, which could skip or misattribute results.
+**Decisions.** Leave the workflow client row open (recommended): accurately scopes the evidence without adding an unqualified UI path. Adding a review view reader would provide client latency but requires separate live qualification. The historical workflow latency values above are withdrawn as qualification evidence, including their use in decision B8 to unblock Multi Review rollback removal; that domain needs a fresh run. Activity and queue evidence is unchanged.
+
+### Review repair: task 1 backend workflow timing and recovery
+
+The harness now associates each result submission identity with its tool's expected consuming phase. It requires exactly one submission for each of the four scripted slots and rejects missing, ambiguous or reversed observations. Submission precedes acceptance, so the new row is explicitly an upper bound from submission to backend phase observation, not acceptance latency. Delayed or absent model callbacks cannot silently erase samples. These revised timings have unit coverage but have not been qualified live.
+
+Failed rounds release fake-model waiters and stop both owned sessions. A stop that cannot confirm completion aborts the phase, avoiding reuse of an uncertain session. This adds recovery overhead only to failed rounds; continuing with unresolved approvals could cascade failures. Tests cover a hidden approval in round one followed by a successful second round.

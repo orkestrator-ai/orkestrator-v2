@@ -967,8 +967,12 @@ credential, login or provider: every turn goes to the fake model.
   moment its cause is known (the fake model's arrival times, or the command's
   return) to what each connected client's page showed, plus backend rows
   (the approval in `session.interactions`, the queued prompt reaching the
-  model, a Multi Review phase change after the model got a result back) and
-  the resumed client's convergence. Obligations: each held turn and queued
+  model, a Multi Review phase change after its corresponding result submission) and
+  the resumed client's convergence. Workflow timings are backend upper bounds
+  from submission (before acceptance); workflow client-visible latency remains
+  unmeasured. Every scripted result must have exactly one submission and its
+  expected consuming phase. Failed rounds stop their sessions before reuse;
+  an uncertain stop aborts the phase. Obligations: each held turn and queued
   prompt reaches the model exactly once, the approval is answered and its
   turn finishes, and every review reaches `ready`. `recurringWork` and
   process totals are sampled at every round boundary for the arm comparison.

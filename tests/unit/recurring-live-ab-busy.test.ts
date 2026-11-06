@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -22,7 +22,14 @@ import {
   type MarkerRecord,
 } from "../../scripts/recurring-live-ab-fake-model";
 
+setDefaultTimeout(30_000);
+
 type Scenario = {
+  lateResults?: boolean;
+  reversedSubmission?: boolean;
+  missingSubmission?: boolean;
+  noApprovalFirstRound?: boolean;
+  stopUnconfirmed?: boolean;
   /** Opening this many clients throws (a view that never appears). */
   failOpen?: number;
   /** The public API never lists the parked approval. */
@@ -47,7 +54,10 @@ function busyHarness(scenario: Scenario = {}) {
   }>;
   const markers = new Map<string, MarkerRecord>();
   const released = new Set<string>();
-  const workflow: Record<string, { calls: number; resultsAt: number[] }> = {};
+  const workflow: Record<
+    string,
+    { calls: number; resultsAt: number[]; submissions: Array<{ resultKey: string; at: number }> }
+  > = {};
   let completions = 0;
   let queued: string | null = null;
   let approval: { id: string; answered: boolean } | null = null;
@@ -77,7 +87,11 @@ function busyHarness(scenario: Scenario = {}) {
       Object.fromEntries(
         Object.entries(workflow).map(([tool, entry]) => [
           tool,
-          { calls: entry.calls, resultsAt: [...entry.resultsAt] },
+          {
+            calls: entry.calls,
+            resultsAt: [...entry.resultsAt],
+            submissions: [...entry.submissions],
+          },
         ]),
       ),
     marker: (id) => {
@@ -129,7 +143,15 @@ function busyHarness(scenario: Scenario = {}) {
         }),
       };
     }
+    if (verb === "session stop") {
+      if (scenario.stopUnconfirmed) return { status: 7, stdout: "{}" };
+      if (!approval || approval.answered)
+        return { status: 8, stdout: JSON.stringify({ error: { code: "session-idle" } }) };
+      approval = null;
+      return json({});
+    }
     if (verb === "session prompt") {
+      if (approval && !approval.answered) return { status: 8, stdout: "{}" };
       const prompt = args[args.indexOf("--prompt") + 1]!;
       if (args.includes("--enqueue")) {
         queued = marker(prompt, "hold");
@@ -164,12 +186,24 @@ function busyHarness(scenario: Scenario = {}) {
     reviewReads += 1;
     const phases = ["preparing", "reviewing", "consolidating", scenario.reviewEnds ?? "ready"];
     const phase = phases[Math.min(phases.length - 1, Math.floor(reviewReads / 2))]!;
-    // Each phase change follows the model getting the previous result back.
-    if (reviewReads % 2 === 1 && reviewReads > 1 && reviewReads < 8) {
-      const tool = reviewReads === 3 ? "submit_validation_plan" : "submit_review_report";
-      const entry = (workflow[tool] ??= { calls: 0, resultsAt: [] });
+    const submit = (tool: string) => {
+      const entry = (workflow[tool] ??= { calls: 0, resultsAt: [], submissions: [] });
       entry.calls += 1;
-      entry.resultsAt.push(now);
+      if (!scenario.missingSubmission)
+        entry.submissions.push({
+          resultKey: `${reviewLaunches}-${tool}`,
+          at: now + (scenario.reversedSubmission ? 100_000 : 0),
+        });
+      if (!scenario.lateResults) entry.resultsAt.push(now);
+    };
+    if (reviewReads === 1) {
+      submit("submit_validation_plan");
+      submit("submit_review_preparation");
+    }
+    if (reviewReads === 3) submit("submit_review_report");
+    if (reviewReads === 5) submit("submit_consolidated_review");
+    if (scenario.lateResults && reviewReads === 8) {
+      for (const entry of Object.values(workflow)) entry.resultsAt.push(now + 50);
     }
     return phase;
   };
@@ -202,7 +236,11 @@ function busyHarness(scenario: Scenario = {}) {
       if (command !== "public_action") throw new Error(`unexpected ${command}`);
       const action = args.action;
       if (action === "session.interactions") {
-        const pending = approval && !approval.answered && !scenario.noApproval;
+        const pending =
+          approval &&
+          !approval.answered &&
+          !scenario.noApproval &&
+          !(scenario.noApprovalFirstRound && approval?.id === "approval-a-r1");
         return {
           ok: true,
           result: {
@@ -353,6 +391,67 @@ describe("busy phase options", () => {
 });
 
 describe("busy phase", () => {
+  test("submission identity survives callbacks delayed beyond ready", async () => {
+    const h = busyHarness({ lateResults: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0] }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.samples["workflow-progress"]).toHaveLength(3);
+  });
+  test("an observation before its own submission cannot use a later unrelated phase", async () => {
+    const h = busyHarness({ reversedSubmission: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0] }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(4);
+    expect(result.samples["workflow-progress"]).toEqual([]);
+  });
+  test("missing submissions cannot silently qualify", async () => {
+    const h = busyHarness({ missingSubmission: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0] }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(4);
+    expect(busyFailed(result)).toBe(true);
+  });
+  test("an unconfirmed stop refuses session reuse", async () => {
+    const h = busyHarness({ noApprovalFirstRound: true, stopUnconfirmed: true });
+    await expect(
+      measureBusy(
+        h.gateway,
+        h.cli,
+        options({ busyClients: [0], busyRounds: 2 }),
+        undefined,
+        h.runtime,
+      ),
+    ).rejects.toThrow("could not confirm session stop");
+    expect(h.calls.filter((call) => call[0] === "review" && call[1] === "launch")).toHaveLength(1);
+  });
+  test("a parked approval in round one cannot block round two", async () => {
+    const h = busyHarness({ noApprovalFirstRound: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 2 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.rounds.map((item) => item.failed)).toEqual([true, false]);
+    expect(h.calls.filter((call) => call[0] === "session" && call[1] === "stop")).toHaveLength(2);
+  });
   test("runs every step for 0, 1 and 2 clients and keeps every obligation", async () => {
     const h = busyHarness();
     const result = await measureBusy(h.gateway, h.cli, options(), undefined, h.runtime);
@@ -427,7 +526,11 @@ describe("busy phase", () => {
       undefined,
       h.runtime,
     );
-    expect(result.failures.map((failure) => failure.step)).toEqual(["approval", "workflow"]);
+    expect(result.failures.map((failure) => failure.step)).toEqual([
+      "approval",
+      "workflow",
+      "workflow-sample",
+    ]);
     expect(result.failures[1]?.detail).toContain("failed");
     expect(result.obligations.duplicates).toBe(1);
     expect(result.timeouts["approval-backend"]).toBe(1);

@@ -49,7 +49,6 @@ describe("fake model scripts", () => {
       });
       for (let tries = 0; !server.marker("q1") && tries < 100; tries += 1)
         await new Promise((resolve) => setTimeout(resolve, 10));
-      await new Promise((resolve) => setTimeout(resolve, 50));
       expect(answered).toBe(false);
       expect(server.marker("q1")).toMatchObject({ requests: 1, toolResults: 0 });
       server.release("q1");
@@ -186,6 +185,9 @@ describe("fake model scripts", () => {
         })
       ).text();
       const counted = server.workflow().submit_review_report;
+      expect(counted?.submissions).toHaveLength(1);
+      expect(counted?.submissions[0]?.resultKey).toBe(key);
+      expect(counted?.submissions[0]?.at).toBeLessThanOrEqual(counted!.resultsAt[0]!);
       expect(counted?.calls).toBe(1);
       expect(counted?.resultsAt).toHaveLength(1);
     } finally {

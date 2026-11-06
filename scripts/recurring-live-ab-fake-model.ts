@@ -50,11 +50,14 @@ export type FakeModelServer = {
   /** Requests answered, by route. */
   counts(): { completions: number; models: number; refused: number };
   /**
-   * Multi Review result calls, by tool: how many were made, and when the
+   * Multi Review result calls, by tool: submission identities and times, and when the
    * latest call's result came back to the model (`performance.now()`), which
    * is after the backend accepted or refused it.
    */
-  workflow(): Record<string, { calls: number; resultsAt: number[] }>;
+  workflow(): Record<
+    string,
+    { calls: number; resultsAt: number[]; submissions: Array<{ resultKey: string; at: number }> }
+  >;
   /**
    * Requests whose latest prompt carried `[hold:<id>]` or `[tool:<id>]`, by id:
    * how many arrived and when the first and the latest did (`performance.now()`).
@@ -73,7 +76,6 @@ export type MarkerRecord = {
   lastAt: number;
 };
 
-/** Marker ids are driver tokens: short, and never prompt text. */
 /** The result key a workflow prompt names (`workflow-results.ts`). */
 const RESULT_KEY = /resultKey "?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"?/;
 
@@ -137,6 +139,7 @@ export const FAKE_WORKFLOW_RESULTS: Readonly<Record<string, unknown>> = {
   submit_consolidated_review: CLEAN_REPORT,
 };
 
+/** Marker ids are driver tokens: short, and never prompt text. */
 const MARKER = /\[(hold|tool):([a-z0-9-]{1,48})\]/g;
 const MAX_MARKERS = 4_096;
 export const FAKE_TOOL_NAME = "bash";
@@ -266,7 +269,10 @@ export function startFakeModelServer(
   const Reply = platform.Response;
   const counts = { completions: 0, models: 0, refused: 0 };
   const markers = new Map<string, MarkerRecord>();
-  const workflow: Record<string, { calls: number; resultsAt: number[] }> = {};
+  const workflow: Record<
+    string,
+    { calls: number; resultsAt: number[]; submissions: Array<{ resultKey: string; at: number }> }
+  > = {};
   const released = new Set<string>();
   const parked = new Map<string, Set<() => void>>();
   let stopped = false;
@@ -332,10 +338,17 @@ export function startFakeModelServer(
       if (marker) note(marker, script.afterToolResult);
       if (script.hold) await waitFor(script.hold, request.signal);
       if (script.workflow) {
-        const entry = (workflow[script.workflow.tool] ??= { calls: 0, resultsAt: [] });
+        const entry = (workflow[script.workflow.tool] ??= {
+          calls: 0,
+          resultsAt: [],
+          submissions: [],
+        });
         const stage = workflowStage(script);
-        if (stage === "submit") entry.calls += 1;
-        else if (stage === "reply" && entry.resultsAt.length < MAX_MARKERS)
+        if (stage === "submit") {
+          entry.calls += 1;
+          if (entry.submissions.length < MAX_MARKERS)
+            entry.submissions.push({ resultKey: script.workflow.resultKey, at: performance.now() });
+        } else if (stage === "reply" && entry.resultsAt.length < MAX_MARKERS)
           entry.resultsAt.push(performance.now());
       }
       const id = `soak-${++sequence}`;
@@ -383,7 +396,11 @@ export function startFakeModelServer(
       Object.fromEntries(
         Object.entries(workflow).map(([tool, entry]) => [
           tool,
-          { calls: entry.calls, resultsAt: [...entry.resultsAt] },
+          {
+            calls: entry.calls,
+            resultsAt: [...entry.resultsAt],
+            submissions: entry.submissions.map((item) => ({ ...item })),
+          },
         ]),
       ),
     marker: (id) => {

@@ -158,14 +158,20 @@ export function playwrightBusyClients(
   profile: string,
   status: BusyClientStatus,
   artifactDir?: string,
+  dependencies?: {
+    launch(): Promise<Browser>;
+    loginPath(profile: string): string;
+    openTab(page: Page, environment: string): Promise<void>;
+  },
 ) {
   let failures = 0;
   let browser: Browser | undefined;
   const open: BusyClientFactory = async ({ count, openEnvironment, signal }) => {
     if (!status.browserUrl || !status.rendererUrl)
       throw new Error("The profile reports no browser or renderer URL");
-    const { chromium } = await import("playwright");
-    browser ??= await chromium.launch({ headless: true });
+    browser ??= dependencies
+      ? await dependencies.launch()
+      : await (await import("playwright")).chromium.launch({ headless: true });
     const clients: BusyClient[] = [];
     try {
       for (let index = 0; index < count; index += 1) {
@@ -185,12 +191,15 @@ export function playwrightBusyClients(
           const page = await context.newPage();
           page.setDefaultTimeout(30_000);
           const base = link?.url ?? status.browserUrl;
-          const response = await page.goto(new URL(loginPath(profile), base).href, {
-            waitUntil: "domcontentloaded",
-          });
+          const response = await page.goto(
+            new URL((dependencies?.loginPath ?? loginPath)(profile), base).href,
+            {
+              waitUntil: "domcontentloaded",
+            },
+          );
           if (!response?.ok()) throw new Error(`${label}: sign-in failed`);
           try {
-            await openApprovalTab(page, openEnvironment);
+            await (dependencies?.openTab ?? openApprovalTab)(page, openEnvironment);
           } catch (error) {
             if (artifactDir)
               await page
@@ -225,7 +234,7 @@ export function playwrightBusyClients(
   };
 }
 
-function pageClient(
+export function pageClient(
   label: string,
   page: Page,
   context: BrowserContext,

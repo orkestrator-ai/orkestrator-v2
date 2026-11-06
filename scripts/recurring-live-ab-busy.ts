@@ -110,14 +110,14 @@ export const BUSY_ROWS = {
   "workflow-progress": {
     budgetMs: 3_000,
     side: "backend",
-    label: "Workflow progress after a result",
+    label: "Backend phase observed after result submission (upper bound; no client measurement)",
   },
   // The plan's next phase waits for its commands, which queue in the
   // host-wide test scheduler with every other worktree's validation and tests.
   "workflow-validation": {
     budgetMs: null,
     side: "backend",
-    label: "Validation plan result to reviewing (runs the plan)",
+    label: "Validation plan submission to reviewing (runs the plan)",
   },
   "workflow-complete": {
     budgetMs: null,
@@ -905,18 +905,28 @@ export async function measureBusy(
             else result.obligations.workflows += 1;
             for (const [id, timing] of runtime.validationRuns(reviewEnvironment.worktree))
               if (!validationsBefore.has(id)) result.validationRuns.push(timing);
-            // Each accepted result is followed by the phase that consumed it.
+            // Correlate by tool and result identity, never the next timestamp.
+            // Submission precedes acceptance: this is a conservative upper bound,
+            // independent of when the model receives the tool's callback.
+            const expected = {
+              submit_validation_plan: "reviewing",
+              submit_review_preparation: "reviewing",
+              submit_review_report: "consolidating",
+              submit_consolidated_review: "ready",
+            };
             const after = fakeModel.workflow();
-            for (const [tool, entry] of Object.entries(after)) {
-              const earlier = workflowsBefore[tool]?.resultsAt.length ?? 0;
-              for (const resultAt of entry.resultsAt.slice(earlier)) {
-                const next = transitions.find((transition) => transition.at >= resultAt);
-                if (next)
-                  record(
-                    tool === "submit_validation_plan" ? "workflow-validation" : "workflow-progress",
-                    Math.round(next.at - resultAt),
-                  );
+            for (const [tool, target] of Object.entries(expected)) {
+              const earlier = workflowsBefore[tool]?.submissions.length ?? 0;
+              const submissions = after[tool]?.submissions.slice(earlier) ?? [];
+              const transition = transitions.find((item) => item.phase === target);
+              if (submissions.length !== 1 || !transition || transition.at < submissions[0]!.at) {
+                fail("workflow-sample", `missing or ambiguous ${tool} -> ${target}`);
+                continue;
               }
+              record(
+                tool === "submit_validation_plan" ? "workflow-validation" : "workflow-progress",
+                Math.round(transition.at - submissions[0]!.at),
+              );
             }
           }
 
@@ -945,8 +955,26 @@ export async function measureBusy(
         } catch (error) {
           if (signal?.aborted) throw error;
           fail("round", error instanceof Error ? error.message.split("\n", 1)[0] : String(error));
-          // Let a turn this round left waiting finish, so the next round's prompts are not refused.
+          // Release model waiters; parked provider approvals require session.stop below.
           for (const id of [held, queued, approval]) fakeModel.release(id);
+        }
+        if (result.failures.length > failuresBefore) {
+          for (const id of [held, queued, approval]) fakeModel.release(id);
+          // A successful stop confirms provider work ended, including parked approvals.
+          // Refuse to reuse an uncertain session; a cascade would obscure the cause.
+          for (const session of [askSession, turnSession]) {
+            const stopped = await step(["session", "stop", session.sessionId]);
+            let idle = false;
+            try {
+              idle =
+                (JSON.parse(stopped.stdout) as { error?: { code?: string } }).error?.code ===
+                "session-idle";
+            } catch {
+              /* A malformed response is not confirmation. */
+            }
+            if (stopped.status !== 0 && !idle)
+              throw new Error("Busy round cleanup could not confirm session stop");
+          }
         }
         await Promise.all(clients.map((client) => client.close()));
         clients = [];

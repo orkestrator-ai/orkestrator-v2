@@ -170,3 +170,12 @@ mise run test:logged -- --name data-saving-owner -- bunx playwright test --confi
 
 This confirms another intermittent recurrence. No assertion, timeout or skip
 changed. The aggregate remains failed; no new cause or fix is claimed.
+
+## Floating-notice repair review — 2026-11-06
+
+- **Original command:** `mise run test:logged -- --name review-browser-suite -- mise run test:browser` (nine component workers).
+- **Failure:** mobile `data saving survives reload, stays client-local and preserves event latency through resume and reconnect` exceeded its 60-second test deadline; teardown closed the browser context.
+- **Suite counts:** 1503 passed, 135 skipped, 4 failed, 1460.5 s. The other failures were the tab-launch selector in both viewports and desktop pipeline fullscreen Notes scrolling; both also failed in owner-only reruns and are not classified as flakes here. The public-site stage did not run.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.5NH72Y/review-browser-suite.log.gz`.
+- **Isolated rerun:** with `ORKESTRATOR_E2E_PORT` set to a free port, `mise run test:logged -- --name data-saving-isolated -- bunx playwright test --config e2e/playwright.config.ts DataSavingGateway.spec.ts --workers=1 --output=output/playwright/data-saving-results` passed, exit 0, 69.1 s. Both viewport cases ran; passing output was deleted by the logged runner.
+- **Assessment:** the unchanged owner again passes alone. Host contention is a hypothesis, not an established cause. No assertion, timeout or skip in this owner was changed.

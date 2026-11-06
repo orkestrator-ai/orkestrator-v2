@@ -23,9 +23,10 @@ Analysed 2026-10-28 against `main` at `7e3ceb7ce`.
 1. **Keep the backend serving when its stdout reader stalls**: Bun's console blocks the whole backend once the desktop stops reading its output. Status: done (2026-10-28).
 2. **Record event-loop stalls**: nothing in the logs measured the backend's own event loop. Status: done (2026-10-28).
 3. **Cut per-request work on the agent MCP endpoint**: every request rebuilt the tool server and parsed the whole mail store. Status: done (2026-10-29). No request parses the mail store any more; building the tool server per request stays, by decision, until task 6 shows it matters.
-4. **Find what held the desktop main thread from 02:22:55Z to 09:08:17Z**: Status: done as an investigation (2026-10-29). It was most likely a modal alert opened behind other windows; which dialog is not recorded anywhere. The fixes are in [0880](0880-desktop-main-thread-held-by-modal-dialog.md).
+4. **Find what held the desktop main thread from 02:22:55Z to 09:08:17Z**: Status: done as an investigation (2026-10-29). It was most likely a modal alert opened behind other windows; which dialog is not recorded anywhere. The fixes were made under 0880 (deleted 2026-11-06); its live check is task 7.
 5. **Stop parsing the whole mail store per mail call**: Status: done (2026-10-29). Reads use a shared read model that re-parses only changed rows; writes still parse once.
 6. **Qualify under load with the new stall log**: Status: open. Needs a live heavy run; the procedure is in task 6.
+7. **Modal-dialog routing on a production install**: real update, restart, toolchain and startup-failure dialogs open as sheets or on a host window, ask for attention, and do not hold the main thread. Moved from to-do 0880 (deleted 2026-11-06). Status: open (needs a production install).
 
 Evidence is labelled **measured** (read from logs, the power log, the unified
 log, or a benchmark run) or **inferred** (a conclusion the measurements fit
@@ -283,7 +284,7 @@ are user-initiated.
   with no log line is the other possibility. Nothing logs dialogs, so the
   logs cannot name it.
 
-**Next step.** [0880](0880-desktop-main-thread-held-by-modal-dialog.md):
+**Next step.** 0880 (deleted 2026-11-06; its live check is task 7):
 log every dialog, never open a modal without a visible parent, disable or
 reroute preview pages' dialogs, add a main-thread stall log to the desktop,
 and reproduce in a disposable profile.
@@ -395,6 +396,45 @@ diagnostics.
 5. Record the evidence here with *measured* and *inferred* labels, and set
    this task's status.
 
+### 7. Modal-dialog routing on a production install
+
+**Problem.** Task 4 traced the 02:22–09:08 stall to a modal box opened behind
+other windows. Every native message box now gets a parent: on macOS a window,
+or a temporary host window, or it is refused as cancelled. The app also raises
+a notification and a dock bounce when it is not focused, and previews cannot
+open dialogs. Agent-test profiles skip the real update and restart prompts, so
+none of this has been seen on a production install.
+
+**Context.** Moved from to-do 0880 (deleted 2026-11-06). The routing is in
+`apps/desktop/electron/native-dialogs.ts` and `dialog-attention.ts`. Previews set
+`disableDialogs` and always allow unload
+(`browser-preview-manager.ts`), so `confirm()` returns false there. The main
+process logs stalls through `startEventLoopStallMonitor` (`desktop/main-thread.stalled`,
+[`logging.md`](../../architecture/logging.md)).
+
+**Investigation.** Steps:
+
+1. On a production macOS install with the app not focused, trigger a real
+   update-ready prompt and a remote restart. Check that each opens as a sheet,
+   and that the system notification and dock bounce fire.
+2. Trigger the toolchain prompt and a startup failure with no window open.
+   Check that a host window parents the box and closes afterwards
+   (`[Dialog] … (parent: host)`), and that the main thread is not held.
+3. Repeat steps 1 and 2 on Linux and Windows, and record whether a windowless
+   message box holds the thread there.
+4. Search the production logs for `main-thread.stalled`, `desktop.dialog` and
+   `uncaught-exception` lines, and record the source if a stall recurs.
+
+**Decisions.**
+
+- **Run it with task 6?**
+  - **Yes: task 6's production-install run already reads the stall log (recommended).**
+    - Pros: one install, one log read.
+    - Cons: step 1 needs a real update to be pending.
+  - **Alone.**
+    - Pros: no heavy-load run needed.
+    - Cons: two passes over the same logs.
+
 ## Design note: agent MCP in its own process
 
 If task 6 shows long stalls caused by unrelated backend work, serve `/mcp`
@@ -491,7 +531,7 @@ stall is inconclusive, so task 6 remains open pending live evidence.
 
 - **Chose:** read the Orkestrator log, the unified log and the code, change
   no desktop code, and file the fixes as
-  [0880](0880-desktop-main-thread-held-by-modal-dialog.md).
+  0880.
 - **Why:** the brief asked for logs only, and the logs cannot name the
   dialog. The fixes (logging dialogs, giving every modal a visible parent,
   turning off preview pages' dialogs, a desktop stall log) are separate

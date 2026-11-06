@@ -54,5 +54,6 @@ What the input stamps ([1202](../cross-cutting/1202-efficiency-review-follow-ups
 ## Related
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
-- [0490 Container start](../../reports/efficiency-logging-database/0490-e25-container-start.md).
+- [Closing check of E25](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e25-container-start), which replaced the 0490 Container start report.
+- [6740 input staging follow-ups](6740-input-staging-follow-ups.md).
 - [0018 container network and credential isolation](0018-container-network-and-credential-isolation.md).

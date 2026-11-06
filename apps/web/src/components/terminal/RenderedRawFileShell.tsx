@@ -6,6 +6,7 @@ import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import type { SaveFile } from "@/hooks/useFileSave";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+import { FloatingNoticeLayer } from "@/components/ui/floating-notice";
 
 const LazyMonacoFileEditor = lazy(async () => ({
   default: (await import("./MonacoFileEditor")).MonacoFileEditor,
@@ -87,7 +88,8 @@ export function RenderedRawFileShell({
         </div>
       </div>
 
-      {notice}
+      {/* Notices float at the top right, below the file header. */}
+      <FloatingNoticeLayer>{notice}</FloatingNoticeLayer>
 
       <TabsContent value="rendered" className="min-h-0 overflow-auto">
         {children}

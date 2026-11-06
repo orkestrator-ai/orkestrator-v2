@@ -1674,7 +1674,18 @@ row therefore has the same stage words, buckets and expiry (from the run's
 environment on that node. A remote run its node reports `not-found` is
 unavailable under Finished, like a deleted local record. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
 
-**Waiting prompts.** `HumanPromptBanner` above the conversation shows the
+Conversation-specific mail, startup failures, provider notices and the agent's
+own waiting prompts use an independent `FloatingNoticeLayer` anchored inside
+that conversation pane. Each pane measures its own transcript gutter; a hidden
+mobile pane therefore also hides its notices and their live regions. Panel-wide
+notices (pause, action errors, workflow capacity and worker prompts) use the area
+stack, which is collapsible and makes no assumption about a shared transcript
+column across splits. Stacks and cards scroll within the measured pane height,
+and pills stay within the pane width. Collapsed status and alert notices retain
+live summaries; opening a card returns announcements to its full content.
+
+**Waiting prompts.** `HumanPromptBanner`, floating at the top right of the
+conversation area with the coordinator's other notices, shows the
 prompts of this coordinator's workers, with an **Open** that goes to the waiting
 tab. Local workers are read from this backend. Workers on another node, while a
 request to them is open, are read with `list_human_prompts` through that node's
@@ -3092,9 +3103,31 @@ reports its rows the same way, plus `autoFix` and `autoPr` with a source of
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
 per-field `source`; a step's stored instructions are reported as
 `instructionsBytes`, not echoed. A reviewer's lens is reported in every
-`selection` as `{ label, instructionBytes }`. A Work row marks an override
-("requested"). The environment and tab UI do not show a marker yet:
-[4943](../todo/coordinator-and-multi-review/4943-launch-override-marker-in-environment-ui.md).
+`selection` as `{ label, instructionBytes }`.
+
+A Work row marks an override ("requested"), and so does the worker's tab. Both
+read the same fact, `delegation.request.source`, by one rule
+(`coordinatorTabLaunchRequest`, `@orkestrator/protocol/coordinator-launch-overrides`):
+the newest of that tab's requests that states a source. Only a launch states one,
+so mail sent to the worker afterwards does not clear the marker, and a tab the
+coordinator only messaged has none. There is no field on the environment record.
+
+The tab reads `list_coordinator_launch_overrides`, which answers from the
+coordinator store alone, across every project, with only the overridden tabs. The
+renderer holds one projection of it
+(`apps/web/src/stores/coordinatorLaunchOverrideStore.ts`): the first agent tab
+mounted reads, every other tab shares the answer, and it re-reads on a coordinator
+store change and on the transport's resync and safety checks. A tab with no
+delegation is absent from the answer, so it shows nothing and adds no read of its
+own, and a tab that cannot be a worker (a terminal, a file) never asks. Against a
+backend without the command nothing is shown. A delegation that retention has
+removed takes its marker with it.
+
+A worker on another node has no marker on its tab. Its delegation is kept on the
+command node, while its tab renders in that node's realm and reads that node's
+backend, which holds no such record. The command node's Work row still says
+"requested". The gap is
+[6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
 
 ## Complete application actions
 

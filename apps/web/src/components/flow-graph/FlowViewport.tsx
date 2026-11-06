@@ -118,6 +118,15 @@ export function useFlowViewport({
   const attachViewport = useCallback((element: HTMLDivElement | null) => {
     viewportRef.current = element;
     setViewportElement(element);
+    // Entering or leaving fullscreen replaces the viewport element, which
+    // starts unscrolled. Where the width is unchanged (overlay scrollbars, as
+    // in WebKit and macOS Electron) nothing else would move it back, so the
+    // view it had carries over; a changed width resets it as usual.
+    const { viewKey: key, measuredWidth: width } = sizesRef.current;
+    const remembered = useFlowGraphViewStore.getState().views.get(key);
+    if (!element || pendingRef.current || width === null || remembered?.width !== width) return;
+    element.scrollLeft = remembered.scrollLeft;
+    element.scrollTop = remembered.scrollTop;
   }, []);
 
   const save = useCallback((view: FlowView) => {

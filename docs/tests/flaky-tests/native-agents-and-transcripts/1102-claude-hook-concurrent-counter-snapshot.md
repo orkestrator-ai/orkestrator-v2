@@ -86,3 +86,29 @@ called it `related` through the false match in to-do 6601; see case
 --cwd=apps/backend test tests/claude-state-signal-integration.test.ts
 --only-failures` passed in 0.7 s (exit 0) at a load of about 16. No
 implementation, assertion or timeout changed.
+
+## Flow viewport review validation recurrence — 2026-11-06
+
+Observed on `d81fd21ed` in
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+This branch changes the shared flow viewport and its renderer tests, plus
+qualification documentation; it changes none of this owner's implementation.
+The aggregate finished in 1615.7 s. Backend used four isolated workers
+(16,358 pass, 134 skip, three failures); root used one worker
+(3,674 pass, three failures). Web passed with 13,101 pass and ten skips.
+Original evidence is under
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.fvkr6h/`;
+the outer wrapper is `orkestrator-test-run.OXNmsh` under the same temporary root.
+
+The exact hook-counter test received `working 19 0` instead of `working 20 0`
+(1137.53 ms) in `workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+Unchanged complete owner rerun:
+
+```sh
+mise run test:logged -- --name hook-writers-isolated -- bun --cwd=apps/backend test tests/claude-state-signal-integration.test.ts --parallel=1 --only-failures
+```
+
+Passed with exit 0 in 0.9 s. Passing output was deleted by the logged
+runner, so isolated totals are not inferred. The isolated pass establishes
+intermittence, not a cause or a repair. No assertion, timeout or skip changed.

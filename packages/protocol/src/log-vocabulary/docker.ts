@@ -9,6 +9,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         "Docker is rootless and the image predates the staged-input relay, so the container cannot read them until rebuilt.",
       "git-mirror.mount-unavailable":
         "A new container gets no project Git mirror, so its clone goes to the remote.",
+      "git-mirror.mount-withheld":
+        "A new restricted container gets no project Git mirror because its firewall would not let it reach the project's remote, so it cannot read what the remote serves through the mirror either.",
       "git-mirror.refreshed": "A project's Git mirror was built or updated.",
       "git-mirror.seeded":
         "A project's Git mirror was built from its host checkout and only what the remote added to it.",

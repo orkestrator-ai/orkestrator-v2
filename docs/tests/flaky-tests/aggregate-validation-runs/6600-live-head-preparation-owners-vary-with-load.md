@@ -55,3 +55,19 @@ In the same preparation, `scrollbar departure after find stays put when streamin
 ## Fix
 
 None here. No assertion, deadline or fixture changed, because a longer deadline on this branch would only hide the condition, and the tests belong to other areas.
+
+## Recurrence 2026-11-05 (worktree-probe change)
+
+On arktech-mini at `585cf97d8` plus the uncommitted worktree-probe change,
+`linked skill entries (task 2) > the entrypoint imports a linked skill where
+Claude reads user skills` (`apps/backend/tests/portable-inputs-shared-skills.test.ts`)
+timed out at 5009.67 ms in the four-worker backend aggregate of `mise run test`,
+at a load average of about 31 measured just after the run. The unchanged
+owning file passed alone in 2.2 s:
+
+```sh
+mise run test:logged -- --name linked-skill -- mise exec -- bun --cwd=apps/backend test ./tests/portable-inputs-shared-skills.test.ts --parallel=1
+```
+
+The same run also failed case
+[9834](../environments-and-containers/9834-container-status-excludes-aggregate-timeout.md).

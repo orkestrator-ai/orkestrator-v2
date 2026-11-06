@@ -31,7 +31,7 @@ Analysed 2026-11-03 against main at `7b48c23fb`.
 
 **Problem.** Until the networks are removed, no new Docker fixture or container environment can be created on beelink without an explicit subnet.
 
-**Context.** `mise run disk:report -- --fix probe-networks` removes unattached probe networks older than a day, whatever their owner (0241 task 5). Running it is the user's call, as it removes resources other runs created.
+**Context.** `mise run disk:report -- --fix probe-networks` removes unattached probe networks older than a day, whatever their owner (rules in [disk-usage.md](../../development/disk-usage.md); its first real run is [0241](0241-leaked-reach-probe-networks.md) task 1, on omarchy-hp). Running it is the user's call, as it removes resources other runs created.
 
 **Investigation.** Not run. For task 5 of 2922 the fixture was started with a PATH shim, kept outside the repository, that gave the profile's own networks explicit `10.229.x.0/24` subnets. With that subnet the restricted container's egress gateway failed to apply its network policy (cause not investigated), so a full-network fixture was used.
 

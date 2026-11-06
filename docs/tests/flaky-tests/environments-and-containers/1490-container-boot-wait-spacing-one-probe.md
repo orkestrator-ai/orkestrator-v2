@@ -1,7 +1,7 @@
 # A probe that comes back early is spaced, one probe in the budget (apps/backend/tests/container-readiness.test.ts)
 
 - **ID:** 1490
-- **Status:** open
+- **Status:** resolved
 - **Test:** `bounded in-container boot wait > a probe that comes back early without a final state is spaced, not repeated at once`
 - **Date observed:** 2026-10-31
 - **Original command:** `mise run test`
@@ -94,3 +94,17 @@ its readiness implementation was edited. This is another observation of the
 existing intermittent case; no assertion, deadline or skip changed.
 
 Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.obbBHe/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Resolved — 2026-11-05
+
+- **Root cause:** the test needed two fake `docker` shell spawns to fit in a
+  real 450 ms budget. On a loaded host the first spawn used the whole budget,
+  so the wait timed out after one probe. The readiness implementation was not
+  at fault and did not change.
+- **Fix:** `314782621`. The deadline holds off, through the wait's own `now`
+  option, until a second probe has run, and the probe count is bounded by the
+  time the wait actually took (`ceil(elapsed / pollMs) + 1`).
+- **Still catches the bug:** with the production pause removed, the test failed
+  with 69 probes against a limit of 6.
+- **Stress verification:** three rounds of 24 concurrent copies of this test on
+  mbp3. The previous test failed 61 of 72 runs; the repaired test failed 0 of 72.

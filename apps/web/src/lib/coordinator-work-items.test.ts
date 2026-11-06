@@ -1239,6 +1239,54 @@ describe("what a worker row says about its request", () => {
     expect(item).toMatchObject({ summary: "Now add tests", agent: "claude", model: "opus" });
   });
 
+  test("a follow-up keeps the launch's override, even one that named no model", () => {
+    const launched = {
+      ...delegated("worker-1", "completed", {
+        request: { summary: "Build it", agent: "claude", reasoning: "max", source: "requested" },
+      }),
+      id: "launch",
+    };
+    const followUp = {
+      ...delegated("worker-1", "running", {
+        requestedAt: at(-60_000),
+        request: { summary: "Now add tests", agent: "claude" },
+      }),
+      id: "follow-up",
+    };
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [launched, followUp],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    );
+    expect(item?.overridden).toBe(true);
+  });
+
+  test("another tab's override does not mark a row whose latest tab used the default", () => {
+    const old = {
+      ...delegated("worker-1", "completed", {
+        workerTabId: "old",
+        request: { agent: "claude", model: "opus", source: "requested" },
+      }),
+      id: "old",
+    };
+    const next = {
+      ...delegated("worker-1", "running", {
+        requestedAt: at(-60_000),
+        workerTabId: "new",
+        request: { agent: "claude", source: "default" },
+      }),
+      id: "new",
+    };
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [old, next],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    );
+    expect(item?.overridden).toBeUndefined();
+  });
+
   test.each([null, undefined])(
     "a newer Codex job never inherits another tab's Claude model (%s)",
     (model) => {

@@ -260,7 +260,7 @@ or a person.
 - Codex answers every server request (`app-server/server-request-router.ts`):
   - exec-policy and network-policy amendments are never offered or sent
     (`app-server/approvals.ts`; removed on 2026-10-27 by
-    [0160](0160-codex-saved-rules-list-and-revoke.md), because the rule each
+    0160, because the rule each
     saves cannot be listed or revoked);
   - `serverRequest/resolved` withdraws a parked request (`event-reducer.ts`);
   - dynamic `item/tool/call` is answered as a failure, with a transcript
@@ -398,7 +398,7 @@ or a person.
    saved rule. Orkestrator cannot list or revoke those, so the read and
    revoke surface (`NativeAgentPermissionRule`, the `permission-rules`
    routes, `listPermissionRules?` / `removePermissionRule?`) moved to
-   [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
+   `0160-codex-saved-rules-list-and-revoke.md`,
    which dropped the amendment options instead (2026-10-27): no Orkestrator
    approval saves a rule now.
 2. **Grok approval kind.** Done 2026-10-22. The bridge derives the kind from
@@ -884,7 +884,7 @@ All answered on 2026-10-25; the reasoning is in the decisions below.
   a session, as Cursor refuses `deny`, rather than run it?~~ No (decision 5).
 - ~~Should Orkestrator expose "always allow" at all, given there is no revoke
   UI yet?~~ Not for Claude (decision 1). Codex's amendment options were
-  removed by [0160](0160-codex-saved-rules-list-and-revoke.md) on
+  removed by 0160 on
   2026-10-27.
 - ~~`previewFormat`: plain or html?~~ `markdown`, shown verbatim (decision 2).
 - ~~Claude MCP OAuth: is the parked `mcp-url` card the intended route for
@@ -1029,7 +1029,7 @@ Decisions made on 2026-10-25 while working through the file.
 
 ## Related
 
-- [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
+- `0160-codex-saved-rules-list-and-revoke.md` (deleted 2026-11-06),
   [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md)
   (split out on 2026-10-25).
 - [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing):

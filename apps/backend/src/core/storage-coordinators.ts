@@ -1465,6 +1465,7 @@ export type CoordinatorsStorage = Pick<
   | "getCoordinatorWorkspaceById"
   | "listCoordinatorWorkspaces"
   | "listCoordinatorWorkflowAssociations"
+  | "listAllCoordinatorWorkflowAssociations"
   | "getCoordinatorReconciliationState"
   | "mutateCoordinatorWorkspaceWithComposeDrafts"
   | "mutateCoordinatorWorkspace"

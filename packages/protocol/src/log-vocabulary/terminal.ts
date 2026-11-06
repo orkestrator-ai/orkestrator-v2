@@ -7,6 +7,8 @@ export const TERMINAL_LOG_AREAS = defineLogAreas({
     events: {
       "input.undelivered": "A keystroke did not reach a shell: `no-session` or `not-delivered`.",
       "orphan.reaped": "A terminal no tab references was closed.",
+      "container-shell.close-failed":
+        "Ending a closed container terminal's in-container shell failed; the next shell start sweeps its record.",
       "agent-completion.notify-failed": "A terminal agent's completion could not be reported.",
       "activity.record-failed": "Terminal environment activity could not be recorded.",
       "pty.exit-listener-failed": "A terminal exit listener threw; the others still run.",

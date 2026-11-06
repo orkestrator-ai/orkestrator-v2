@@ -3,8 +3,10 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_ROOT_PATH,
   CONTAINER_ROOT_USER_ARGS,
+  CONTAINER_TERMINAL_CLOSE_SCRIPT,
   containerTerminalUserArgs,
   isContainerRootUser,
 } from "../../apps/backend/src/core/container-scripts";
@@ -64,10 +66,13 @@ describe("root execs", () => {
     expect(containerTerminalUserArgs(undefined)).toEqual([]);
   });
 
-  test("terminal launches pass their user through the root-aware helper", () => {
+  test("terminal launches and closes pass their user through the root-aware helper", () => {
     const terminal = read("apps/backend/src/core/commands-registry-terminal.ts");
     expect(terminal).not.toContain('dockerArgs.push("--user", config.user)');
-    expect(terminal.match(/containerTerminalUserArgs\(config\.user\)/g)).toHaveLength(2);
+    // attach_terminal and start_terminal_session share spawnContainerTerminal.
+    expect(terminal.match(/containerTerminalUserArgs\(config\.user\)/g)).toHaveLength(1);
+    const close = read("apps/backend/src/core/container-terminal-shell.ts");
+    expect(close.match(/containerTerminalUserArgs\(shell\.user\)/g)).toHaveLength(1);
   });
 });
 
@@ -204,6 +209,10 @@ describe("image", () => {
     expect(read("docker/tests/final-image-smoke.sh")).toContain("root-boundary-smoke.sh");
     const smoke = read("docker/tests/root-boundary-smoke.sh");
     expect(smoke).toContain(`ROOT_PATH=${CONTAINER_ROOT_PATH}`);
-    expect(smoke).toContain("orkestrator_source_runtime_env 2>/dev/null || true\nexec zsh -l");
+    // The smoke runs the backend's exact root terminal launch and close.
+    expect(smoke.match(/^TERMINAL_COMMAND='([^']*)'$/m)?.[1]).toBe(
+      CONTAINER_INTERACTIVE_SHELL_COMMAND,
+    );
+    expect(smoke.match(/^CLOSE_SCRIPT='([^']*)'$/m)?.[1]).toBe(CONTAINER_TERMINAL_CLOSE_SCRIPT);
   });
 });

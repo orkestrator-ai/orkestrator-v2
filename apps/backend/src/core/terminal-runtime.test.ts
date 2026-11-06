@@ -7,11 +7,14 @@ import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, type StorageService } from "./storage.js";
+import type { ContainerTerminalShell } from "./container-terminal-shell.js";
+import type { PtyProcess } from "./pty.js";
 import {
   TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS,
   TERMINAL_ACTIVITY_SETTLE_MS,
   TERMINAL_COMPLETION_NOTIFY_RETRY_DELAYS_MS,
   TERMINAL_OUTPUT_RETENTION_MS,
+  type TerminalRuntime,
 } from "./terminal-runtime.js";
 
 const runtimes: BackendRuntime[] = [];
@@ -231,5 +234,104 @@ describe("terminal runtime shutdown", () => {
       clock.assertDrained();
     }
     expect(owner.notifyAgentTurnCompleted).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("container terminal shells", () => {
+  const shell = { containerId: "container-1", user: "node", token: "token-1" };
+
+  function fakePty(): PtyProcess {
+    return { kill: mock(() => undefined) } as unknown as PtyProcess;
+  }
+
+  function closingRuntime() {
+    const closes: Array<{ shell: ContainerTerminalShell; signal: AbortSignal }> = [];
+    const settle = Promise.withResolvers<void>();
+    const closeContainerShell = mock((closed: ContainerTerminalShell, signal: AbortSignal) => {
+      closes.push({ shell: closed, signal });
+      return settle.promise;
+    });
+    const runtime = new BackendRuntime({
+      emit: mock(() => undefined),
+      terminals: { closeContainerShell },
+    });
+    runtimes.push(runtime);
+    return { terminals: runtime.terminals, closes, closeContainerShell, settle };
+  }
+
+  function startContainerShell(terminals: TerminalRuntime, id: string): PtyProcess {
+    terminals.rememberSession(id, {
+      kind: "container",
+      containerId: "container-1",
+      cols: 80,
+      rows: 24,
+    });
+    const pty = fakePty();
+    terminals.registerProcess(id, pty);
+    terminals.recordContainerShell(id, shell);
+    return pty;
+  }
+
+  test("an explicit close ends the in-container shell once, after the PTY", async () => {
+    const { terminals, closes, closeContainerShell } = closingRuntime();
+    const pty = startContainerShell(terminals, "container-1:a");
+
+    terminals.explicitlyCloseSession("container-1:a");
+    // The PTY's own exit arrives later and cleans up again.
+    terminals.cleanupSession("container-1:a");
+    await settlePromises();
+
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(closeContainerShell).toHaveBeenCalledTimes(1);
+    expect(closes[0]?.shell).toEqual(shell);
+    expect(terminals.containerShell("container-1:a")).toBeUndefined();
+  });
+
+  test("a PTY that exits on its own also ends what its shell left in the container", async () => {
+    const { terminals, closeContainerShell } = closingRuntime();
+    startContainerShell(terminals, "container-1:b");
+
+    terminals.cleanupSession("container-1:b");
+    await settlePromises();
+
+    expect(closeContainerShell).toHaveBeenCalledTimes(1);
+  });
+
+  test("sessions with no recorded shell close nothing in a container", async () => {
+    const { terminals, closeContainerShell } = closingRuntime();
+    terminals.rememberSession("container-1:c", {
+      kind: "container",
+      containerId: "container-1",
+      cols: 80,
+      rows: 24,
+    });
+    terminals.explicitlyCloseSession("container-1:c");
+    terminals.explicitlyCloseSession("local");
+    await settlePromises();
+
+    expect(closeContainerShell).not.toHaveBeenCalled();
+  });
+
+  test("shutdown aborts a close still in flight", async () => {
+    const { terminals, closes, settle } = closingRuntime();
+    startContainerShell(terminals, "container-1:d");
+    terminals.explicitlyCloseSession("container-1:d");
+    await settlePromises();
+    expect(closes[0]?.signal.aborted).toBe(false);
+
+    terminals.shutdown();
+
+    expect(closes[0]?.signal.aborted).toBe(true);
+    settle.resolve();
+  });
+
+  test("without an injected closer a recorded shell is only forgotten", () => {
+    const runtime = new BackendRuntime({ emit: mock(() => undefined) });
+    runtimes.push(runtime);
+    startContainerShell(runtime.terminals, "container-1:e");
+
+    runtime.terminals.explicitlyCloseSession("container-1:e");
+
+    expect(runtime.terminals.containerShell("container-1:e")).toBeUndefined();
   });
 });

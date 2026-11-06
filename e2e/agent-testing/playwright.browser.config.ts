@@ -47,6 +47,7 @@ export default defineConfig({
     "changes-remote-freshness.spec.ts",
     "container-bridge-logs.spec.ts",
     "container-root-terminal.spec.ts",
+    "container-terminal-close.spec.ts",
     "container-approval-stop.spec.ts",
     "container-claude-terminal-signal.spec.ts",
     "container-fake-engines.spec.ts",

@@ -104,6 +104,7 @@ export function HostUpdateBanner() {
         id: HOST_UPDATE_TOAST_ID,
         description: text,
         duration: 15_000,
+        action: { label: "Details", onClick: requestCurrentMachineUpdates },
       });
     } else {
       toast.info("Host update stopped", {

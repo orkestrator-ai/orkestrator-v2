@@ -9,6 +9,8 @@ export const UPDATER_LOG_AREAS = defineLogAreas({
       "check.failed": "An update check failed; the next periodic check retries.",
       "download.failed": "Downloading or staging an update failed.",
       downloaded: "An update finished downloading.",
+      "release.not-ready":
+        "The newest release has no update files for this platform yet, so the check uses the one before it.",
       "library.message":
         "One line from electron-updater at its own level. Its debug output, which includes the differential download plan, is off by default.",
       "remote.check-failed": "A check a remote client requested failed.",

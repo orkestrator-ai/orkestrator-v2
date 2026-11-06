@@ -8,7 +8,11 @@
  * and a new fact must be supplied by both or the code does not compile.
  * `environment-row-model.parity.test.ts` checks the two adapters agree.
  */
-import { NODE_DELETE_FAILURE, type AgentActivity } from "@orkestrator/protocol/node-summaries";
+import {
+  NODE_DELETE_FAILURE,
+  type AgentActivity,
+  type EnvironmentDeletionStep,
+} from "@orkestrator/protocol/node-summaries";
 import type { PrState } from "@orkestrator/protocol/pr-monitor";
 import type { EnvironmentTooltipMachine } from "./EnvironmentTooltipBody";
 import { environmentNameSignal, type EnvironmentNameSignal } from "@/lib/environment-name-signal";
@@ -38,6 +42,8 @@ export interface EnvironmentRowFacts {
   deleteFailure: string | null;
   /** When the running delete started, if known. */
   deletingSince: string | null;
+  /** Which step the running delete is on, if its machine reports one. */
+  deletingStep: EnvironmentDeletionStep | null;
   /** `deleting` is left over from a failed merge cleanup: a bulk delete can retry it. */
   deletionRetryable: boolean;
   /** A build pipeline names this environment: the row carries the pipe. */

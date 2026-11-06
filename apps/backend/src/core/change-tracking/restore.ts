@@ -31,6 +31,7 @@ import {
 import { validCapturePath } from "./confined-read.js";
 import type { ChangeLedger } from "./change-ledger.js";
 import type { ObjectStore } from "./object-store.js";
+import type { ChangeTrackingPolicy } from "./policy-registry.js";
 import { compareManifests } from "./snapshot-diff.js";
 import type { WorktreeRegistry, WorktreeChangeOwner } from "./worktree-owner.js";
 
@@ -198,6 +199,27 @@ export async function containerConditionalWrite(
   );
 }
 
+/**
+ * How long a restore preview may spend checking its destinations. The
+ * preflight reads and hashes each planned path one at a time, so a fixed
+ * deadline refused exactly the bulk restores a user most wants: on a busy
+ * host 10,000 files took up to 15 s and 20,000 up to 35 s (todo 4960). The
+ * deadline grows with the plan and stays at least the floor, up to the
+ * ceiling.
+ */
+export function restorePreflightDeadlineMs(
+  paths: number,
+  policy: Pick<
+    ChangeTrackingPolicy,
+    "restorePreflightDeadlineMs" | "restorePreflightPerPathMs" | "restorePreflightMaxDeadlineMs"
+  >,
+): number {
+  return Math.min(
+    policy.restorePreflightMaxDeadlineMs,
+    Math.max(policy.restorePreflightDeadlineMs, paths * policy.restorePreflightPerPathMs),
+  );
+}
+
 function matchesAction(action: RestoreAction, record: ReadRecord | undefined): boolean {
   if (!record) return false;
   if (record.kind === "missing") return action.expectedOid === null && action.expectedMode == null;
@@ -217,6 +239,8 @@ export class ChangeRestoreService {
       registry: WorktreeRegistry;
       enabled: () => boolean;
       tokenTtlMs: () => number;
+      /** Destination preflight deadline for a plan of this many paths. */
+      preflightDeadlineMs: (paths: number) => number;
       onApplied?: (worktreeId: string, environmentId: string | null) => void;
     },
   ) {}
@@ -357,7 +381,7 @@ export class ChangeRestoreService {
     }
     // Preflight the destination against the measured after-state.
     const described = new Map<string, ReadRecord>();
-    const signal = AbortSignal.timeout(10_000);
+    const signal = AbortSignal.timeout(this.deps.preflightDeadlineMs(actions.length));
     try {
       const batchSize = owner.executor.kind === "host-worker" ? 1 : 5_000;
       for (let index = 0; index < actions.length; index += batchSize) {

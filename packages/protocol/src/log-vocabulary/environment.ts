@@ -61,6 +61,8 @@ export const ENVIRONMENT_LOG_AREAS = defineLogAreas({
       "handoff-sweep.failed": "Sweeping transferred transcripts no tab references failed.",
       "delete.terminals-survived":
         "Terminal process trees outlived termination, so the deletion stops.",
+      "delete.step-deadline":
+        "A deletion step that runs child processes passed its deadline; they are stopped and the deletion fails once they have.",
       "delete.artifacts-left": "Graph run artifact directories were not removed.",
       "delete.worktrees-kept": "Graph runs kept branch worktrees.",
       "delete.step-failed":

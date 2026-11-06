@@ -63,6 +63,7 @@ import os from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
+  diagnoseProbe,
   dispatchProbeTurn,
   hasRunningSleep,
   invokeCommand,
@@ -73,6 +74,7 @@ import {
   scopePrefix,
   TRANSIENT_APPLY_STATES,
   type ProbeExpectation,
+  type ProbeInventoryRow,
   type ProbeVerdict,
 } from "./mcp-apply-live-support";
 
@@ -99,8 +101,8 @@ type Interaction = { id: string; sessionId: string; kind: string; state: string 
 type Projection = {
   sessionId?: string;
   turn: { phase: string; error?: string };
-  /** The session's live MCP inventory, when it reports one (names only are read). */
-  runtime?: { mcp?: Array<{ name: string }> };
+  /** The session's live MCP inventory, when it reports one (name, status and tool count only). */
+  runtime?: { mcp?: Array<{ name: string; status?: string; toolCount?: number }> };
   messages: Message[];
   interactions?: Interaction[];
 };
@@ -274,8 +276,19 @@ interface StepRecord {
     toolMentions?: number;
     interactions?: string[];
     toolRows?: string[];
+    diagnosis?: ReturnType<typeof diagnoseProbe>;
+    inventory?: ProbeInventoryRow[];
+    otherServers?: number;
   }>;
   note?: string;
+}
+
+/** A failed probe's reason, with what the session's inventory says about it. */
+function probeFailure(outcome: StepRecord["probes"][number]): string {
+  const reason = outcome.verdict?.reason ?? "failed";
+  const diagnosis = outcome.diagnosis;
+  if (!diagnosis) return reason;
+  return `${reason} [${diagnosis.diagnosis}${diagnosis.detail ? `: ${diagnosis.detail}` : ""}]`;
 }
 
 interface ScopeRecord {
@@ -650,24 +663,47 @@ test.describe("live MCP apply", () => {
           // Give a slow server a moment to flush its log line.
           await new Promise((resolve) => setTimeout(resolve, 500));
           const rows = toolRows(outcome.fresh);
-          // Read only when a substitution needs judging: the inventory is
-          // the runtime's own word that a probed name is gone.
+          const judge = (inventory?: readonly ProbeInventoryRow[]) =>
+            judgeProbe({
+              events: events(),
+              server,
+              nonce: value,
+              reply: outcome.reply,
+              expect: expectation,
+              toolRows: rows,
+              turnError: outcome.error,
+              ...(inventory ? { inventory: inventory.map((row) => row.name) } : {}),
+            });
+          let verdict = judge();
+          // The inventory is the runtime's own word on which servers it
+          // offered. It is read for every failed probe, so a probe that should
+          // reach a server and logged no call says whether the server was
+          // never offered or the model did not call it (task 5), and for a
+          // substitution on a probe that must fail, where it can prove the
+          // probed name gone.
           const inventory =
-            !expectation.reach && rows.length > 0
+            !verdict.passed || (!expectation.reach && rows.length > 0)
               ? await projection(tab)
-                  .then((current) => current?.runtime?.mcp?.map((server) => server.name))
+                  .then((current) =>
+                    current?.runtime?.mcp?.map(({ name, status, toolCount }) => ({
+                      name,
+                      ...(status ? { status } : {}),
+                      ...(toolCount !== undefined ? { toolCount } : {}),
+                    })),
+                  )
                   .catch(() => undefined)
               : undefined;
-          const verdict = judgeProbe({
-            events: events(),
-            server,
-            nonce: value,
-            reply: outcome.reply,
-            expect: expectation,
-            toolRows: rows,
-            turnError: outcome.error,
-            ...(inventory ? { inventory } : {}),
-          });
+          if (inventory) verdict = judge(inventory);
+          const diagnosis = verdict.passed
+            ? undefined
+            : diagnoseProbe({
+                server,
+                expect: expectation,
+                verdict,
+                toolRows: rows,
+                inventory,
+                turnError: outcome.error,
+              });
           console.log(
             `[mcp-qualification] ${platform}: probe ${verdict.passed ? "passed" : "failed"}`,
           );
@@ -687,8 +723,14 @@ test.describe("live MCP apply", () => {
             // arguments or output), so a call that never reached a server
             // shows whether it was refused, failed or never attempted.
             ...(rows.length > 0 ? { toolRows: rows } : {}),
+            ...(diagnosis ? { diagnosis } : {}),
+            // Probe servers only, plus how many other servers the session
+            // listed, so a missing name is not mistaken for a missing list.
             ...(inventory
-              ? { inventory: inventory.filter((name) => PROBE_SERVER_NAME.test(name)) }
+              ? {
+                  inventory: inventory.filter((row) => PROBE_SERVER_NAME.test(row.name)),
+                  otherServers: inventory.filter((row) => !PROBE_SERVER_NAME.test(row.name)).length,
+                }
               : {}),
           };
           return record;
@@ -944,7 +986,7 @@ test.describe("live MCP apply", () => {
             record.probes.push(outcome);
             if (!outcome.verdict.passed) {
               summary.failures.push(
-                `${scope.scope} ${name}: tab ${outcome.tab} ${entry.server} expected ${outcome.expect}: ${outcome.verdict.reason ?? "failed"}`,
+                `${scope.scope} ${name}: tab ${outcome.tab} ${entry.server} expected ${outcome.expect}: ${probeFailure(outcome)}`,
               );
             }
           }
@@ -1101,9 +1143,7 @@ test.describe("live MCP apply", () => {
             const outcome = await probe(tabA, beta, { reach: true, tag: "v2", label: alpha });
             record.probes.push(outcome);
             if (!outcome.verdict.passed) {
-              summary.failures.push(
-                `${scope.scope} restart and restore: ${outcome.verdict.reason ?? "failed"}`,
-              );
+              summary.failures.push(`${scope.scope} restart and restore: ${probeFailure(outcome)}`);
             }
           }
 
@@ -1198,9 +1238,7 @@ test.describe("live MCP apply", () => {
           if (!outcome.verdict.passed) {
             loaded.note =
               "the new CLI did not load the SSE entry, so the stale-server hook could not be exercised";
-            summary.failures.push(
-              `claude-sse initial load: ${outcome.verdict.reason ?? loaded.note}`,
-            );
+            summary.failures.push(`claude-sse initial load: ${probeFailure(outcome)}`);
           } else {
             const entry = await findEntry(project!.sourceId, server);
             await step(

@@ -28,14 +28,14 @@ governs, marked "Decided".
 
 ### Tasks
 
-1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
+1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (ST-13 and BG-15's baselines taken 2026-11-06, ST-13 also live on `dev:test` profiles; BG-15's live run is [7211](7211-tmux-mail-inject-live-evidence.md)).
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: done 2026-11-05, with what is left in to-dos (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9's rest measured 2026-11-05 and not built, thresholds in [6760](6760-agent-mail-store-split-thresholds.md); the prompt-queue reads a steer made were 5100, done 2026-11-05; live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1). E12 (WEB-2's third fix, WEB-6 and WEB-14) was checked back on 2026-11-05 and its batch file deleted: all three were built, and its two-tab Profiler run found no difference in commits; see the [closing check of E12](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e12-renderer-store).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 measured in E10 on a `dev:test` profile (2026-11-06, a real Claude bridge streaming against a loopback model, no billed turn) and with a fake bridge, and not built: on the real stack the bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read; the figures and decisions are [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md), and the outcome is the [closing check of E10](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e10-conditional-reads-and-deltas)).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; TX-1 measured in E10: on a `dev:test` profile every streaming answer was a delta for one viewer and for each of two, and with a fake bridge the ring disabled gave 46 of 47 snapshots, 1.86–6.63 MB per viewer in 10 s; see [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1; TX-8, TX-15 and TX-18 done 2026-11-05 in E9, with fixture figures and live evidence in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md); TX-3, TX-7, TX-9, TX-11 to TX-14 and TX-16 done 2026-11-05 in E11, focused tests only, see the [closing check of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e11-projection-hashing); TX-17 profiled and closed without a change, and E11's savings measured with a provider fake, 2026-11-05 in [6260](../transcripts-and-observation/6260-projection-hashing-measurements.md), figures in the [measurement of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#measurement-of-e11-to-do-6260)).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: done (BR-1 and BR-3 done, tests for BR-1 added 2026-11-05 by E20; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings done 2026-11-05).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-17 done 2026-11-04 on Linux, a proved ignored `node_modules` taking no watches (4,672 to 170 on `watch-nm-4k`) and on macOS its events dropped on arrival; what is left of ST-16 and ST-17 is [5060](5060-worktree-watch-leftovers.md), which also has the outcome of every task in batch E7; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-20 done 2026-11-05, a second hourly retention pass over 400 snapshots of 2,000 files from 565 ms to 87 ms and a put during a sweep from about 400 ms to 1–2 ms, live sizing in [5361](5361-retention-pass-on-a-large-real-store.md); ST-19 done 2026-11-05, `activeTurns()` seeks the lifecycle index, and the ledger retention that decides what becomes of the rows is built, live sizing in [5821](5821-ledger-retention-live-evidence.md); ST-21 done 2026-11-05 by batch E-0580, its leftovers in [5800](5800-file-read-streaming-leftovers.md); ST-13 open).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: done (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-17 done 2026-11-04 on Linux, a proved ignored `node_modules` taking no watches (4,672 to 170 on `watch-nm-4k`) and on macOS its events dropped on arrival; what is left of ST-16 and ST-17 is [5060](5060-worktree-watch-leftovers.md), which also has the outcome of every task in batch E7; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-20 done 2026-11-05, a second hourly retention pass over 400 snapshots of 2,000 files from 565 ms to 87 ms and a put during a sweep from about 400 ms to 1–2 ms, live sizing in [5361](5361-retention-pass-on-a-large-real-store.md); ST-19 done 2026-11-05, `activeTurns()` seeks the lifecycle index, and the ledger retention that decides what becomes of the rows is built, live sizing in [5821](5821-ledger-retention-live-evidence.md); ST-21 done 2026-11-05 by batch E-0580, its leftovers in [5800](5800-file-read-streaming-leftovers.md); ST-13 done 2026-11-06, the snapshot check's free-page release moved to a child process, its stall from 140 ms p50 (up to 2.4 s) to 6–7 ms on a 512 MiB database, and the deletion scrub and pre-migration copy left in-process in [7210](7210-storage-work-left-on-the-event-loop.md)).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: done (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 done 2026-11-06, a mail delivery to an idle tmux tab from 9 keyed reads to 7 with the fresh liveness probe kept, live evidence in [7211](7211-tmux-mail-inject-live-evidence.md)).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: done (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md); GW-15 done 2026-11-05, a revalidation by date alone is [6160](6160-static-if-modified-since-compression.md); GW-10 declined 2026-11-05 on first-load numbers, with the rewriter unchanged).
@@ -62,6 +62,24 @@ governs, marked "Decided".
   - **Measure only from now on.**
     - Pros: half the work.
     - Cons: the first batch is never shown to have helped.
+
+#### Baselines for ST-13 and BG-15 (2026-11-06)
+
+Taken with the changes of tasks 7 (ST-13) and 8 (BG-15), as decided above: the same measurement on `main` at `c1724ab74` and on branch `storage-mail-maintenance-3b173b35c92e-r1`. The bench figures are in those tasks. Live, on isolated `dev:test` profiles (`--fixture --no-agent-credentials --agent-platforms codex`, macOS, the shared build host), one profile per side and run:
+
+1. Start the profile, stop it, and leave 256 MiB of free pages in its own `orkestrator.sqlite` (`output/benchmarks/st13/seed-free-pages.ts`, not committed): either one table dropped, or a kept table with every other row deleted ("interleaved"), so a release has to move pages rather than truncate.
+2. Start it again. The first snapshot check, with its upkeep, runs 600 s after the backend starts.
+3. Take a diagnostics bundle (`orkestrator --profile <name> diagnostics export`) before and after the check, for the backend's own event-loop sampler (500 ms ticks) and the database figures, and fetch the gateway's login page (unauthenticated, served by the backend's event loop) every 20 ms for 45 s before the check and 180 s from 5 s before it.
+4. `dev:stop` and `dev:reset` the profile. Base and branch ran one after the other, except the interleaved pair, which ran concurrently with checks six minutes apart.
+
+| Run | Gateway latency during the check: p50 / p99 / max | Requests over 50 / 100 ms | Free pages before → after | File after the check |
+| --- | --- | --- | --- | --- |
+| Base, interleaved | 0.6 / 17.5 / 686.2 ms | 9 / 5 | 32,767 → 0 | 136 MB |
+| Branch, interleaved | 0.7 / 14.9 / 37.9 ms | 0 / 0 | 32,767 → 0 | 136 MB |
+| Base, dropped table | 0.3 / 10.7 / 41.7 ms | 0 / 0 | 65,696 → 0 | 270 MB |
+| Branch, dropped table | 0.7 / 14.3 / 33.1 ms | 0 / 0 | 65,696 → 0 | 0.8 MB |
+
+Before the checks the same probe saw at most 12–30 ms on every profile. With the free pages at the end of the file (a dropped table) the old in-process release cost the loop little, since it had nothing to move, but left the file at 270 MB until a later checkpoint; the child's per-step checkpoint returned the space at once. With interleaved free pages the old release held the backend for up to 686 ms; the child kept every request under 38 ms. The backend's own sampler, too coarse for these stalls, counted at most one more tick 100 ms or more late across each check window on either side. An earlier pair without the gateway probe (dropped table) agreed: free pages to 0, file 270 MB → 0.8 MB on the branch, unchanged on base. BG-15 has no live baseline: a claude-tmux tab needs a signed-in Claude CLI and a delivered message starts a turn, which this round could not do ([7211](7211-tmux-mail-inject-live-evidence.md)).
 
 ### 2. Storage keyed reads and writes
 
@@ -723,6 +741,21 @@ Earlier, re-checked on 2026-11-02 against `main` at `38d55ee1`: ST-1, ST-2 and S
 
 A micro-benchmark over 10,000 small files two directories deep (5 rounds, median): the old `confinedRead` 621 ms, the new one 275 ms (so `dlopen` cost about 35 µs per file), and the stamp-matched skip 44 ms, which includes the whole ancestor walk. Caching directory handles could therefore save at most about 2 µs per file. What remains of a warm capture over many small files is ST-3: `ObjectStore.reuse` (`utimes` under the store lock) and the closure `has`, about 230 ms each per 10,000 files in one profiling run.
 
+Done 2026-11-06, ST-13 (branch `storage-mail-maintenance-3b173b35c92e-r1`, against `main` at `c1724ab74`). The report's two calls had already left the loop: the hourly `VACUUM INTO` and its `quick_check` run in a child process since #1363 (`copyDatabaseInChildProcess`), and a forced hourly or ledger check held the loop 4–25 ms. What still blocked it was the snapshot check's upkeep, every five minutes: `incremental_vacuum` in 4 MiB steps on the backend's connection, each step paying a WAL commit and, every step past 1,000 pages, the automatic checkpoint's copy and fsync. `runDatabaseUpkeep` now runs `PRAGMA optimize` on the backend's connection (its queries are what it reads) and, only when the free list is not empty (`releasableFreePages`), starts `releaseFreePagesInChildProcess` under the copy's supervisor (`runSqliteHelperInChildProcess`, shared with the copy): its own connection with the backend's `synchronous = FULL`, `secure_delete` and `journal_size_limit`, 256 pages (1 MiB) per transaction, a passive checkpoint of its own frames after each, 5 ms between steps, at most 1 GiB a check, and it stops on a busy database. The pre-migration copy and the deletion scrub's release stay in-process; they are [7210](7210-storage-work-left-on-the-event-loop.md).
+
+`mise exec -- bun apps/backend/scripts/storage-maintenance-stall.ts --main-mb 512 --ledger-mb 256 --runs 4`, two interleaved rounds of `c1724ab74` and this code (eight runs each), macOS, Bun 1.4.4, load average 12 to 17 on the shared build host. Stall is the longest lateness of a 2 ms timer chain during the step:
+
+| Step | Before: stall p50 / max | After: stall p50 / max | Wall p50 before / after |
+| --- | --- | --- | --- |
+| Upkeep (after 1/8 of the rows were deleted) | 140 / 2,356 ms | 6 / 7 ms | 1.5 / 3.0 s |
+| `PRAGMA optimize` alone | 13 / 39 ms | 11 / 44 ms | 12 / 10 ms |
+| Hourly check, forced due (copy in its child) | 4 / 10 ms | 4 / 25 ms | 1.7 / 2.0 s |
+| Ledger check, forced due | 7 / 13 ms | 7 / 13 ms | 1.8 / 1.7 s |
+| Pre-migration copy (in-process, unchanged) | 1,522 / 2,868 ms | 1,891 / 2,018 ms | 1.5 / 1.9 s |
+| Deletion scrub (in-process, unchanged) | 173 / 189 ms | 169 / 319 ms | 172 / 171 ms |
+
+The release takes longer in total, off the loop, because of the pause and the per-step checkpoint. With a writer committing a small row every 20 ms on the backend's connection during the release (a throwaway script, 256 MiB database with 64 MiB free, two runs each), the longest stall was 165–187 ms with 4 MiB steps in-process, 23–35 ms with 256 KiB steps in-process, and 2–7 ms with the child at 4 MiB steps; one child run at 1 MiB steps showed one 314 ms stall and the other 5 ms, the backend's writer waiting behind a step. A first attempt kept the release in-process with time-fitted steps and a passive checkpoint after each; it measured worse (upkeep stall p50 67 to 178 ms, up to 2,014 ms), because each checkpoint pays an fsync, and was dropped. Tests: `storage-backups-ledger.test.ts` (no child when nothing is free, never `releaseFreePages` on the backend's connection, the budget in steps, giving way to a writer without touching the backend's timeout, a failed child logged without its message) and the supervisor test in `storage-backups.test.ts`.
+
 **Decisions.**
 
 - **First step?** Decided 2026-11-01, done 2026-11-02.
@@ -950,6 +983,17 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
     - Pros: no fixture changes.
     - Cons: splitting NUL-delimited output in shell is exactly what the framing exists to avoid.
 
+- **ST-13: what still holds the loop, and where does it go?** Done 2026-11-06.
+  - **The upkeep's free-page release in a child under the copy's supervisor, `optimize` kept in-process (recommended).**
+    - Pros: upkeep's stall from 140 ms p50 (up to 2.4 s) to 6–7 ms; reuses a supervisor that already handles a dead backend, a lost exit and a timeout; the checkpoint's fsync moves with it.
+    - Cons: a process every five minutes while free pages remain; a backend writer can wait behind one 1 MiB step; the release takes longer in total.
+  - **Keep the release in-process with smaller, time-fitted steps and a checkpoint per step.**
+    - Pros: no process.
+    - Cons: measured worse; each checkpoint pays an fsync on the loop.
+  - **A Bun `Worker` with its own connection, as the report suggested.**
+    - Pros: no process start.
+    - Cons: a second supervision model beside the copy's; a worker shares the backend's process, so it is not isolated the way the copy's child is.
+
 ### 8. tmux and container polling
 
 **Problem.** Each tmux tab still runs up to four separate execs per tick, and container lifecycle changes do not stop the loops that depend on them.
@@ -977,7 +1021,17 @@ Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from
 
 Done 2026-11-04, BG-14: a tab reopen reads one page from the transcript's tail (`readPage` in `tmux-transcript-reader.ts`, at most 512 KiB and 500 records, one `docker exec`) and the renderer pages earlier history in (`ClaudeTmuxChatTab.tsx`, `prependTranscriptPage` in `claudeTmuxStore.ts`). Task snapshots no longer need a replay: the poll tail's one pass records each call's snapshot (`TaskSnapshotHistory`). Through a fake `docker` on PATH (`apps/backend/scripts/tmux-reopen-read-size.ts`, workload "longest session"): 36,853,890 bytes in 2 execs before, 524,306 bytes in 1 exec after. Remaining live evidence: [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md).
 
-**Investigation.** Still open: BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
+Done 2026-11-06, BG-15 (branch `storage-mail-maintenance-3b173b35c92e-r1`, against `main` at `c1724ab74`). The mail injector hands the dispatch the presence its gate just read (`tmuxPresenceRead` in `agent-mail-service.ts`). When that is `idle`, `dispatchMailInject` skips the environment, queue and draft reads it made before the probe, because the gate made the same three reads moments earlier; without a presence (or with any other) it still makes them first. Everything task 10 relies on stays: the liveness probe is still fresh (`claude_tmux_status` with no reuse age), and the environment, queue and draft are read again after it (`mailInjectHold`, which now also re-checks the environment there, so a deletion requested between the gate and the dispatch holds the mail rather than reaching the boundary's refusal), then the queue boundary as before. `mise exec -- bun apps/backend/scripts/tmux-mail-inject-reads.ts --deliveries 2000`, the real drainer over a real `StorageService` with a fake tab, two rounds each of `c1724ab74` and this code:
+
+| Per delivery to an idle tab | Before | After |
+| --- | --- | --- |
+| Keyed reads (environment / queue / draft) | 9 (2 / 3 / 4) | 7 (2 / 2 / 3) |
+| `claude_tmux_status`: fresh / recent allowed | 1 / 1 | 1 / 1 |
+| Wall time, p50 / p95 | 0.15–0.16 / 0.35–0.55 ms | 0.14–0.16 / 0.34–0.45 ms |
+
+So the saving is two keyed reads per delivered message, as the analysis expected; the time is within noise. Tests: `prompt-queue-drainer.test.ts` (read counts with and without the presence, one fresh probe either way; a deletion or a queued prompt arriving after the gate still holds the mail) and `agent-mail-service-presence.test.ts` (the presence reaches the dispatch, and none is passed when the drainer has no gate). A delivery to a real claude-tmux tab is [7211](7211-tmux-mail-inject-live-evidence.md).
+
+**Investigation.** BG-15 is done (above). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
 **Decisions.**
 
@@ -995,13 +1049,16 @@ Done 2026-11-04, BG-14: a tab reopen reads one page from the transcript's tail (
   - **Resume from the client's last byte offset.**
     - Pros: small backend change.
     - Cons: the offset is lost with the tab's state, and the task list must still be rebuilt from the start of the file.
-- **BG-15: pass the presence snapshot into the mail inject?**
-  - **Leave it (recommended).**
-    - Pros: the repeat is three keyed reads and one deliberate fresh `has-session` per delivered message, not per tick; the fresh probe is what keeps mail from reaching a dead session (task 10).
-    - Cons: a few reads per delivery remain.
-  - **Pass the presence answer through.**
-    - Pros: saves those reads.
-    - Cons: dispatch would act on an answer up to 3 s old, which task 10 ruled out.
+- **BG-15: pass the presence snapshot into the mail inject?** Done 2026-11-06: the third option, which the analysis did not list.
+  - **Leave it.**
+    - Pros: the repeat is three keyed reads per delivered message, not per tick; no change.
+    - Cons: those reads remain.
+  - **Pass the presence answer through and act on it.**
+    - Pros: saves the reads and the probe.
+    - Cons: dispatch would act on a liveness answer up to 3 s old, which task 10 ruled out.
+  - **Pass it through only to skip the pre-probe reads, keeping the fresh probe and the reads after it (recommended).**
+    - Pros: two keyed reads fewer per delivery; the decision to type still rests on reads made after a fresh probe, so task 10's guarantee is unchanged; an unchecked caller keeps the old order.
+    - Cons: a small saving (7 instead of 9 keyed reads); the dispatch has one more optional argument.
 
 ### 9. PR monitor cost
 
@@ -2420,6 +2477,7 @@ browser and real-stack suites were not run.
 - WEB-19 timings in Chromium: answered 2026-11-05 by [E22's closing check](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e22-chat-rendering). With React's development build and a `<Profiler>` around a rich `MessageMarkdown`, the median per update at 30 KB was 27.1 ms for a full render and 5.5 ms for the live path (5 KB: 4.8 and 1.3 ms). Production React in Chromium was not measured.
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
 - GW-16 past loopback Chromium: the input-results subprotocol through the Tailscale Serve route, a command-node relay in a browser, WebKit and a mobile WebView. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
+- Task 7, ST-13: measured on macOS only, on a synthetic 512 MiB database and on `dev:test` profiles seeded with 256 MiB of free pages; a real store with free pages left by deletions (sizes in [5101](5101-store-size-and-write-rate-live.md)) and Linux were not run. Task 8, BG-15: a real claude-tmux tab is [7211](7211-tmux-mail-inject-live-evidence.md).
 
 ## Related
 
@@ -2550,3 +2608,23 @@ The reads were separate, so a slow transcript could not delay session state, whi
 ### Task 4: discovery causes instead of a new signal (2026-11-04)
 
 The analysis said an invalidation would have to start naming discovery. #1659 (2026-11-03) had already added a `cause` to each change, so the listener reads that and no event changed. A change with no cause (a backend before v2.36.0) or an unknown one counts as naming discovery, which keeps such a backend correct at the cost of some reads, and is listed in the compatibility register.
+
+### Task 7: ST-13 measured what remained, not what the report named (2026-11-06)
+
+The report named the hourly `VACUUM INTO` and `quick_check`. Both were already in a child process (#1363), and the measurement showed the hourly and ledger checks holding the loop 4–25 ms. Moving them again would have saved nothing, so the work went to the step that did block: the five-minute upkeep's free-page release. The pre-migration copy and the deletion scrub also block, but are outside the snapshot check; they are recorded in [7210](7210-storage-work-left-on-the-event-loop.md) with a recommendation each rather than changed here.
+
+### Task 7: the release child's step, pause and busy rule (2026-11-06)
+
+256 pages (1 MiB) a transaction and 5 ms between them. The step bounds how long a backend writer waits behind the child's write lock; at 4 MiB that wait would be the 4 MiB step's own cost again. The pause gives the backend's writers a window between steps; it is why the release's total time roughly doubled (1.5 s to 3.0 s p50 for 64 MiB), which is off the loop and once per five minutes at most. The child waits at most one second for the lock and then stops rather than failing: the next check retries, and the backend's writers come first. Each step ends with a passive checkpoint in the child, so the backend's next commit does not cross the automatic-checkpoint threshold on the child's frames and pay that fsync on the loop. Both numbers are judgments checked against the contention runs in task 7, not tuned.
+
+### Task 7: the release has no lease (2026-11-06)
+
+The copies hold the `storage-backup` lease so two backends sharing a data directory do not copy at once. The release does not take it: SQLite's write lock already serialises two releases, each stops on a busy database, and a lease held across a child's run would make the other backend's check wait for it.
+
+### Task 8: BG-15 keeps an extra environment read after the probe (2026-11-06)
+
+Before, the post-probe re-read covered only the queue and the draft. `mailInjectHold`, shared by both reads, also checks the environment, so a deletion requested between the gate and the dispatch now holds the mail as `environment-unready` after the probe, before the queue boundary, whose `assertEnvironmentAcceptsBackgroundState` would otherwise refuse it with an error. That is why the environment reads per delivery stay at 2 while the queue and draft reads drop by one each.
+
+### Task 1: how the live ST-13 baseline gets work to do (2026-11-06)
+
+A fresh `dev:test` profile's database has almost no free pages, so its upkeep would have nothing to release and both sides would measure the same. The profile was stopped and 256 MiB of free pages were written into its own database before the second start, in two layouts, because where the free pages sit decides what a release costs: at the end of the file it only truncates, between live pages it moves them. The interleaved layout is the one deletions leave behind and the one that showed the difference. The backend's 500 ms event-loop sampler cannot resolve stalls of tens to hundreds of milliseconds, so the gateway's login page was probed every 20 ms; it is served by the backend's event loop and needs no token, so no credential was read or printed.

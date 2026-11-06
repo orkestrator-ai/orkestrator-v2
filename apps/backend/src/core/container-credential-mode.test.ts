@@ -2,13 +2,28 @@ import { expect, test, spyOn } from "bun:test";
 import { containerCredentialMode } from "./container-credential-mode.js";
 import type { CommandContext } from "./commands-context.js";
 const context = {} as CommandContext;
-test.each(["supported", "unsupported"] as const)("known %s capability", async (support) => {
-  expect(await containerCredentialMode(context, "container", async () => support)).toBe(
-    support === "supported" ? "verifier" : "token-file",
+test.each([
+  ["supported", "supported", "launcher"],
+  ["unsupported", "supported", "verifier"],
+  ["unsupported", "unsupported", "token-file"],
+] as const)("bridge-launch %s, bridge-credential %s: %s", async (launch, credential, mode) => {
+  const asked: string[] = [];
+  expect(
+    await containerCredentialMode(context, "container", async (_id, _context, capability) => {
+      asked.push(capability);
+      return capability === "bridge-launch" ? launch : credential;
+    }),
+  ).toBe(mode);
+  // The launcher implies the verifier, so a launcher image is asked nothing more.
+  expect(asked).toEqual(
+    launch === "supported" ? ["bridge-launch"] : ["bridge-launch", "bridge-credential"],
   );
 });
 test("unknown and failed reads refuse a downgrade", async () => {
+  const launcherUnknown = async (_id: string, _context: unknown, capability: string) =>
+    capability === "bridge-launch" ? ("unknown" as const) : ("supported" as const);
   for (const check of [
+    launcherUnknown,
     async () => "unknown" as const,
     async (): Promise<never> => {
       throw new Error("unavailable");
@@ -66,7 +81,7 @@ test.each(["supported", "legacy", "unavailable"] as const)(
       ).rejects.toThrow("Cannot determine");
     } else {
       expect(await containerCredentialMode(unrecorded, "old-container", async () => support)).toBe(
-        kind === "supported" ? "verifier" : "token-file",
+        kind === "supported" ? "launcher" : "token-file",
       );
     }
   },

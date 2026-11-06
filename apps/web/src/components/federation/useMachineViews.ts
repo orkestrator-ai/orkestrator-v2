@@ -11,6 +11,7 @@ import {
 } from "@orkestrator/protocol/federation";
 import {
   environmentDeletionFailure,
+  environmentDeletionStep,
   environmentHasDeletionTombstone,
   NODE_DELETE_FAILURE,
   type NodeSummary,
@@ -117,6 +118,9 @@ function boundEnvironments(
       environmentHasDeletionTombstone(environment) &&
       environment.lifecycleOperationStartedAt
         ? { deletingSince: environment.lifecycleOperationStartedAt }
+        : {}),
+      ...(environmentDeletionStep(environment)
+        ? { deletingStep: environmentDeletionStep(environment)! }
         : {}),
       ...(environment.cleanupAfterMergeError ? { deletionRetryable: true as const } : {}),
       isProjectHome: environment.projectHome === true,

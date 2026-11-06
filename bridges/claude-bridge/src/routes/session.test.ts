@@ -471,7 +471,8 @@ describe("session routes", () => {
     const response = await app.request("/session/s-health/runtime-health");
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      summary: { drift: { unknownEvents: 1, unknownKinds: ["future-event"] } },
+      // No Claude CLI is open for it, so it reads detached.
+      summary: { state: "detached", drift: { unknownEvents: 1, unknownKinds: ["future-event"] } },
       mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       notices: [
         expect.objectContaining({

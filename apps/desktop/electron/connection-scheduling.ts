@@ -1,3 +1,5 @@
+import { reconnectDelayMs } from "@orkestrator/protocol/reconnect-backoff";
+
 /**
  * Background connection scheduling for the connection manager: a bound on
  * concurrent background attempts across machines, and per-machine reconnect
@@ -25,7 +27,14 @@ export class BackgroundAttemptLimiter {
   }
 }
 
-/** One pending reconnect per machine; delays grow per attempt and reset on success. */
+/**
+ * One pending reconnect per machine; delays grow per attempt and reset on success.
+ *
+ * Each delay is drawn from the upper half of its rung (`reconnectDelayMs`'s
+ * equal jitter), so desktops that lost the same remote backend at the same
+ * moment do not retry it in lock-step (todo 7200, task 2). Jitter only ever
+ * shortens a rung, never by more than half.
+ */
 export class ReconnectScheduler {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly attempts = new Map<string, number>();
@@ -34,13 +43,19 @@ export class ReconnectScheduler {
   constructor(
     private readonly delaysMs: readonly number[],
     private readonly fire: (connectionId: string) => void,
+    private readonly random: () => number = Math.random,
   ) {}
 
   schedule(connectionId: string): void {
     if (this.disposed || this.timers.has(connectionId)) return;
     const attempt = (this.attempts.get(connectionId) ?? 0) + 1;
     this.attempts.set(connectionId, attempt);
-    const delay = this.delaysMs[Math.min(attempt - 1, this.delaysMs.length - 1)] ?? 60_000;
+    const rung = this.delaysMs[Math.min(attempt - 1, this.delaysMs.length - 1)] ?? 60_000;
+    const delay = reconnectDelayMs(
+      { initialDelayMs: rung, maxDelayMs: rung, healthyAfterMs: 0 },
+      0,
+      this.random,
+    );
     const timer = setTimeout(() => {
       this.timers.delete(connectionId);
       this.fire(connectionId);

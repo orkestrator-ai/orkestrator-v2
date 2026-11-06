@@ -32,7 +32,7 @@ export function DesignEnvironmentDeletionNotice({
     let active = true;
     void (async () => {
       try {
-        if (!(await getCapabilities())?.library) return;
+        if (!(await getCapabilities()).library) return;
         const page = await designApi.library(environmentId, { filter: "all", limit: 50 });
         if (!active) return;
         const live = page.entries.filter((entry) => entry.state !== "deleted");

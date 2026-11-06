@@ -32,9 +32,17 @@ test.describe("multi-select across machines", () => {
     ).toHaveCount(0);
   });
 
-  test("Shift-click selects the rows between, across machines", async ({ page }) => {
-    await row(page, "p-env-1").click();
-    await row(page, "spare-fix").click({ modifiers: ["Shift"] });
+  test("Shift-click selects the rows between, across machines, without selecting text", async ({
+    page,
+  }) => {
+    // Click the names, rather than empty row space, so the browser establishes
+    // a text-selection anchor and would extend it on the Shift mousedown.
+    await row(page, "p-env-1").getByText("p-env-1", { exact: true }).click();
+    await row(page, "spare-fix")
+      .getByText("spare-fix", { exact: true })
+      .click({ modifiers: ["Shift"] });
+
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("");
 
     const ids = await page
       .locator("[data-sidebar-scroll] [data-environment-selection-id]")

@@ -121,6 +121,8 @@ export interface Environment {
   cleanupAfterMergeError?: string;
   /** Why the last delete failed; the tombstone stays and deleting again retries. */
   deletionError?: string;
+  /** The step the running delete is on, while the backend reports one. */
+  deletionStep?: import("@orkestrator/protocol/node-summaries").EnvironmentDeletionStep;
   /** Sanitized failure from the most recent backend-owned lifecycle operation. */
   lifecycleError?: string | null;
   name: string;

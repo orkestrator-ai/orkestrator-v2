@@ -342,6 +342,7 @@ export function segmentNeedsRender(
   segment: AssistantSegment,
   historical: HistoricalAssistantSegmentState,
   now: number = Date.now(),
+  probeIntervalMs: number = SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
 ): boolean {
   if (turn.assistantSegmentVersion(segment.assistantMessageId) !== historical.renderedItemVersion) {
     return true;
@@ -357,7 +358,7 @@ export function segmentNeedsRender(
     return false;
   }
   const probedAt = historical.render.subagentProbedAt;
-  return probedAt === 0 || now - probedAt >= SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS;
+  return probedAt === 0 || now - probedAt >= probeIntervalMs;
 }
 
 export interface PublishAssistantRowsOptions {
@@ -367,6 +368,56 @@ export interface PublishAssistantRowsOptions {
   bumpMessageRevision: (context: ThreadContext, revised: readonly NormalizedMessage[]) => void;
   /** Called after a row renders, for state derived from its parts. */
   onRendered: (message: NormalizedMessage) => void;
+  /** Defaults to `SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS`. */
+  subagentProbeIntervalMs?: number;
+}
+
+/**
+ * Arms one follow-up publish while a sub-agent card of the active turn can
+ * still move.
+ *
+ * A child reports its progress only to its own rollout. The parent stream
+ * carries one live item when a child starts and one when it ends, and nothing
+ * while it works or while the parent waits on it. The transcript probe runs
+ * only inside a publish, and a publish otherwise follows only a parent event,
+ * so a burst of spawns followed by a quiet parent left every card as the last
+ * probe saw it until the next parent event. A probe that ran before a child's
+ * rollout could be resolved left that card without its name or actions for
+ * the rest of the child's run.
+ *
+ * At most one timer per thread; `onDue` re-checks that the thread is still
+ * live. Each publish that still finds a card waiting re-arms it, so a running
+ * child is probed once per interval; a publish that finds the cards settled
+ * or the turn ended cancels it.
+ */
+export function scheduleSubagentProbe(
+  state: ThreadRuntimeState,
+  turn: TurnAccumulator,
+  intervalMs: number,
+  onDue: () => void,
+): void {
+  const waiting =
+    !turn.isTerminal() &&
+    ((state.render.subagentActivity && !state.render.subagentSettled) ||
+      Array.from(state.historicalAssistantSegments.values()).some(
+        (row) => !row.retiring && awaitsSubagent(row),
+      ));
+  if (!waiting) {
+    cancelSubagentProbe(state);
+    return;
+  }
+  if (state.subagentProbeTimer) return;
+  state.subagentProbeTimer = setTimeout(() => {
+    state.subagentProbeTimer = undefined;
+    onDue();
+  }, intervalMs);
+  state.subagentProbeTimer.unref?.();
+}
+
+export function cancelSubagentProbe(state: ThreadRuntimeState): void {
+  if (!state.subagentProbeTimer) return;
+  clearTimeout(state.subagentProbeTimer);
+  state.subagentProbeTimer = undefined;
 }
 
 /**
@@ -385,11 +436,12 @@ export async function publishAssistantRows(
   options: PublishAssistantRowsOptions,
 ): Promise<void> {
   const now = Date.now();
+  const probeIntervalMs = options.subagentProbeIntervalMs ?? SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS;
   trackChangedRows(context, state, turn, now);
   const due: string[] = [];
   for (const [id, historical] of state.historicalAssistantSegments) {
     const segment = turn.findAssistantSegment(id);
-    if (segment && segmentNeedsRender(turn, segment, historical, now)) {
+    if (segment && segmentNeedsRender(turn, segment, historical, now, probeIntervalMs)) {
       due.push(id);
     } else if (historical.retiring) {
       releaseRow(state, turn, id, historical);
@@ -413,7 +465,7 @@ export async function publishAssistantRows(
       cwd: options.cwd,
       state: renderState,
       segment,
-      subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
+      subagentProbeIntervalMs: probeIntervalMs,
       ...(startedHistorical && !renderState.subagentActivity ? { skipSubagentProbe: true } : {}),
     });
 

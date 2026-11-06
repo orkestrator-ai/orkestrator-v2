@@ -22,6 +22,8 @@ export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd()
 const bridgeCredential = loadBridgeCredential("PI_BRIDGE_TOKEN");
 /** The token, when given one rather than its verifier: only test harnesses read it. */
 export const authToken = bridgeCredential.plainToken ?? "";
+/** The signatures this bridge requires on what changes an agent's authority. */
+export const bridgeAuthority = bridgeCredential.authority;
 
 /**
  * Where durable bridge state lives, or null when this bridge is stateless.

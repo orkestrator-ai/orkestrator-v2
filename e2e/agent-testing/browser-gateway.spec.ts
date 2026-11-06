@@ -4,9 +4,20 @@ import {
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import { createHash } from "node:crypto";
-// Not `./browser-test`: this file is the suite's direct check that the gateway
-// serves the renderer's modules through a real browser's network stack.
-import { expect, test, type Page } from "@playwright/test";
+import {
+  DIRECT_LOAD_TIMEOUT_MS,
+  DIRECT_LOAD_WAIT_MS,
+  DIRECT_LOAD_NAVIGATION_MS,
+  runDirectLoads,
+  expect,
+  isModuleLoad,
+  moduleStatusFailure,
+  retryNavigationsOnNetworkChange,
+  test,
+  type Page,
+  type Request as PageRequest,
+  type Response as PageResponse,
+} from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -556,6 +567,57 @@ test("project Home retains background work and unread attention beneath the boar
     await invoke("close_local_terminal_session", { sessionId: terminal.sessionId });
     await invoke("set_environment_unread", { environmentId: home.id, unread: false });
   }
+});
+
+// The suite's one check that the gateway serves the renderer's modules through a
+// real browser's network stack; every other case fetches them outside Chromium.
+// On Linux, Chromium aborts in-flight loads whenever a host interface changes
+// (flake 2340), so a load that lost modules only that way is loaded again.
+test.describe(() => {
+  test.use({ modulesThroughChromium: true });
+
+  test("the gateway serves the renderer's modules to Chromium's own network stack", async ({
+    page,
+  }) => {
+    test.setTimeout(DIRECT_LOAD_TIMEOUT_MS);
+    // Navigations are not what this case checks; retry them as every other case does.
+    retryNavigationsOnNetworkChange(page);
+    const status = await profileStatus();
+    expect(status.status).toBe("ready");
+    const invoke = await authenticatedInvoke(page, status);
+    const fixture = (await invoke<Project[]>("get_projects")).find(
+      (project) => project.localPath === status.testProject,
+    );
+    expect(fixture).toBeTruthy();
+    await runDirectLoads(async () => {
+      // Start from a blank page, so no load from the previous attempt is counted.
+      await page.goto("about:blank", { timeout: DIRECT_LOAD_NAVIGATION_MS });
+      const failures: string[] = [];
+      const onFailed = (request: PageRequest) => {
+        if (isModuleLoad(request)) failures.push(request.failure()?.errorText ?? "failed");
+      };
+      const onResponse = (response: PageResponse) => {
+        const failure = isModuleLoad(response.request())
+          ? moduleStatusFailure(response.status())
+          : undefined;
+        if (failure) failures.push(failure);
+      };
+      page.on("requestfailed", onFailed);
+      page.on("response", onResponse);
+      await page.goto(status.browserUrl!, { timeout: DIRECT_LOAD_NAVIGATION_MS });
+      const rendered = page.getByText(fixture!.name, { exact: false }).first();
+      const unreachable = page.getByRole("heading", { name: "Orkestrator couldn’t connect" });
+      // A page that lost its entry modules shows neither, so wait without failing
+      // and let the outcome decide.
+      await expect(rendered.or(unreachable))
+        .toBeVisible({ timeout: DIRECT_LOAD_WAIT_MS })
+        .catch(() => undefined);
+      const visible = await rendered.isVisible();
+      page.off("requestfailed", onFailed);
+      page.off("response", onResponse);
+      return { failures, rendered: visible };
+    });
+  });
 });
 
 test("real browser gateway exercises an authoritative local environment", async ({ page }) => {

@@ -19,7 +19,6 @@ import {
 import { cn } from "@/lib/utils";
 import { designAction, designApi, failureOf } from "@/lib/design-client";
 import {
-  legacyLibraryPage,
   runDesignLifecycle,
   validateDesignName,
   type DesignLibraryItem,
@@ -41,11 +40,9 @@ export interface DesignLibraryClient {
   exportDocument: (environmentId: string, canvasId: string) => Promise<DesignCanvas>;
 }
 
-/** `legacy` uses an old backend's name-only list; lifecycle actions are hidden. */
-export function designLibraryClient(legacy: boolean): DesignLibraryClient {
+export function designLibraryClient(): DesignLibraryClient {
   return {
-    list: (environmentId, query) =>
-      legacy ? legacyLibraryPage(environmentId, query) : designApi.library(environmentId, query),
+    list: (environmentId, query) => designApi.library(environmentId, query),
     lifecycle: (environmentId, canvasId, input, preconditions) =>
       runDesignLifecycle(environmentId, canvasId, input, preconditions),
     purge: (environmentId, canvasId) => designApi.purge(environmentId, canvasId),
@@ -80,8 +77,7 @@ function EntryFacts({ entry }: { entry: DesignLibraryItem }) {
   if (entry.state === "deleted" && entry.deletedAt)
     facts.push(`Deleted ${formatTime(entry.deletedAt)}`);
   else if (entry.modifiedAt) facts.push(`Modified ${formatTime(entry.modifiedAt)}`);
-  if (!entry.legacy)
-    facts.push(`${entry.frameCount} ${entry.frameCount === 1 ? "frame" : "frames"}`);
+  facts.push(`${entry.frameCount} ${entry.frameCount === 1 ? "frame" : "frames"}`);
   if (entry.export)
     facts.push(
       entry.export.outdated
@@ -98,7 +94,6 @@ function EntryFacts({ entry }: { entry: DesignLibraryItem }) {
 export function DesignLibrary({
   environmentId,
   backendKey,
-  legacy,
   canManage,
   client,
   openChoices,
@@ -108,7 +103,6 @@ export function DesignLibrary({
 }: {
   environmentId: string;
   backendKey: string;
-  legacy: boolean;
   /** Backend supports lifecycle operations (rename/duplicate/trash/restore). */
   canManage: boolean;
   client?: DesignLibraryClient;
@@ -119,7 +113,7 @@ export function DesignLibrary({
   /** Bump to reload the first page (e.g. after an import). */
   refreshToken?: number;
 }) {
-  const api = useMemo(() => client ?? designLibraryClient(legacy), [client, legacy]);
+  const api = useMemo(() => client ?? designLibraryClient(), [client]);
   const scopeKey = `${backendKey}\u0000${environmentId}`;
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -180,7 +174,7 @@ export function DesignLibrary({
         const result = await api.list(environmentId, {
           search: query.trim() || undefined,
           sort,
-          filter: legacy ? "live" : filter,
+          filter,
           offset,
           limit: DESIGN_LIBRARY_PAGE_SIZE,
         });
@@ -205,7 +199,7 @@ export function DesignLibrary({
         if (epoch === epochRef.current) setLoading("idle");
       }
     },
-    [api, environmentId, filter, legacy, query, sort],
+    [api, environmentId, filter, query, sort],
   );
 
   const load = (offset: number, select?: string) => {
@@ -215,7 +209,7 @@ export function DesignLibrary({
 
   // A changed query, scope or refresh reloads the first page; its loading
   // state is set here, while rendering, rather than by the effect below.
-  const trigger = [api, environmentId, filter, legacy, query, sort, scopeKey, refreshToken];
+  const trigger = [api, environmentId, filter, query, sort, scopeKey, refreshToken];
   const [loadTrigger, setLoadTrigger] = useState(trigger);
   if (trigger.some((value, index) => !Object.is(value, loadTrigger[index]))) {
     setLoadTrigger(trigger);
@@ -270,7 +264,7 @@ export function DesignLibrary({
 
   const renderActions = (entry: DesignLibraryItem) => {
     const choices = entry.state === "deleted" ? null : openChoices(entry.id);
-    const manage = canManage && !legacy;
+    const manage = canManage;
     if (renaming?.id === entry.id)
       return (
         <form
@@ -484,7 +478,7 @@ export function DesignLibrary({
     : filter === "deleted"
       ? "Trash is empty."
       : "No designs yet. Create one in New design or import an .orkdes file.";
-  const quotaFull = page !== null && !legacy && page.quota.live >= page.quota.liveLimit;
+  const quotaFull = page !== null && page.quota.live >= page.quota.liveLimit;
 
   return (
     <div className="grid gap-3">
@@ -510,7 +504,7 @@ export function DesignLibrary({
             <SelectItem value="name">Name</SelectItem>
           </SelectContent>
         </Select>
-        {!legacy && canManage && (
+        {canManage && (
           <Select value={filter} onValueChange={(value) => setFilter(value as Filter)}>
             <SelectTrigger aria-label="Show designs" size="sm" className="w-32">
               <SelectValue />
@@ -601,7 +595,7 @@ export function DesignLibrary({
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
           {page ? `Showing ${entries.length} of ${page.total}` : ""}
-          {page && !legacy && filter === "deleted" && page.quota.deletedLimit > 0
+          {page && filter === "deleted" && page.quota.deletedLimit > 0
             ? ` · Trash ${page.quota.deleted} of ${page.quota.deletedLimit}`
             : ""}
         </span>

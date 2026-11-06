@@ -975,7 +975,7 @@ describe("ProviderMcpSettings on another machine", () => {
 
     fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
     expect(await screen.findByRole("option", { name: "Leaf worktree (worktree)" })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: /Failed worktree/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Failed worktree/ }) === null).toBe(true);
   });
 });
 

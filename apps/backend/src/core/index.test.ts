@@ -1406,15 +1406,23 @@ describe("native-agent activity reconciliation lifecycle", () => {
       expect(retirementJob?.intervalMs).toBe(60_000);
       expect(retiredReviews.mock.calls.length).toBeGreaterThan(0);
       // No 2 s bundle and no 60 s tab timer: the jobs own those cadences. The
-      // node ticket-sync fallback is a separate 60 s timer, not tab cleanup.
+      // node ticket-sync fallback and the log detail expiry check are separate
+      // 60 s timers, not tab cleanup; a repeated init must not add a second.
       const ticketSyncTimer = (
         backend as unknown as { nodeCoordination: { ticketSyncTimer: unknown } }
       ).nodeCoordination.ticketSyncTimer;
       expect(ticketSyncTimer).toBeDefined();
+      const logExpiryTimer = (
+        backend as unknown as { runtime: { logPolicy: { expiryTimer: unknown } } }
+      ).runtime.logPolicy.expiryTimer;
+      expect(logExpiryTimer).toBeDefined();
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
       expect(
         intervals.filter(
-          (interval) => interval.delay === 60_000 && interval.handle !== ticketSyncTimer,
+          (interval) =>
+            interval.delay === 60_000 &&
+            interval.handle !== ticketSyncTimer &&
+            interval.handle !== logExpiryTimer,
         ),
       ).toHaveLength(0);
       const startup = {

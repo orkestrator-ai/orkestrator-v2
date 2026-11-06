@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { buildLocalBridges } from "../../apps/desktop/scripts/dev/bridge-builds";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
@@ -56,7 +57,14 @@ test("rejected second launch leaves crash markers intact and immediate exit flus
   const children: ChildProcess[] = [];
   const closed = new Map<ChildProcess, Promise<number | null>>();
   const launch = () => {
-    const child = spawn(electronExecutable, [...ELECTRON_TEST_SWITCHES, bundle], {
+    // Playwright's `electron.launch` adds --no-sandbox on Linux; this bare spawn
+    // must too. Where unprivileged user namespaces are refused (GitHub's
+    // ubuntu-latest, through AppArmor), Chromium falls back to the setuid
+    // `chrome-sandbox` helper, which an npm install never makes root-owned, and
+    // aborts before `ready`. This fixture loads no renderer, so nothing it
+    // asserts depends on the sandbox.
+    const sandbox = process.platform === "linux" ? ["--no-sandbox"] : [];
+    const child = spawn(electronExecutable, [...ELECTRON_TEST_SWITCHES, ...sandbox, bundle], {
       cwd: root,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -183,6 +191,13 @@ test.beforeAll(() => {
     encoding: "utf8",
   });
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+  // Build the local bridges, as `dev:test` does before it starts a profile.
+  // This profile provisions no agent toolchain and an agent-test backend never
+  // falls back to PATH, so a built Cursor bridge is its only agent platform.
+  // Without one (a fresh checkout or CI) the window opens the blocking "AI CLI
+  // Required" alert, which hides the workspace this spec drives.
+  const bridges = buildLocalBridges(repositoryRoot);
+  expect(bridges.ok, bridges.output).toBe(true);
 });
 
 test("a real window sends its startup markers to the main process and none of its logger lines", async () => {

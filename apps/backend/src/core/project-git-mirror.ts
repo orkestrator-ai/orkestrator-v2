@@ -846,7 +846,10 @@ export async function sweepOrphanedProjectGitMirrors(
     if (!PROJECT_ID_PATTERN.test(name) || projectIds.has(name)) continue;
     const target = path.join(dataDir, GIT_MIRRORS_DIR, name);
     const stats = await lstat(target).catch(() => null);
-    if (!stats?.isDirectory() || now() - stats.mtimeMs < minAgeMs) continue;
+    // Whole milliseconds on both sides: `mtimeMs` carries the filesystem's
+    // sub-millisecond part and `Date.now()` does not, so a directory changed
+    // in the current millisecond would otherwise read as younger than zero.
+    if (!stats?.isDirectory() || now() - Math.floor(stats.mtimeMs) < minAgeMs) continue;
     try {
       await removeConfinedDirectory(dataDir, `${GIT_MIRRORS_DIR}/${name}`);
       removed += 1;

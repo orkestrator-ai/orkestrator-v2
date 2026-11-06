@@ -43,7 +43,7 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
       useEnvironmentStore.getState().setEnvironments([failed]);
     });
     view.rerender(<ProjectHomeActivity home={failed} projectName="Project" />);
-    expect(screen.queryByRole("button", { name: /Project Home/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Project Home/ }) === null).toBe(true);
     view.unmount();
     render(
       <ProjectHomeActivity
@@ -51,7 +51,7 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
         projectName="Project"
       />,
     );
-    expect(screen.queryByRole("button", { name: /Project Home/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Project Home/ }) === null).toBe(true);
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
   },
 );

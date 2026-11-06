@@ -1086,7 +1086,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       expect(
         await screen.findByText("Delivery waiting: Codex is turned off. Turn it on to send."),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
       expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
     });
 

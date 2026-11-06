@@ -3014,6 +3014,9 @@ export class OrkestratorBackend {
   }
 
   private startLogPolicy(): void {
+    // A repeated `init` keeps the running service rather than leaking its
+    // expiry timer and config listener behind a second one.
+    if (this.stopLogPolicyListener) return;
     const policy = startLogPolicyService(this.context.storage, {
       logging: this.applicationLogging,
       listRunningBridges: (onTarget) => listRunningBridgeTargets(this.context, onTarget),

@@ -840,12 +840,20 @@ describe("create_project_from_scratch", () => {
         gitUrl: "https://example.invalid/other.git",
         localPath: projectPath,
       });
+      // The waiter can reject as soon as the holder releases the path lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       const pathWasProtected = await remainsPending(secondCloneEntered);
       releaseFirst();
       expect(pathWasProtected).toBe(true);
 
       await expect(first).resolves.toMatchObject({ localPath: projectPath });
-      await expect(second).rejects.toThrow("A project already uses this local path");
+      expect(await secondError).toMatchObject({
+        message: expect.stringContaining("A project already uses this local path"),
+      });
       expect(cloneCalls).toBe(1);
       expect(await storage.loadProjects()).toHaveLength(1);
     });
@@ -1636,13 +1644,21 @@ describe("create_project_from_scratch", () => {
       const first = invoke(path.join(realParent, "shared"));
       await firstInitEntered;
       const second = invoke(path.join(aliasParent, "shared"));
+      // The waiter can reject as soon as the holder releases the path lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       const pathWasProtected = await remainsPending(secondInitEntered);
       releaseFirst();
       expect(pathWasProtected).toBe(true);
       expect(initCalls).toBe(1);
 
       await expect(first).resolves.toBeDefined();
-      await expect(second).rejects.toThrow("A project already uses this local path");
+      expect(await secondError).toMatchObject({
+        message: expect.stringContaining("A project already uses this local path"),
+      });
       expect(initCalls).toBe(1);
       expect(await storage.loadProjects()).toHaveLength(1);
     });
@@ -1693,12 +1709,20 @@ describe("create_project_from_scratch", () => {
       // case-preserving lock key would let both calls init at once and the
       // loser's rollback would delete the winner's .git.
       const second = invoke(path.join(root, "casedproject"));
+      // The waiter can reject as soon as the holder releases the path lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       const pathWasProtected = await remainsPending(secondInitEntered);
       releaseFirst();
       expect(pathWasProtected).toBe(true);
 
       await expect(first).resolves.toBeDefined();
-      await expect(second).rejects.toThrow("A project already uses this local path");
+      expect(await secondError).toMatchObject({
+        message: expect.stringContaining("A project already uses this local path"),
+      });
       expect(initCalls).toBe(1);
       expect(await storage.loadProjects()).toHaveLength(1);
     });

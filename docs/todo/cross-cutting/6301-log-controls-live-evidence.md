@@ -20,6 +20,8 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 `.github/workflows/native-application-menu.yml` now runs the Electron test on `ubuntu-latest` (under Xvfb), `windows-latest` and `macos-15`, and the packaged spec on `ubuntu-latest` and `macos-15`. Linux also runs `renderer-log-boundary-electron.spec.ts` under Xvfb, the first real-window evidence for that spec. Its path filter triggers it on the pull request. **None of those runs has happened yet, and the macOS package step (`mise run package:mac:unpacked:test`) has never been run.**
 
+Seen 2026-11-06: from #1873 on, `ubuntu-latest` failed every run on `renderer-log-boundary-electron.spec.ts` alone (run 42224936288, 10 of 10 repeats), for two reasons the spec, not the app, had. Its bare-spawned lifecycle fixture lacked the `--no-sandbox` Playwright adds on Linux, so Chromium aborted on the runner's non-root `chrome-sandbox`. And the real-window case's profile had no agent platform: CI never builds the bridges, so the blocking "AI CLI Required" alert covered the window. The spec now passes `--no-sandbox` to its own spawn on Linux and builds the local bridges first, as `dev:test` does. The other Electron and packaged jobs passed on all three systems.
+
 **Decisions.**
 
 - **How to finish the check?**

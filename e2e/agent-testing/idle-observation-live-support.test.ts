@@ -1,3 +1,5 @@
+import { idleObservationModel, asyncQuestionPrompt } from "./idle-observation-live-support";
+import { finalReply, scriptedStep } from "./idle-observation-fake-claude";
 import { describe, expect, test } from "bun:test";
 import {
   requireRecoveredBackoff,
@@ -213,4 +215,21 @@ test("restart qualification rejects a lost stream despite fallback turn completi
   expect(() => requireRecoveredBackoff(null)).toThrow("did not recover backoff");
   expect(requireRecoveredBackoff(0)).toBe(0);
   expect(requireRecoveredBackoff(12000)).toBe(12000);
+});
+
+test("fake Pi overrides cannot escape loopback and real runs preserve overrides", () => {
+  expect(idleObservationModel("pi", true, "openai/real")).toBe("idleqa-fake/idleqa-1");
+  expect(idleObservationModel("pi", true)).toBe("idleqa-fake/idleqa-1");
+  expect(idleObservationModel("pi", false, "openai/real")).toBe("openai/real");
+  expect(idleObservationModel("codex", true, "custom")).toBe("custom");
+});
+test("async question prompt requests both replies the watcher expects", () => {
+  const prompt = asyncQuestionPrompt("Choose a codeword", "IDLEQA-ASKED-1");
+  expect(prompt).toContain("reply with exactly IDLEQA-ASKED-1 and nothing else");
+  expect(prompt).toContain("After I answer, reply with exactly CODEWORD_CHOSEN=<selected option>");
+  expect(scriptedStep(prompt, false).kind).toBe("question");
+  expect(finalReply(prompt)).toBe("IDLEQA-ASKED-1");
+  expect(finalReply("Answers to your questions:\n- Choose a codeword?: IDLEQA_BETA")).toBe(
+    "CODEWORD_CHOSEN=IDLEQA_BETA",
+  );
 });

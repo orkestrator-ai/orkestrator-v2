@@ -204,7 +204,7 @@ export function codexOutputItem(
   };
 }
 
-function serve(): void {
+export function startCodexFakeModel(onCalls?: (calls: ReadonlyMap<string, string>) => void) {
   let sampled = 0;
   const server = Bun.serve<{
     prompt: string;
@@ -285,6 +285,7 @@ function serve(): void {
               socket.data.calls.delete(socket.data.calls.keys().next().value!);
             }
           }
+          onCalls?.(socket.data.calls);
           send({ type: "response.output_item.done", output_index: 0, item });
         }
         send({
@@ -294,7 +295,10 @@ function serve(): void {
       },
     },
   });
-  console.log(`http://127.0.0.1:${server.port}/v1`);
+  return server;
 }
 
-if ((import.meta as { main?: boolean }).main) serve();
+if ((import.meta as { main?: boolean }).main) {
+  const server = startCodexFakeModel();
+  console.log(`http://127.0.0.1:${server.port}/v1`);
+}

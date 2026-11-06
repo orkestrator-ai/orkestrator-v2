@@ -1,3 +1,4 @@
+import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model-shared";
 /**
  * A scripted loopback OpenAI chat-completions endpoint for
  * `idle-observation-live.spec.ts` (todo 0049 task 7), so the real pinned Pi
@@ -67,17 +68,6 @@ export function piAssistantMessage(
   return { content: step.kind === "text" ? step.text : finalReply(prompt) };
 }
 
-function chunk(id: string, delta: Record<string, unknown>, finish: string | null, usage?: object) {
-  return `data: ${JSON.stringify({
-    id,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model: PI_FAKE_MODEL,
-    choices: [{ index: 0, delta, finish_reason: finish }],
-    ...(usage ? { usage } : {}),
-  })}\n\n`;
-}
-
 /** The streamed frames for one assistant message. */
 export function piStreamFrames(id: string, message: ReturnType<typeof piAssistantMessage>): string {
   const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
@@ -96,45 +86,26 @@ export function piStreamFrames(id: string, message: ReturnType<typeof piAssistan
       }
     : { role: "assistant", content: message.content };
   return (
-    chunk(id, delta, null) +
-    chunk(id, {}, message.toolCall ? "tool_calls" : "stop", usage) +
+    piCompletionChunk(PI_FAKE_MODEL, id, delta, null) +
+    piCompletionChunk(PI_FAKE_MODEL, id, {}, message.toolCall ? "tool_calls" : "stop", usage) +
     "data: [DONE]\n\n"
   );
 }
 
 /** The `models.json` provider that points Pi at this endpoint; its key is a placeholder. */
 export function piFakeModelsConfig(baseUrl: string) {
-  return {
-    providers: {
-      [PI_FAKE_PROVIDER]: {
-        name: "Idle observation fake",
-        baseUrl,
-        api: "openai-completions",
-        apiKey: "fixture-only-not-a-key",
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: false,
-          supportsUsageInStreaming: true,
-          maxTokensField: "max_tokens",
-        },
-        models: [
-          {
-            id: PI_FAKE_MODEL,
-            name: "Idle observation 1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 32_000,
-            maxTokens: 256,
-          },
-        ],
-      },
-    },
-  };
+  return piProviderConfig({
+    provider: PI_FAKE_PROVIDER,
+    providerName: "Idle observation fake",
+    baseUrl,
+    apiKey: "fixture-only-not-a-key",
+    model: PI_FAKE_MODEL,
+    modelName: "Idle observation 1",
+  });
 }
 
-function serve(): void {
+export function startPiFakeModel(platform = { Response: globalThis.Response }) {
+  const Reply = platform.Response;
   let counter = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -142,28 +113,30 @@ function serve(): void {
     async fetch(request) {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname.endsWith("/models")) {
-        return Response.json({ object: "list", data: [{ id: PI_FAKE_MODEL, object: "model" }] });
+        return Reply.json({ object: "list", data: [{ id: PI_FAKE_MODEL, object: "model" }] });
       }
       if (request.method !== "POST" || !url.pathname.endsWith("/chat/completions")) {
-        return new Response("not served", { status: 404 });
+        return new Reply("not served", { status: 404 });
       }
       let body: ChatBody;
       try {
+        if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES)
+          throw new Error("too large");
         const text = await request.text();
         if (text.length > MAX_BODY_BYTES) throw new Error("too large");
         body = JSON.parse(text) as ChatBody;
       } catch {
-        return new Response("bad request", { status: 400 });
+        return new Reply("bad request", { status: 400 });
       }
       counter += 1;
       const id = `chatcmpl-idleqa-${counter}`;
       const message = piAssistantMessage(body, counter);
       if (body.stream === true) {
-        return new Response(piStreamFrames(id, message), {
+        return new Reply(piStreamFrames(id, message), {
           headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
         });
       }
-      return Response.json({
+      return Reply.json({
         id,
         object: "chat.completion",
         created: Math.floor(Date.now() / 1000),
@@ -196,7 +169,10 @@ function serve(): void {
       });
     },
   });
-  console.log(`http://127.0.0.1:${server.port}/v1`);
+  return server;
 }
 
-if ((import.meta as { main?: boolean }).main) serve();
+if ((import.meta as { main?: boolean }).main) {
+  const server = startPiFakeModel();
+  console.log(`http://127.0.0.1:${server.port}/v1`);
+}

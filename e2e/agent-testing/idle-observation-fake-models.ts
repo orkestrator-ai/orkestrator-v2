@@ -12,6 +12,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
 import { installFakeClaudeApiFixture } from "./container-fake-claude-install";
+import { profilePiAgentDirectory } from "../../scripts/pi-fake-model-shared";
 import { piFakeModelsConfig } from "./idle-observation-fake-pi";
 
 export interface FakeModelHandle {
@@ -56,7 +57,7 @@ export type FakeModelPlatform = keyof typeof FAKE_SCRIPTS;
  */
 export function fakeModelSettingsFile(platform: FakeModelPlatform, dataDir: string): string {
   if (platform === "pi") {
-    return path.join(dataDir, "agent-credentials", "home", ".pi", "agent", "models.json");
+    return path.join(profilePiAgentDirectory(dataDir), "models.json");
   }
   const home = path.join(dataDir, "agent-credentials", platform);
   return path.join(home, platform === "claude" ? "settings.json" : "config.toml");

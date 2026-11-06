@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { NO_SUBAGENT_REPLY } from "./idle-observation-fake-claude";
 import {
+  startCodexFakeModel,
   codexFollowUp,
   codexOutputItem,
   codexRequestState,
@@ -185,3 +186,68 @@ describe("scripted fake Codex model", () => {
     ).toEqual({ prompt: answer, afterTool: false });
   });
 });
+
+test("websocket wiring remembers calls, waits once, caps spawns per connection and evicts old calls", async () => {
+  let calls = new Map<string, string>();
+  const server = startCodexFakeModel((current) => {
+    calls = new Map(current);
+  });
+  const socket = new WebSocket(`ws://127.0.0.1:${server.port}/v1`);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.onopen = () => resolve();
+      socket.onerror = () => reject(new Error("websocket open failed"));
+    });
+    const exchange = (input: object[], tools?: object[]) =>
+      new Promise<Record<string, any>>((resolve) => {
+        let item: Record<string, any> = {};
+        socket.onmessage = (event) => {
+          const frame = JSON.parse(String(event.data));
+          if (frame.type === "response.output_item.done") item = frame.item;
+          if (frame.type === "response.completed") resolve(item);
+        };
+        socket.send(
+          JSON.stringify({ type: "response.create", input, ...(tools ? { tools } : {}) }),
+        );
+      });
+    const prompt =
+      "Use your sub-agent or task delegation tool to start exactly one sub-agent. Give it this task: reply with the text child-1. Then reply with exactly IDLEQA-SUB-2 and nothing else.";
+    const first = await exchange(
+      [{ role: "user", content: prompt }],
+      [
+        {
+          type: "namespace",
+          name: "collaboration",
+          tools: [
+            { type: "function", name: "spawn_agent" },
+            { type: "function", name: "wait_agent" },
+          ],
+        },
+      ],
+    );
+    expect(first.name).toBe("spawn_agent");
+    expect(first.namespace).toBe("collaboration");
+    expect(calls.get(first.call_id)).toBe("spawn_agent");
+    const wait = await exchange([{ type: "function_call_output", call_id: first.call_id }]);
+    expect(wait.name).toBe("wait_agent");
+    const done = await exchange([{ type: "function_call_output", call_id: wait.call_id }]);
+    expect(done.content[0].text).toBe("IDLEQA-SUB-2");
+    expect((await exchange([{ role: "user", content: prompt }])).name).toBe("spawn_agent");
+    expect((await exchange([{ role: "user", content: prompt }])).content[0].text).toBe(
+      NO_SUBAGENT_REPLY,
+    );
+    // Fresh commands still work after the spawn cap, using newly offered tools.
+    for (let index = 0; index < 65; index += 1) {
+      await exchange(
+        [{ role: "user", content: warmup }],
+        [{ type: "function", name: "exec_command" }],
+      );
+    }
+    expect(calls.size).toBe(64);
+    expect(calls.has(first.call_id)).toBe(false);
+    expect([...calls.values()].every((name) => name === "exec_command")).toBe(true);
+  } finally {
+    socket.close();
+    await server.stop(true);
+  }
+}, 15000);

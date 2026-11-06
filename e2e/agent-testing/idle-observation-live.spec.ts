@@ -85,7 +85,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { CODEWORD_REPLY_PREFIX } from "./idle-observation-fake-claude";
-import { PI_FAKE_MODEL_REF } from "./idle-observation-fake-pi";
+import { idleObservationModel, asyncQuestionPrompt } from "./idle-observation-live-support";
 import {
   installContainerFakeClaude,
   readContainerFile,
@@ -571,9 +571,7 @@ test.describe("live idle observation", () => {
           });
 
         // A Pi session names its model; the fake is a provider of its own.
-        const model =
-          MODELS.get(platform) ??
-          (FAKE_MODELS && platform === "pi" ? PI_FAKE_MODEL_REF : undefined);
+        const model = idleObservationModel(platform, FAKE_MODELS, MODELS.get(platform));
         if (model) summary.model = model;
         /** Start the current environment with one native tab and its session. */
         const prepareEnvironment = async () => {
@@ -1279,11 +1277,7 @@ test.describe("live idle observation", () => {
           let askedWhileIdle = false;
           let cardShownAt: number | null = null;
           const dispatchedAt = Date.now();
-          await sendFromBackend(
-            `Use your request_user_input_async tool to ask me one question, "${title}", ` +
-              "with the options IDLEQA_ALPHA and IDLEQA_BETA. Do not wait for my answer: " +
-              `right after asking, reply with exactly ${word} and nothing else.`,
-          );
+          await sendFromBackend(asyncQuestionPrompt(title, word));
           const settled = await watchSettle(before, word, {
             uiBoundMs: COMPLETION_BUDGET_MS,
             onRead: async (current) => {

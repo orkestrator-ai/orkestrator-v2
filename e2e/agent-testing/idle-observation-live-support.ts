@@ -1,3 +1,4 @@
+import { PI_FAKE_MODEL_REF } from "./idle-observation-fake-pi";
 /**
  * Pure helpers for `idle-observation-live.spec.ts`, kept apart so they are
  * unit-tested without a profile or a browser.
@@ -286,4 +287,22 @@ export function requireRecoveredBackoff(backoffMs: number | null): number {
   if (backoffMs === null)
     throw new Error("observation stream did not recover backoff after the turn");
   return backoffMs;
+}
+
+/** Fake Pi runs must never select a billed provider from an environment override. */
+export function idleObservationModel(
+  platform: string,
+  fake: boolean,
+  override?: string,
+): string | undefined {
+  return fake && platform === "pi" ? PI_FAKE_MODEL_REF : override;
+}
+
+export function asyncQuestionPrompt(title: string, word: string): string {
+  return (
+    `Use your request_user_input_async tool to ask me one question, "${title}", ` +
+    "with the options IDLEQA_ALPHA and IDLEQA_BETA. Do not wait for my answer: " +
+    `right after asking, reply with exactly ${word} and nothing else. ` +
+    "After I answer, reply with exactly CODEWORD_CHOSEN=<selected option> and nothing else, replacing <selected option> with my selected option."
+  );
 }

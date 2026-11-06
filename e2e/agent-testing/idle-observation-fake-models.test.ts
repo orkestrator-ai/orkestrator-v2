@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+import { expect, test, setDefaultTimeout } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { type ChildProcess, type spawn } from "node:child_process";
@@ -13,10 +14,12 @@ import {
   withFakeModelCleanup,
 } from "./idle-observation-fake-models";
 
+setDefaultTimeout(30_000);
+
 function fakeChild(mode: "ready" | "silent" | "exit" | "error") {
   const child = Object.assign(new EventEmitter(), {
     stdout: new PassThrough(),
-    pid: mode === "error" ? undefined : 123,
+    pid: mode === "error" ? undefined : fakePid(1),
     exitCode: null as number | null,
     signalCode: null as string | null,
     killed: false,

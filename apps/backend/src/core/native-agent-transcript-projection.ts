@@ -742,6 +742,63 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
+  /**
+   * Cache gauges for recurring diagnostics (`native-projection`): how many
+   * keys each per-session map holds, and the bytes the bounded ones charge.
+   * Every map that is keyed by a session (or a session's read) is listed, so a
+   * soak can tell a cache that tracks the open sessions from one that grows
+   * with every session ever seen. Counts only; reading walks no entry.
+   */
+  cacheGauges(): Record<string, number> {
+    return {
+      projections: this.projectionCache.size,
+      projectionSync: this.projectionSync.size,
+      projectionSyncBytes: this.projectionSyncBytes,
+      projectionRevisions: this.projectionRevisions.size,
+      projectionHistory: this.projectionHistory.size,
+      projectionHistoryBytes: this.projectionHistoryBytes,
+      projectionEpochs: this.projectionEpochs.size,
+      projectionMissingSince: this.projectionMissingSince.size,
+      projectionRefreshes: this.projectionRefreshes.size,
+      projectionRefreshDescriptors: this.projectionRefreshDescriptors.size,
+      directHistoryGaps: this.directHistoryGaps.size,
+      stopNotices: this.stopNotices.size,
+      toolDetails: this.toolDetailCache.size,
+      toolDetailBytes: this.toolDetailCacheBytes,
+      pinnedToolDetails: this.pinnedToolDetailRefs.size,
+      toolDetailEncodings: this.toolDetailEncodings.size,
+      toolDetailEncodingBytes: this.toolDetailEncodings.bytes,
+      remoteToolDetailReads: this.remoteToolDetailReads.size,
+      progressiveTranscripts: this.progressiveTranscriptCache.size,
+      progressiveTranscriptBytes: this.progressiveTranscriptBytes,
+      transcriptDeltaBases: this.transcriptDeltaBases.size,
+      transcriptDeltaBaseBytes: this.transcriptDeltaBases.retainedBytes,
+      progressiveSourceTokens: this.progressiveSourceTokens.size,
+      progressiveStates: this.progressiveStateCache.size,
+      progressiveDiscovery: this.progressiveDiscoveryCache.size,
+      progressiveDiscoveryBytes: this.progressiveDiscoveryBytes,
+      progressiveReads: this.progressiveReads.size,
+      progressiveReadWaiters: this.progressiveReadWaiters.size,
+      progressiveReadEpochs: this.progressiveReadEpochs.size,
+      progressiveDirtyFollowUps: this.progressiveDirtyFollowUps.size,
+      progressiveTrailing: this.progressiveTrailing.size,
+      progressiveHydrations: this.progressiveHydrations.size,
+      progressiveHydrationTimers: this.progressiveHydrationTimers.size,
+      progressiveHydrationReadStarts: this.progressiveHydrationReadStarts.size,
+      progressiveDiscoveryProviders: this.progressiveDiscoveryJobsByProvider.size,
+      interactiveSnapshotShares: this.interactiveSnapshotShares.size,
+      projectedMessages: this.projectedMessages.size,
+      projectedMessageSessions: this.projectedMessages.sessionCount,
+      projectedMessageBytes: this.projectedMessages.bytes,
+      directHistoryPages: this.directHistoryPages.size,
+      directHistoryPageBytes: this.directHistoryPages.bytes,
+      directHistorySessions: this.directHistoryPages.observedSessions,
+      directHistoryReads: this.directHistoryPages.pendingReads,
+      artifactOverlays: this.artifactOverlays.size,
+      displayTailCheckpoints: this.displayTailScheduler.size,
+    };
+  }
+
   /** Drop every legacy projection cache; run after shutdown settled the reads. */
   clear(): void {
     this.projectionCache.clear();

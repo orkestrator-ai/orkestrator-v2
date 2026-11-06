@@ -117,6 +117,10 @@ describe("live benchmark lifecycle", () => {
       ORKESTRATOR_NATIVE_OBSERVATION_SHARING: "0",
     });
     expect(start[3].ORKESTRATOR_RECURRING_METRICS).toBeUndefined();
+    // Never a window on the host's desktop, and no reachability probe networks.
+    expect(start[3].DISPLAY).toBeUndefined();
+    expect(start[3].WAYLAND_DISPLAY).toBeUndefined();
+    expect(start[3].ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("off");
     expect(h.commands).toEqual([
       ["dev:stop", "--profile", result.profile],
       ["dev:reset", "--profile", result.profile],
@@ -877,6 +881,11 @@ describe("soak", () => {
       final: {},
       leaks: [],
       backendRssKiB: { baseline: null, final: null },
+      trend: [],
+      growing: [],
+      cacheTrends: [],
+      rssTrend: null,
+      sessions: { requested: 0, opened: 0, cycleSessions: 0, prompts: 0, modelRequests: 0 },
     }));
     const h = harness({
       measureSoak: soak,

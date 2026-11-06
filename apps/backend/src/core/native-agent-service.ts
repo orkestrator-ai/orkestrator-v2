@@ -1,4 +1,5 @@
 import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
+import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { turnOutcomeFailureKind } from "./agent-usage-limits.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -538,6 +539,8 @@ export class NativeAgentService {
    */
   private readonly observations: NativeAgentObservationBroker;
   private unsubscribeObservationWakeups: (() => void) | null = null;
+  /** Unregisters the projection's cache gauges; called once on shutdown. */
+  private removeProjectionCacheGauges: () => void = () => undefined;
   /**
    * Automatic continuation of incomplete turns, for platforms with a recovery
    * strategy, and the manual-prompt claims that keep it from racing the user.
@@ -719,6 +722,10 @@ export class NativeAgentService {
       scheduleAmbiguousSteerSettle: (input, key, requestId, provider) =>
         this.promptQueues.scheduleAmbiguousSteerSettle(input, key, requestId, provider),
     });
+    this.removeProjectionCacheGauges = recurringDiagnosticsRegistry.addCacheSource(
+      "native-projection",
+      this.projections,
+    );
     this.promptQueues = new NativeAgentPromptQueueDispatcher({
       storage,
       isStopped: () => this.stopped,
@@ -4203,6 +4210,7 @@ export class NativeAgentService {
     this.usageLimitResend.clear();
     this.catalogs.clear();
     this.projections.clear();
+    this.removeProjectionCacheGauges();
   }
 
   /**

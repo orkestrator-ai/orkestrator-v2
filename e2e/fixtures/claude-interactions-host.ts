@@ -30,10 +30,51 @@ for (const key of Object.keys(process.env)) {
     delete process.env[key];
 }
 const coordinator = process.env.CLAUDE_FIXTURE_COORDINATOR === "1";
-// A coordinator delegates through Orkestrator's own MCP server, which the
-// loader adds from the backend's connection. The fake SDK never connects to
-// it, so the address only has to be well formed.
-const agentMcp = { url: "http://127.0.0.1:9/mcp", token: "fixture-agent-mcp" };
+// A deterministic MCP executor stands in for worker launch. The scripted SDK
+// sends the permitted call to this loopback server and consumes its receipt
+// before it asks a question; no real environment or provider is started.
+interface Delegation {
+  environmentId: string;
+  status: "running";
+  toolUseId: string;
+}
+const delegations = new Map<string, Delegation[]>();
+const fakeMcp = coordinator
+  ? Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const { id, method, params } = (await req.json()) as {
+          id: string;
+          method: string;
+          params: {
+            name: string;
+            arguments: { name: string; prompt: string };
+            _meta: { sessionId: string };
+          };
+        };
+        if (method !== "tools/call" || params.name !== "launch_environment")
+          return Response.json({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32601, message: "Unknown fake tool" },
+          });
+        const sessionId = params._meta.sessionId;
+        const receipt: Delegation = {
+          environmentId: `fake-worker-${sessionId}`,
+          status: "running",
+          toolUseId: id,
+        };
+        delegations.set(sessionId, [...(delegations.get(sessionId) ?? []), receipt]);
+        return Response.json({
+          jsonrpc: "2.0",
+          id,
+          result: { content: [{ type: "text", text: JSON.stringify(receipt) }] },
+        });
+      },
+    })
+  : undefined;
+const agentMcp = { url: `http://127.0.0.1:${fakeMcp?.port ?? 9}/mcp`, token: "fixture-agent-mcp" };
 if (coordinator) {
   process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
   mockGetMcpServerNames.mockImplementation(async () => new Set(["orkestrator"]));
@@ -118,10 +159,59 @@ const server = Bun.serve({
         description: "Fixture task",
         is_backgrounded: true,
       });
-      call.push({ type: "result", subtype: "success" });
+      if (!coordinator) call.push({ type: "result", subtype: "success" });
       return Response.json({ sessionId: session.id });
     }
     const sessionId = new URL(req.url).searchParams.get("session")!;
+    if (path === "/delegate" && fakeMcp) {
+      const { tool, input } = (await req.json()) as {
+        tool: string;
+        input: { name: string; prompt: string };
+      };
+      const call = turns.get(sessionId)!;
+      const permission = await preToolUse(call, tool, input);
+      if (permission.hookSpecificOutput?.permissionDecision === "deny")
+        return Response.json(permission, { status: 403 });
+      if (
+        tool !== "mcp__orkestrator__launch_environment" ||
+        !(call.options.allowedTools as string[]).includes("mcp__orkestrator__*")
+      )
+        return Response.json({ error: "Delegation was not allowed" }, { status: 403 });
+      const toolUseId = `delegate-${sessionId}`;
+      call.push({
+        type: "assistant",
+        message: {
+          id: `assistant-${toolUseId}`,
+          role: "assistant",
+          content: [{ type: "tool_use", id: toolUseId, name: tool, input }],
+        },
+      });
+      const response = await fetch(agentMcp.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: toolUseId,
+          method: "tools/call",
+          params: {
+            name: "launch_environment",
+            arguments: input,
+            _meta: { sessionId },
+          },
+        }),
+      });
+      const reply = (await response.json()) as {
+        result: { content: Array<{ type: string; text: string }> };
+      };
+      call.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: toolUseId, content: reply.result.content }],
+        },
+      });
+      return Response.json(JSON.parse(reply.result.content[0]!.text));
+    }
     if (path === "/raise") {
       const { mode, tool, input } = (await req.json()) as {
         mode: "form" | "url" | "unsupported" | "question" | "tool";
@@ -188,6 +278,18 @@ const server = Bun.serve({
         stopped: turns.get(sessionId)?.options.abortController?.signal.aborted ?? false,
         result: results.get(sessionId),
         history: history.get(sessionId) ?? [],
+        delegations: delegations.get(sessionId) ?? [],
+        delegationResults: manager
+          .getSession(sessionId)
+          ?.messages.flatMap((message) => message.parts)
+          .filter(
+            (part) => part.type === "tool-invocation" && part.toolUseId === `delegate-${sessionId}`,
+          )
+          .map((part) => ({
+            toolUseId: part.toolUseId,
+            state: part.toolState,
+            output: part.toolOutput,
+          })),
         policy: effectiveExecutionPolicy(manager.getSession(sessionId)?.executionPolicy)?.id,
         allowedTools: turns.get(sessionId)?.options.allowedTools,
         permissionMode: turns.get(sessionId)?.options.permissionMode,
@@ -219,6 +321,7 @@ console.log(`INTERACTION_FIXTURE_READY:${server.port}`);
 for (const signal of ["SIGTERM", "SIGINT"] as const)
   process.on(signal, () => {
     for (const sessionId of turns.keys()) manager.deleteSession(sessionId);
+    fakeMcp?.stop(true);
     server.stop(true);
     rmSync(home, { recursive: true, force: true });
     process.exit(0);

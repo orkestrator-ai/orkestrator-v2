@@ -14,52 +14,19 @@
  * Claude's own MCP elicitation is covered by `ClaudeInteractions.spec.ts`.
  */
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface } from "node:readline";
 import path from "node:path";
+import {
+  startInteractionFixtureHost,
+  stopInteractionFixtureHost,
+  type InteractionFixtureHost as Host,
+} from "./interaction-fixture-host";
 
 // A test may start the bridge host it uses, which imports a whole bridge.
 test.describe.configure({ timeout: 60_000 });
 
-interface Host {
-  process: ChildProcess;
-  origin: string;
-}
-
-async function startHost(script: string, env: Record<string, string> = {}): Promise<Host> {
-  const child = spawn("bun", [path.join(import.meta.dirname, "fixtures", script)], {
-    env: { ...process.env, ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  // Bound diagnostic output; never carry a provider response into reports.
-  let error = "";
-  child.stderr!.on("data", (chunk) => {
-    error = (error + String(chunk)).slice(-3000);
-  });
-  const origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`${script} startup timed out`)), 30_000);
-    child.once("error", reject);
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      if (error) console.error(error);
-      reject(new Error(`${script} exited before readiness`));
-    });
-    createInterface({ input: child.stdout! }).on("line", (line) => {
-      if (!line.startsWith("INTERACTION_FIXTURE_READY:")) return;
-      clearTimeout(timeout);
-      resolve(`http://127.0.0.1:${line.split(":")[1]}`);
-    });
-  });
-  return { process: child, origin };
-}
-
-async function stopHost(started: Host): Promise<void> {
-  if (started.process.exitCode !== null) return;
-  await new Promise<void>((resolve) => {
-    started.process.once("exit", () => resolve());
-    started.process.kill("SIGTERM");
-  });
-}
+const startHost = (script: string, env: Record<string, string> = {}) =>
+  startInteractionFixtureHost(path.join(import.meta.dirname, "fixtures", script), env);
+const stopHost = stopInteractionFixtureHost;
 
 /**
  * One host per kind and worker, started by the first test that needs it: each
@@ -73,7 +40,11 @@ const host = (script: string, env: Record<string, string> = {}): Promise<Host> =
 };
 const claude = () => host("claude-interactions-host.ts");
 const coordinator = () => host("claude-interactions-host.ts", { CLAUDE_FIXTURE_COORDINATOR: "1" });
-const codex = () => host("codex-elicitation-host.ts");
+// A Codex child owns one answer log. Give each test its own child/log so no
+// session can satisfy its assertions with an earlier session's responses.
+let codexInstance = 0;
+const codex = () =>
+  host("codex-elicitation-host.ts", { CODEX_FIXTURE_INSTANCE: String(++codexInstance) });
 test.afterAll(async () => {
   const started = await Promise.allSettled(hosts.values());
   hosts.clear();
@@ -89,6 +60,8 @@ interface Snapshot {
   result?: unknown;
   history?: Array<{ behavior?: string; message?: string; updatedInput?: unknown }>;
   answers?: Array<{ action?: string; content?: unknown }>;
+  delegations?: Array<{ environmentId: string; status: string; toolUseId: string }>;
+  delegationResults?: Array<{ toolUseId: string; state: string; output: string }>;
   policy?: string;
   allowedTools?: string[];
 }
@@ -127,6 +100,7 @@ for (const mode of ["form", "url"] as const) {
     request,
   }) => {
     const { snapshot, post } = await openSession(page, request, codex());
+    expect((await snapshot()).answers).toEqual([]);
     await page.getByRole("button", { name: "Switch environment", exact: true }).click();
     await post("raise", { mode });
     await expect.poll(async () => (await snapshot()).activity).toBe("waiting");
@@ -141,20 +115,21 @@ for (const mode of ["form", "url"] as const) {
     if (mode === "form")
       await page.getByRole("textbox", { name: "Team", exact: true }).fill("core");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
+    const accepted = {
+      action: "accept",
+      content: mode === "form" ? { team: "core" } : {},
+      _meta: null,
+    };
     // What the bridge wrote back to the app-server child.
-    await expect
-      .poll(async () => (await snapshot()).answers?.[0])
-      .toMatchObject(
-        mode === "form" ? { action: "accept", content: { team: "core" } } : { action: "accept" },
-      );
+    await expect.poll(async () => (await snapshot()).answers).toEqual([accepted]);
     await expect(page.getByText(title, { exact: true })).toHaveCount(0);
 
     await post("raise", { mode });
     await expect(page.getByText(title, { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Cancel turn", exact: true }).click();
     await expect
-      .poll(async () => (await snapshot()).answers?.[1])
-      .toMatchObject({ action: "cancel", content: null });
+      .poll(async () => (await snapshot()).answers)
+      .toEqual([accepted, { action: "cancel", content: null, _meta: null }]);
     await expect(page.getByText(title, { exact: true })).toHaveCount(0);
   });
 }
@@ -232,12 +207,27 @@ test("a coordinator turn delegates through Orkestrator tools, is refused a write
   // read-only hook is the gate it does consult.
   expect(initial.allowedTools).toContain("mcp__orkestrator__*");
   const delegation = await (
-    await post("pre-tool-use", {
+    await post("delegate", {
       tool: "mcp__orkestrator__launch_environment",
       input: { name: "worker", prompt: "Make the change" },
     })
   ).json();
-  expect(delegation).toEqual({});
+  expect(delegation).toMatchObject({
+    environmentId: expect.any(String),
+    status: "running",
+    toolUseId: expect.any(String),
+  });
+  expect((await snapshot()).delegations).toEqual([delegation]);
+  // The same SDK turn has consumed the launch receipt through the real bridge.
+  await expect
+    .poll(async () => (await snapshot()).delegationResults)
+    .toEqual([
+      {
+        toolUseId: delegation.toolUseId,
+        state: "success",
+        output: expect.stringContaining(delegation.environmentId),
+      },
+    ]);
   const write = await (
     await post("pre-tool-use", {
       tool: "Write",
@@ -261,6 +251,7 @@ test("a coordinator turn delegates through Orkestrator tools, is refused a write
   await expect(page.getByText("Claude needs input", { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByText("Claude needs input", { exact: true })).toBeVisible();
+  expect((await snapshot()).delegations).toEqual([delegation]);
   await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Docs" }).click();
   await page.getByRole("button", { name: "Submit", exact: true }).click();

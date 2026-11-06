@@ -41,6 +41,8 @@ export type CleanupCommandRunner = (
 
 export type CleanupStepOptions = {
   run?: CleanupCommandRunner;
+  /** Fence and drain readers only after deciding this checkout will be removed. */
+  beforeWorktreeRemoval?: () => Promise<void>;
   /**
    * Deletion asserts container ownership before it records anything, so its
    * own container step need not probe Docker a second time. The reconciler
@@ -248,6 +250,7 @@ async function cleanupWorktree(
   entry: EnvironmentCleanupEntry,
   context: EnvironmentCleanupContext,
   run: CleanupCommandRunner,
+  options: CleanupStepOptions,
 ): Promise<void> {
   const worktreePath = entry.worktreePath;
   if (!worktreePath) return;
@@ -280,6 +283,7 @@ async function cleanupWorktree(
   ) {
     return;
   }
+  await options.beforeWorktreeRemoval?.();
   const projectPath =
     entry.projectPath && (await pathExists(entry.projectPath)) ? entry.projectPath : null;
   // An fsmonitor daemon outlives its worktree and is never reaped, so stop it
@@ -518,7 +522,7 @@ export async function runEnvironmentCleanupStep(
       const result = await removeEnvironmentNetwork(context, entry.environmentId);
       if (result === "in-use") throw new CleanupRefusedError("network still has containers");
       if (result === "unreachable") throw new CleanupRefusedError("docker unreachable");
-    } else if (step === "worktree") await cleanupWorktree(entry, context, run);
+    } else if (step === "worktree") await cleanupWorktree(entry, context, run, options);
     else if (step === "branch") {
       const outcome = await cleanupEnvironmentBranch(entry, run);
       if (outcome === "kept") {

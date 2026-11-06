@@ -55,3 +55,32 @@ Final evidence is `/tmp/orkestrator-test-run.OKCGVn/browser.log.gz` and
 `/tmp/orkestrator-test-run.OKCGVn/summary.json`. This broad command remains
 incomplete/non-green; unrelated browser failures have not been reclassified as
 flakes or repaired by this change.
+
+## Coordinator C3 review fixes — 2026-11-05
+
+Both mobile cases failed again in the two-worker component suite, on separate
+fixture ports from other checkouts. The owner rerun on another dedicated port
+failed all four AgentUsage cases (30-second reload/locator timeouts), while all
+eight ChangeTracking cases passed. The default suite was also running.
+This confirms recurrence, not an isolated pass or a root cause.
+
+Commands, counts and evidence are recorded in
+[6660](6660-change-tracking-image-reload.md). No usage implementation or test changed.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+Both mobile compact-usage cases exceeded the 30 s test deadline, at the usage-duration assertion or header focus.
+
+The browser repeat used five workers and a free fixture port. It named nine failures and stopped at the 1800000 ms group deadline after starting 708 of 1596 cases; complete pass totals were not available. Original command: `ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name browser -- mise run test:browser`.
+
+The unchanged complete owner passed alone, exit 0, in 31.6 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-agent-usage-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1 --output output/agent-testing/review-address-owners/usage
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8yBzhf/browser.log.gz`. Passing
+output was deleted by the logged runner, so individual rerun counts were not
+retained. This establishes intermittence, not its cause. No assertion, timeout
+or implementation was changed to hide the failure; the broad check remains
+non-green.

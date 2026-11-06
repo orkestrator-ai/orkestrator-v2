@@ -148,3 +148,32 @@ namespace. Durations are not reference figures.
   reload caused by source edits) has a different cause and is not part of
   this fix.
 
+## Re-run with the 0622 fix (to-do 0042 task 11), 2026-11-06
+
+No recurrence. Branch `preview-flakes-1bb27c3be3fd-r1` from `main` at
+`e6c3da899`, Linux (beelink), Electron headless
+(`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`) in a private loopback-only
+network namespace, one worker, other builds on the host. The keyboard test
+passed 10 of 10 before the 0622 fix, 10 of 10 on the committed fix
+(`03cbf0191`), and 10 of 10 with every process pinned to two cores beside four
+busy loops. It also passed in 3 complete-owner runs and 2 runs of the owner
+without the legacy URL tab case
+([7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)).
+Without the private namespace, 3 of 10 runs failed at startup with
+`net::ERR_NETWORK_CHANGED`
+([2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)),
+before the test began. macOS was not run.
+
+
+## Review validation, 2026-11-06: lost at startup, not a recurrence
+
+The review's `mise run test:agent:electron` (head `f67ef0666`) never reached
+this test: the spec's `beforeAll` window stopped at "Orkestrator couldn’t
+connect" after Chromium aborted its Vite modules with
+`net::ERR_NETWORK_CHANGED`
+([2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)).
+The launcher now reloads a window only for that startup failure (`9ef37bfd1`,
+to-do 0042 D24). Afterwards, headless and without a private network namespace,
+this test passed 10 of 10 (`--repeat-each=10`) and the owner without the
+[7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)
+case 21 of 21.

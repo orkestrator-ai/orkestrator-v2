@@ -115,6 +115,72 @@ describe("AgentMailBanner", () => {
     useAgentMailStore.setState(useAgentMailStore.getInitialState());
   });
 
+  test.each(["pending-inject", "stored", "inject_failed"] as const)(
+    "a platform hold explains %s mail and prevents delivery until released",
+    (placement) => {
+      install(placement, { policy: placement === "stored" ? "off" : "idle" });
+      const view = render(
+        <AgentMailBanner
+          environmentId="env-1"
+          tabId="tab-1"
+          deliveryHeldReason="Codex is turned off. Turn it on to send."
+        />,
+      );
+      if (placement !== "inject_failed")
+        expect(
+          screen.getByText("Delivery waiting: Codex is turned off. Turn it on to send."),
+        ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+      if (placement === "inject_failed")
+        expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
+          true,
+        );
+      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+      view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      expect(screen.queryByText(/Delivery waiting: Codex/) === null).toBe(true);
+      expect(
+        screen.getByRole("button", {
+          name: placement === "inject_failed" ? "Retry" : "Deliver now",
+        }),
+      ).toBeTruthy();
+    },
+  );
+
+  test("a platform hold disables budget Resume until released and keeps the reason visible", async () => {
+    install("inject-held", { placementReason: "loop-budget-exhausted" });
+    const retry = spyOn(backend, "retryAgentMailInject").mockResolvedValue({
+      ...message("pending-inject"),
+      body: "hello",
+    });
+    const view = render(
+      <AgentMailBanner
+        environmentId="env-1"
+        tabId="tab-1"
+        deliveryHeldReason="Codex is turned off. Turn it on to send."
+      />,
+    );
+    expect(
+      screen.getByText("Delivery paused: loop budget · Codex is turned off. Turn it on to send."),
+    ).toBeTruthy();
+    const resume = screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement;
+    expect(resume.disabled).toBe(true);
+    fireEvent.click(resume);
+    expect(retry).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(useAgentMailStore.getState().panel).toEqual({ focus: mailboxId });
+
+    view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(screen.getByText("Delivery paused: loop budget")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await waitFor(() =>
+      expect(retry).toHaveBeenCalledWith("env-1", "tab-1", "message-inject-held"),
+    );
+  });
+
   test.each([
     ["stored", undefined, "bg-primary"],
     ["inject_failed", undefined, "bg-failure"],

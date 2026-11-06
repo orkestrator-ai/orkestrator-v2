@@ -20,6 +20,7 @@
 
 import { createLogger } from "@orkestrator/protocol/logger";
 import { snapshotBeforeMigration } from "../storage-backups.js";
+import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import {
   CHANGE_LEDGER_DATABASE_FILE,
   StorageDatabase,
@@ -406,9 +407,10 @@ const CHANGE_LEDGER_FILE_MIGRATIONS: readonly StorageMigration[] = [
  */
 export function openChangeLedgerDatabase(
   dataDir: string,
-  options: Pick<StorageDatabaseOptions, "busyTimeoutMs"> = {},
+  options: Pick<StorageDatabaseOptions, "busyTimeoutMs" | "cacheGaugeRegistry"> = {},
 ): StorageDatabase {
   return new StorageDatabase(dataDir, {
+    cacheGaugeRegistry: recurringDiagnosticsRegistry,
     ...options,
     file: CHANGE_LEDGER_DATABASE_FILE,
     migrations: CHANGE_LEDGER_FILE_MIGRATIONS,

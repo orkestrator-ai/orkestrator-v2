@@ -27,6 +27,41 @@ out at 5,526.42 ms. Artifact:
 This occurrence has no isolated pass, so it remains unresolved; it is not excused
 as environmental based on the timeout alone.
 
+## Recurrence 2026-11-06 — coordinator Work panel removal
+
+`mise run test:logged -- --name address-default-suite -- mise run test`
+failed on this unchanged backend test at 5090.23 ms (5,000 ms deadline)
+with four backend workers. Backend totals: 16,356 pass, 126 skip, three failures and two errors;
+web: 12,990 pass, zero failures. The same run also caught two new test type
+errors, corrected in `5f5cb11b1`. Evidence:
+`/tmp/orkestrator-test-run.srVdfm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The owning file passed unchanged with
+`mise run test:logged -- --name address-measurement-isolated -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`
+(exit 0, 6.3 s). No assertion, skip, or timeout was changed. The coordinator
+renderer removal does not edit this backend path; initial timeout cause remains
+unconfirmed. A fresh aggregate run follows the test type fix.
+
+## Interaction-policy review repair validation — 2026-11-06
+
+The exact default aggregate retry (`mise run test:logged -- --name
+review-default-tests -- mise run test`, up to four backend workers) reproduced
+the timeout at 5,977.15 ms. The backend group later hit its no-output watchdog,
+so it has no complete test total. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LRGSlT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The unchanged owner failed alone again: 19 passes, one timeout (6,075.48 ms)
+and one closed-database error, 11.2 s for twenty tests:
+
+```sh
+mise run test:logged -- --name backend-measurement-cap-alone -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures
+```
+
+Artifact: `orkestrator-test-run.gk5LrU/backend-measurement-cap-alone.log.gz`
+under the same temporary root. This branch changes no measurement/capture code
+or tests. The failure remains unresolved; no timeout, assertion or skip changed,
+and no environmental exemption is claimed from the timeout alone.
+
 ## Flow viewport review validation recurrence — 2026-11-06
 
 Observed on `d81fd21ed` in
@@ -52,3 +87,18 @@ mise run test:logged -- --name measurement-cap-isolated -- bun --cwd=apps/backen
 Passed with exit 0 in 4.0 s. Passing output was deleted by the logged
 runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
+
+## Environment-deletion main merge — 2026-11-06
+
+`mise run test:logged -- --name merge-default -- mise run test` repeated
+the restore-plan deadline at 5,724.92 ms with four isolated backend workers.
+Evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HtWRHT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The complete unchanged owner still failed alone:
+`mise run test:logged -- --name merge-restore-plan-alone -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`.
+It reported 19 pass, one fail and one between-test error in 11.81 s: the same
+case timed out at 5,812.19 ms, then outstanding work used the closed database.
+Isolated evidence: `orkestrator-test-run.ShXcQv/merge-restore-plan-alone.log.gz`
+under the same temporary root. The nine-worker component browser suite was
+also running. No isolated pass, new root cause or fix is claimed; no assertion,
+deadline, skip or implementation changed.

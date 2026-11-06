@@ -136,17 +136,17 @@ collide.
 
 Task 1 is done: the scan runs in `mise run test`, and the seven files were
 rewritten with `scripts/rewrite-bounded-dom-assertions.ts`. The duplicate 9834
-cases in `environments-and-containers/` are now 7140 and 7141. Tasks 2 and 3
-are open.
+cases in `environments-and-containers/` are now 6603 and 6602 after merging
+`main` (which independently renumbered the same cases). Tasks 2 and 3 are open.
 
 ## Related
 
 - [0030](0030-test-suite-and-ci-health.md) task 1: the required-check ruleset.
 - [linting.md](../../development/linting.md): what the lint job runs.
 - Flake cases
-  [7140](../../tests/flaky-tests/environments-and-containers/7140-container-status-excludes-aggregate-timeout.md)
+  [6603](../../tests/flaky-tests/environments-and-containers/6603-container-status-excludes-aggregate-timeout.md)
   and
-  [7141](../../tests/flaky-tests/environments-and-containers/7141-firewall-egress-filter-startup-timeout.md),
+  [6602](../../tests/flaky-tests/environments-and-containers/6602-firewall-egress-filter-startup-timeout.md),
   previously both numbered 9834.
 
 ## Assumptions and decisions
@@ -158,3 +158,10 @@ canaries in the slow tier. The CI lint guard now targets the new scan file.
 Case 0043 remains open pending loaded-host aggregate evidence; its historical
 30-second failures are retained. No timeout was increased and no assertion was
 removed.
+
+### Task 3: reconcile concurrent case renames during the main merge
+
+Kept main's established case numbers 6603 and 6602 rather than this branch's
+7140 and 7141. This preserves incoming links and the later recurrence evidence
+without duplicating cases. Updated the current-state summary and related links;
+the earlier renumbering account above remains historical.

@@ -28,6 +28,7 @@ beforeEach(() => {
     isLoading: false,
     error: null,
     deletingEnvironments: new Set(),
+    deletingStartedAt: new Map(),
   });
 });
 
@@ -220,6 +221,23 @@ describe("environmentStore", () => {
     expect(useEnvironmentStore.getState().isDeleting("live")).toBe(true);
     useEnvironmentStore.getState().removeEnvironment("live");
     expect(useEnvironmentStore.getState().isDeleting("live")).toBe(false);
+  });
+
+  test("a failed tombstone stays unavailable and retry starts a fresh attempt", () => {
+    useEnvironmentStore.getState().setEnvironments([
+      environment("failed", {
+        lifecycleOperation: "deleting",
+        deletionRequestedAt: "2026-11-05T12:00:00.000Z",
+        deletionError: "Terminal process trees are still running",
+      }),
+    ]);
+    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(true);
+    useEnvironmentStore.getState().setDeleting("failed", true);
+    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(true);
+    expect(useEnvironmentStore.getState().deletingStartedAt.get("failed")).toBeDefined();
+    useEnvironmentStore.getState().setDeleting("failed", false);
+    expect(useEnvironmentStore.getState().deletingStartedAt.has("failed")).toBe(false);
+    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(true);
   });
 });
 

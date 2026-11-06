@@ -81,4 +81,4 @@ E9 is built: turn checks read session state only, an evicted remote detail is re
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), tasks 1 and 5
 - [Efficiency report, B](../../reports/2026-10-27-efficiency.md#b-native-agent-transcript-pipeline) (TX-2, TX-8, TX-15, TX-18)
-- [Efficiency index, closing check of E9](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e9-transcript-reads)
+- [Efficiency outcome, closing check of E9](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e9-transcript-reads)

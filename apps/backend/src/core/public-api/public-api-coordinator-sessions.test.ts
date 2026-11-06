@@ -124,7 +124,7 @@ describe("Coordinator conversations are public sessions", () => {
   });
 
   for (const source of ["memory", "persisted", "projection"]) {
-    test(`a paused Coordinator reads saved messages without provider access (source=${source})`, async () => {
+    test(`a paused Coordinator reads saved messages without provider transcript access or starts (source=${source})`, async () => {
       const {
         harness,
         service,
@@ -168,11 +168,14 @@ describe("Coordinator conversations are public sessions", () => {
         lifecycleState: "paused",
       }));
       const providerRead = mock(async () => {
-        throw new Error("Paused reads must not touch the provider");
+        throw new Error("Paused reads must not read provider history or start a session");
       });
+      // Held projections observe the cached provider so an existing turn can
+      // still be stopped, while history remains entirely cache-backed.
+      const statusRead = mock(async () => "idle" as const);
       Object.assign(stub.provider, {
         messages: providerRead,
-        status: providerRead,
+        status: statusRead,
         createSession: providerRead,
       });
       expect((await harness.call("session.list", { environmentId })).ok).toBe(true);
@@ -189,8 +192,10 @@ describe("Coordinator conversations are public sessions", () => {
       });
       expect(projection).toMatchObject({
         messages: [{ id: "earlier", content: "Earlier answer" }],
+        turn: { phase: "idle" },
       });
       expect(providerRead).not.toHaveBeenCalled();
+      expect(statusRead).toHaveBeenCalledTimes(1);
       const refused = await harness.call(
         "session.prompt",
         { sessionId, prompt: "Hello" },

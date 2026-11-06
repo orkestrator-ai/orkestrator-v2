@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0910` task 3 of the E5 efficiency batch (R18's maintenance items, D5), whose batch file was deleted when E5 landed. Its outcome is in [the closing check of E5](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e5-database-upkeep); the original text stays in git history at `69a3b4ca5`. E5 built the rest of 0910: `PRAGMA optimize` and removing the inert `foreign_keys`.
+Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0910` task 3 of the E5 efficiency batch (R18's maintenance items, D5), whose batch file was deleted when E5 landed. Its outcome is in [the closing check of E5](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e5-database-upkeep); the original text stays in git history at `69a3b4ca5`. E5 built the rest of 0910: `PRAGMA optimize` and removing the inert `foreign_keys`.
 
 ### Tasks
 

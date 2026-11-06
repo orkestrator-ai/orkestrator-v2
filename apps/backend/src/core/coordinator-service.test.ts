@@ -714,6 +714,49 @@ describe("project coordinator", () => {
     expect(retried.workspace.lastStartupError).toBeUndefined();
   });
 
+  test.each(["platform-off", "safety-level"] as const)(
+    "resume refuses an unavailable selected platform (%s) and preserves the pause",
+    async (cause) => {
+      const project = await storage.addProject(
+        createProject("https://example.invalid/repo.git", checkout),
+      );
+      const service = new CoordinatorService(storage, () => ({
+        enabled: true,
+        running: true,
+        error: null,
+      }));
+      const initial = await service.ensure(project.id);
+      const conversation = initial.workspace.conversations[0]!;
+      const config = await storage.loadConfig();
+      await storage.saveConfig({
+        ...config,
+        global: {
+          ...config.global,
+          enabledAgentPlatforms: ["codex", "grok"],
+          coordinatorProviderTiers: "advisory",
+        },
+      });
+      await service.assignConversationAgent(
+        project.id,
+        conversation.id,
+        cause === "platform-off" ? "codex" : "grok",
+      );
+      await service.setPaused(project.id, true);
+      const allowed = await storage.loadConfig();
+      await storage.saveConfig({
+        ...allowed,
+        global: {
+          ...allowed.global,
+          ...(cause === "platform-off"
+            ? { enabledAgentPlatforms: ["claude"] }
+            : { coordinatorProviderTiers: "enforced" as const }),
+        },
+      });
+      await expect(service.setPaused(project.id, false)).rejects.toThrow("provider is unavailable");
+      expect((await service.get(project.id))!.workspace.lifecycleState).toBe("paused");
+    },
+  );
+
   describe("a conversation that failed to start", () => {
     async function failedConversation() {
       const project = await storage.addProject(

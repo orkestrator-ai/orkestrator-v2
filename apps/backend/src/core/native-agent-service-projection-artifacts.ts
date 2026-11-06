@@ -312,6 +312,11 @@ export class ArtifactOverlayIndex {
     return overlay;
   }
 
+  /** Conversations with a cached overlay read, for cache gauges. */
+  get size(): number {
+    return this.entries.size;
+  }
+
   clear(): void {
     this.entries.clear();
     this.unsubscribe?.();

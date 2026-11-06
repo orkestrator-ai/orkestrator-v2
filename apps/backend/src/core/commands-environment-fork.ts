@@ -17,6 +17,7 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import { toClientEnvironment } from "./commands-terminal.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
+import { environmentHasDeletionTombstone } from "@orkestrator/protocol/node-summaries";
 
 const GIT_REMOTE_QUERY_TIMEOUT_MS = 30_000;
 const GIT_FETCH_TIMEOUT_MS = 120_000;
@@ -245,6 +246,8 @@ export async function forkEnvironmentRecord(
   context: CommandContext,
   options: ForkEnvironmentOptions = {},
 ): Promise<ClientEnvironment> {
+  if (environmentHasDeletionTombstone(source))
+    throw new Error("Cannot fork an environment while deletion is pending");
   const { storage } = context;
   const project = await storage.getProject(source.projectId);
   if (!project) throw new Error(`Project not found: ${source.projectId}`);

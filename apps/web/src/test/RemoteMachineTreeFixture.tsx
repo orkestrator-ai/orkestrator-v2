@@ -54,6 +54,12 @@ function install() {
           order: index,
           status: "running",
           projectHome: id === "home",
+          ...(id === "b" && new URLSearchParams(location.search).has("delete-failed")
+            ? {
+                deletionRequestedAt: "2026-11-06T00:00:00Z",
+                deletionError: "fixture cleanup refused",
+              }
+            : {}),
           ...(id === "b" && new URLSearchParams(location.search).has("accessible-state")
             ? { hasUnreadWork: true, agentMailUnread: 2, prState: "open" }
             : {}),

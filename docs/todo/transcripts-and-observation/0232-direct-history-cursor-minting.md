@@ -479,4 +479,4 @@ collecting with the first release that carries them.
   the support window.
 - [Efficiency report, B](../../reports/2026-10-27-efficiency.md#b-native-agent-transcript-pipeline)
   (TX-10), closed into task 4; see the
-  [closing note for 0385](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-0385-tx-10-joined-history-pages).
+  [closing note for 0385](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-0385-tx-10-joined-history-pages).

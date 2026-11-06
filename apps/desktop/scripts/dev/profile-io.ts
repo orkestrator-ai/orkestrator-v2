@@ -45,7 +45,7 @@ import {
   type RuntimeProfileRoots,
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
-import { pinnedArtifactDirectory } from "@orkestrator/toolchain/manager";
+import { ensurePinnedToolchains, pinnedArtifactDirectory } from "@orkestrator/toolchain/manager";
 import {
   isSupportToolName,
   pinnedToolchainArtifacts,
@@ -603,6 +603,65 @@ export async function seedInstalledAgentToolchains(
     }
   }
   return { seeded, failed };
+}
+
+export type ToolchainPrefetchOptions = {
+  /** Defaults to the pinned manifest; narrowed by tests. */
+  artifacts?: readonly ToolchainArtifact[];
+  platform?: NodeJS.Platform;
+  architecture?: string;
+  /** Substituted by tests; defaults to the real manager with Bun's `fetch`. */
+  ensure?: typeof ensurePinnedToolchains;
+};
+
+export type ToolchainPrefetchResult = {
+  /** `name@version` for each agent toolchain now installed in the profile. */
+  downloaded: string[];
+  /** Path-free reason when the download failed; Electron then tries itself. */
+  error?: string;
+};
+
+/**
+ * Download the agent toolchains the host could not seed, before Electron.
+ *
+ * Electron fetches through Chromium's network stack, which aborts every
+ * in-flight request with `net::ERR_NETWORK_CHANGED` whenever a host interface
+ * appears or disappears. Docker does that for each container and network, so
+ * on a host running other Docker work (and in the Docker suite's own image
+ * qualifications just before the profile starts) an unattended profile lost
+ * its Grok or Cursor download and quit before readiness. Bun's `fetch` is not
+ * affected. Installing here goes through the same manager and hash checks, so
+ * Electron then finds a verified install and only activates it. A failure is
+ * reported and left to Electron's download, as before.
+ */
+export async function prefetchAgentToolchains(
+  profile: RuntimeProfile,
+  platforms: readonly string[],
+  options: ToolchainPrefetchOptions = {},
+): Promise<ToolchainPrefetchResult> {
+  const selected = new Set(platforms);
+  const platform = options.platform ?? process.platform;
+  const architecture = options.architecture ?? process.arch;
+  const artifacts = (options.artifacts ?? pinnedToolchainArtifacts(platform, architecture)).filter(
+    (artifact) =>
+      selected.has(artifact.name) &&
+      artifact.platform === platform &&
+      artifact.architecture === architecture,
+  );
+  if (artifacts.length === 0) return { downloaded: [] };
+  try {
+    await (options.ensure ?? ensurePinnedToolchains)({
+      dataDir: profile.dataDir,
+      platform,
+      architecture,
+      artifacts,
+    });
+    return { downloaded: artifacts.map((artifact) => `${artifact.name}@${artifact.version}`) };
+  } catch (error) {
+    // Messages name the tool and the failure, not the profile's paths.
+    const message = error instanceof Error ? error.message : String(error);
+    return { downloaded: [], error: message.split(profile.dataDir).join("<profile>") };
+  }
 }
 
 /** An access token this close to expiry is not worth handing over. */

@@ -166,3 +166,62 @@ export async function terminateProcessTree(
   signalTree(child, descendants, "SIGKILL", runtime);
   return waitForTreeExit(child, descendants, options.killWaitMs, pollIntervalMs, runtime);
 }
+
+/** Signals a process group; false only when no process is left in it. `0` probes. */
+export type ProcessGroupSignaller = (pgid: number, signal: ProcessTreeSignal | 0) => boolean;
+
+export type ReapProcessGroupOptions = {
+  graceMs: number;
+  killWaitMs: number;
+  pollIntervalMs?: number;
+  signalGroup?: ProcessGroupSignaller;
+  now?: () => number;
+  sleep?: (timeoutMs: number) => Promise<void>;
+};
+
+const signalGroupDefault: ProcessGroupSignaller = (pgid, signal) => {
+  try {
+    process.kill(-pgid, signal);
+    return true;
+  } catch (error) {
+    // EPERM still means the group has members, just not ones this user may signal.
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+};
+
+/**
+ * Stops what is left of a process group whose leader has already exited.
+ *
+ * `terminateProcessTree` finds descendants by parent pid, so it only works
+ * while the leader is alive: once a bridge dies on its own, its agent CLI is
+ * reparented and no snapshot can reach it, but it is still in the bridge's
+ * group. Only call this for a group the caller created (a `detached` spawn).
+ * A group with no members left answers ESRCH, and Linux does not reuse a pid
+ * while it still names a live group, so an empty group is never mistaken for
+ * someone else's process.
+ */
+export async function reapProcessGroup(
+  pgid: number | undefined,
+  options: ReapProcessGroupOptions,
+): Promise<"empty" | "stopped" | "survived"> {
+  if (!pgid || pgid <= 1 || process.platform === "win32") return "empty";
+  const signal = options.signalGroup ?? signalGroupDefault;
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ??
+    ((timeoutMs: number) => new Promise((resolve) => setTimeout(resolve, timeoutMs)));
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 50);
+  const drained = async (timeoutMs: number) => {
+    const deadline = now() + Math.max(0, timeoutMs);
+    while (signal(pgid, 0)) {
+      const remaining = deadline - now();
+      if (remaining <= 0) return false;
+      await sleep(Math.min(pollIntervalMs, remaining));
+    }
+    return true;
+  };
+  if (!signal(pgid, "SIGTERM")) return "empty";
+  if (await drained(options.graceMs)) return "stopped";
+  if (!signal(pgid, "SIGKILL")) return "stopped";
+  return (await drained(options.killWaitMs)) ? "stopped" : "survived";
+}

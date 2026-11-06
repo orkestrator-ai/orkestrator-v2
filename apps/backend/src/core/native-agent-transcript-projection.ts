@@ -349,6 +349,8 @@ export interface NativeAgentTranscriptProjectionHost {
   storage: StorageService;
   options: NativeAgentServiceOptions;
   catalogs: NativeAgentCatalogCache;
+  /** A provider already serving this runtime; never starts a bridge. */
+  cachedProvider?(input: NativeAgentProjectionInput): NativeAgentRuntimeProvider | undefined;
   /** Last provider-owned activity; read without touching the provider. */
   observedActivity(
     sessionKey: string,
@@ -476,7 +478,7 @@ export class NativeAgentTranscriptProjection {
   >();
   private readonly projectionRefreshDescriptors = new Map<
     string,
-    { epoch: number; signature: string; environmentId: string }
+    { epoch: number; signature: string; environmentId: string; forgotten?: boolean }
   >();
   /** Invalidates an in-flight read when a logical tab changes provider identity. */
   private readonly projectionEpochs = new Map<string, number>();
@@ -493,6 +495,11 @@ export class NativeAgentTranscriptProjection {
   private readonly progressiveStateCache = new Map<
     string,
     { token: string; value: NativeAgentSessionStateView }
+  >();
+  /** Only live requests are registered; settled views carry their own identity. */
+  private readonly progressiveRequests = new Map<
+    string,
+    { environmentId: string; readers: number; forgotten: boolean }
   >();
   private readonly progressiveReads = new Map<string, Promise<unknown>>();
   private readonly progressiveReadWaiters = new Map<string, number>();
@@ -739,6 +746,63 @@ export class NativeAgentTranscriptProjection {
         this.transcriptDelta(previous, current),
       recoverableDispatchStatus: (createdAt: string, kind?: "prompt" | "steer") =>
         this.recoverableDispatchStatus(createdAt, kind),
+    };
+  }
+
+  /**
+   * Cache gauges for recurring diagnostics (`native-projection`): how many
+   * keys each per-session map holds, and the bytes the bounded ones charge.
+   * Every map that is keyed by a session (or a session's read) is listed, so a
+   * soak can tell a cache that tracks the open sessions from one that grows
+   * with every session ever seen. Counts only; reading walks no entry.
+   */
+  cacheGauges(): Record<string, number> {
+    return {
+      projections: this.projectionCache.size,
+      projectionSync: this.projectionSync.size,
+      projectionSyncBytes: this.projectionSyncBytes,
+      projectionRevisions: this.projectionRevisions.size,
+      projectionHistory: this.projectionHistory.size,
+      projectionHistoryBytes: this.projectionHistoryBytes,
+      projectionEpochs: this.projectionEpochs.size,
+      projectionMissingSince: this.projectionMissingSince.size,
+      projectionRefreshes: this.projectionRefreshes.size,
+      projectionRefreshDescriptors: this.projectionRefreshDescriptors.size,
+      directHistoryGaps: this.directHistoryGaps.size,
+      stopNotices: this.stopNotices.size,
+      toolDetails: this.toolDetailCache.size,
+      toolDetailBytes: this.toolDetailCacheBytes,
+      pinnedToolDetails: this.pinnedToolDetailRefs.size,
+      toolDetailEncodings: this.toolDetailEncodings.size,
+      toolDetailEncodingBytes: this.toolDetailEncodings.bytes,
+      remoteToolDetailReads: this.remoteToolDetailReads.size,
+      progressiveTranscripts: this.progressiveTranscriptCache.size,
+      progressiveTranscriptBytes: this.progressiveTranscriptBytes,
+      transcriptDeltaBases: this.transcriptDeltaBases.size,
+      transcriptDeltaBaseBytes: this.transcriptDeltaBases.retainedBytes,
+      progressiveSourceTokens: this.progressiveSourceTokens.size,
+      progressiveStates: this.progressiveStateCache.size,
+      progressiveDiscovery: this.progressiveDiscoveryCache.size,
+      progressiveDiscoveryBytes: this.progressiveDiscoveryBytes,
+      progressiveReads: this.progressiveReads.size,
+      progressiveReadWaiters: this.progressiveReadWaiters.size,
+      progressiveReadEpochs: this.progressiveReadEpochs.size,
+      progressiveDirtyFollowUps: this.progressiveDirtyFollowUps.size,
+      progressiveTrailing: this.progressiveTrailing.size,
+      progressiveHydrations: this.progressiveHydrations.size,
+      progressiveHydrationTimers: this.progressiveHydrationTimers.size,
+      progressiveHydrationReadStarts: this.progressiveHydrationReadStarts.size,
+      progressiveDiscoveryProviders: this.progressiveDiscoveryJobsByProvider.size,
+      interactiveSnapshotShares: this.interactiveSnapshotShares.size,
+      projectedMessages: this.projectedMessages.size,
+      projectedMessageSessions: this.projectedMessages.sessionCount,
+      projectedMessageBytes: this.projectedMessages.bytes,
+      directHistoryPages: this.directHistoryPages.size,
+      directHistoryPageBytes: this.directHistoryPages.bytes,
+      directHistorySessions: this.directHistoryPages.observedSessions,
+      directHistoryReads: this.directHistoryPages.pendingReads,
+      artifactOverlays: this.artifactOverlays.size,
+      displayTailCheckpoints: this.displayTailScheduler.size,
     };
   }
 
@@ -2861,6 +2925,12 @@ export class NativeAgentTranscriptProjection {
             freshness: "current" as const,
           } satisfies ProviderTranscriptSnapshot);
     phases?.sourceEnded();
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (this.progressiveRequests.get(sessionKey)?.forgotten) return null;
     if ("unchanged" in providerResult) {
       if (!previous) {
         throw new ProviderUnavailableError("Provider returned unchanged without a transcript base");
@@ -2958,8 +3028,8 @@ export class NativeAgentTranscriptProjection {
 
   /**
    * The conversation this read names when it may be read but not run: paused,
-   * or failed to start. `undefined` for every other session, whose reads go on
-   * to the provider.
+   * failed to start, or on a platform that is unavailable. `undefined` for every
+   * other session, whose reads go on to the provider.
    */
   private async heldCoordinatorRead(
     input: NativeAgentProjectionInput,
@@ -2975,19 +3045,25 @@ export class NativeAgentTranscriptProjection {
     return { message: held.message };
   }
 
-  /**
-   * Session state for a held conversation, from the session record alone: the
-   * turn is over and nothing is parked, because nothing can be running. Answers
-   * without resolving a provider, which is what would start a bridge.
-   */
+  /** Held reads preserve an existing turn's activity so Stop stays available. */
   private async heldCoordinatorSessionState(
-    input: NativeAgentProgressiveInput,
+    input: NativeAgentProjectionInput,
     message: string,
   ): Promise<NativeAgentSessionStateView | null> {
     const session = await this.storage.getNativeAgentSession(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );
     if (!session) return null;
+    const provider = this.host.cachedProvider?.(input);
+    const status = provider
+      ? await readProviderStatus(provider, session.providerSessionId).catch(() => ({
+          status: "running" as const,
+        }))
+      : undefined;
+    const phase =
+      status?.status === "running" || status?.status === "blocked" || status?.status === "error"
+        ? status.status
+        : "idle";
     return {
       identity: this.progressiveIdentity(
         { ...input, viewVersion: 1 },
@@ -2995,7 +3071,7 @@ export class NativeAgentTranscriptProjection {
         `saved:${input.agent}`,
       ),
       connection: "error",
-      turn: { phase: "idle", error: message },
+      turn: { phase, error: message },
       interactions: [],
       composerControls: [],
       capabilities: nativeCapabilities(input.agent),
@@ -3089,7 +3165,47 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
-  async getTranscriptUpdate(
+  private async trackProgressiveRequest<T>(
+    input: NativeAgentProgressiveInput,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const request = this.progressiveRequests.get(key) ?? {
+      environmentId: input.environmentId,
+      readers: 0,
+      forgotten: false,
+    };
+    request.readers += 1;
+    this.progressiveRequests.set(key, request);
+    try {
+      return await read();
+    } finally {
+      request.readers -= 1;
+      if (request.readers === 0) {
+        this.progressiveRequests.delete(key);
+        if (request.forgotten) {
+          // Also release artifacts produced while the provider read was settling.
+          this.invalidateProjection(key);
+          this.releaseForgottenProjectionEpochs(key);
+        }
+      }
+    }
+  }
+
+  getTranscriptUpdate(
+    input: NativeAgentTranscriptUpdateInput,
+    bypassSourceToken = false,
+  ): Promise<NativeAgentTranscriptUpdate> {
+    return this.trackProgressiveRequest(input, () =>
+      this.getTranscriptUpdateOnce(input, bypassSourceToken),
+    );
+  }
+
+  private async getTranscriptUpdateOnce(
     input: NativeAgentTranscriptUpdateInput,
     bypassSourceToken = false,
   ): Promise<NativeAgentTranscriptUpdate> {
@@ -3137,32 +3253,33 @@ export class NativeAgentTranscriptProjection {
     // Phase timings for the read this caller waits on; background refreshes
     // behind a cached answer are not attributed to this response.
     const phases = new ProgressiveReadPhaseTimer();
-    const publish = async (
+    const publish = (
       timer?: ProgressiveReadPhaseTimer,
-    ): Promise<NativeAgentTranscriptView | null> => {
-      // Recovery needs rows even if an already-started conditional poll says
-      // unchanged. Drain it before synchronously claiming fresh source work.
-      if (bypassSourceToken) {
-        while (this.progressiveReads.has(key)) {
-          await this.progressiveReads.get(key)!.catch(() => undefined);
+    ): Promise<NativeAgentTranscriptView | null> =>
+      this.trackProgressiveRequest(input, async () => {
+        // Recovery needs rows even if an already-started conditional poll says
+        // unchanged. Drain it before synchronously claiming fresh source work.
+        if (bypassSourceToken) {
+          while (this.progressiveReads.has(key)) {
+            await this.progressiveReads.get(key)!.catch(() => undefined);
+          }
         }
-      }
-      const read = () => this.readProgressiveTranscript(input, key, timer, bypassSourceToken);
-      const cover = () =>
-        this.progressiveReadCovering(
-          key,
-          sessionKey,
-          epoch,
-          input.forceSnapshot === true,
-          timer ? timer.own(read) : read,
-        );
-      const projection = await (timer ? timer.covering(cover) : cover());
-      if (!projection) return null;
-      const commit = () => this.commitProgressiveTranscript(key, input, projection);
-      if (timer) timer.normalize(commit);
-      else commit();
-      return projection.value;
-    };
+        const read = () => this.readProgressiveTranscript(input, key, timer, bypassSourceToken);
+        const cover = () =>
+          this.progressiveReadCovering(
+            key,
+            sessionKey,
+            epoch,
+            input.forceSnapshot === true,
+            timer ? timer.own(read) : read,
+          );
+        const projection = await (timer ? timer.covering(cover) : cover());
+        if (!projection || this.progressiveRequests.get(sessionKey)?.forgotten) return null;
+        const commit = () => this.commitProgressiveTranscript(key, input, projection);
+        if (timer) timer.normalize(commit);
+        else commit();
+        return projection.value;
+      });
     if (!cached && !input.forceSnapshot) {
       const persisted = await this.storage.getNativeAgentDisplayTail(sessionKey).catch(() => null);
       if (persisted && persisted.logicalSessionKey === input.logicalSessionKey) {
@@ -3591,7 +3708,13 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
-  async getSessionStateUpdate(
+  getSessionStateUpdate(
+    input: NativeAgentProgressiveInput,
+  ): Promise<NativeAgentSessionStateUpdate> {
+    return this.trackProgressiveRequest(input, () => this.getSessionStateUpdateOnce(input));
+  }
+
+  private async getSessionStateUpdateOnce(
     input: NativeAgentProgressiveInput,
   ): Promise<NativeAgentSessionStateUpdate> {
     this.host.assertProjectionInput(input);
@@ -4883,6 +5006,72 @@ export class NativeAgentTranscriptProjection {
     }
   }
 
+  /**
+   * Releases what this projection keeps for a deleted environment's sessions:
+   * their cached views and sync revisions, history, tool details, projected
+   * rows, direct pages and progressive reads. Called when an environment is
+   * deleted, after its session records went; never on tab close, unmount or
+   * switch. The caches are rebuildable, but without this a deleted
+   * environment's views stayed resident until LRU churn pushed them out
+   * (1,024 projections, 4,096 revision counters), so memory grew with every
+   * environment ever deleted (todo 7100 task 1).
+   *
+   * Sessions are found through cached views and active read descriptors, since a
+   * session key is a hash. A read still in flight is fenced by the epoch bump
+   * in {@link invalidateProjection}; its epoch is reclaimed once it settles.
+   */
+  forgetEnvironment(environmentId: string): number {
+    const sessionKeys = new Set<string>();
+    for (const entry of this.projectionCache.values()) {
+      if (entry.input.environmentId !== environmentId) continue;
+      sessionKeys.add(
+        nativeAgentSessionStorageKey(
+          entry.input.environmentId,
+          entry.input.agent,
+          entry.input.logicalSessionKey,
+        ),
+      );
+    }
+    for (const [key, descriptor] of this.projectionRefreshDescriptors) {
+      if (descriptor.environmentId !== environmentId) continue;
+      descriptor.forgotten = true;
+      sessionKeys.add(key.replace(/\0sync-v1$/, ""));
+    }
+    for (const [key, request] of this.progressiveRequests) {
+      if (request.environmentId !== environmentId) continue;
+      request.forgotten = true;
+      sessionKeys.add(key);
+    }
+    for (const { value } of [
+      ...this.progressiveTranscriptCache.values(),
+      ...this.progressiveStateCache.values(),
+    ]) {
+      if (value.identity.environmentId !== environmentId) continue;
+      sessionKeys.add(
+        nativeAgentSessionStorageKey(
+          environmentId,
+          value.identity.platform,
+          value.identity.logicalSessionKey,
+        ),
+      );
+    }
+    for (const sessionKey of sessionKeys) {
+      this.invalidateProjection(sessionKey);
+      this.projectionRevisions.delete(sessionKey);
+      this.releaseForgottenProjectionEpochs(sessionKey);
+    }
+    return sessionKeys.size;
+  }
+
+  private releaseForgottenProjectionEpochs(sessionKey: string): void {
+    for (const candidate of Array.from(this.progressiveReadEpochs.keys())) {
+      if (candidate.startsWith(`${sessionKey}\0`) && !this.progressiveReads.has(candidate))
+        this.progressiveReadEpochs.delete(candidate);
+    }
+    this.pruneProjectionEpoch(sessionKey);
+    this.pruneProjectionEpoch(`${sessionKey}\0sync-v1`);
+  }
+
   invalidateProjection(key: string): void {
     this.stopNotices.delete(key);
     const keys = [key, `${key}\0sync-v1`];
@@ -4967,6 +5156,7 @@ export class NativeAgentTranscriptProjection {
   private pruneProjectionEpoch(key: string): void {
     if (this.projectionCache.has(key)) return;
     if (this.projectionRefreshes.has(key)) return;
+    if (this.progressiveRequests.has(key)) return;
     const progressivePrefix = `${key}\0progressive-v1\0`;
     if (
       Array.from(this.progressiveReads.keys()).some((candidate) =>
@@ -5051,8 +5241,17 @@ export class NativeAgentTranscriptProjection {
     });
     return operation.finally(() => {
       if (this.projectionRefreshes.get(key) === operation) {
+        const forgotten = this.projectionRefreshDescriptors.get(key)?.forgotten;
         this.projectionRefreshes.delete(key);
         this.projectionRefreshDescriptors.delete(key);
+        if (forgotten) {
+          const sessionKey = key.replace(/\0sync-v1$/, "");
+          // Normalization can have populated row/detail caches before the
+          // commit's epoch check rejected the late view.
+          this.invalidateProjection(sessionKey);
+          this.projectionRevisions.delete(sessionKey);
+          this.releaseForgottenProjectionEpochs(sessionKey);
+        }
       }
       this.pruneProjectionEpoch(key);
     });
@@ -5088,6 +5287,7 @@ export class NativeAgentTranscriptProjection {
         // Keep the original cached history: a one-message state read must
         // not narrow a later held transcript read.
         const saved = held.view;
+        const state = await this.heldCoordinatorSessionState(input, held.message);
         const savedGeneration = String(saved.identity.sourceGeneration);
         return {
           platform: input.agent,
@@ -5097,7 +5297,7 @@ export class NativeAgentTranscriptProjection {
           messages: saved.messages,
           messageWindow: saved.messageWindow,
           connection: "error",
-          turn: { phase: "idle", error: held.message },
+          turn: state?.turn ?? { phase: "idle", error: held.message },
           interactions: [],
           composerControls: [],
           capabilities: nativeCapabilities(input.agent),

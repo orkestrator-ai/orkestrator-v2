@@ -31,3 +31,10 @@ All ran the owning file alone through `mise run test:logged`, with `bun --cwd=ap
 Before investigating a timeout in this file, time a few spawns of `/usr/bin/true` while it runs, and compare with the table.
 
 The file spends its time on real processes, which is what `scripts/test-tiers.ts` says belongs in the slow tier, yet it runs in the default tier. Moving it there would stop this failure reaching review preparation, at the cost of less frequent coverage. That is a separate decision about the tier list and has not been made here.
+
+## Recurrence on the environment deletion branch (2026-11-06)
+
+- **Failure:** `what the home holds decides as much as what the stamp says > a damaged stamp falls back to the copy`, `^ this test timed out after 60000ms`, in `mise run test` during review preparation of the environment deletion branch at `a27d3d51d`, macOS arm64, Bun 1.4.4, 18 CPUs. That host's 15-minute load average was 48–68 through the period.
+- **Why triage linked it to the branch:** the file imports `tempDir` from `tests/container-lifecycle-fixtures.ts`, which imports `backend-runtime.ts` and with it 1,029 backend modules, among them the changed `diff-stats-tracking.ts`, `diff-stats-service.ts`, `worktree-watcher.ts`, `worktree-removal-reads.ts` and `watch-host.ts`. Nothing in the file calls them. None of them does work when imported: `watch-host.ts` builds its shared `WatchHost` at load, but the helper process starts only on the first watch.
+- **Isolated reruns:** the case alone took 49.1 s while the host was loaded, under its 60 s deadline. At `9478f8808`, at a 1-minute load average of 8 with `/usr/bin/true` spawning in 2–3 ms, it passed alone in 3.0 s (`-t "a damaged stamp falls back"`). The whole file passed in 111.2 s, exit 0. Both ran through `mise run test:logged` with `bun --cwd=apps/backend test tests/portable-inputs-stamps.test.ts`.
+- **Conclusion:** the same spawn-latency deadline as above. The test is unchanged.

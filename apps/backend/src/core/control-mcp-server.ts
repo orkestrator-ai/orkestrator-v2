@@ -7,6 +7,7 @@ import type {
   ControlMcpCredentialPolicy,
   ControlMcpCredentialSummary,
 } from "@orkestrator/protocol/control-mcp";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { ConfirmTokens } from "./control-mcp-confirm.js";
 import {
   ControlMcpCredentialStore,
@@ -521,7 +522,10 @@ export class ControlMcpServer {
         throw new Error("Coordinator credential cannot access another project");
       }
       if (typeof args.environmentId === "string") {
-        const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+        const ownRuntime = coordinatorRuntimeId(
+          coordinatorScope.coordinatorId,
+          coordinatorScope.conversationId,
+        );
         if (args.environmentId !== ownRuntime) {
           const target =
             typeof args.nodeId === "string"

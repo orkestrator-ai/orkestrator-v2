@@ -70,3 +70,26 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. Reopened for `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull`, which exceeded its current 30-second budget (30050.80 ms). `mise run test:logged -- --name merge-owner-diagnostics -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.9 s). The older Electron failures remain historical.
 
 Full failure names, counts, evidence paths and unresolved limitations are in [0724](0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
+
+
+## DOM scan default-tier review repair — 2026-11-06
+
+Commit d468b27d9 moved the entire diagnostic file into the default tier despite
+this case's 30-second scan timeouts. The review repair extracts the scan to
+`tests/unit/dom-absence-scan.test.ts` and returns the subprocess canaries in
+`test-diagnostic-bounds.test.ts` to the slow tier. The scan now skips dependency,
+build and Git metadata directories, avoids symlinks, and reads synchronously
+instead of awaiting every directory and file. Fixture coverage checks exclusions,
+nested repository tests and malformed-source rejection. CI's lint guard follows
+the new file. See [todo 7142](../../../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md).
+
+Status remains open: targeted validation is not repeated loaded-host aggregate
+qualification, and this case includes other historical timeout owners.
+
+Focused repair validation (2026-11-06): `mise run test:logged -- --name
+review-scan-final -- bun test ./tests/unit/dom-absence-scan.test.ts
+./tests/unit/test-diagnostic-bounds.test.ts ./tests/unit/test-tiers.test.ts
+./tests/unit/ci-workflows.test.ts ./tests/unit/flaky-tests-index.test.ts
+./tests/unit/todo-index.test.ts --parallel=2 --only-failures` passed (exit 0,
+3.8 seconds). This exercises the original canaries and the new discovery fixtures
+together; it is not a loaded-host aggregate rerun.

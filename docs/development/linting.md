@@ -42,7 +42,7 @@ output — one push reports both.
 
 The same job also runs two repository-wide test guards that need no build: the
 DOM absence scan (`never passes a DOM-producing query result directly to
-toBeNull` in `tests/unit/test-diagnostic-bounds.test.ts`) and the flaky-test
+toBeNull` in `tests/unit/dom-absence-scan.test.ts`) and the flaky-test
 index check (`tests/unit/flaky-tests-index.test.ts`), so a PR that breaks either
 fails within minutes. Both also run in `mise run test`, the default tier that
 review preparation runs, so a branch hears about them before it reaches CI.
@@ -50,6 +50,14 @@ The DOM scan used to be in the slow tier, which no review runs, and seven
 offenders merged on 2026-11-05 (todo
 [7142](../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md)). A scan
 failure is fixed with `bun scripts/rewrite-bounded-dom-assertions.ts`.
+
+The default-tier scan is separate from the subprocess diagnostic canaries,
+which remain in the slow tier. Its synchronous source walk skips `node_modules`,
+`dist` and `.git` directories and does not follow directory symlinks. This reduces
+installed-tree I/O and avoids per-file asynchronous scheduling. The original
+aggregate timeout history remains open in flake case
+[0043](../tests/flaky-tests/aggregate-validation-runs/0043-root-suite-5000-ms-timeout-cluster.md);
+focused passes do not establish that the loaded-host flake is resolved.
 
 ## What is excluded, and why
 

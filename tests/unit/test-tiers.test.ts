@@ -55,6 +55,13 @@ describe("test tier selection", () => {
     }
   });
 
+  test("the DOM scan runs by default while diagnostic subprocess canaries stay slow", () => {
+    const args = tierArguments("default", repositoryRoot, ".", ["./tests"])!;
+    expect(args).not.toContain("--path-ignore-patterns=tests/unit/dom-absence-scan.test.ts");
+    expect(args).toContain("--path-ignore-patterns=tests/unit/test-diagnostic-bounds.test.ts");
+    expect(slowTestFiles(repositoryRoot, ".")).not.toContain("tests/unit/dom-absence-scan.test.ts");
+  });
+
   test("slow discovery is sorted, deduplicated and excludes dependency directories", () => {
     const { root } = fixture({
       "apps/backend/tests/tmux-live.test.ts": "",

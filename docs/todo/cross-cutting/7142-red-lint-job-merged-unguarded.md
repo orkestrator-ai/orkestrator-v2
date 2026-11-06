@@ -11,7 +11,7 @@ gating merges on the job, which is the maintainer's call.
 
 ### Tasks
 
-1. **Run the DOM absence scan in the default tier**: move `tests/unit/test-diagnostic-bounds.test.ts` out of the slow tier so `mise run test`, which review preparation runs, includes the scan. Status: done (2026-11-06).
+1. **Run the DOM absence scan in the default tier**: isolate the source scan in `tests/unit/dom-absence-scan.test.ts` in the default tier so `mise run test`, which review preparation runs, includes the scan. Status: done (2026-11-06).
 2. **Gate merges on the lint job**: apply the required-check ruleset prepared in [0030](0030-test-suite-and-ci-health.md) task 1, which already lists `bun fmt and oxlint`. Status: open (depends on 0030 task 1; maintainer action).
 3. **Catch number collisions between concurrent branches before they reach `main`**: two branches that each pass the flake-index or todo-index check alone can still collide once both merge. Status: open (depends on 2).
 
@@ -55,26 +55,23 @@ scan.
   files #1862 and #1866 had broken; #1865 broke `SystemUsageIndicator` again
   two minutes later.
 
-The fix removes the file from `SLOW_TESTS`. It spawns only `bun` children of
-its own (the two console canaries), as fourteen other default-tier root files
-do, and does not wait on Git, tmux, Chromium, servers or wall-clock time,
-which is what the tier is for. The whole file ran in 6.2 s locally.
+The original fix moved the whole file to the default tier and measured 6.2 s
+locally. Review identified open flake case
+[0043](../../tests/flaky-tests/aggregate-validation-runs/0043-root-suite-5000-ms-timeout-cluster.md),
+which records this scan exceeding 30 s in three aggregates. A focused pass alone
+cannot close that history.
 
 **Decisions.**
 
-- **How should review preparation see the scan?**
-  - **Move the file to the default tier (recommended, done).**
-    - Pros: one-line change; `mise run test` is already scheduled for every
-      code change under `apps/`, `bridges/`, `packages/`, `scripts/` or
-      `tests/`; the file matches the tier's definition.
-    - Cons: about 6 s more on the root group of the default suite.
-  - **Add the scan to `mise run lint`.**
-    - Pros: mirrors the CI job, which runs lint and the scan together.
-    - Cons: `lint` would start running a test; CI would run the scan twice.
-  - **Split the scan into its own default-tier file.**
-    - Pros: leaves the canaries in the slow tier.
-    - Cons: changes the CI step and its contract test in
-      `tests/unit/ci-workflows.test.ts` for a 3 s saving.
+- **Isolate and reduce the scan (recommended, implemented).** Keep the scan in
+  its own default-tier file; restore the diagnostic subprocess canaries to the
+  slow tier. Skip dependency/build/metadata directories and use synchronous
+  source reads to avoid per-file asynchronous scheduling. Pros: preserves
+  default validation and CI coverage while reducing installed-tree work.
+  Cons: CI and its contract test need the new scan path; loaded-host qualification
+  remains necessary before closing case 0043.
+- **Keep the whole diagnostic file in the default tier.** Pros: smaller diff.
+  Cons: adds subprocess canaries and the recorded aggregate timeout risk.
 
 ### 2. Gate merges on the lint job
 
@@ -151,3 +148,13 @@ are open.
   and
   [7141](../../tests/flaky-tests/environments-and-containers/7141-firewall-egress-filter-startup-timeout.md),
   previously both numbered 9834.
+
+## Assumptions and decisions
+
+### Task 1: separate source scanning from subprocess diagnostics
+
+Chose a default-tier scan with explicit source-tree exclusions and kept the
+canaries in the slow tier. The CI lint guard now targets the new scan file.
+Case 0043 remains open pending loaded-host aggregate evidence; its historical
+30-second failures are retained. No timeout was increased and no assertion was
+removed.

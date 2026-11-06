@@ -48,7 +48,7 @@ describe("CI workflow contracts", () => {
   test("the fast lint job runs the DOM absence scan and the flaky-test index check", () => {
     const runs = workflow("ci").jobs.oxc!.steps!.flatMap((step) => step.run ?? []);
     const guard = (file: string) => runs.find((run) => run.includes(file));
-    expect(guard("tests/unit/test-diagnostic-bounds.test.ts")).toContain(
+    expect(guard("tests/unit/dom-absence-scan.test.ts")).toContain(
       "never passes a DOM-producing query result",
     );
     expect(guard("tests/unit/flaky-tests-index.test.ts")).toBeDefined();

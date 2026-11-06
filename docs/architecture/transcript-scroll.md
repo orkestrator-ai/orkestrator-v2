@@ -233,8 +233,10 @@ reader's: it does not release a follower. A navigation started since the show
 (activation) owns the viewport, so the old offset is not written over it.
 
 CI runs `InspectorTranscriptHide.spec.ts` in both Chromium and WebKit, in
-both viewport projects. It samples the reader's first visible animation frame
-with a probe armed before showing the pane, then checks latest-on-activation.
+both viewport projects. It records the reader's offset once it has held for 5
+animation frames (WebKit animates the wheel, and Virtuoso then corrects row
+estimates), samples the reader's first visible animation frame with a probe
+armed before showing the pane, then checks latest-on-activation.
 For both the follower and reader, it samples every animation frame for 750 ms
 after reaching the end, checking that the transcript stays at the end and the
 overview stays at its saved offset. This bounds the settling claim to that

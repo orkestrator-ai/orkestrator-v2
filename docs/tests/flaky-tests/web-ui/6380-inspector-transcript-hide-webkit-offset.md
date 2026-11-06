@@ -1,15 +1,15 @@
 # Inspector transcript hide: a review report's first offset under WebKit
 
 - **ID:** 6380
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `Build Pipeline with a review report shows the newest message when its pane returns`
 - **File:** `e2e/InspectorTranscriptHide.spec.ts:74`
 - **Browser:** Playwright WebKit (`ORKESTRATOR_E2E_BROWSER=webkit`), both viewports
 
-Still open on 2026-11-06: the main cause (an engine clamp) is fixed in the app; a
-rarer cause in how the spec records the reader's offset remains (see
-[Remaining cause](#remaining-cause-the-readers-offset-is-read-while-it-is-still-moving)).
+Resolved 2026-11-06. Two causes: an engine clamp, fixed in the app, and the
+spec recording the reader's offset while it was still moving, fixed in the spec
+(see [Second cause](#second-cause-the-readers-offset-was-read-while-it-was-still-moving)).
 
 Reported at about 75% of runs on WebKit. In the `mobile-shell-browser` job on
 `main`, the step `inspector-transcript-webkit` failed in 4 of the 5 completed CI
@@ -123,16 +123,18 @@ All in the Docker image above, `--workers=1`, on 2026-11-06:
 | WebKit, final fix | the spec with logging added, assertions unchanged, `--repeat-each=40` | 237 passed, 3 failed (all the cause below) |
 | WebKit, final fix | `e2e/InspectorTranscriptHide.spec.ts --repeat-each=10` | 60 passed |
 | Chromium, final fix | `e2e/InspectorTranscriptHide.spec.ts --repeat-each=10` | 60 passed |
+| WebKit, both fixes | `e2e/InspectorTranscriptHide.spec.ts --repeat-each=40` | 240 passed |
+| Chromium, both fixes | `e2e/InspectorTranscriptHide.spec.ts --repeat-each=10` | 60 passed |
 
-No run after the fix failed with the clamp.
+No run after the app fix failed with the clamp, and no run after the spec fix
+failed at all.
 
-## Remaining cause: the reader's offset is read while it is still moving
+## Second cause: the reader's offset was read while it was still moving
 
-Not fixed, because it is in the spec rather than the app, and changing how the
-spec records the offset is a decision for its owner. In WebKit, `page.mouse.wheel(0, -600)`
+In WebKit, `page.mouse.wheel(0, -600)`
 scrolls with an animation, and Virtuoso then corrects for rows that measured
 shorter than estimated (`scrollBy` by −200 px or −109 px in the logs). The spec
-reads `readerOffset` once `bottomGap` passes 100 and the overview has been moved,
+read `readerOffset` once `bottomGap` passes 100 and the overview has been moved,
 which can be before that movement ends. The transcript then keeps moving before
 the hide, and the first frame after the show is, correctly, where the reader
 was at the hide.
@@ -157,10 +159,14 @@ of its overflowing-transcript tests failed 6 of 6 in WebKit with the controller
 change reverted (received about 20 px above the recorded offset). That spec is
 not in the WebKit CI job.
 
-A possible change, not made: record `readerOffset` only once the transcript's
-offset has held for a few animation frames (or after `scrollend` plus a frame),
-so the spec compares the first frame with where the reader settled. The
-assertion itself would not change.
+Fix, in the spec: `settledOffset` records `readerOffset` only once the
+transcript's `scrollTop` has held for 5 consecutive animation frames (failing
+if it never does within 3 seconds), so the first frame is compared with where
+the reader settled. It is a setup-timing change: the `bottomGap` > 100 check,
+the `readerOffset` > 100 check and the exact equality at the first-frame
+assertion are unchanged. `e2e/MultiReviewFlow.spec.ts` still records its
+reading position the old way and still fails in WebKit; it is not in CI and was
+left unchanged.
 
 One `Graph Run` failure at line 63 (`samples.length` was 1 in the follower's
 settling check) appeared once in the first 10× run and not in 50 further `Graph

@@ -117,6 +117,11 @@ export type Options = {
   soakCycleGapMs: number;
   /** Fake-model Pi sessions kept open on the fixture's local environment. */
   soakSessions: number;
+  /**
+   * `dev:test --agent-platforms`: the managed toolchains a profile prepares.
+   * Unset keeps the profile default (every platform, some downloaded at start).
+   */
+  agentPlatforms?: string;
 };
 
 export function parseOptions(argv: string[]): Options {
@@ -170,7 +175,12 @@ export function parseOptions(argv: string[]): Options {
       options.soakCycleGapMs = positive(value(index++, name), name);
     else if (name === "--soak-sessions")
       options.soakSessions = positive(value(index++, name), name);
-    else if (name === "--soak-environments") {
+    else if (name === "--agent-platforms") {
+      const platforms = value(index++, name);
+      if (!/^[a-z]+(,[a-z]+)*$/.test(platforms))
+        throw new Error("--agent-platforms takes a comma list of platform names");
+      options.agentPlatforms = platforms;
+    } else if (name === "--soak-environments") {
       const kinds = value(index++, name).split(",").filter(Boolean);
       if (kinds.length === 0 || kinds.some((kind) => kind !== "local" && kind !== "container"))
         throw new Error("--soak-environments accepts local,container");
@@ -809,6 +819,22 @@ export function countGuardLines(logDir: string | undefined): number | null {
     .reduce((total, count) => total + count, 0);
 }
 
+/** The launcher's arguments for one profile. */
+export function profileArguments(profile: string, options: Options): string[] {
+  return [
+    "apps/desktop/scripts/dev-test.ts",
+    "--profile",
+    profile,
+    "--fixture",
+    "--fixture-environments",
+    options.fixtureEnvironments,
+    "--no-agent-credentials",
+    // Never open a window on the host's desktop; the gateway serves the app.
+    "--headless",
+    ...(options.agentPlatforms ? ["--agent-platforms", options.agentPlatforms] : []),
+  ];
+}
+
 function startProfile(
   profile: string,
   options: Options,
@@ -819,21 +845,10 @@ function startProfile(
   try {
     // Spawn the launcher directly so its manifest PID is the child we own,
     // rather than a descendant of an opaque mise wrapper.
-    return spawn(
-      "bun",
-      [
-        "apps/desktop/scripts/dev-test.ts",
-        "--profile",
-        profile,
-        "--fixture",
-        "--fixture-environments",
-        options.fixtureEnvironments,
-        "--no-agent-credentials",
-        // Never open a window on the host's desktop; the gateway serves the app.
-        "--headless",
-      ],
-      { env, stdio: ["ignore", output, output] },
-    );
+    return spawn("bun", profileArguments(profile, options), {
+      env,
+      stdio: ["ignore", output, output],
+    });
   } finally {
     closeSync(output);
   }

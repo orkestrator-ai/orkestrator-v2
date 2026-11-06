@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { __testing, measureSoak, parseOptions } from "../../scripts/recurring-live-ab";
+import {
+  __testing,
+  measureSoak,
+  parseOptions,
+  profileArguments,
+} from "../../scripts/recurring-live-ab";
 import {
   FAKE_PI_MODEL_REF,
   profilePiAgentDirectory,
@@ -106,6 +111,15 @@ describe("soak sessions and trends", () => {
     expect(parseOptions([]).soakSessions).toBe(0);
     expect(() => parseOptions(["--soak-sessions", "9"])).toThrow();
     expect(() => parseOptions(["--soak-sessions", "1.5"])).toThrow();
+  });
+
+  test("starts profiles headless, credential-free and optionally on chosen toolchains", () => {
+    const defaults = profileArguments("p", parseOptions([]));
+    expect(defaults).toEqual(expect.arrayContaining(["--headless", "--no-agent-credentials"]));
+    expect(defaults).not.toContain("--agent-platforms");
+    const narrowed = profileArguments("p", parseOptions(["--agent-platforms", "pi"]));
+    expect(narrowed.slice(-2)).toEqual(["--agent-platforms", "pi"]);
+    expect(() => parseOptions(["--agent-platforms", "pi;rm"])).toThrow();
   });
 
   test("keeps fake-model sessions open, prompts them every cycle and samples the trend", async () => {

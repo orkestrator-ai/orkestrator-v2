@@ -54,7 +54,7 @@ So 1,400 finished records cost 5 to 8 ms on a sweep that runs every 60 s and abo
 
 ## Current state
 
-C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its outcome table is in the last version of the deleted report: `git show b0fbe4ee1^:docs/reports/coordinator/0110-c3-sweep-and-reads.md`.
+C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its outcome table is in the last version of the deleted report: `git show abc3eea16^:docs/reports/coordinator/0110-c3-sweep-and-reads.md`.
 
 ## Needs verification
 
@@ -77,3 +77,10 @@ not remove the per-wake repair or replace task 2's measurement.
 
 The recovery command uses the final deletion's parent so it includes the corrected
 main-opening path list, rather than finding the earlier deletion by its subject.
+
+### Tasks 1 and 2: report recovery from merged history
+
+Use the parent of the merged C3 deletion commit `abc3eea16` for the recovery
+command. This keeps the full report available from main's history instead of
+depending on the unmerged commit `b0fbe4ee1`. A link to the batch record would
+identify the closure but would not retrieve the original report.

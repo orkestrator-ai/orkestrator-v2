@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { reportDockerNetworkChange } from "./docker-network-changes.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
@@ -114,7 +115,11 @@ export async function ensureEnvironmentNetwork(
   const labels = expectedLabels(owner, environmentId);
   const existing = await inspectNetwork(name);
   if (existing.kind === "present") {
-    if (labelsMatch(existing.labels, labels)) return name;
+    if (labelsMatch(existing.labels, labels)) {
+      // An adopted network may predate this process's peer list.
+      reportDockerNetworkChange();
+      return name;
+    }
     throw new ContainerLifecycleError(
       "needs-attention",
       "A Docker network with this environment's name exists but is not labelled as its own. It was left untouched.",
@@ -143,7 +148,10 @@ export async function ensureEnvironmentNetwork(
     // An ambiguous create (timeout, a racing attempt) is resolved by exact
     // identity rather than reported as failure.
     const after = await inspectNetwork(name);
-    if (after.kind === "present" && labelsMatch(after.labels, labels)) return name;
+    if (after.kind === "present" && labelsMatch(after.labels, labels)) {
+      reportDockerNetworkChange();
+      return name;
+    }
     const message = error instanceof Error ? error.message : String(error);
     throw new ContainerLifecycleError(
       /address pools|could not find an available|non-overlapping/i.test(message)
@@ -154,6 +162,8 @@ export async function ensureEnvironmentNetwork(
         : "Docker could not create the environment's network. Nothing else was changed.",
     );
   }
+  // The agent-tools server admits peers by this backend's network subnets.
+  reportDockerNetworkChange();
   return name;
 }
 
@@ -175,6 +185,7 @@ export async function removeEnvironmentNetwork(
   if (probe.containers > 0) return "in-use";
   try {
     await runCommand("docker", ["network", "rm", name], { timeoutMs: 30_000 });
+    reportDockerNetworkChange();
     return "removed";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

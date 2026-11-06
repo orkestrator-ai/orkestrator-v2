@@ -156,7 +156,7 @@ describe("bun output", () => {
     expect(triage.commands[0]!.unattributedReason).toContain("Bun counted 3");
   });
 
-  test("a test that names a changed path is related", () => {
+  test("a test that names a changed directory is related, and the verdict names that directory", () => {
     const root = fixture({
       "tests/todo-index.test.ts": [
         'import { test } from "bun:test";',
@@ -176,7 +176,7 @@ describe("bun output", () => {
     expect(failures(triage)[0]).toMatchObject({
       verdict: "related",
       reasons: ["references-changed-path"],
-      changedPath: "docs/todo/cross-cutting/2921-browser-failures.md",
+      changedPath: "docs/todo",
     });
   });
 
@@ -233,6 +233,344 @@ describe("bun output", () => {
     const triage = classify(root, { output: bunAggregate(root), status: "incomplete" });
     expect(triage.commands[0]!.unattributed).toBe(true);
     expect(triage.commands[0]!.unattributedReason).toContain("did not finish");
+  });
+});
+
+/**
+ * To-do 4520 changed only `apps/web/src/hooks/` and documents, yet 17 backend
+ * and CLI failures were triaged `related`: each test's import graph reached
+ * `packages/protocol/src/web-annotations.ts`, whose doc comment names
+ * `apps/web` as an example.
+ */
+describe("paths named outside a test and its helpers", () => {
+  const CHANGED_4520 = [
+    "apps/web/src/hooks/native-agent-live-head.test.ts",
+    "apps/web/src/hooks/native-agent-live-head.ts",
+    "apps/web/src/hooks/useNativeAgentSession.sync.test.tsx",
+    "docs/todo/cross-cutting/1202-efficiency-review-follow-ups.md",
+    "docs/todo/transcripts-and-observation/0000-index.md",
+    "docs/todo/transcripts-and-observation/4520-live-head-omitted-count-duplicate-part.md",
+  ];
+  const WEB_ANNOTATIONS = [
+    "/**",
+    " * - `root` meta (`<meta name=… content=…>`): the producing project's",
+    " *   directory relative to the environment workspace, for example `apps/web`;",
+    " *   absent means the workspace root.",
+    " */",
+    'export const SOURCE_HINT_ROOT_META = "orkestrator-source-root";',
+  ].join("\n");
+  const OUTPUT = [
+    "apps/backend/tests/container-readiness.test.ts:",
+    "(fail) bounded in-container boot wait > a pending shell probe is clipped to the remaining overall deadline",
+    " 0 pass",
+    " 1 fail",
+  ].join("\n");
+  function tree(overrides: Record<string, string> = {}): string {
+    return fixture({
+      "packages/protocol/package.json": JSON.stringify({ name: "@acme/protocol" }),
+      "packages/protocol/src/web-annotations.ts": WEB_ANNOTATIONS,
+      "apps/backend/src/core/container-readiness.ts": [
+        'import { SOURCE_HINT_ROOT_META } from "../../../../packages/protocol/src/web-annotations";',
+        "export const meta = SOURCE_HINT_ROOT_META;",
+      ].join("\n"),
+      "apps/backend/tests/container-readiness.test.ts": [
+        'import { test } from "bun:test";',
+        'import { meta } from "../src/core/container-readiness";',
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+      ...overrides,
+    });
+  }
+
+  test("a directory named in a production module's doc comment is not a reference", () => {
+    const triage = classify(tree(), { output: OUTPUT, changedFiles: CHANGED_4520 });
+    expect(failures(triage)[0]).toMatchObject({
+      file: "apps/backend/tests/container-readiness.test.ts",
+      verdict: "unrelated",
+      reasons: ["no-changed-dependency"],
+    });
+    expect(failures(triage)[0]!.changedPath).toBeUndefined();
+  });
+
+  test("a directory or basename in a production module's code is not a reference", () => {
+    const root = tree({
+      "apps/backend/src/core/container-readiness.ts": [
+        'import { SOURCE_HINT_ROOT_META } from "../../../../packages/protocol/src/web-annotations";',
+        'export const webRoot = "apps/web";',
+        'export const head = "native-agent-live-head.ts";',
+        "export const meta = SOURCE_HINT_ROOT_META;",
+      ].join("\n"),
+    });
+    const triage = classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 });
+    expect(failures(triage)[0]).toMatchObject({
+      verdict: "unrelated",
+      reasons: ["no-changed-dependency"],
+    });
+  });
+
+  test("a changed file's full path in a production module's code is still a reference", () => {
+    const root = tree({
+      "apps/backend/src/core/container-readiness.ts": [
+        'import { readFileSync } from "node:fs";',
+        'export const head = readFileSync("apps/web/src/hooks/native-agent-live-head.ts", "utf8");',
+      ].join("\n"),
+    });
+    const triage = classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 });
+    expect(failures(triage)[0]).toMatchObject({
+      verdict: "related",
+      reasons: ["references-changed-path"],
+      changedPath: "apps/web/src/hooks/native-agent-live-head.ts",
+    });
+  });
+
+  test("a changed file's full path in a production module's comment is not a reference", () => {
+    const root = tree({
+      "apps/backend/src/core/container-readiness.ts": [
+        "// Mirrors apps/web/src/hooks/native-agent-live-head.ts.",
+        "export const meta = 1;",
+      ].join("\n"),
+    });
+    const triage = classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 });
+    expect(failures(triage)[0]!.verdict).toBe("unrelated");
+  });
+
+  test("a directory a test helper names is a reference", () => {
+    const root = tree({
+      "apps/backend/tests/container-readiness.test.ts": [
+        'import { test } from "bun:test";',
+        'import { webRoot } from "./web-fixture-test-support";',
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+      "apps/backend/tests/web-fixture-test-support.ts":
+        'import { join } from "node:path";\nexport const webRoot = join(process.cwd(), "apps/web");\n',
+    });
+    const triage = classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 });
+    expect(failures(triage)[0]).toMatchObject({
+      verdict: "related",
+      reasons: ["references-changed-path"],
+      changedPath: "apps/web",
+    });
+  });
+
+  test("a directory named only in the test file's own comment is not a reference", () => {
+    const root = tree({
+      "apps/backend/tests/container-readiness.test.ts": [
+        'import { test } from "bun:test";',
+        '// Unlike "apps/web", the backend has no live head.',
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+    });
+    const triage = classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 });
+    expect(failures(triage)[0]!.verdict).toBe("unrelated");
+  });
+
+  test("a preload every test loads is not one test's own helper", () => {
+    const root = tree({
+      "apps/backend/bunfig.toml": '[test]\npreload = ["./tests/setup.ts"]\n',
+      "apps/backend/tests/setup.ts": 'export const webRoot = "apps/web";\n',
+    });
+    const triage = classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 });
+    expect(failures(triage)[0]).toMatchObject({
+      verdict: "unrelated",
+      reasons: ["no-changed-dependency"],
+    });
+  });
+
+  for (const location of ["test", "helper", "production"] as const) {
+    test(`a preserved legal comment in a ${location} is not path evidence`, () => {
+      const file =
+        location === "test"
+          ? "apps/backend/tests/container-readiness.test.ts"
+          : location === "helper"
+            ? "apps/backend/src/core/readiness-test-support.ts"
+            : "apps/backend/src/core/container-readiness.ts";
+      const literal =
+        location === "production" ? "apps/web/src/hooks/native-agent-live-head.ts" : "apps/web";
+      const root = tree({
+        "apps/backend/tests/container-readiness.test.ts": [
+          ...(location === "test" ? [] : [`import "../src/core/${path.basename(file)}";`]),
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+        ].join("\n"),
+        [file]: [
+          `/*! "${literal}" */`,
+          "export const value = 1;",
+          ...(location === "test"
+            ? [
+                'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+              ]
+            : []),
+        ].join("\n"),
+      });
+      expect(
+        failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+      ).toMatchObject({
+        verdict: "unrelated",
+        reasons: ["no-changed-dependency"],
+      });
+    });
+  }
+
+  for (const expression of [
+    '"apps/web"',
+    "'/* \"apps/web\" */'",
+    "'// \"apps/web\"'",
+    "`apps/web`",
+    "`apps/web/**/${name}`",
+    "`apps/web/**/${`${name}`}`",
+    "`apps/web/**/${({ name }).name}`",
+    '`apps/web/**/${"/* text */"}`',
+  ]) {
+    test(`real path text survives comment removal in ${expression}`, () => {
+      const root = tree({
+        "apps/backend/tests/container-readiness.test.ts": [
+          '/*! "unrelated/legal/path" */',
+          `const directory = ${expression};`,
+          'const markers = "/* not a comment */ // nor is this";',
+          'const escaped = "\\\"/* still a string */\\\"";',
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+        ].join("\n"),
+      });
+      expect(
+        failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+      ).toMatchObject({
+        verdict: "related",
+        reasons: ["references-changed-path"],
+        changedPath: "apps/web",
+      });
+    });
+  }
+
+  test("legal comments inside template expressions cannot become path evidence", () => {
+    const root = tree({
+      "apps/backend/tests/container-readiness.test.ts": [
+        'const description = `text ${(() => { /*! "apps/web" */ return name; })()}`;',
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+    });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0]!.verdict,
+    ).toBe("unrelated");
+  });
+
+  test("unsupported Flow syntax in a Jest test leaves path analysis unavailable", () => {
+    const root = fixture({
+      "tests/example.test.js": [
+        '// "apps/web"',
+        "opaque type ID = string;",
+        'test("works", () => {});',
+      ].join("\n"),
+    });
+    const result = classify(root, {
+      output: "FAIL tests/example.test.js\n  ● works\nTests: 1 failed, 1 total",
+      changedFiles: ["apps/web/src/hooks/head.ts"],
+    });
+    expect(failures(result)[0]).toMatchObject({
+      runner: "jest",
+      verdict: "undetermined",
+      reasons: ["dependency-graph-incomplete"],
+    });
+    expect(failures(result)[0]!.changedPath).toBeUndefined();
+  });
+
+  test("ambiguous regexp tokens cannot expose comment-like path text", () => {
+    const root = tree({
+      "apps/backend/tests/container-readiness.test.ts": [
+        '/*! "apps/web" */',
+        "const pattern = /[/*]/;",
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+    });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+    ).toMatchObject({
+      verdict: "undetermined",
+      reasons: ["dependency-graph-incomplete"],
+    });
+  });
+
+  for (const location of ["test", "helper"] as const) {
+    for (const slash of ["/[a-z]/", "10 / 2"]) {
+      test(`a longer path prefix with ${slash} in a ${location} stays unrelated`, () => {
+        const testFile = "apps/backend/tests/container-readiness.test.ts";
+        const file = location === "test" ? testFile : "apps/backend/tests/readiness-helper.ts";
+        const testBody =
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => {});';
+        const root = tree({
+          [testFile]: `import "./readiness-helper";\n${testBody}`,
+          [file]: [
+            'export const directory = "apps/website/src/hooks";',
+            'export const glob = "family/*";',
+            'export const url = "https://example.test";',
+            `export const value = ${slash};`,
+            ...(location === "test" ? [testBody] : []),
+          ].join("\n"),
+        });
+        const failure = failures(
+          classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }),
+        )[0]!;
+        expect(failure).toMatchObject({
+          verdict: "unrelated",
+          reasons: ["no-changed-dependency"],
+        });
+        expect(failure.changedPath).toBeUndefined();
+      });
+    }
+  }
+
+  for (const [directory, verdict] of [
+    ["apps/web", "undetermined"],
+    ["apps/website", "unrelated"],
+  ] as const) {
+    test(`an imported JSON fixture naming ${directory} is ${verdict}`, () => {
+      const root = tree({
+        "apps/backend/tests/container-readiness.test.ts": [
+          'import data from "./readiness-fixture.json";',
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => data);',
+        ].join("\n"),
+        "apps/backend/tests/readiness-fixture.json": JSON.stringify({ directory }),
+      });
+      const failure = failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0]!;
+      expect(failure).toMatchObject({
+        verdict,
+        reasons: [
+          verdict === "undetermined" ? "dependency-graph-incomplete" : "no-changed-dependency",
+        ],
+      });
+      expect(failure.changedPath).toBeUndefined();
+    });
+  }
+
+  for (const [basename, verdict] of [
+    ["agent-test-cursor-credential.ts", "related"],
+    ["agent-contest-cursor-credential.ts", "unrelated"],
+    ["agent-fixture-support.ts", "related"],
+  ]) {
+    test(`helper basename heuristic classifies ${basename} as ${verdict}`, () => {
+      const root = tree({
+        "apps/backend/src/core/container-readiness.ts": `import "./${basename}";\nexport const meta = 1;`,
+        [`apps/backend/src/core/${basename}`]: 'export const directory = "apps/web";',
+      });
+      expect(
+        failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+      ).toMatchObject({
+        verdict,
+        reasons: [verdict === "related" ? "references-changed-path" : "no-changed-dependency"],
+      });
+    });
+  }
+
+  test("a helper reached through a production module is the test's own helper", () => {
+    const root = tree({
+      "apps/backend/src/core/container-readiness.ts": 'import "../../tests/readiness-support";',
+      "apps/backend/tests/readiness-support.ts": 'export const directory = "apps/web";',
+    });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+    ).toMatchObject({
+      verdict: "related",
+      reasons: ["references-changed-path"],
+      changedPath: "apps/web",
+    });
   });
 });
 
@@ -417,6 +755,51 @@ describe("conservative dependency attribution", () => {
       });
     });
   }
+  test("an open flake-registry row never changes a verdict", () => {
+    const registry = [
+      "| Status | Test | File |",
+      "| --- | --- | --- |",
+      "| open | `idle connections expire` | apps/backend/src/pool.test.ts |",
+      "| open | `a capture's write finishes while a long sweep is still walking` | |",
+    ].join("\n");
+    const unknownTest =
+      "a sweep's lock > a capture's write finishes while a long sweep is still walking";
+    // The last failure names no file this tree has, as in to-do 4520's
+    // `known-flaky`, `test-file-unknown` row.
+    const output = (root: string) =>
+      bunAggregate(root, 3).replace(
+        "@acme/backend:test:workspace:  13339 pass",
+        `@acme/backend:test:workspace: (fail) ${unknownTest}\n@acme/backend:test:workspace:  13339 pass`,
+      );
+    const verdicts = (changedFiles: string[], listed: boolean) => {
+      const root = fixture({
+        ...MODULES,
+        ...(listed ? { "docs/tests/flaky-tests/backend/0000-index.md": registry } : {}),
+      });
+      const triage = classify(root, { output: output(root), changedFiles });
+      expect(triage.commands[0]!.unattributed).toBe(false);
+      return Object.fromEntries(failures(triage).map((f) => [f.name, f]));
+    };
+    for (const [changedFiles, poolVerdict] of [
+      [["docs/notes.md"], "unrelated"],
+      [["apps/backend/src/pool.ts"], "related"],
+    ] as const) {
+      const without = verdicts([...changedFiles], false);
+      const withRow = verdicts([...changedFiles], true);
+      expect(withRow["idle connections expire"]).toMatchObject({
+        verdict: poolVerdict,
+        reasons: expect.arrayContaining(["known-flaky"]),
+      });
+      expect(withRow[unknownTest]).toMatchObject({
+        file: null,
+        verdict: "undetermined",
+        reasons: ["known-flaky", "test-file-unknown"],
+      });
+      for (const name of Object.keys(without)) {
+        expect(withRow[name]!.verdict).toBe(without[name]!.verdict);
+      }
+    }
+  });
   for (const source of [
     'const moduleName = "./runtime"; import(moduleName);',
     'const moduleName = "./runtime"; require(moduleName);',

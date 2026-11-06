@@ -15,6 +15,7 @@ import {
 } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { reportDockerNetworkChange } from "./docker-network-changes.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   MAX_CLEANUP_CANDIDATES,
@@ -345,6 +346,7 @@ export async function executeDockerCleanup(
     }
     try {
       await runCommand("docker", ["network", "rm", name], { timeoutMs: 30_000 });
+      reportDockerNetworkChange();
       outcomes.push({ kind: "network", id: name, outcome: "removed" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

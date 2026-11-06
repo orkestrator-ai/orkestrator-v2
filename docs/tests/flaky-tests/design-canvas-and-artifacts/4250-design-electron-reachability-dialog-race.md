@@ -43,3 +43,22 @@ Docker reach the backend, where this modal does not open, or with a real display
 
 **Next step:** on a host where the modal opens, record when it opens and closes
 against the journey's steps, then rerun on a host where it does not open.
+
+## Recurrence during 7041 task 2 (2026-11-06)
+
+Three runs alone on beelink at `main` `c1724ab74`, through
+`mise run test:logged -- … bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts`
+with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, one worker. Docker's
+automatic address pools were exhausted.
+
+| Run | Probe | Docker shim on PATH | Result |
+| --- | --- | --- | --- |
+| 1 | on | no (the probe network could not be created) | passed, 18.5 s |
+| 2 | on | yes (probe network created on a /29, removed within 6 s) | failed: `toHaveTitle` timed out after 150 s on `Orkestrator AI` instead of `Orkestrator AI — DEV [design-canvas-electron]` (`design-canvas-electron-journey.ts:96`), then cleanup hit [1131](1131-design-electron-graceful-quit-deadline.md) |
+| 3 | off | yes | failed in cleanup only: `Owned processes did not exit` ([1131](1131-design-electron-graceful-quit-deadline.md)) |
+
+Run 3 failed with the probe off, so these runs do not show that the probe's
+modal causes the failures. Run 2's title timeout is a new failing step. When the
+probe ran, its modal may have opened, but that was not recorded. Whether Electron
+specs should skip the probe is [7470](../../../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
+task 1.

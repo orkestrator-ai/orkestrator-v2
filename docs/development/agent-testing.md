@@ -609,6 +609,34 @@ mise run docker:build:dev --profile container-qa
 Never add the live Orkestrator source checkout as the project under test. Use the
 copied `testProject` only.
 
+#### Container profiles on an exhausted Docker address pool
+
+When Docker's automatic address pools are full, a manual container profile
+fails at startup with `ContainerLifecycleError:resource-exhausted: Docker has no
+free address range for another environment network`. Agents must not free other
+runs' networks to get past it. Start the profile with the same scoped Docker
+shim that `test:agent:docker:isolated` puts on PATH:
+
+```bash
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+mise run dev:test --profile container-qa --fixture --fixture-environments local,container
+```
+
+Run it from the worktree root, and keep the same two variables on any later
+`dev:test` restart of that profile. The shim
+(`apps/desktop/scripts/dev/docker-qualification.ts`) changes only
+`docker network create` calls that carry an `orkestrator-owner=` label and no
+`--subnet`. When such a call fails because the pools are exhausted, it retries
+on otherwise-unrouted /29s in 172.16.240.0/22. Docker refuses an overlap
+atomically, and every other error is passed back unchanged. It needs `ip` to
+check routes; without it, exhaustion stays a hard failure. The fixture's
+environment network then shows a `172.16.24x.y/29` subnet. With the
+host-reachability check on, the profile's probe network is created on a /29 in
+the same way and removed again when the check ends. `dev:stop` and `dev:reset`
+need no shim: they remove the profile's own networks by owner label. Never put
+the shim on the PATH of anything but a disposable profile.
+
 ## Automated checks
 
 Run focused package typechecks/tests first, with bounded `--parallel` workers on
@@ -630,7 +658,8 @@ mise run test:logged -- --name agent-browser -- mise run test:agent:browser
 
 mise run test:logged -- --name agent-electron -- mise run test:agent:electron
 
-# Against a profile started with --fixture-environments local,container:
+# Against a profile started with --fixture-environments local,container
+# (on an exhausted Docker pool, start it with the shim described above):
 ORKESTRATOR_AGENT_TEST_PROFILE=container-qa \
 mise run test:logged -- --name agent-docker -- mise run test:agent:docker
 

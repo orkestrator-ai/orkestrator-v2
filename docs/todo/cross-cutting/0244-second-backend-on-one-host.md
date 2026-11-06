@@ -2,17 +2,19 @@
 
 ## Task analysis
 
-Analysed 2026-10-30 against `main` at `cd7bbe3e5` (first analysed 2026-10-27
+Analysed 2026-11-06 against `main` at `c1724ab74` (first analysed 2026-10-27
 against `863b5782`; tasks 1 to 3 were implemented on the
-`todo-0244-second-backend-one-host` branch the same day).
+`todo-0244-second-backend-one-host` branch on 2026-10-30; task 5 was run on
+2026-11-06 in a disposable systemd container, together with
+[7370](7370-tailscale-serve-second-backend-live.md)'s predecessor 0996 task 3).
 
 ### Tasks
 
-1. **Keep a second backend off the default Control MCP port**: only the default data directory's backend binds 34122; every other one takes an ephemeral port and publishes it in `backend-instance.json`. Status: done (live proof is task 5).
-2. **Recover the port when it frees up**: retry a failed bind of the fixed port with capped backoff and say "port in use" in Settings. Status: done (live proof is task 5).
-3. **Detect a second instance**: a backend of another data directory logs a line when the default data directory's descriptor names a live backend. Status: done.
-4. **Find why the live backend exited at 00:58:57**: reproduce in a VM without any test suite running. Status: open (needs a disposable VM; steps under Outstanding work).
-5. **Qualify two backends on one host**: in a VM, neither loses its Control MCP or exits when the other boots, restarts or stops. Status: open (needs a disposable VM; steps under Outstanding work).
+1. **Keep a second backend off the default Control MCP port**: only the default data directory's backend binds 34122; every other one takes an ephemeral port and publishes it in `backend-instance.json`. Status: done (proved live by task 5).
+2. **Recover the port when it frees up**: retry a failed bind of the fixed port with capped backoff and say "port in use" in Settings. Status: done (proved live by task 5).
+3. **Detect a second instance**: a backend of another data directory logs a line when the default data directory's descriptor names a live backend. Status: done (seen live in task 5).
+4. **Find why the live backend exited at 00:58:57**: reproduce in a VM without any test suite running. Status: open (needs a VM with its own kernel and a desktop AppImage; what it needs is under Outstanding work).
+5. **Qualify two backends on one host**: neither loses its Control MCP or exits when the other boots, restarts or stops. Status: done (2026-11-06, disposable systemd container; record under Qualification record).
 
 ### 1. Keep a second backend off the default Control MCP port
 
@@ -73,7 +75,7 @@ against `863b5782`; tasks 1 to 3 were implemented on the
 
 **Context.** The original file listed the Control MCP port, the loopback client port and the agent tools port as shared per-user resources.
 
-**Investigation.** With task 1 in place, only the default data directory binds the fixed Control MCP port. The agent tools server already falls back to an ephemeral port when its preferred one is taken (`apps/backend/src/core/agent-tools.ts`, `listen(preferredPort)` then `listen(0)`), and the loopback client port is opt-in (`--loopback-client-port`). The gateway's own default 34121 (`DEFAULT_GATEWAY_PORT`, `apps/backend/src/gateway-support-core.ts`) applies only when `--port` is omitted; `service install` and the desktop pass one. Done on this branch: `liveInstanceIn` (`apps/backend/src/instance-descriptor.ts`) reads another data directory's descriptor and checks the PID with signal 0 (EPERM counts as alive); `main.ts` calls it for `defaultDataDir()` when its own data directory is not the default, and logs `[Backend] Another backend (pid N) serves the default data directory; this one serves <dir> and leaves the fixed Control MCP port to it.` Seen in the isolated live check below.
+**Investigation.** With task 1 in place, only the default data directory binds the fixed Control MCP port. The agent tools server already falls back to an ephemeral port when its preferred one is taken (`apps/backend/src/core/agent-tools.ts`, `listen(preferredPort)` then `listen(0)`), and the loopback client port is opt-in (`--loopback-client-port`). The gateway's own default 34121 (`DEFAULT_GATEWAY_PORT`, `apps/backend/src/gateway-support-core.ts`) applies only when `--port` is omitted; `service install` and the desktop pass one. Done on this branch: `liveInstanceIn` (`apps/backend/src/instance-descriptor.ts`) reads another data directory's descriptor and checks the PID with signal 0 (EPERM counts as alive); `main.ts` calls it for `defaultDataDir()` when its own data directory is not the default (`logGatewayPortPolicy`, `apps/backend/src/gateway-port-policy.ts`). The line was first a sentence ("Another backend (pid N) serves the default data directory …") and is now the structured event `[backend] port-policy.second-backend mainPid=N dataDir=<dir> gatewayPort=free controlPort=left-to-main`. Seen in the isolated live check below, and on every boot of the second service in task 5 while the main one ran (none on its first boot, before the main one existed).
 
 **Decisions.**
 
@@ -93,8 +95,19 @@ against `863b5782`; tasks 1 to 3 were implemented on the
 
 **Investigation.** `docs/debugging/process-crashes-and-kills.md` ("The 2026-10-26 incidents") records it as a SIGKILL from an unknown sender while two full `mise run test` suites and the qualification service install were running inside the app; its section 3 sets up an audit trail for the next one. The eight-hour freeze was `dialog.showErrorBox` blocking Electron's main process on Linux, replaced by the non-blocking `apps/desktop/electron/restart-prompt.ts` (#1301). The 09:05:47 SIGTRAP was `app.relaunch()` using the vanished AppImage mount (fixed in `apps/desktop/electron/relaunch.ts`), and the 09:11:12 SIGBUS is a network-service child outliving the main process on quit, documented as harmless. What remains is whether the second backend's restart sent the SIGKILL or merely coincided with a test-suite kill, which this repository has seen before during agent-run `mise run test`. Nothing on this branch changes that; it can only be settled by the VM run under Outstanding work.
 
+On 2026-11-06 the task 5 run gave partial evidence: in a disposable systemd container, a production-flavour service on the default data directory kept its PID (`NRestarts=0`, no core dumps) through one install, three restarts, a stop and start, and the purge-uninstall of a second production-flavour service. That run differs from the incident in every way that might matter: the current build rather than `2.30.0-beta`, a service rather than the desktop AppImage, no agent tab, and a private HOME. It does not answer the question, but no second-backend mechanism showed up where one could have.
+
+Task 4 itself was not run, because a container on this host cannot do it. The signal audit (`process-crashes-and-kills.md` section 3) installs `auditctl` rules, and the kernel's audit rules are not namespaced: from a container they would be added to this host's own kernel, needing `CAP_AUDIT_CONTROL` there. The run also needs the desktop app, which in a container means Electron headless on Chromium's Ozone platform (`HEADLESS_ELECTRON_SWITCHES` in `apps/desktop/electron/runtime-profile.ts`), an AppImage built from `electron-builder.release.linux.config.ts` (`mise run package:linux` installs into the user's home and is not usable), FUSE or `--appimage-extract-and-run`, and network access for `bunx orkestrator@2.30.0-beta`. A headless AppImage was therefore not tried. What a run needs is listed under Outstanding work.
+
 **Decisions.**
 
+- **Where can the reproduction run?**
+  - **A disposable VM with its own kernel (recommended).**
+    - Pros: the audit rules, the desktop app and the pre-fix CLI all stay inside the guest.
+    - Cons: needs a VM image; none exists on the Linux hosts these agents use.
+  - **A systemd container on a shared host, as task 5 used.**
+    - Pros: already proven for services (Assumptions and decisions, "Task 5: how the run was isolated").
+    - Cons: the audit rules would land on the host kernel, which the run may not touch; without them a death names no sender, which is the point of the task.
 - **How to pin down the sender?**
   - **Rely on the audit trail from `process-crashes-and-kills.md` on the next occurrence, and run the VM reproduction once without any test suite running (recommended).**
     - Pros: the VM run isolates the second-backend hypothesis from the test-suite one; the audit catches real-host recurrences.
@@ -103,25 +116,27 @@ against `863b5782`; tasks 1 to 3 were implemented on the
     - Pros: same environment as the incident.
     - Cons: forbidden by this file's constraints and the production-sharing rules in `AGENTS.md`.
 - **Should the file's rating be revisited?**
-  - **Keep High until task 1 is fully done, then re-rate (recommended).**
-    - Pros: the default-port takeover is still reachable until the fix ships and is proved.
-    - Cons: the scariest part (the exit) is no longer clearly caused by the second backend.
-  - **Lower it now.**
-    - Pros: reflects that the exit is attributed elsewhere.
-    - Cons: the new port rule and retry are on by default and not yet proved on a real install.
+  - **Re-rate to Medium now that task 5 has proved tasks 1 and 2 (recommended, done 2026-11-06).**
+    - Pros: what remains is a missing observation of an exit whose sender is unknown and which the 2026-11-06 run did not reproduce.
+    - Cons: if the second backend's restart did send the SIGKILL, a user running two backends could still lose the live one.
+  - **Keep High until task 4 is settled.**
+    - Pros: errs on the side of a possible backend kill.
+    - Cons: overstates the remaining work: the port takeover that High was kept for is fixed and proved.
 
 ### 5. Qualify two backends on one host
 
-**Problem.** No run has shown that two backends coexist after the fix.
+**Problem.** No run had shown that two backends coexist after the fix.
 
 **Context.** The run must happen in a VM or container, never on a machine someone works on; `scripts/qualify-standalone-service.ts` refuses to run when it finds another Orkestrator.
 
-**Investigation.** The qualification script disables the Control MCP of its units, so as written it cannot prove task 1's behaviour for a production-flavour second service. On this branch the rule, retry and descriptor field are proved by unit tests with OS-assigned ports and by one isolated `agent-test` backend in throwaway directories (Assumptions and decisions, "Tasks 1 to 3: how the behaviour was proved"). Neither binds 34122 or runs a production-flavour backend, so the default install keeping 34122 across the other's restarts is still unobserved.
+**Investigation.** The qualification script disables the Control MCP of its units, so as written it cannot prove task 1's behaviour for a production-flavour second service. On this branch the rule, retry and descriptor field are proved by unit tests with OS-assigned ports and by one isolated `agent-test` backend in throwaway directories (Assumptions and decisions, "Tasks 1 to 3: how the behaviour was proved"). Neither binds 34122 or runs a production-flavour backend, so the default install keeping 34122 across the other's restarts was unobserved.
+
+Run on 2026-11-06 in a disposable Debian 13 systemd container with no network, on the packed CLI of this branch (`orkestrator@2.36.5-beta`, `main` at `c1724ab74`). Both backends were production-flavour `service install` units with the Control MCP enabled: A on the default data directory, B on `/var/tmp/ork-b`. Every step passed; the output is under Qualification record. One display defect was found and fixed: a loopback-only service printed `address (no browser listener; see the log)` although its gateway is the browser listener (Assumptions and decisions, "Task 5: the loopback address line").
 
 **Decisions.**
 
 - **What should the run use for the second backend?**
-  - **A production-flavour `orkestrator service install --data-dir <other>` with the Control MCP left enabled, in a disposable VM (recommended).**
+  - **A production-flavour `orkestrator service install --data-dir <other>` with the Control MCP left enabled, in a disposable systemd container or VM (recommended, done).**
     - Pros: exercises exactly the case that was broken.
     - Cons: needs a VM image with a desktop or `serve` backend on the default data directory as well.
   - **`scripts/qualify-standalone-service.ts` as it is.**
@@ -189,13 +204,78 @@ which delivers no signal. It is a read, not a kill, so it is inside the
 repository's "signal only what you spawned" rule. The unit test checks the
 default checker against a `sleep` it spawned and stops through its own handle.
 
-### Task 4: rating kept at High
+### Task 4: rating kept at High (2026-10-30), then Medium (2026-11-06)
 
-Took the recommended "keep High until task 1 is fully done". Task 1 is done
-in code but the new rule and the retry are on by default and not yet proved on
-a real install (task 5), and the exit's sender is still unknown, which is the
-"never proved on the real stack" case of the High rating. Re-rate after the
-task 5 run.
+On 2026-10-30 took the recommended "keep High until task 1 is fully done":
+the new rule and the retry were on by default and not yet proved on a real
+install. Task 5 proved them on 2026-11-06, so the file is re-rated Medium:
+the open work is task 4, a missing observation ("a missing measurement" in the
+rating rules) of an exit whose sender is unknown and which the task 5 run did
+not reproduce.
+
+### Task 4: not run in a container
+
+The ticket allowed task 4 only if a headless AppImage worked. It was not tried:
+the run's pass criterion is the signal audit, and its `auditctl` rules are
+host-global, so a container would have to install them on this host's kernel,
+which the run may not change. Recorded what the run needs (Outstanding work)
+instead of building an AppImage that could not settle the question.
+
+### Task 5: how the run was isolated
+
+- A Debian 13 (`trixie-slim`) image, labelled
+  `orkestrator.qualification=todo-0244-0996-bbf7fc8bac86`, with systemd, an
+  `ork` user (uid 1000, lingering), this host's Bun 1.4.4 binary and the
+  packed CLI. The release directory was pre-built in the image the way
+  `installRelease` builds one (the packed package plus a frozen install of its
+  `resources/release-runtime` lockfile) and copied into each data directory
+  before `service install`, which reuses a complete release. So the services
+  ran this branch's code, not the published `2.36.5-beta`.
+- `docker run --network none`: the container had only its own loopback, so
+  34121 and 34122 were the container's ports, nothing was published to the
+  host, and no Docker network was created (the host's address pool is nearly
+  full; to-do 7041).
+- systemd needs a writable cgroup tree. Docker mounts a non-privileged
+  container's cgroup read-only, so the container got `--cgroupns=private
+  --cap-add SYS_ADMIN` and an entrypoint that remounts its own (private)
+  `/sys/fs/cgroup` read-write before `exec /sbin/init`. `--privileged` was not
+  needed.
+- With no network the launcher's `toolchain install` failed at once
+  (`getaddrinfo EAI_AGAIN github.com`) and it started the release anyway, as
+  designed. No agent was installed, signed in or run.
+- The container and image were removed afterwards, and the one build-cache
+  record the build created (the others predated it or belonged to other
+  builds).
+
+### Task 5: A on a service, not the desktop
+
+Step 1 allows `service install` or the desktop app. A service was used, with
+`-- --host 127.0.0.1 --allow-non-tailscale-bind`, because the container has no
+display and no Tailscale (a service with no `--host` needs a tailnet address
+to start). The desktop passes `--port 34121` explicitly, so this run covers the
+implicit default; the explicit desktop path is the one the unit tests cover.
+
+### Task 5: the second-instance line is now a structured event
+
+Step 2 expected the sentence "Another backend (pid …) serves the default data
+directory". The backend now logs `[backend] port-policy.second-backend
+mainPid=N dataDir=<dir> gatewayPort=free controlPort=left-to-main`, which is
+what B logged on every boot while A ran. The step was read as satisfied by
+that event; the retry's "Port 34122 is free again" sentence is likewise now
+`[control-mcp] listener.port-free port=34122`.
+
+### Task 5: the loopback address line
+
+`service install` printed `address (no browser listener; see the log)` for a
+service bound to `127.0.0.1`, while the next line listed that same listener.
+The descriptor omits `browserUrl` when it equals the loopback primary URL, so
+the CLI had no remote address to show and fell back to a message that read as
+a failure. The line now says `(loopback only; see local listeners)` when
+there are local listeners, and keeps the old text when there are none
+(`packages/cli/src/client/commands/service.ts`; test "a loopback-only service
+is not reported as having no browser listener" in
+`packages/cli/tests/service-install.test.ts`, which fails on the old code).
+Re-checked in the container with the rebuilt client.
 
 ### Tasks 1 to 3: how the behaviour was proved
 
@@ -235,9 +315,13 @@ provider turn.
   ([`backend-instance.ts`](../../../packages/protocol/src/backend-instance.ts),
   [`main.ts`](../../../apps/backend/src/main.ts)).
 - A taken fixed port is retried with backoff (5 s to 5 min) and Settings → MCP
-  says the port is in use.
-- A backend of another data directory logs when the default data directory's
-  descriptor names a live backend.
+  says the port is in use; a recovered listener logs
+  `[control-mcp] listener.port-free port=N`.
+- A backend of another data directory logs `port-policy.second-backend` when
+  the default data directory's descriptor names a live backend.
+- All of the above was proved on 2026-11-06 with two production-flavour
+  services in a disposable systemd container (task 5). Why the live backend
+  exited on 2026-10-26 is still unknown (task 4).
 - `orkestrator service install` still writes only `PATH` and `NODE_ENV`; the
   backend's rule covers its units, including ones written by older CLIs.
 - The startup orphan reaper only signals PIDs recorded on its own data
@@ -280,56 +364,67 @@ the user's real HOME.
 | 09:10:16 | The test unit was removed (`service uninstall --purge`), freeing 34122. |
 | 09:11:12 | The live app's NetworkService child (pid 991601) dumped core with SIGBUS; the app restarted from a new mount and its backend then held 34121 and 34122 again. The AppImage file, `/tmp` (6%) and `/dev/shm` (1%) gave no reason for a SIGBUS. A separate crash investigation (codex) was running on the host at the time. |
 
+### Qualification record (2026-11-06, task 5)
+
+Disposable Debian 13 systemd container, `--network none`, packed CLI of this
+branch (`orkestrator 2.36.5-beta`); setup under Assumptions and decisions,
+"Task 5: how the run was isolated". A: `orkestrator service install --yes --
+--host 127.0.0.1 --allow-non-tailscale-bind` (unit `orkestrator-backend`).
+B: the same with `--data-dir /var/tmp/ork-b` (unit
+`orkestrator-backend-497a8829`). B was installed first, for 0996 task 3; the
+steps below are this file's.
+
+| Step | Observed | Result |
+| --- | --- | --- |
+| 1. A on the default data directory | `ss`: `127.0.0.1:34121` and `127.0.0.1:34122`, both `bun` pid 275. A's descriptor `controlMcp`: `{"running":true,"url":"http://127.0.0.1:34122/mcp"}`. | Pass |
+| 2. B, production flavour, Control MCP on | B's descriptor: gateway `http://127.0.0.1:32827/`, `controlMcp` `{"running":true,"url":"http://127.0.0.1:45819/mcp"}`. After A existed, every B boot logged `[backend] port-policy.second-backend mainPid=275 dataDir=/var/tmp/ork-b gatewayPort=free controlPort=left-to-main`; its first boot, before A, did not. A kept 34122. | Pass |
+| 3. Restart B three times, 20 s apart | B pids 367, 456, 537; Control MCP on 33583, 41635, 46711, gateway on 41477, 35215, 43063. After each: A still pid 275, `POST http://127.0.0.1:34122/mcp` without a token answered 401, `ss` showed only pid 275 on 34121/34122. A's unit `NRestarts=0`. | Pass |
+| 4. Retry while 34122 is held | A stopped; `python3 -m http.server 34122 --bind 127.0.0.1` (pid 692) held the port; A started as pid 722 with gateway on 34121. Descriptor `controlMcp` `{"running":false,"url":"http://127.0.0.1:34122/mcp"}`; `get_control_mcp_settings` returned `running: false` and `error: "Port 34122 is in use by another process. Orkestrator keeps retrying and starts the local MCP server once the port is free."`; the log had `startup.step-failed step=control-mcp … error.code=EADDRINUSE`. The holder was stopped by its recorded PID at 03:52:00; at 03:52:06 the descriptor showed `"running":true`, the log `[control-mcp] listener.port-free port=34122`, `ss` pid 722 on both ports and settings `error: null`. | Pass (6 s) |
+| 5. Uninstall B, then restart A | `service uninstall --data-dir /var/tmp/ork-b --purge`: "Removed systemd orkestrator-backend-497a8829.service. Deleted /var/tmp/ork-b/backend." A still pid 931 (A had been restarted for 0996's walk step), MCP 401. `systemctl --user restart orkestrator-backend`: new pid 1114 on 34121 and 34122, `controlMcp.running` true. No core dumps in the container. | Pass |
+
+`--purge` removes only `<data-dir>/backend` (releases, launcher, unit config),
+as its help says; the rest of a second data directory stays.
+
 ## Outstanding work
 
-### Qualification
+### Task 4: what the reproduction needs
 
-Both runs need a disposable Linux VM (for example Ubuntu 24.04 with a desktop
-session for task 4) with Docker, `bun`, `jq` and `ss`, and a build that
-contains this branch (an `orkestrator` CLI from a release cut after it merges,
-or `bun pm pack` of `packages/cli` installed with `bunx`). Never on a machine
-someone works on.
+Never on a machine someone works on, and not in a container on a shared host
+(the audit rules are host-global; see task 4).
 
-4. **The 00:58:57 exit.** In the VM, with no test suite running:
-   1. Turn on the signal audit from
-      [`process-crashes-and-kills.md`](../../debugging/process-crashes-and-kills.md)
-      section 3 (`ork-audit-on.sh`).
-   2. Start the desktop AppImage on the default data directory and open one
-      local environment with a running agent tab. Record the backend PID
-      (`jq .pid ~/.config/orkestrator-v2/backend-instance.json`).
-   3. Reproduce the incident's second unit with the pre-fix CLI:
-      `bunx orkestrator@2.30.0-beta service install --data-dir /tmp/ork-b
-      --host 127.0.0.1 --allow-non-tailscale-bind --port 0 --runtime-flavor
-      agent-test --yes`, then `systemctl --user restart
-      orkestrator-backend-<digest>.service` three times, 20 s apart.
-   4. Pass: the desktop backend's PID is unchanged, `journalctl --user` and
-      `coredumpctl` show nothing for it, and the audit log shows no SIGKILL to
-      it. If it dies, the audit log names the sender; record it here.
-   5. Clean up with `service uninstall --data-dir /tmp/ork-b --purge` and
-      `ork-audit-off.sh`.
-5. **Two backends on one host.** In the VM, with the new build:
-   1. Backend A on the default data directory: `orkestrator service install
-      --yes` (or the desktop app). Check `ss -ltnp 'sport = :34122'` names A's
-      PID and `jq .controlMcp ~/.config/orkestrator-v2/backend-instance.json`
-      is `{"running":true,"url":"http://127.0.0.1:34122/mcp"}`.
-   2. Backend B, production flavour, Control MCP enabled: `orkestrator service
-      install --data-dir /var/tmp/ork-b --yes`. Check B's
-      `/var/tmp/ork-b/backend-instance.json` `controlMcp.url` is not on 34122,
-      B's `service.log` has the "Another backend (pid …) serves the default
-      data directory" line, and A still holds 34122.
-   3. Restart B's unit three times. A's PID is unchanged, A's
-      `http://127.0.0.1:34122/mcp` answers 401 without a token, and B never
-      holds 34122.
-   4. Retry: stop A's unit, hold the port with a process you start
-      (`python3 -m http.server 34122 --bind 127.0.0.1 &`, note its PID), start
-      A. A's descriptor shows `"running":false` and Settings → MCP (or the
-      `get_control_mcp_settings` command) says port 34122 is in use. Stop the
-      Python server by its recorded PID; within 5 min A logs
-      `[control-mcp] Port 34122 is free again; listening.` and its descriptor
-      shows `"running":true`.
-   5. Stop and uninstall B (`service uninstall --data-dir /var/tmp/ork-b
-      --purge`); A is unaffected. Restart A; it binds 34122 again.
-   6. Record the commands' output here and re-rate the file.
+- **A disposable Linux VM with its own kernel and root**, for example Ubuntu
+  24.04, with `auditd`/`auditctl`, `bun`, `jq`, `ss` and network access to
+  npm (for `bunx orkestrator@2.30.0-beta`). A desktop session is optional:
+  Electron runs headless on Chromium's Ozone platform.
+- **A desktop AppImage of a build at least as new as `c1724ab74`**, built from
+  `electron-builder.release.linux.config.ts` (its AppImage target) with
+  `--publish never`, never with `mise run package:linux`, which installs into
+  the user's home. Start it on the default data directory with the switches
+  in `HEADLESS_ELECTRON_SWITCHES` (`--ozone-platform=headless --disable-gpu
+  --password-store=basic`), no `DISPLAY`/`WAYLAND_DISPLAY`, and FUSE in the
+  guest or `--appimage-extract-and-run`.
+- **A local environment with a running tab and no billed turn**: a terminal
+  tab running a long command, or an agent tab opened with no prompt. A guest
+  without credentials cannot start a turn at all.
+
+Steps, in the VM with no test suite running:
+
+1. Turn on the signal audit from
+   [`process-crashes-and-kills.md`](../../debugging/process-crashes-and-kills.md)
+   section 3 (`ork-audit-on.sh`).
+2. Start the AppImage headless on the default data directory and open the
+   environment and tab above. Record the backend PID
+   (`jq .pid ~/.config/orkestrator-v2/backend-instance.json`).
+3. Reproduce the incident's second unit with the pre-fix CLI:
+   `bunx orkestrator@2.30.0-beta service install --data-dir /tmp/ork-b
+   --host 127.0.0.1 --allow-non-tailscale-bind --port 0 --runtime-flavor
+   agent-test --yes`, then `systemctl --user restart
+   orkestrator-backend-<digest>.service` three times, 20 s apart.
+4. Pass: the desktop backend's PID is unchanged, `journalctl --user` and
+   `coredumpctl` show nothing for it, and the audit log shows no SIGKILL to
+   it. If it dies, the audit log names the sender; record it here.
+5. Clean up with `service uninstall --data-dir /tmp/ork-b --purge` and
+   `ork-audit-off.sh`.
 
 ## Constraints and rationale
 
@@ -351,6 +446,10 @@ someone works on.
 
 - [0033-remote-host-upgrades.md](0033-remote-host-upgrades.md): the
   qualification that found it.
+- [7370-tailscale-serve-second-backend-live.md](7370-tailscale-serve-second-backend-live.md):
+  the gateway-port half's remaining Tailscale Serve and release-note work
+  (it replaces 0996, whose loopback qualification ran in the same container
+  as task 5).
 - [control-mcp.md](../../architecture/control-mcp.md),
   [public-cli.md](../../architecture/public-cli.md#instance-descriptor),
   [host-updates.md](../../architecture/host-updates.md#standalone-service),

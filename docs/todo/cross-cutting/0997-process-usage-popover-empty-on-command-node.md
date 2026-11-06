@@ -72,5 +72,5 @@ The desktop window on a real command node. The browser check of task 2 is done: 
 
 ## Related
 
-- [0996-second-backend-takes-default-gateway-port.md](0996-second-backend-takes-default-gateway-port.md)
+- [7370-tailscale-serve-second-backend-live.md](7370-tailscale-serve-second-backend-live.md) (replaces 0996)
 - [0244-second-backend-on-one-host.md](0244-second-backend-on-one-host.md)

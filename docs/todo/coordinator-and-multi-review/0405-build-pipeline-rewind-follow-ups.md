@@ -209,8 +209,9 @@ prove it.
    move the branch by hand.
 3. Check that Pause and Cancel refuse with "The code rewind to … has not
    finished".
-4. Delete the pipeline from the UI. Check that it disappears, and that its
-   Kanban ticket moves back with no completion comment.
+4. Delete the pipeline through the backend command. Check that it disappears
+   from the persisted list, and that its Kanban ticket moves back with no
+   completion comment. A renderer Delete control is not currently implemented.
 
 Run on 2026-11-06 (harness evidence, not the UI run above). Two cases
 were added to the opt-in live test
@@ -250,11 +251,16 @@ cases exercise `deleteWithPendingCodeRewind` itself. The run found no defect.
 "Recreate the workspace" in step 2 was covered by moving the branch, which is
 the same refusal (`head !== from`) in `resetWorktreeToCommit`.
 
-Not covered: the Delete button and the pipeline disappearing from the UI
-(step 4's renderer half). The button's `delete_build_pipeline` command
-calls `remove` (`commands-registry-build.ts`), which this run drove directly;
-on the renderer side only the wrapper's mapping onto that command is tested
-(`apps/web/src/lib/backend.test.ts`).
+Review follow-up on 2026-11-06: the renderer has a `deleteBuildPipeline`
+wrapper, but no UI caller of it. The earlier reference to a Delete button
+was incorrect. `e2e/agent-testing/pipeline-delete.spec.ts` imports a failed
+snapshot with a pending code rewind into an isolated credential-free profile,
+loads the production renderer wrapper in Chromium, and sends deletion through
+the real gateway and command registry. It checks that the persisted list no
+longer contains the pipeline, including after a page reload. This complements
+the Docker service tests; it does not qualify a renderer Delete button, visual
+list removal, or a container-backed browser flow. Those require a UI feature
+that does not currently exist.
 
 **Decisions.**
 
@@ -421,9 +427,9 @@ Known limits, by design:
   the next evidence. A real provider session committing in the container is
   covered by task 1 or 2 if either runs on a container environment.
 - Task 9 is harness evidence: the backend's `remove` was driven directly in
-  a real container. The Delete button and the pipeline leaving the list were
-  not seen in a browser; a container-environment run of task 1 can look at
-  them in passing.
+  a real container. The renderer wrapper now has real-gateway browser coverage,
+  including persisted list removal after reload. There is no renderer Delete
+  control; clicking it and observing visual list removal remain unverified.
 - The stacked bypass on a physical phone (task 8). Playwright WebKit passed
   on 2026-11-06; no phone or real Safari was used. The fullscreen fix was
   checked in Playwright WebKit and headless Chromium only, not in macOS
@@ -554,6 +560,14 @@ Decisions made on 2026-11-01 while running item 7.
     not just stopped, leaves the reset refused for good ("the branch moved"),
     and only deleting the environment clears it. Recorded as
     2120 (deleted 2026-11-06; task 9).
+
+### 15. Correct task 9’s renderer qualification scope (task 9)
+
+Chose to test the existing renderer deletion wrapper through the real gateway
+and correct the nonexistent-button claim. This covers command dispatch without
+provider turns. Adding a new Delete UI would expand this qualification ticket
+into product work; the new test therefore makes no claim about clicking a
+button or visual list removal.
 
 ## Related
 

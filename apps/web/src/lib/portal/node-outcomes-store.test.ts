@@ -1,5 +1,9 @@
-import { describe, expect, mock, test } from "bun:test";
-import { NODE_SUMMARY_CHANGED_EVENT } from "@orkestrator/protocol/node-summaries";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  NODE_OUTCOMES_CHANGED_EVENT,
+  NODE_SUMMARY_CHANGED_EVENT,
+} from "@orkestrator/protocol/node-summaries";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import {
   NODE_OUTCOMES_REFRESH_DEBOUNCE_MS,
@@ -31,7 +35,19 @@ const record = (nodeId: string, outcomeId: string): NodeOutcomeRecord => ({
   recordedAt: "2026-11-06T00:00:00.000Z",
 });
 
-const settle = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
+async function settle() {
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+}
+let clock: ReturnType<typeof installControlledTimeout>;
+const cleanups: Array<() => void> = [];
+beforeEach(() => {
+  clock = installControlledTimeout(NODE_OUTCOMES_REFRESH_DEBOUNCE_MS, { maxPending: 2 });
+});
+afterEach(() => {
+  for (const stop of cleanups.splice(0)) stop();
+  clock.assertDrained();
+  clock.restore();
+});
 
 function createStore(read: (nodeId: string) => Promise<NodeOutcomeRecord[]>) {
   const events = fakeEvents();
@@ -48,6 +64,7 @@ describe("NodeOutcomesStore", () => {
     const stops = Array.from({ length: 3 }, () =>
       store.subscribe("node-a", (value) => seen.push(value)),
     );
+    cleanups.push(...stops);
     await settle();
 
     expect(read).toHaveBeenCalledTimes(1);
@@ -62,13 +79,15 @@ describe("NodeOutcomesStore", () => {
     const { store, events } = createStore(read);
     const stopA = store.subscribe("node-a", () => {});
     const stopB = store.subscribe("node-b", () => {});
+    cleanups.push(stopA, stopB);
     await settle();
     read.mockClear();
 
     for (let index = 0; index < 5; index++) {
       events.emit(NODE_SUMMARY_CHANGED_EVENT, { nodeId: "node-a", epoch: 1 });
     }
-    await settle(NODE_OUTCOMES_REFRESH_DEBOUNCE_MS + 20);
+    clock.advance();
+    await settle();
 
     expect(read.mock.calls.map(([nodeId]) => nodeId)).toEqual(["node-a"]);
     stopA();
@@ -79,11 +98,13 @@ describe("NodeOutcomesStore", () => {
     const read = mock(async (_nodeId: string) => []);
     const { store, events } = createStore(read);
     const stop = store.subscribe("node-a", () => {});
+    cleanups.push(stop);
     await settle();
     read.mockClear();
 
     events.emit(NODE_SUMMARY_CHANGED_EVENT, { nodeId: "node-z", epoch: 1 });
-    await settle(NODE_OUTCOMES_REFRESH_DEBOUNCE_MS + 20);
+    clock.advance();
+    await settle();
 
     expect(read).not.toHaveBeenCalled();
     stop();
@@ -94,11 +115,13 @@ describe("NodeOutcomesStore", () => {
     const { store, events } = createStore(read);
     const stopA = store.subscribe("node-a", () => {});
     const stopB = store.subscribe("node-b", () => {});
+    cleanups.push(stopA, stopB);
     await settle();
     read.mockClear();
 
     events.emit(NATIVE_EVENT_STREAM_CONNECTED_EVENT, {});
-    await settle(NODE_OUTCOMES_REFRESH_DEBOUNCE_MS + 20);
+    clock.advance();
+    await settle();
 
     expect(read.mock.calls.map(([nodeId]) => nodeId).sort()).toEqual(["node-a", "node-b"]);
     stopA();
@@ -113,14 +136,66 @@ describe("NodeOutcomesStore", () => {
       return [record(nodeId, "o-1")];
     });
     const { store } = createStore(read);
-    const stop = store.subscribe("node-a", () => {});
+    const delivered = Promise.withResolvers<void>();
+    let deliveries = 0;
+    const stop = store.subscribe("node-a", () => {
+      if (++deliveries === 2) delivered.resolve();
+    });
+    cleanups.push(stop);
 
     void store.refresh("node-a");
     void store.refresh("node-a");
     release();
-    await settle(10);
+    await delivered.promise;
+    await settle();
 
     expect(read).toHaveBeenCalledTimes(2);
     stop();
+  });
+  test("obsolete async registrations cannot join a replacement subscription", async () => {
+    const { store, events } = createStore(async () => []);
+    const first = store.subscribe("node-a", () => {});
+    first();
+    const second = store.subscribe("node-a", () => {});
+    cleanups.push(second);
+    await settle();
+    for (const event of [
+      NODE_SUMMARY_CHANGED_EVENT,
+      NODE_OUTCOMES_CHANGED_EVENT,
+      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+    ]) {
+      expect(events.count(event)).toBe(1);
+    }
+    second();
+    for (const event of [
+      NODE_SUMMARY_CHANGED_EVENT,
+      NODE_OUTCOMES_CHANGED_EVENT,
+      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+    ]) {
+      expect(events.count(event)).toBe(0);
+    }
+  });
+
+  test("another window receives outcome records and dismissals without a summary change", async () => {
+    let records: NodeOutcomeRecord[] = [];
+    const events = fakeEvents();
+    const first = new NodeOutcomesStore(async () => records, events.listen as never);
+    const second = new NodeOutcomesStore(async () => records, events.listen as never);
+    const seen: NodeOutcomeRecord[][] = [];
+    cleanups.push(
+      first.subscribe("node-a", () => {}),
+      second.subscribe("node-a", (value) => seen.push(value)),
+    );
+    await settle();
+    records = [record("node-a", "external")];
+    events.emit(NODE_OUTCOMES_CHANGED_EVENT, { nodeId: "node-a" });
+    clock.advance();
+    await settle();
+    expect(seen.at(-1)).toEqual(records);
+    records = [];
+    events.emit(NODE_OUTCOMES_CHANGED_EVENT, { nodeId: "node-a" });
+    clock.advance();
+    await settle();
+    expect(seen.at(-1)).toEqual([]);
   });
 });

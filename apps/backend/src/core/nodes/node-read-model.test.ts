@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { NodeReadModel } from "./node-read-model.js";
 
 function harness() {
@@ -513,39 +514,136 @@ test("a leaf's agent-mail change re-reads every project for the rows' mail badge
   }
 });
 
-test("summary changes for one node are announced at most once per interval, the last one included", async () => {
-  const events: Array<{ event: string; payload: unknown }> = [];
+type ChangeModel = {
+  noteChanged(nodeId: BackendId): void;
+  stateFor(nodeId: BackendId): unknown;
+  requestHydrate(nodeId: BackendId): Promise<void>;
+  refreshProjects(nodeId: BackendId, projectIds: string[]): Promise<void>;
+};
+
+function changeHarness() {
+  let now = 0;
+  let name = "before";
+  const events: string[] = [];
   const model = new NodeReadModel({
+    now: () => now,
     nodes: {
       selfIdentity: async () => "bk_command" as BackendId,
       selfProfile: async () => ({ displayName: "Command" }),
       listNodes: async () => ({ nodes: [] }) as never,
-      link: () => null,
+      link: () =>
+        ({
+          connected: true,
+          invoke: async (command: string) =>
+            command === "get_projects"
+              ? [{ id: "p1", name: "One" }]
+              : [{ id: "e1", projectId: "p1", name, status: "running" }],
+        }) as never,
       subscribe: () => () => undefined,
       recordProfile: async () => undefined,
     },
     emit: (event, payload) => {
-      events.push({ event, payload });
+      if (event === "node-summary-changed") events.push((payload as { nodeId: string }).nodeId);
     },
-    local: {
-      invoke: async <T>(command: string) => (command === "get_projects" ? [] : []) as T,
-    },
-    changeMinIntervalMs: 200,
+    changeMinIntervalMs: 1_000,
   });
+  return {
+    model,
+    changes: model as unknown as ChangeModel,
+    events,
+    at: (time: number) => {
+      now = time;
+    },
+    rename: () => {
+      name = "after";
+    },
+  };
+}
+
+test("summary changes for one node are announced at most once per interval, the last one included", () => {
+  const h = changeHarness();
+  const batch = installControlledTimeout(50);
+  const throttle = installControlledTimeout(1_000);
+  const nodeId = "bk_command" as BackendId;
   try {
-    await model.summaries(undefined, { includeSelf: true });
-    for (let index = 0; index < 10; index++) {
-      model.noteLocalEvent("resource-changed", { resource: "environment" });
-      await Bun.sleep(10);
-    }
-    await Bun.sleep(80);
-    // The first change is announced after the 50 ms batch; the rest wait out the interval.
-    expect(events.filter(({ event }) => event === "node-summary-changed")).toHaveLength(1);
-    await Bun.sleep(250);
-    const announced = events.filter(({ event }) => event === "node-summary-changed");
-    expect(announced).toHaveLength(2);
-    expect(announced[1]!.payload).toMatchObject({ nodeId: "bk_command" });
+    h.changes.stateFor(nodeId);
+    h.changes.noteChanged(nodeId);
+    h.at(50);
+    batch.advance();
+    for (let index = 0; index < 10; index++) h.changes.noteChanged(nodeId);
+    expect(h.events).toEqual([nodeId]);
+    expect(throttle.pendingCount()).toBe(1);
+    h.at(1_050);
+    throttle.advance();
+    expect(h.events).toEqual([nodeId, nodeId]);
+    batch.assertDrained();
+    throttle.assertDrained();
   } finally {
-    model.stop();
+    h.model.stop();
+    throttle.restore();
+    batch.restore();
+  }
+});
+
+test("a quiet node moves a busy node's pending timer forward to its batch deadline", () => {
+  const h = changeHarness();
+  const batch = installControlledTimeout(50);
+  const throttle = installControlledTimeout(1_000);
+  const remaining = installControlledTimeout(900);
+  const busy = "bk_busy" as BackendId;
+  const quiet = "bk_quiet" as BackendId;
+  try {
+    // Hydrated nodes retain their throttle record after an announcement.
+    // requestHydrate creates their state, but this test controls only announcements.
+    const internals = h.model as unknown as { stateFor(id: BackendId): unknown };
+    internals.stateFor(busy);
+    internals.stateFor(quiet);
+    h.changes.noteChanged(busy);
+    h.at(50);
+    batch.advance();
+    h.changes.noteChanged(busy);
+    h.at(100);
+    h.changes.noteChanged(quiet);
+    expect(throttle.pendingCount()).toBe(0);
+    h.at(150);
+    batch.advance();
+    expect(h.events).toEqual([busy, quiet]);
+    h.at(1_050);
+    remaining.advance();
+    expect(h.events).toEqual([busy, quiet, busy]);
+  } finally {
+    h.model.stop();
+    remaining.restore();
+    throttle.restore();
+    batch.restore();
+  }
+});
+
+test("environment refresh announces changed summaries and skips unchanged re-reads", async () => {
+  const h = changeHarness();
+  const batch = installControlledTimeout(50);
+  const throttle = installControlledTimeout(1_000);
+  const nodeId = "bk_leaf" as BackendId;
+  try {
+    h.changes.stateFor(nodeId);
+    await h.changes.requestHydrate(nodeId);
+    h.at(50);
+    batch.advance();
+    expect(h.events).toEqual([nodeId]);
+    await h.changes.refreshProjects(nodeId, ["p1"]);
+    expect(batch.pendingCount() + throttle.pendingCount()).toBe(0);
+    expect(h.events).toEqual([nodeId]);
+    h.rename();
+    await h.changes.refreshProjects(nodeId, ["p1"]);
+    expect(throttle.pendingCount()).toBe(1);
+    h.at(1_050);
+    throttle.advance();
+    expect(h.events).toEqual([nodeId, nodeId]);
+    await h.changes.refreshProjects(nodeId, ["p1"]);
+    expect(batch.pendingCount() + throttle.pendingCount()).toBe(0);
+  } finally {
+    h.model.stop();
+    throttle.restore();
+    batch.restore();
   }
 });

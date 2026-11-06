@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -64,7 +65,7 @@ const {
   resetResourceSync,
   startResourceSync,
 } = await import("./resource-sync");
-const { MAX_DEFERRED_WORKFLOW_READS, startStoreResourceSync } =
+const { DEFERRED_WORKFLOW_RETRY_MS, MAX_DEFERRED_WORKFLOW_READS, startStoreResourceSync } =
   await import("./store-resource-sync");
 const { armBuildPipelineTabActivation, armStartupAgentTabActivation } =
   await import("./pane-layout-authoritative");
@@ -634,6 +635,90 @@ describe("workflow bindings in a hidden window", () => {
     expect(hydrateMultiReviewWorkflow).toHaveBeenCalledTimes(1);
     expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1");
   });
+
+  for (const overflow of [false, true]) {
+    test(`retries acknowledged hidden scoped changes after a failed ${overflow ? "overflow" : "point"} read and unchanged manifest`, async () => {
+      useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
+      useEnvironmentStore.setState({ environments: [environment("env-1")] });
+      setVisibility("hidden");
+      const retry = installControlledTimeout(DEFERRED_WORKFLOW_RETRY_MS);
+      const read = overflow ? hydrateBuildPipelinesForProject : hydrateBuildPipeline;
+      read.mockImplementationOnce(async () => {
+        throw new Error("transient read failure");
+      });
+      const reviewRead = overflow
+        ? hydrateMultiReviewWorkflowsForEnvironment
+        : hydrateMultiReviewWorkflow;
+      reviewRead.mockImplementationOnce(async () => {
+        throw new Error("transient review failure");
+      });
+      const changes = overflow
+        ? Array.from({ length: MAX_DEFERRED_WORKFLOW_READS + 1 }, (_, index) => ({
+            resource: "multi-review" as const,
+            id: `multi-${index}`,
+            revision: index + 1,
+          }))
+        : [
+            { resource: "build-pipeline" as const, id: "pipeline-1", revision: 1 },
+            { resource: "multi-review" as const, id: "multi-1", revision: 2 },
+          ];
+      const originalSetInterval = globalThis.setInterval;
+      const originalClearInterval = globalThis.clearInterval;
+      let poll!: () => void;
+      globalThis.setInterval = ((callback: () => void) => {
+        poll = callback;
+        return 42 as unknown as ReturnType<typeof setInterval>;
+      }) as typeof setInterval;
+      globalThis.clearInterval = (() => {}) as typeof clearInterval;
+      const calls: number[] = [];
+      const loadScopedManifest = mock(async (_generation: string | undefined, cursor: number) => {
+        calls.push(cursor);
+        return {
+          generation: "a".repeat(32),
+          cursor: changes.length,
+          highWater: changes.length,
+          reset: false,
+          resetResources: [],
+          changes: cursor === 0 ? changes : [],
+          revisions: { "build-pipeline": "b".repeat(32), "multi-review": "c".repeat(32) },
+          hasMore: false,
+        };
+      });
+      let stop: (() => void) | undefined;
+      try {
+        stop = startResourceSync({ loadScopedManifest });
+        await waitForState(() => calls.length === 1, "first scoped manifest");
+        // The next request proves the hidden change was acknowledged.
+        poll();
+        await waitForState(() => calls.length === 2, "acknowledged scoped manifest");
+        expect(calls[1]).toBe(changes.length);
+        expect(read).not.toHaveBeenCalled();
+        setVisibility("visible");
+        await waitForState(() => retry.pendingCount() === 1, "failed read retry");
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(reviewRead).toHaveBeenCalledTimes(1);
+        poll();
+        await waitForState(() => calls.length === 3, "unchanged scoped manifest");
+        expect(calls[2]).toBe(changes.length);
+        retry.advance();
+        await waitForState(
+          () => read.mock.calls.length === 2 && reviewRead.mock.calls.length === 2,
+          "recovered deferred reads",
+        );
+        // Wait for the single-flight flush to settle, then prove no retry remains.
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        retry.assertDrained();
+        expect(read).toHaveBeenCalledTimes(2);
+        expect(reviewRead).toHaveBeenCalledTimes(2);
+      } finally {
+        stop?.();
+        detach?.();
+        retry.restore();
+        globalThis.setInterval = originalSetInterval;
+        globalThis.clearInterval = originalClearInterval;
+      }
+    });
+  }
 
   test("reconciles both collections instead when too many ids changed while hidden", async () => {
     useProjectStore.setState({ projects: [{ id: "project-1" } as never] });

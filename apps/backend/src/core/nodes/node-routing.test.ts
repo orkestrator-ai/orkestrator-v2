@@ -3,6 +3,7 @@ import {
   isNodeExcludedCommand,
   isWorkspaceExcludedCommand,
   NodeOutcomeLedger,
+  MAX_NODE_OUTCOMES,
   routeToNode,
 } from "./node-routing.js";
 
@@ -95,4 +96,24 @@ test("workspace Stop is allowed locally while peer routing and controller stop s
     }),
   ).rejects.toThrow("cannot be run on another node");
   expect(invoke).not.toHaveBeenCalled();
+});
+
+test("outcome notifications name both affected nodes on eviction and skip no-op mutations", async () => {
+  const changed = mock((_nodeId: string) => {});
+  const ledger = new NodeOutcomeLedger(undefined, changed);
+  const entry = { nodeId: "bk_old" as never, command: "stop_environment", requestKey: "first" };
+  const first = await ledger.record(entry);
+  await ledger.record(entry);
+  expect(changed).toHaveBeenCalledTimes(1);
+  for (let i = 1; i < MAX_NODE_OUTCOMES; i++) {
+    await ledger.record({ ...entry, nodeId: "bk_new" as never, requestKey: String(i) });
+  }
+  changed.mockClear();
+  await ledger.record({ ...entry, nodeId: "bk_new" as never, requestKey: "overflow" });
+  expect(changed.mock.calls.map(([nodeId]) => nodeId)).toEqual(["bk_new", "bk_old"]);
+  expect(await ledger.dismiss(first.outcomeId)).toBe(false);
+  expect(changed).toHaveBeenCalledTimes(2);
+  const remaining = ledger.list()[0]!;
+  expect(await ledger.dismiss(remaining.outcomeId)).toBe(true);
+  expect(changed.mock.calls.at(-1)).toEqual(["bk_new"]);
 });

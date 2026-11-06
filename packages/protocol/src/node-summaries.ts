@@ -34,6 +34,7 @@ import {
 } from "./pr-monitor.js";
 
 export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
+export const NODE_OUTCOMES_CHANGED_EVENT = "node-outcomes-changed";
 
 /**
  * Extra `get_environment_snapshots` arguments for a summary read: each

@@ -152,6 +152,7 @@ export class NodeReadModel {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly changed = new Set<BackendId>();
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
+  private changeTimerDueAt: number | null = null;
   private readonly lastChangeEmittedAt = new Map<BackendId, number>();
   private reconcileJobs: BackendActivityJobs | null = null;
   private started = false;
@@ -232,6 +233,7 @@ export class NodeReadModel {
     }
     if (this.changeTimer) clearTimeout(this.changeTimer);
     this.changeTimer = null;
+    this.changeTimerDueAt = null;
   }
 
   /** Other consumers (coordinator mail, outbox collection) of the same streams. */
@@ -672,12 +674,24 @@ export class NodeReadModel {
 
   private noteChanged(nodeId: BackendId): void {
     this.changed.add(nodeId);
-    if (!this.changeTimer) this.scheduleChangeFlush(NODE_SUMMARY_CHANGE_BATCH_MS);
+    const now = (this.options.now ?? Date.now)();
+    const last = this.lastChangeEmittedAt.get(nodeId);
+    const eligibleAt =
+      last === undefined
+        ? now
+        : last + (this.options.changeMinIntervalMs ?? NODE_SUMMARY_CHANGE_MIN_INTERVAL_MS);
+    const dueAt = Math.max(now + NODE_SUMMARY_CHANGE_BATCH_MS, eligibleAt);
+    if (this.changeTimerDueAt === null || dueAt < this.changeTimerDueAt) {
+      if (this.changeTimer) clearTimeout(this.changeTimer);
+      this.scheduleChangeFlush(dueAt - now);
+    }
   }
 
   private scheduleChangeFlush(delayMs: number): void {
+    this.changeTimerDueAt = (this.options.now ?? Date.now)() + delayMs;
     this.changeTimer = setTimeout(() => {
       this.changeTimer = null;
+      this.changeTimerDueAt = null;
       this.flushChanged();
     }, delayMs);
     this.changeTimer.unref?.();
@@ -686,7 +700,7 @@ export class NodeReadModel {
   /** Announces changed nodes, holding back any announced within the minimum interval. */
   private flushChanged(): void {
     const interval = this.options.changeMinIntervalMs ?? NODE_SUMMARY_CHANGE_MIN_INTERVAL_MS;
-    const now = Date.now();
+    const now = (this.options.now ?? Date.now)();
     let nextDueMs: number | null = null;
     for (const id of Array.from(this.changed)) {
       const last = this.lastChangeEmittedAt.get(id);

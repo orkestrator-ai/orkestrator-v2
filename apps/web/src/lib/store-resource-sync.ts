@@ -57,6 +57,9 @@ const log = createLogger("web.resource-sync");
  */
 export const MAX_DEFERRED_WORKFLOW_READS = 512;
 
+/** Delay between attempts to hydrate acknowledged hidden-window changes. */
+export const DEFERRED_WORKFLOW_RETRY_MS = 1_000;
+
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
@@ -112,10 +115,14 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   const deferredPipelineReads = new Set<string>();
   const deferredMultiReviewReads = new Set<string>();
   let deferredWorkflowReadsOverflowed = false;
+  let deferredWorkflowGeneration = 0;
+  let workflowFlushRunning = false;
+  let workflowRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Remembers a change a hidden window will read when shown; true when deferred. */
   const deferWhileHidden = (reads: Set<string>, id: string): boolean => {
     if (!documentHidden()) return false;
+    deferredWorkflowGeneration += 1;
     if (deferredWorkflowReadsOverflowed) return true;
     reads.add(id);
     if (deferredPipelineReads.size + deferredMultiReviewReads.size > MAX_DEFERRED_WORKFLOW_READS) {
@@ -625,25 +632,53 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   );
 
   const flushDeferredWorkflowReads = (): void => {
-    if (disposed || documentHidden()) return;
-    if (deferredWorkflowReadsOverflowed) {
-      deferredWorkflowReadsOverflowed = false;
-      void requestStoreResync({
-        resources: new Set<ResourceManifestKind>(["build-pipeline", "multi-review"]),
-        reason: "explicit",
-      }).catch(() => undefined);
-      return;
-    }
-    const pipelineIds = Array.from(deferredPipelineReads);
-    const workflowIds = Array.from(deferredMultiReviewReads);
-    deferredPipelineReads.clear();
-    deferredMultiReviewReads.clear();
-    // Failures are logged by the refresh itself; the next change or the
-    // periodic manifest check reads the record again.
-    for (const pipelineId of pipelineIds) void refreshPipeline(pipelineId).catch(() => undefined);
-    for (const workflowId of workflowIds) {
-      void refreshMultiReview(workflowId).catch(() => undefined);
-    }
+    if (disposed || documentHidden() || workflowFlushRunning) return;
+    if (workflowRetryTimer) clearTimeout(workflowRetryTimer);
+    workflowRetryTimer = null;
+    const generation = deferredWorkflowGeneration;
+    workflowFlushRunning = true;
+    const flush = async (): Promise<void> => {
+      if (deferredWorkflowReadsOverflowed) {
+        await requestStoreResync({
+          resources: new Set<ResourceManifestKind>(["build-pipeline", "multi-review"]),
+          reason: "explicit",
+        });
+        if (generation === deferredWorkflowGeneration) deferredWorkflowReadsOverflowed = false;
+        return;
+      }
+      const refresh = async (ids: Set<string>, read: (id: string) => Promise<void>) => {
+        await Promise.allSettled(
+          Array.from(ids, async (id) => {
+            await read(id);
+            // A hidden-window change arriving during the read still needs replay.
+            if (generation === deferredWorkflowGeneration) ids.delete(id);
+          }),
+        );
+      };
+      await Promise.all([
+        refresh(deferredPipelineReads, refreshPipeline),
+        refresh(deferredMultiReviewReads, refreshMultiReview),
+      ]);
+    };
+    void flush()
+      .catch(() => undefined)
+      .finally(() => {
+        workflowFlushRunning = false;
+        if (
+          !disposed &&
+          !documentHidden() &&
+          (deferredWorkflowReadsOverflowed ||
+            deferredPipelineReads.size ||
+            deferredMultiReviewReads.size)
+        ) {
+          // Manifest delivery already acknowledged these changes. Retry independently
+          // with one bounded timer, even when every subsequent manifest is unchanged.
+          workflowRetryTimer = setTimeout(() => {
+            workflowRetryTimer = null;
+            flushDeferredWorkflowReads();
+          }, DEFERRED_WORKFLOW_RETRY_MS);
+        }
+      });
   };
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", flushDeferredWorkflowReads);
@@ -654,6 +689,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
 
   return () => {
     disposed = true;
+    if (workflowRetryTimer) clearTimeout(workflowRetryTimer);
     for (const deferred of deferredPaneLayoutRefreshes.values()) {
       deferred.resolve();
     }

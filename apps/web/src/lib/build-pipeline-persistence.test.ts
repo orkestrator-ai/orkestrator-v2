@@ -5,6 +5,8 @@ import {
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
   isBuildPipelineTranscriptStale,
+  isBuildPipelineKnownUnavailable,
+  resetBuildPipelineUnavailableMarkersForTests,
   isBuildPipelineTranscriptUnavailable,
   LEGACY_BUILD_PIPELINE_STORAGE_KEY,
   migrateLegacyBuildPipelines,
@@ -77,10 +79,40 @@ function deferred<T>(): {
 describe("build pipeline read model", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    resetBuildPipelineUnavailableMarkersForTests();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
+  });
+
+  test("point reads mark missing and invalid records unavailable and found records clear them", async () => {
+    expect(await hydrateBuildPipeline("pipeline-1", async () => null)).toBeNull();
+    expect(isBuildPipelineKnownUnavailable("pipeline-1")).toBe(true);
+    const invalid = { ...record(snapshot(), 1), version: -1 };
+    expect(await hydrateBuildPipeline("pipeline-1", async () => invalid)).toBeNull();
+    expect(isBuildPipelineKnownUnavailable("pipeline-1")).toBe(true);
+    await hydrateBuildPipeline("pipeline-1", async () => record(snapshot(), 2));
+    expect(isBuildPipelineKnownUnavailable("pipeline-1")).toBe(false);
+    expect(await hydrateBuildPipeline("pipeline-1", async () => invalid)).toBeNull();
+    expect(isBuildPipelineKnownUnavailable("pipeline-1")).toBe(true);
+  });
+
+  test("an unchanged conditional answer clears the unavailable marker", async () => {
+    await hydrateBuildPipeline("pipeline-1", async () => record(snapshot(), 1));
+    await hydrateBuildPipeline("pipeline-1", async () => null);
+    expect(isBuildPipelineKnownUnavailable("pipeline-1")).toBe(true);
+    invokeMock.mockResolvedValue({ unchanged: true, revision: 1 });
+    await hydrateBuildPipeline("pipeline-1");
+    expect(isBuildPipelineKnownUnavailable("pipeline-1")).toBe(false);
+  });
+
+  test("a valid project listing clears only markers for records it contains", async () => {
+    await hydrateBuildPipeline("pipeline-1", async () => null);
+    await hydrateBuildPipeline("pipeline-2", async () => null);
+    await hydrateBuildPipelinesForProject("project-1", async () => [record(snapshot(), 1)]);
+    expect(isBuildPipelineKnownUnavailable("pipeline-1")).toBe(false);
+    expect(isBuildPipelineKnownUnavailable("pipeline-2")).toBe(true);
   });
 
   test("normalizes future wire vocabulary in live updates and rehydrates it after a reload", async () => {

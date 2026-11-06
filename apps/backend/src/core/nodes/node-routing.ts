@@ -227,6 +227,7 @@ export class NodeOutcomeLedger {
       load(): Promise<unknown>;
       save(records: NodeOutcomeRecord[]): Promise<void>;
     },
+    private readonly onChanged?: (nodeId: BackendId) => void,
   ) {}
 
   async restore(): Promise<void> {
@@ -263,16 +264,20 @@ export class NodeOutcomeLedger {
       outcomeId: randomUUID(),
       recordedAt: new Date().toISOString(),
     };
+    const evicted = this.records.length >= MAX_NODE_OUTCOMES ? this.records[0] : undefined;
     this.records = [...this.records, record].slice(-MAX_NODE_OUTCOMES);
     await this.persistence?.save(this.records).catch(() => undefined);
+    this.onChanged?.(record.nodeId);
+    if (evicted && evicted.nodeId !== record.nodeId) this.onChanged?.(evicted.nodeId);
     return record;
   }
 
   async dismiss(outcomeId: string): Promise<boolean> {
-    const before = this.records.length;
+    const dismissed = this.records.find((record) => record.outcomeId === outcomeId);
+    if (!dismissed) return false;
     this.records = this.records.filter((record) => record.outcomeId !== outcomeId);
-    if (this.records.length === before) return false;
     await this.persistence?.save(this.records).catch(() => undefined);
+    this.onChanged?.(dismissed.nodeId);
     return true;
   }
 }

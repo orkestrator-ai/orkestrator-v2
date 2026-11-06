@@ -31,6 +31,7 @@ import {
 } from "@orkestrator/protocol/backend-profile";
 import {
   NODE_SUMMARY_CHANGED_EVENT,
+  NODE_OUTCOMES_CHANGED_EVENT,
   type NodeSummariesResult,
   type NodeSummary,
   type SelfNodeSummary,
@@ -234,7 +235,7 @@ export async function listNodeOutcomes(nodeId: string): Promise<NodeOutcomeRecor
   return Array.isArray(value) ? value : [];
 }
 
-/** How long node summary changes are gathered before the outcome lists are read again. */
+/** How long outcome and node summary changes are gathered before lists are read again. */
 export const NODE_OUTCOMES_REFRESH_DEBOUNCE_MS = 250;
 
 type NodeOutcomesEntry = {
@@ -256,6 +257,7 @@ export class NodeOutcomesStore {
   private readonly entries = new Map<string, NodeOutcomesEntry>();
   private unlisteners: Array<() => void> = [];
   private listening = false;
+  private listeningGeneration = 0;
 
   constructor(
     private readonly read: (nodeId: string) => Promise<NodeOutcomeRecord[]> = listNodeOutcomes,
@@ -338,17 +340,25 @@ export class NodeOutcomesStore {
   private startListening(): void {
     if (this.listening) return;
     this.listening = true;
+    const generation = ++this.listeningGeneration;
     const attach = (event: string, handler: (payload: unknown) => void) => {
-      void this.listenTo<unknown>(event, ({ payload }) => handler(payload)).then((stop) => {
-        if (this.listening) this.unlisteners.push(stop);
-        else stop();
-      });
+      void this.listenTo<unknown>(event, ({ payload }) => {
+        if (this.listening && generation === this.listeningGeneration) handler(payload);
+      })
+        .then((stop) => {
+          if (this.listening && generation === this.listeningGeneration)
+            this.unlisteners.push(stop);
+          else stop();
+        })
+        .catch(() => undefined);
     };
-    attach(NODE_SUMMARY_CHANGED_EVENT, (payload) => {
+    const refreshChangedNode = (payload: unknown) => {
       const nodeId = (payload as { nodeId?: unknown } | null)?.nodeId;
       if (typeof nodeId === "string") this.scheduleRefresh(nodeId);
       else this.refreshAll();
-    });
+    };
+    attach(NODE_SUMMARY_CHANGED_EVENT, refreshChangedNode);
+    attach(NODE_OUTCOMES_CHANGED_EVENT, refreshChangedNode);
     // Records written while the stream was down arrive with no event.
     attach(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => this.refreshAll());
   }
@@ -356,6 +366,7 @@ export class NodeOutcomesStore {
   private stopListening(): void {
     if (!this.listening) return;
     this.listening = false;
+    this.listeningGeneration += 1;
     for (const stop of this.unlisteners) stop();
     this.unlisteners = [];
   }

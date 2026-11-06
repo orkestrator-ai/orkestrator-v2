@@ -1000,20 +1000,33 @@ export const UPKEEP_RELEASE_PAGE_BUDGET = 262_144;
 export const UPKEEP_RELEASE_STEP_PAGES = 256;
 /** The child's pause between steps, so the backend's writers get the lock. */
 export const UPKEEP_RELEASE_PAUSE_MS = 5;
+/**
+ * A step (its `incremental_vacuum` and checkpoint) slower than this ends the
+ * release until the next check. A slow step means the disk is busy: a step
+ * reads the pages it moves while it holds the write lock, and a backend writer
+ * waits behind it with the event loop held. With four processes fsyncing beside
+ * it, steps of a 1 GiB release held the lock for up to 2.5 s and backend writes
+ * waited up to 4.2 s (to-do 7210 task 4). On an idle disk a step takes under
+ * 60 ms, so a stop there only moves the rest to the next check.
+ */
+export const UPKEEP_RELEASE_SLOW_STEP_MS = 100;
 /** A release still running after this long is killed; checks come every five minutes. */
 const UPKEEP_RELEASE_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * Why a free-page release stopped: nothing left (`done`), the page budget
  * (`budget`), another connection held the database (`busy`), a step freed
- * nothing (`no-progress`), or the database cannot release pages at all
- * (`not-incremental`, no incremental auto-vacuum).
+ * nothing (`no-progress`), a step took longer than
+ * {@link UPKEEP_RELEASE_SLOW_STEP_MS} (`slow-step`, a busy disk), or the
+ * database cannot release pages at all (`not-incremental`, no incremental
+ * auto-vacuum).
  */
 export const FREE_PAGE_RELEASE_STOPS = [
   "done",
   "budget",
   "busy",
   "no-progress",
+  "slow-step",
   "not-incremental",
 ] as const;
 export type FreePageReleaseStop = (typeof FREE_PAGE_RELEASE_STOPS)[number];
@@ -1034,8 +1047,9 @@ export interface FreePageRelease {
  * {@link UPKEEP_RELEASE_STEP_PAGES} at a time with the backend's durability
  * settings, checkpoints its own frames after each step so the backend's next
  * commit does not pay for them, and pauses between steps. It stops at the
- * budget, when nothing is left, or when a step makes no progress or finds the
- * database busy (the next check tries again). Rejects when the child fails.
+ * budget, when nothing is left, or when a step makes no progress, finds the
+ * database busy or is slower than {@link UPKEEP_RELEASE_SLOW_STEP_MS} (the
+ * next check tries again). Rejects when the child fails.
  */
 export function releaseFreePagesInChildProcess(
   file: string,
@@ -1043,6 +1057,7 @@ export function releaseFreePagesInChildProcess(
     maxPages?: number;
     stepPages?: number;
     pauseMs?: number;
+    slowStepMs?: number;
     timeoutMs?: number;
     spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   } = {},
@@ -1055,6 +1070,7 @@ export function releaseFreePagesInChildProcess(
       String(options.maxPages ?? UPKEEP_RELEASE_PAGE_BUDGET),
       String(options.stepPages ?? UPKEEP_RELEASE_STEP_PAGES),
       String(options.pauseMs ?? UPKEEP_RELEASE_PAUSE_MS),
+      String(options.slowStepMs ?? UPKEEP_RELEASE_SLOW_STEP_MS),
     ],
     { timeoutMs: options.timeoutMs ?? UPKEEP_RELEASE_TIMEOUT_MS, spawn: options.spawn },
   ).then(({ code, signal, stdout, stderr }) => {
@@ -1075,15 +1091,15 @@ export function releaseFreePagesInChildProcess(
 
 /**
  * Run by {@link releaseFreePagesInChildProcess}:
- * `-- <file> <maxPages> <stepPages> <pauseMs>`. Prints `<released> <left> <stop>`
- * ({@link FreePageReleaseStop}).
- * Sets what the backend's connection sets (`storage-database.ts`), so a step
- * here is as durable and as scrubbing as one there. A busy database ends the
- * run without an error: the backend's writers come first.
+ * `-- <file> <maxPages> <stepPages> <pauseMs> <slowStepMs>`. Prints
+ * `<released> <left> <stop>` ({@link FreePageReleaseStop}). Sets what the
+ * backend's connection sets (`storage-database.ts`), so a step here is as
+ * durable and as scrubbing as one there. A busy database or a slow step ends
+ * the run without an error: the backend's writers come first.
  */
 const FREE_PAGE_RELEASE_HELPER = String.raw`
 const { Database } = require("bun:sqlite");
-const [file, maxPages, stepPages, pauseMs] = process.argv.slice(1).map((v, i) => (i === 0 ? v : Number(v)));
+const [file, maxPages, stepPages, pauseMs, slowStepMs] = process.argv.slice(1).map((v, i) => (i === 0 ? v : Number(v)));
 try {
   const db = new Database(file);
   let released = 0;
@@ -1107,6 +1123,7 @@ try {
         break;
       }
       const pages = Math.max(1, Math.min(stepPages, maxPages - released));
+      const started = performance.now();
       try {
         db.exec("PRAGMA incremental_vacuum(" + pages + ")");
       } catch (error) {
@@ -1125,6 +1142,11 @@ try {
       }
       released += left - now;
       left = now;
+      // The disk is busy: stop holding the lock until the next check.
+      if (left > 0 && released < maxPages && performance.now() - started > slowStepMs) {
+        stop = "slow-step";
+        break;
+      }
       if (pauseMs > 0) Bun.sleepSync(pauseMs);
     }
   } finally {

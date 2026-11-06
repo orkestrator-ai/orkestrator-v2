@@ -71,6 +71,29 @@ function stepGate(directory: string) {
   };
 }
 
+/**
+ * The real supervisor and helper, with the helper's `incremental_vacuum` number
+ * `step` taking `ms` longer, as a step does when the disk is busy.
+ */
+function slowStepSpawn(step: number, ms: number) {
+  return (command: string, args: string[], options: SpawnOptions) => {
+    const prelude = `
+      const slowSqlite = require("bun:sqlite");
+      const slowExec = slowSqlite.Database.prototype.exec;
+      let slowStep = 0;
+      slowSqlite.Database.prototype.exec = function (sql, ...rest) {
+        const result = slowExec.call(this, sql, ...rest);
+        if (String(sql).includes("incremental_vacuum") && ++slowStep === ${step}) Bun.sleepSync(${ms});
+        return result;
+      };
+    `;
+    const slowed = args.slice();
+    // -e, supervisor, --, timeoutMs, helper, ...helperArgs
+    slowed[4] = prelude + args[4];
+    return spawn(command, slowed, options);
+  };
+}
+
 function checkRetainedData(file: string, title: string) {
   // Verify through a new connection after the worker has closed its own.
   const copy = new Database(file, { readonly: true });
@@ -103,6 +126,8 @@ describe("free-page release with live backend writes", () => {
       spawn: gate.spawn,
       maxPages: 12,
       stepPages: 4,
+      // Every step must run here, however slow the host's disk is.
+      slowStepMs: 60_000,
       timeoutMs: 20_000,
     });
     // Attach a rejection handler immediately, including if waiting for a gate fails.
@@ -163,6 +188,33 @@ describe("free-page release with live backend writes", () => {
       await gate.unblock();
       await outcome;
     }
+  }, 30_000);
+
+  test("a slow step ends the run and the next check resumes it (to-do 7210 task 4)", async () => {
+    const { main } = await fixture();
+    const before = main.releasableFreePages();
+    // Step 2 is slower than the threshold: its pages count, then the child stops
+    // instead of taking the write lock again while the disk is busy.
+    expect(
+      await releaseFreePagesInChildProcess(main.path, {
+        spawn: slowStepSpawn(2, 1_500),
+        maxPages: 12,
+        stepPages: 4,
+        pauseMs: 0,
+        slowStepMs: 1_000,
+        timeoutMs: 20_000,
+      }),
+    ).toEqual({ released: 8, left: before - 8, stop: "slow-step" });
+    expect(main.releasableFreePages()).toBe(before - 8);
+    main.writeStore("kanban", [{ id: "live", projectId: "p1", title: "after-slow-step" }]);
+    expect(
+      await releaseFreePagesInChildProcess(main.path, {
+        maxPages: 4,
+        stepPages: 4,
+        slowStepMs: 60_000,
+      }),
+    ).toEqual({ released: 4, left: before - 12, stop: "budget" });
+    checkRetainedData(main.path, "after-slow-step");
   }, 30_000);
 
   test("the release deadline kills and reaps a worker blocked between steps", async () => {

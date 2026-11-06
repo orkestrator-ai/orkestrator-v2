@@ -252,7 +252,10 @@ describe("database upkeep (reports 0760 and 0910)", () => {
       (main.db.query(`PRAGMA ${name}`).get() as Record<string, number>)[name]!;
     const pages = pragma("page_count");
     expect(pragma("freelist_count")).toBeGreaterThan(0);
-    await runDatabaseUpkeep(main);
+    // Every step must run here, however slow the host's disk is.
+    await runDatabaseUpkeep(main, {
+      release: (file) => releaseFreePagesInChildProcess(file, { slowStepMs: 60_000 }),
+    });
     expect(pragma("freelist_count")).toBe(0);
     expect(pragma("page_count")).toBeLessThan(pages / 2);
   });
@@ -291,14 +294,18 @@ describe("database upkeep (reports 0760 and 0910)", () => {
         .filter((row) => row.event === "upkeep.finished")
         .map((row) => row.fields);
     try {
-      // A new database starts with free pages; return them first.
-      await releaseFreePagesInChildProcess(main.path);
+      // A new database starts with free pages; return them first, every step.
+      await releaseFreePagesInChildProcess(main.path, { slowStepMs: 60_000 });
       await runDatabaseUpkeep(main, { now });
       wastePages(main);
       const releasable = main.releasableFreePages();
       await runDatabaseUpkeep(main, {
         now,
         release: async () => ({ released: 7, left: releasable - 7, stop: "busy" }),
+      });
+      await runDatabaseUpkeep(main, {
+        now,
+        release: async () => ({ released: 3, left: releasable - 3, stop: "slow-step" }),
       });
       await runDatabaseUpkeep(main, {
         now,
@@ -324,6 +331,15 @@ describe("database upkeep (reports 0760 and 0910)", () => {
           left: releasable - 7,
           releaseMs: 10,
           stop: "busy",
+        },
+        {
+          durationMs: 40,
+          optimizeMs: 10,
+          releasable,
+          released: 3,
+          left: releasable - 3,
+          releaseMs: 10,
+          stop: "slow-step",
         },
         expect.objectContaining({ releasable, released: null, releaseMs: 10, stop: "failed" }),
       ]);
@@ -398,7 +414,13 @@ describe("database upkeep (reports 0760 and 0910)", () => {
     const before = main.releasableFreePages();
     expect(before).toBeGreaterThan(20);
     expect(
-      await releaseFreePagesInChildProcess(main.path, { maxPages: 10, stepPages: 4, pauseMs: 0 }),
+      await releaseFreePagesInChildProcess(main.path, {
+        maxPages: 10,
+        stepPages: 4,
+        pauseMs: 0,
+        // Every step must run here, however slow the host's disk is.
+        slowStepMs: 60_000,
+      }),
     ).toEqual({ released: 10, left: before - 10, stop: "budget" });
     expect(main.releasableFreePages()).toBe(before - 10);
   });

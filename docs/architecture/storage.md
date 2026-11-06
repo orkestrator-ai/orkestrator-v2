@@ -735,9 +735,23 @@ returns at most 1 GiB per check, 1 MiB per transaction, checkpoints its own
 frames after each one (so the backend's next commit does not pay for them),
 pauses 5 ms between them and stops when the database is busy. In-process,
 those steps had held the event loop 30–190 ms each (to-do 1202 task 7).
+It also stops after any step that took longer than 100 ms
+(`UPKEEP_RELEASE_SLOW_STEP_MS`), and the next check carries on. A step reads
+the pages it moves while it holds the write lock, so on a busy disk one step
+can hold it for seconds. A backend writer waits behind that step, and because
+`bun:sqlite` is synchronous, the event loop waits with it. With four processes
+fsyncing on the same disk, a 1 GiB release that ran to its budget held backend
+writes for 1.7–4.2 s, with 2–7 writes of at least 1 s each. A longer pause, a
+smaller step and `synchronous = NORMAL` in the child did not change that. The
+waiting writer is not starved between steps: Bun's SQLite is built with
+`SQLITE_ENABLE_SETLK_TIMEOUT`, so a writer blocked on the lock gets it as soon
+as the step commits. On a quiet disk a step takes 5–60 ms and the release runs
+its whole budget. Other work on the host can still stop it early, which moves
+the rest to the next check. `apps/backend/scripts/storage-release-writer-stall.ts`
+measures this (to-do 7210 task 4).
 Each pass writes one `storage` `upkeep.finished` line with how long
 `optimize` held the event loop, the pages released and left, and why the
-release stopped; slow SQLite calls on either file write `operation.slow`
+release stopped (`slow-step` for the case above); slow SQLite calls on either file write `operation.slow`
 ([what ran during a stall](logging.md#what-ran-during-a-stall)).
 
 Every startup also extracts identities from stray `looped-reviews.json` files

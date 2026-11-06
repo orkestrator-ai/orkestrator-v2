@@ -572,3 +572,29 @@ Passing output was deleted by the logged runner; per-case totals were not
 retained. No product code, assertion, timeout or skip changed between these
 runs. This shows intermittence for this notice case, without establishing its
 cause or excusing the other owners' failures or incomplete broad validation.
+
+## Approval-card markers validation — 2026-11-06
+
+Branch base `ee2cc8423` (`mise run flaky:recurrence -- 0382` verdict: open).
+A focused run of `InteractionSourceLayout`, `ClaudeInteractions` and
+`InteractionPolicyChecks` with the config's default workers (Linux, private
+loopback namespace; 15 passed, 3 failed in 1.3 min) failed two
+`e2e/ClaudeInteractions.spec.ts:44` mobile cases: the form card's title was
+not visible after the reload, and the URL card's `page.reload` exceeded the
+30 s test timeout. The third failure is case
+[0252](../native-agents-and-transcripts/0252-claude-paused-question-route-disposal.md).
+The change under test touched approval cards only, not form or URL cards.
+
+```sh
+ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-interaction-card -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/InteractionSourceLayout.spec.ts e2e/ClaudeInteractions.spec.ts e2e/InteractionPolicyChecks.spec.ts
+```
+
+The complete owner passed alone, exit 0, in 28.9 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-claude-interactions-rerun -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts
+```
+
+No assertion, timeout or skip changed. Evidence:
+`orkestrator-test-run.OyQ3Ys/e2e-interaction-card.log.gz` below the host
+temporary directory.

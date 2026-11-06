@@ -328,10 +328,45 @@ export function parseFirewallStatus(text: string): EnvironmentNetworkPolicy["eff
   };
 }
 
+const REFUSALS_SEPARATOR = "--- egress-refusals ---";
+
+/**
+ * The name checks' refusal counts (`egress-refusals.json`, written by the
+ * gateway's daemon); anything unexpected reads as absent.
+ */
+export function parseEgressRefusals(text: string): { connections: number; queries: number } | null {
+  if (!text.trim() || text.length > 256) return null;
+  let value: Record<string, unknown>;
+  try {
+    value = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const connections = boundedNumber(value.refusedConnections);
+  const queries = boundedNumber(value.refusedQueries);
+  return connections === null || queries === null ? null : { connections, queries };
+}
+
+/**
+ * The output of `FIREWALL_STATUS_READ`: the firewall report, then the
+ * refusal counts after a separator line. Counts are kept only beside a
+ * report whose name checks are enforced.
+ */
+export function parseFirewallReport(text: string): EnvironmentNetworkPolicy["effective"] {
+  const at = text.indexOf(`\n${REFUSALS_SEPARATOR}\n`);
+  const report = at < 0 ? text : text.slice(0, at);
+  const effective = parseFirewallStatus(report);
+  if (!effective) return null;
+  const counts =
+    at < 0 ? null : parseEgressRefusals(text.slice(at + REFUSALS_SEPARATOR.length + 2));
+  return { ...effective, refusals: effective.egressFilter === "enforced" ? counts : null };
+}
+
 // Refreshing images keep the report in a root-only directory; earlier images
-// wrote it where node could replace it.
-const FIREWALL_STATUS_READ =
-  "head -c 4096 /run/orkestrator-firewall/firewall.json 2>/dev/null || head -c 4096 /run/orkestrator/firewall.json";
+// wrote it where node could replace it. Gateways with name checks write their
+// refusal counts beside it.
+export const FIREWALL_STATUS_READ = `{ head -c 4096 /run/orkestrator-firewall/firewall.json 2>/dev/null || head -c 4096 /run/orkestrator/firewall.json 2>/dev/null; }; printf '\\n%s\\n' '${REFUSALS_SEPARATOR}'; head -c 256 /run/orkestrator-firewall/egress-refusals.json 2>/dev/null; true`;
 
 /** Subnet and gateway Docker assigned to a network; null when it cannot say. */
 async function networkIdentity(
@@ -457,7 +492,7 @@ export async function environmentNetworkPolicy(
       ["exec", firewallContainer, "sh", "-c", FIREWALL_STATUS_READ],
       { timeoutMs: 10_000 },
     );
-    result.effective = parseFirewallStatus(stdout);
+    result.effective = parseFirewallReport(stdout);
   } catch {
     result.effective = null;
   }

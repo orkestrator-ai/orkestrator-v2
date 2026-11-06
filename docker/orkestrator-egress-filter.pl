@@ -39,9 +39,14 @@
 # only; and an allowed service still accepts whatever data or credential it
 # is sent.
 #
+# It counts the connections and queries it refuses since the gateway booted
+# (--counts, shown in the firewall report), and never records a refused
+# name: one can carry the data an agent tried to send.
+#
 # Usage (init-firewall.sh starts it):
 #   orkestrator-egress-filter --names FILE --resolv FILE --mark N
-#       --proxy-port N --dns-port N --ready FILE [--supervise]
+#       --proxy-port N --dns-port N --ready FILE
+#       [--counts FILE] [--quiet FILE] [--supervise]
 use strict;
 use warnings;
 use Socket qw(:DEFAULT inet_aton inet_ntoa pack_sockaddr_in unpack_sockaddr_in
@@ -68,6 +73,8 @@ use constant DNS_TIMEOUT       => 2.5;    # per upstream attempt
 use constant DNS_TCP_TIMEOUT   => 10;
 use constant MAX_NAMES         => 4096;
 use constant RELOAD_INTERVAL   => 1;
+use constant MAX_COUNT         => 999_999_999_999_999;    # 15 digits, below 2**53
+use constant QUIET_LIMIT       => 120;    # seconds a --quiet marker mutes counting
 
 # Package variable, so a test that loads this file can point it at fixtures.
 our %opt = (supervise => 0);
@@ -141,6 +148,65 @@ sub name_allowed_on_port {
     return 1 if $allowed_ports{"$name\ttcp:$port"};
     return 1 if ($port == 443 || $port == 22) && github_name($name);
     return 0;
+}
+
+# ---------------------------------------------------------------------------
+# Refusal counts
+# ---------------------------------------------------------------------------
+
+# Connections and DNS queries refused since the gateway booted, for the
+# firewall report. Counts only: a refused name can carry the data an agent
+# tried to send (`<secret>.attacker.tld`), so no name, part of one or digest
+# of one is kept, logged or written. The --counts file is on the gateway's
+# /run tmpfs: it starts empty on every boot and carries the counts across a
+# worker restart within one (losing at most the last second's).
+my %refused = (connections => 0, queries => 0);
+my $refused_written;
+
+# The firewall's own boot checks ask for names off the list on purpose and
+# hold the --quiet marker while they run, so they are not counted. A marker
+# left by a script that died stops muting after QUIET_LIMIT seconds.
+sub counting {
+    return 1 unless defined $opt{quiet};
+    my @stat = stat($opt{quiet});
+    return !@stat || time - $stat[9] > QUIET_LIMIT;
+}
+
+sub count_refusal {
+    my ($kind) = @_;
+    $refused{$kind}++ if $refused{$kind} < MAX_COUNT && counting();
+}
+
+sub refusals_text {
+    return sprintf(qq({"refusedConnections":%d,"refusedQueries":%d}\n),
+        $refused{connections}, $refused{queries});
+}
+
+sub load_refusals {
+    return unless defined $opt{counts};
+    open(my $fh, '<', $opt{counts}) or return;
+    my $line = <$fh> // '';
+    close $fh;
+    if ($line =~ /^\{"refusedConnections":(\d{1,15}),"refusedQueries":(\d{1,15})\}\n?$/) {
+        @refused{qw(connections queries)} = ($1 + 0, $2 + 0);
+        $refused_written = refusals_text();
+    }
+}
+
+# Rewritten at most once a RELOAD_INTERVAL, and only when a count moved. A
+# failed write is retried on the next one; it never stops the worker.
+sub write_refusals {
+    return unless defined $opt{counts};
+    my $text = refusals_text();
+    return if defined $refused_written && $text eq $refused_written;
+    my $tmp = "$opt{counts}.tmp.$$";
+    my $fh;
+    if (open($fh, '>', $tmp) && print({$fh} $text) && close($fh)
+        && chmod(0644, $tmp) && rename($tmp, $opt{counts})) {
+        $refused_written = $text;
+    } else {
+        unlink $tmp;
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -373,6 +439,7 @@ sub drop_connection {
 # Sends a refusal the client can read, then closes.
 sub refuse_connection {
     my ($c, $kind) = @_;
+    count_refusal('connections');
     if ($c->{upstream}) {
         delete $connections{fileno($c->{upstream})};
         hard_close($c->{upstream});
@@ -663,6 +730,7 @@ sub dns_udp_query {
         my ($port, $address) = unpack_sockaddr_in($from);
         my @resolvers = query_resolvers($name, inet_ntoa($address) =~ /^127\./);
         if (!@resolvers || ($flags & 0x7800)) {
+            count_refusal('queries');
             send($dns_udp, dns_answer($message, $flags, $question_end, $edns, 5), 0, $from);
             next;
         }
@@ -815,6 +883,7 @@ sub dns_tcp_next {
     refresh_names();
     my @resolvers = query_resolvers($name, $c->{from_loopback});
     if (!@resolvers || ($flags & 0x7800)) {
+        count_refusal('queries');
         my $reply = dns_answer($message, $flags, $question_end, $edns, 5);
         $c->{to_client} .= pack('n', length $reply) . $reply;
         return;
@@ -930,6 +999,8 @@ sub run_worker {
     $dns_udp = $udp;
     load_resolvers();
     load_names();
+    load_refusals();
+    write_refusals();
     $poll->mask($_ => POLLIN) for $proxy, $dns_udp, $dns_tcp;
     my $tmp = "$opt{ready}.tmp.$$";
     open(my $ready, '>', $tmp) or die "ready: $!\n";
@@ -962,6 +1033,7 @@ sub run_worker {
             refresh_names();
             expire_connections();
             expire_dns_tcp();
+            write_refusals();
         }
         expire_queries();
     }
@@ -984,6 +1056,8 @@ sub parse_options {
         elsif ($arg eq '--proxy-port') { $opt{proxy_port} = $value; }
         elsif ($arg eq '--dns-port')   { $opt{dns_port} = $value; }
         elsif ($arg eq '--ready')      { $opt{ready} = $value; }
+        elsif ($arg eq '--counts')     { $opt{counts} = $value; }
+        elsif ($arg eq '--quiet')      { $opt{quiet} = $value; }
         else { die "usage: unknown option $arg\n"; }
     }
     for my $key (qw(names resolv mark proxy_port dns_port ready)) {

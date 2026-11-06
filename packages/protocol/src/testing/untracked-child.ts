@@ -122,7 +122,12 @@ type FakeSubprocess = {
  * Honours numeric stdout and stderr; stdin is always `/dev/null`. Returns the
  * PIDs it started and what puts Bun back.
  */
-export function loseBunExitsEntirely(): { pids: number[]; restore(): void } {
+export function loseBunExitsEntirely({
+  lateEchildMs,
+}: {
+  /** Then reject `exited` with ECHILD, as Bun does when it handles the exit after someone reaped the child. */
+  lateEchildMs?: number;
+} = {}): { pids: number[]; restore(): void } {
   const pids: number[] = [];
   const spy = spyOn(Bun, "spawn").mockImplementation(((
     argv: string[],
@@ -136,7 +141,10 @@ export function loseBunExitsEntirely(): { pids: number[]; restore(): void } {
     const child: FakeSubprocess = {
       pid,
       stdin: { end: () => undefined },
-      exited: new Promise(() => undefined),
+      exited: new Promise((_resolve, reject) => {
+        if (lateEchildMs === undefined) return;
+        setTimeout(() => reject(new Error("ECHILD: unknown error, waitpid")), lateEchildMs);
+      }),
       exitCode: null,
       signalCode: null,
       kill: (signal) => process.kill(pid, signal ?? "SIGTERM"),

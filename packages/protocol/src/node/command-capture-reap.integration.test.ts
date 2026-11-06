@@ -45,6 +45,17 @@ describe.skipIf(process.platform !== "darwin")("a child whose exit Bun lost", ()
     expect(lostExitReaperStats().reaped).toBe(before + 1);
   }, 20_000);
 
+  // Bun can still handle the exit after the reap; its waitpid then fails with
+  // ECHILD and `exited` rejects. The capture has settled, so that changes nothing.
+  test("a late ECHILD from Bun after the reap is ignored", async () => {
+    lost = loseBunExitsEntirely({ lateEchildMs: 5_000 });
+    const { stdout } = await runCommand("sh", ["-c", "printf done"]);
+    expect(stdout).toBe("done");
+    await untilGone(lost.pids[0]!, 10_000);
+    // Outlive the rejection: an unhandled one fails the test run.
+    await Bun.sleep(2_500);
+  }, 20_000);
+
   test("a success is reaped the same way", async () => {
     lost = loseBunExitsEntirely();
     const { stdout } = await runCommand("sh", ["-c", "printf done"]);

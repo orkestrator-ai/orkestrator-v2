@@ -34,8 +34,9 @@ export function dismissStartupDialogs(app: ElectronApplication): void {
           // The button can leave the role tree between the check that ran this
           // handler and the click: a later modal hides it, or a status refresh
           // re-renders the dialog. An unbounded click then waits for the whole
-          // action's timeout and fails it; Playwright reruns the handler if
-          // the button is still there afterwards.
+          // action's timeout and fails it. After this handler resolves,
+          // Playwright waits for the button to become hidden; if it remains
+          // visible, the triggering action can still time out.
           await button.click({ timeout: 5_000 }).catch(() => undefined);
         })
         .catch(() => undefined);

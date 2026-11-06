@@ -751,7 +751,8 @@ Findings (fixed on this branch unless stated):
 - **The startup-dialog handler could fail the action that triggered it
   (fixed).** Its unbounded click waited out the action's timeout when the
   button left the role tree under it. The click is now bounded (5 s) and its
-  failure ignored; Playwright re-runs the handler while the button is visible.
+  failure ignored. After the handler resolves, Playwright waits for the button
+  to become hidden; a still-visible button can time out the triggering action.
 - **The gateway's capture had drifted from the desktop's (fixed, task 7).**
   Compared with a real capture of the same button, the hand-built record had
   `role: null` instead of `button`, no `type` attribute, empty styles,
@@ -1369,9 +1370,10 @@ In the namespace run the `beforeAll` failed on the locator handler for
 triggered it. The run's trace showed only that wait, not why the button left;
 the dialog's label changes with the CLI status ("Not Now" once it is signed
 out rather than missing), and a later modal hides it from role queries. Options: an
-unbounded click (as before); a bounded click whose failure is ignored, after
-which Playwright re-runs the handler if the button is still visible. Chose the
-bounded click (5 s). `electron-startup-dialogs.test.ts` covers it and fails
+unbounded click (as before); a bounded click whose failure is ignored. After
+the handler resolves, Playwright waits for the button to become hidden, so a
+still-visible button can time out the triggering action. Chose the bounded
+click (5 s). `electron-startup-dialogs.test.ts` covers it and fails
 against the old handler. The next run passed.
 
 ### Task 7: replay recorded desktop captures in the gateway spec (2026-11-06)

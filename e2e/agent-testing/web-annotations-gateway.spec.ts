@@ -3,10 +3,11 @@
  * `dev:test` profile (run by `mise run test:agent:browser:isolated`).
  *
  * Browser clients cannot capture (native capture is desktop-only and is
- * covered by `web-annotations-electron.spec.ts`), so these tests build a
- * synthetic capture from the fixture page as rendered by real Chromium and
- * exercise what every client shares: two-client batch reservation races,
- * request bounds, queue holds, cancellation, and reload rehydration.
+ * covered by `web-annotations-electron.spec.ts`), so these tests replay
+ * recorded desktop captures, using page identity and staged screenshot data
+ * from the current run. They exercise what every client shares: two-client
+ * batch reservation races, request bounds, queue holds, cancellation, and
+ * reload rehydration.
  *
  * The live implement and discuss tests are opt-in
  * (`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`) and require a profile started

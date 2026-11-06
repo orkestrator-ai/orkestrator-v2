@@ -989,6 +989,7 @@ for (const mode of ["crash", "graceful"] as const) {
       status = restart.status;
       record(scenario, "stop-ms", restart.stopMs);
       record(scenario, "start-to-ready-ms", restart.startMs);
+      await expect.poll(() => model.callsWith(running)[0]?.aborted, { timeout: 30_000 }).toBe(true);
       record(scenario, "held-call-aborted", model.callsWith(running)[0]?.aborted === true);
 
       record(scenario, "first-transcript-read", await firstTranscriptRead(environment.id));
@@ -1055,6 +1056,9 @@ for (const mode of ["crash", "graceful"] as const) {
       );
       record(scenario, "follow-up-user-prompts-in-context", model.callsWith(next)[0]?.userPrompts);
       expect(model.callsWith(next)).toHaveLength(1);
+      expect(model.callsWith(next)[0]!.context.some((prompt) => prompt.includes(running))).toBe(
+        true,
+      );
       // The queued prompt is held while the interrupted turn reads as failed
       // (the drain never auto-sends after a failed turn); a later turn's end
       // releases it. It must still arrive exactly once.
@@ -1109,6 +1113,7 @@ test("bridge restart: mid-turn and idle", async ({ browser }) => {
         BUDGET.activityMs,
       );
     }
+    await expect.poll(() => model.callsWith(running)[0]?.aborted, { timeout: 30_000 }).toBe(true);
     record("bridge-mid-turn", "held-call-aborted", model.callsWith(running)[0]?.aborted === true);
     const after = tag("MCBNEXT");
     const sentAt = await send(a.page, `${after} after the bridge restart`);
@@ -1129,7 +1134,13 @@ test("bridge restart: mid-turn and idle", async ({ browser }) => {
     );
     expect(model.callsWith(running)).toHaveLength(1);
     expect(model.callsWith(after)).toHaveLength(1);
+    expect(model.callsWith(after)[0]!.context.some((prompt) => prompt.includes(running))).toBe(
+      true,
+    );
 
+    // An answer can render before the SDK settles the turn. Wait for the
+    // authoritative idle state so this kill exercises the idle boundary.
+    await expect.poll(() => activity(a!.page, environment.name), { timeout: 60_000 }).toBe("idle");
     // Idle: the next prompt starts a new bridge and resumes the conversation.
     const idleBridge = claudeBridgePid(status);
     process.kill(idleBridge, "SIGKILL");
@@ -1149,6 +1160,7 @@ test("bridge restart: mid-turn and idle", async ({ browser }) => {
         ),
       );
     }
+    expect(model.callsWith(idle)[0]!.context.some((prompt) => prompt.includes(after))).toBe(true);
     record("bridge-idle", "user-prompts-in-context", model.callsWith(idle)[0]?.userPrompts);
     expect(model.callsWith(idle)).toHaveLength(1);
   } finally {
@@ -1156,3 +1168,68 @@ test("bridge restart: mid-turn and idle", async ({ browser }) => {
     await closeClient(b);
   }
 });
+
+// Restart after the accepted result is observable and the turn has settled.
+// This is distinct from killing a held provider call: durable result recovery
+// must preserve the answer and must not repeat its dispatch.
+for (const boundary of ["backend", "bridge"] as const) {
+  test(`${boundary} restart after result acceptance preserves the result without dispatch replay`, async ({
+    browser,
+  }) => {
+    test.setTimeout(10 * 60_000);
+    let status = readyStatus();
+    let client: Client | undefined;
+    const marker = tag("MCACCEPT");
+    const prompt = `${marker} accepted result before restart`;
+    const answer = answerFor(prompt);
+    try {
+      client = await newClient(browser, "accepted-result", { status });
+      await openEnvironment(client.page, fixture.name, environment.name);
+      await send(client.page, prompt);
+      await expect.poll(() => rowsWith(client!.page, answer), { timeout: 120_000 }).toBe(1);
+      await expect
+        .poll(() => activity(client!.page, environment.name), { timeout: 60_000 })
+        .toBe("idle");
+      expect(model.callsWith(marker)).toHaveLength(1);
+      expect(model.callsWith(marker)[0]?.answeredAt).toEqual(expect.any(Number));
+      await closeClient(client);
+      client = undefined;
+      if (boundary === "backend") {
+        status = (await restartProfile("crash")).status;
+      } else {
+        const bridge = claudeBridgePid(status);
+        process.kill(bridge, "SIGKILL");
+        await expect.poll(() => processAlive(bridge), { timeout: 10_000 }).toBe(false);
+      }
+      client = await newClient(browser, "accepted-result-recovered", { status });
+      await openEnvironment(client.page, fixture.name, environment.name);
+      await expect.poll(() => rowsWith(client!.page, answer), { timeout: 120_000 }).toBe(1);
+      await client.page.reload();
+      await openEnvironment(client.page, fixture.name, environment.name);
+      await expect.poll(() => rowsWith(client!.page, answer), { timeout: 120_000 }).toBe(1);
+      const followUp = tag("MCACCEPTNEXT");
+      const followUpPrompt = `${followUp} continue accepted conversation`;
+      await send(client.page, followUpPrompt);
+      await expect
+        .poll(() => rowsWith(client!.page, answerFor(followUpPrompt)), { timeout: 120_000 })
+        .toBe(1);
+      expect(model.callsWith(followUp)).toHaveLength(1);
+      expect(model.callsWith(followUp)[0]!.context.some((text) => text.includes(marker))).toBe(
+        true,
+      );
+      expect(model.callsWith(marker)).toHaveLength(1);
+      record(
+        `${boundary}-result-accepted`,
+        "original-dispatch-count",
+        model.callsWith(marker).length,
+      );
+      record(
+        `${boundary}-result-accepted`,
+        "recovered-answer-rows",
+        await rowsWith(client.page, answer),
+      );
+    } finally {
+      await closeClient(client);
+    }
+  });
+}

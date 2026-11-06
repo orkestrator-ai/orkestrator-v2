@@ -29,6 +29,8 @@ export interface FakeModelCall {
    * shows its earlier prompts and a fresh one shows only the last.
    */
   userPrompts: number;
+  /** In-memory fixture context; never write this to evidence. */
+  context: string[];
   receivedAt: number;
   answeredAt?: number;
   aborted?: boolean;
@@ -185,6 +187,11 @@ export async function startFakeAnthropicModel(port = 0): Promise<FakeAnthropicMo
         prompt,
         ...(hold ? { hold } : {}),
         userPrompts: userPromptCount(body),
+        context: (
+          (body as { messages?: Array<{ role?: string; content?: unknown }> }).messages ?? []
+        )
+          .filter((message) => message.role === "user")
+          .map((message) => lastUserPrompt({ messages: [message] })),
         receivedAt: Date.now(),
       };
       if (calls.length >= MAX_CALLS) calls.shift();

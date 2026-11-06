@@ -322,6 +322,54 @@ describe("session.transcript", () => {
     expect(before).toBeUndefined();
   });
 
+  test("window pagination cannot certify incomplete history without a history cursor", async () => {
+    const { harness } = await setup();
+    const started = await harness.call<{ sessionId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "hello" },
+      { requestId: "t-incomplete-window" },
+    );
+    if (!started.ok) throw new Error(started.error.message);
+    const sessionId = started.result.sessionId;
+    harness.commands.set("get_native_agent_transcript_update", async () => ({
+      status: "snapshot",
+      token: "partial-window",
+      value: {
+        messages: [0, 1, 2].map((index) => ({
+          id: `partial-${index}`,
+          role: "assistant",
+          content: "fixture",
+          parts: [],
+          createdAt: null,
+        })),
+        freshness: "cached",
+        historyEpoch: "partial-epoch",
+        historyComplete: false,
+        messageWindow: { truncated: true },
+      },
+    }));
+    const newest = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      limit: 1,
+    });
+    if (!newest.ok) throw new Error(newest.error.message);
+    let before = newest.result.olderCursor;
+    for (const id of ["partial-1", "partial-0"]) {
+      expect(before).toEqual(expect.any(String));
+      const page = await harness.call<PublicTranscriptPage>("session.transcript", {
+        sessionId,
+        limit: 1,
+        before,
+      });
+      if (!page.ok) throw new Error(page.error.message);
+      expect(page.result.messages.map((message) => message.id)).toEqual([id]);
+      expect(page.result.complete).toBe(false);
+      expect(page.result.token).toBeNull();
+      before = page.result.olderCursor;
+    }
+    expect(before).toBeUndefined();
+  });
+
   test("a restart preview with no rows and no cursor is not complete", async () => {
     // Seen live (todo 0048 task 11): the first read after a backend restart
     // got a Claude bridge preview holding none of the conversation's rows,

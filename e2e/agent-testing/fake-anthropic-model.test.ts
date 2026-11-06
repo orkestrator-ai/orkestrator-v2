@@ -106,6 +106,8 @@ describe("endpoint", () => {
       ["three", 1],
     ]);
     expect(model.callsWith("thr")).toHaveLength(1);
+    expect(model.calls()[0]?.context).toEqual(["one", "two"]);
+    expect(model.calls()[1]?.context).toEqual(["three"]);
   });
 
   test("a held prompt waits for its release; a released id passes from then on", async () => {

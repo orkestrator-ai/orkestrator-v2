@@ -805,7 +805,7 @@ showing the result.
   earlier prompt).
 - **Older backend.** v2.21.0 was built from its tag in this worktree
   (`git archive v2.21.0`, `bun install --frozen-lockfile --ignore-scripts`,
-  `bun run build` in `bridges/claude-bridge`) and started with
+  `bun run --cwd bridges/claude-bridge build` in the archived checkout) and started with
   `--data-dir`, `HOME` and `CLAUDE_CONFIG_DIR` of its own under `output/`,
   `--port <free> --control-port 0`, `ORKESTRATOR_CONTROL_MCP_PORT=0` and
   `--renderer-dev-server-url` set to the profile's current renderer, so the
@@ -1412,9 +1412,30 @@ with other tasks' decisions.
   their backend, so "restart mid-dispatch" for a local environment is always
   "turn interrupted": the boundaries qualified are the dispatch accepted with
   the provider working (held call), the prompt queued durably, and the result
-  arriving after the restart (the follow-up and the queued prompt). A
-  container bridge outlives a backend restart and is not covered here; it
+  arriving after the restart (the follow-up and the queued prompt). Review
+  added a separate result-accepted case for both backend crash and bridge
+  restart: wait for the answer and settled turn, restart, recover the answer
+  after opening and reloading, continue with the earlier prompt in context,
+  and require exactly one original provider dispatch. This qualifies recovery
+  of an already settled result; it does not inject a crash between accepting
+  a provider result and publishing the settled turn.
+  A container bridge outlives a backend restart and is not covered here; it
   belongs with the Docker runs in 0031.
+- **T11.6 Review coverage.** The restart cases now await held-call abortion
+  before continuing and assert the earlier prompt is present in the next
+  provider request's context. Context stays in memory and is not written to
+  evidence. The command integration tests inject a reaper to check the actual
+  exit callback and verify replacement-start termination bypasses it. The
+  public transcript regression pages to the start of an incomplete window
+  without a history cursor and requires every page to remain incomplete.
+  Targeted validation on credential-free profile `q48-fix-fe80`: both backend
+  held-turn restart cases passed; the bridge case initially failed because
+  it killed the bridge after rendering an answer without waiting for idle.
+  After adding the idle-state barrier, the bridge case and both new
+  result-accepted cases passed (3/3). The profile was stopped and reset.
+  Focused command-exit and public transcript tests passed (18/18), as did
+  fake-model tests (9/9), the documentation task-surface guard and Playwright
+  spec loading. Earlier review-wide failures remain separately recorded.
 
 ## Related
 

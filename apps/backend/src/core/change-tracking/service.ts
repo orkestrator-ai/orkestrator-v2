@@ -51,7 +51,7 @@ import { ObjectStore } from "./object-store.js";
 import { ChangeTrackingPolicyRegistry, type ChangeTrackingPolicy } from "./policy-registry.js";
 import { ChangeProjectionService } from "./projection-service.js";
 import { ChangeResourcePublisher } from "./publisher.js";
-import { ChangeRestoreService } from "./restore.js";
+import { ChangeRestoreService, restorePreflightDeadlineMs } from "./restore.js";
 import { ChangeRetentionService, type RetentionReport } from "./retention.js";
 import {
   TurnBoundaryService,
@@ -106,6 +106,12 @@ export interface ChangeTrackingServiceOptions {
   ) => string | null;
   /** Ask the environment scan owner for a fresh observation. */
   requestEnvironmentRefresh?: (environmentId: string) => void;
+  /**
+   * The same, for a user's manual refresh: the owner may also refresh what the
+   * scan compares against (a container's remote). Falls back to
+   * `requestEnvironmentRefresh`.
+   */
+  requestExplicitEnvironmentRefresh?: (environmentId: string) => void;
   /** The branch an environment's pull request targets (pull-request scope). */
   prBaseBranch?: (environmentId: string) => Promise<string | null>;
   policy?: Partial<ChangeTrackingPolicy>;
@@ -236,6 +242,7 @@ export class ChangeTrackingService {
       registry: this.registry,
       enabled: () => policy().restoreEnabled,
       tokenTtlMs: () => policy().restoreTokenTtlMs,
+      preflightDeadlineMs: (paths) => restorePreflightDeadlineMs(paths, policy()),
       onApplied: (_worktreeId, environmentId) => {
         if (environmentId) options.requestEnvironmentRefresh?.(environmentId);
       },
@@ -1121,7 +1128,9 @@ export class ChangeTrackingService {
       this.projections.getFreshness(input.resourceKey)?.freshness.lastSuccessfulCheckAt ?? null;
     const requiredEpoch = this.projections.revision(input.resourceKey) + 1;
     const requestedAt = new Date().toISOString();
-    this.options.requestEnvironmentRefresh?.(parts.ownerId);
+    (this.options.requestExplicitEnvironmentRefresh ?? this.options.requestEnvironmentRefresh)?.(
+      parts.ownerId,
+    );
     const deadline = Date.now() + this.policies.policy.manualRefreshDeadlineMs;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));

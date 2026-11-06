@@ -5,7 +5,7 @@
 - **Date observed:** 2026-10-27
 - **Branch:** `todo-0161-codex-default-mode-question-2cf150514fc2`, based on
   `origin/main` `863b57821`. Outside `bridges/codex-bridge` and docs the
-  branch changes only comments in `apps/backend/src/core/http-bridge-interactions.ts`
+  branch changes only comments in `apps/backend/src/core/http-bridge/interactions.ts`
   and the test `native-agent-service-projection-lifecycle.test.ts`; every
   owner below, and everything it imports, is byte-identical to the base.
 - **Command:** `mise run test` (logs `orkestrator-test-run.TBDb6d` below the
@@ -74,8 +74,9 @@ changed in this follow-up; no runtime implementation changed.
   total). These owners and their runtime imports are unchanged by the follow-up.
 
 The billed browser run's question outcome and its separate approval-model
-completion-token failure are recorded in
-[todo 0161](../../../todo/agent-engines/0161-codex-default-mode-question-activity.md#qualification).
+completion-token failure were recorded in todo 0161's Qualification section
+(`docs/todo/agent-engines/0161-codex-default-mode-question-activity.md`,
+deleted 2026-11-06; see git history).
 
 The independent question-only browser qualification then passed all three
 tests (745.9 s), with its default 10.5-minute wait, reload, chosen-codeword

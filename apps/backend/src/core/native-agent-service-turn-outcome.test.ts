@@ -1,6 +1,6 @@
 import { readProjectUsageLimits } from "./agent-usage-limits.js";
 import { openCodeAgentFor } from "./opencode-provider-helpers.js";
-import { bridgePromptBody } from "./http-bridge-prompt-body.js";
+import { bridgePromptBody } from "./http-bridge/prompt-body.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";

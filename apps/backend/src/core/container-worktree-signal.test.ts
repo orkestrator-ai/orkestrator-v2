@@ -145,7 +145,15 @@ describe("container worktree signal", () => {
     expect(h.hints).toEqual([{ fileList: true, tree: true, overflow: false }]);
     expect(h.signals.status()).toEqual({
       containers: 1,
-      states: { unarmed: 0, arming: 0, armed: 0, confirmed: 1, demoted: 0, unsupported: 0 },
+      states: {
+        unarmed: 0,
+        arming: 0,
+        armed: 0,
+        unconfirmed: 0,
+        confirmed: 1,
+        demoted: 0,
+        unsupported: 0,
+      },
       fallback: 0,
       demotions: {},
       rings: 1,
@@ -287,6 +295,38 @@ describe("container worktree signal", () => {
     await h.time.advance(CONTAINER_WORKTREE_SIGNAL_RETRY_MS * 2);
     await flushMicrotasks();
     expect(h.installs).toHaveLength(2);
+  });
+
+  test("a lineage armed for a whole retry window with no ring reports unconfirmed", async () => {
+    const h = harness();
+    const watcher = h.start();
+    await flushMicrotasks();
+    await h.time.advance(CONTAINER_WORKTREE_SIGNAL_RETRY_MS - 1);
+    expect(h.signals.status().states).toMatchObject({ armed: 1, unconfirmed: 0 });
+    // The re-arm on the window keeps the lineage's first armed time.
+    await h.time.advance(1);
+    await flushMicrotasks();
+    expect(h.installs).toHaveLength(2);
+    expect(h.signals.status()).toMatchObject({
+      containers: 1,
+      states: { armed: 0, unconfirmed: 1, confirmed: 0 },
+      fallback: 1,
+      rings: 0,
+    });
+
+    h.ring("ready");
+    expect(h.signals.status().states).toMatchObject({ unconfirmed: 0, confirmed: 1 });
+    // A demotion starts a new stretch: armed again until another whole window.
+    h.ring("lost");
+    expect(h.signals.status().states).toMatchObject({ demoted: 1, unconfirmed: 0 });
+    await h.time.advance(CONTAINER_WORKTREE_SIGNAL_RETRY_MS);
+    await flushMicrotasks();
+    expect(h.signals.status().states).toMatchObject({ armed: 1, unconfirmed: 0 });
+    await h.time.advance(CONTAINER_WORKTREE_SIGNAL_RETRY_MS);
+    await flushMicrotasks();
+    expect(h.signals.status().states).toMatchObject({ armed: 0, unconfirmed: 1 });
+    watcher.close();
+    expect(h.signals.status().containers).toBe(0);
   });
 
   test("a new lineage installs only after the previous one stopped, and old rings are void", async () => {

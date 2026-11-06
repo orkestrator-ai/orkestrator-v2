@@ -343,8 +343,8 @@ Navigation: Fit all (Shift+1), Zoom to selection (Shift+2), 100% (Ctrl/⌘+0),
 pointer-anchored wheel/pinch zoom, Shift+wheel and middle-drag pan, keyboard
 move/resize of frames (Arrow, Alt+Arrow, Shift for 10 px), numeric frame
 fields and device presets, frame selection (clicking a frame title outlines
-the frame in blue; Delete/Backspace deletes it — undoable, and confirmed first
-on legacy canvases; a canvas-background click or Escape deselects), Escape
+the frame in blue; Delete/Backspace deletes it — undoable; a canvas-background
+click or Escape deselects), Escape
 priority (gesture → preview → element selection → frame selection → drawers),
 design undo only when the canvas owns the shortcut. Narrow panes use
 Layers/Inspector drawers. Short panes (under 400 px, about 400% zoom) keep the

@@ -42,8 +42,10 @@ export function EnvironmentInputsSection({
     void load();
   }, [load]);
 
-  if (!status || status.mode === "none") return null;
+  if (!status) return null;
   const revoked = status.revokedProviders ?? [];
+  // A runtime with nothing staged or mounted still keeps its revocations.
+  if (status.mode === "none" && revoked.length === 0) return null;
 
   const allowAgain = async (provider: string) => {
     setRevoking(provider);
@@ -110,7 +112,7 @@ export function EnvironmentInputsSection({
         <p className="text-muted-foreground">
           The record of this container&apos;s inputs is unavailable.
         </p>
-      ) : (
+      ) : status.mode === "none" ? null : (
         <ul className="flex flex-col gap-1">
           {status.providers
             .filter((entry) => !revoked.includes(entry.provider))

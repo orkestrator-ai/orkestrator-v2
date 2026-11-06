@@ -38,7 +38,7 @@ import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 import { runCommand } from "./shell.js";
-import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import { openCodeSdkFetch } from "./http-bridge/index.js";
 import {
   applyClaudeHostCredentialEnvironment,
   resolveCursorHostCredentialMaterial,

@@ -9,8 +9,11 @@ The contract is in
 [web-page-annotations.md](../architecture/web-page-annotations.md#development-source-hints).
 The plugin below is run by
 `apps/desktop/tests/source-hint-emitter-doc.test.ts`; both Vite configurations
-are exercised by `source-hint-emitter-vite.integration.test.ts`. Changes to
-these snippets need the normal code checks.
+are exercised by `source-hint-emitter-vite.integration.test.ts`. The Vite 8
+configuration also runs end to end: `web-annotations-electron.spec.ts` serves
+an app built from these snippets (`source-hint-emitter-vite-app.ts`) with the
+real Vite CLI and captures it through the desktop app. Changes to these
+snippets need the normal code checks.
 
 ## What a hint is
 
@@ -128,10 +131,29 @@ export default defineConfig(({ command }) => ({
 }));
 ```
 
-Other Babel setups add the same plugin entry to their development configuration.
 Both Vite setups above are tested with development transforms and production
 builds, including a production build with `NODE_ENV=development` to check the
 configuration gate independently of the plugin's gate.
+
+### Other Babel build setups are unqualified
+
+webpack (`babel-loader`), Next.js with a Babel config, Babel through Jest-style
+toolchains and any other Babel integration are **not qualified**. The plugin is
+plain Babel and nothing in it is Vite-specific, so adding the same entry to a
+development-only Babel configuration should stamp the same attributes, but no
+Orkestrator test has run one: neither the stamps in development, nor the
+production exclusion, nor a desktop capture. Two things differ by tool and are
+the user's to check before relying on it:
+
+- **The development gate.** Babel's own `env` follows `BABEL_ENV`, then
+  `NODE_ENV`, and treats an unset value as development. A tool that builds for
+  production without setting either ships the stamps (repository paths in the
+  page). Gate the plugin on the tool's own production flag as the Vite configs
+  above do, and check the build output with the `grep` below.
+- **The root.** The tool's working directory is often the package, not the
+  workspace; pass `root` explicitly.
+
+The [Checking it works](#checking-it-works) steps apply unchanged.
 
 ## Projects without Babel
 

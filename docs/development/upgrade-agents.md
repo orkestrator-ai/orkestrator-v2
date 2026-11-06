@@ -669,6 +669,24 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md` is worth
    reopening, not that the bridge is broken.
 
+   On macOS, re-prove that the CLI enforces the provider sandbox
+   `claudeExecutionSandbox` sets: a command cannot write outside the
+   workspace or reach an unlisted host under auto-approve, even when it asks
+   to run unsandboxed, and neither raises an approval card. Under `ask`, an
+   escape request must raise a Bash approval card: the file is absent while
+   pending, acceptance allows the outside write, and decline prevents it.
+   This runs the real bridge and CLI in
+   a temporary home, with no credentials and a scripted model:
+
+   ```bash
+   mise run verify:claude:sandbox-live
+   ```
+
+   Its controls also pin what the sandbox proxy does without
+   `strictAllowlist` (an unlisted host is granted unseen, or asked about in a
+   second card); if one of them starts failing, the CLI changed its network
+   model and `claude-execution-sandbox.ts` needs another look.
+
    Re-check the Linux command sandbox on a Linux host. The probe in
    `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI
    runs a command (bubblewrap, then its `apply-seccomp` helper nesting a user
@@ -951,7 +969,13 @@ the pinned binary's parser over the production argument shape.
    starts resolving a non-blocking question itself, publish its limit as the
    question's `providerLimitAt` instead. To prove a paused question outlives
    the default deadline and Codex's own auto-resolution, run the same test
-   once with `CODEX_LIVE_QUESTION_ANSWER_DELAY_MS=660000` (about 11 minutes).
+   once more with `RUN_LIVE_CODEX_QUESTION_DEADLINES=1` and
+   `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=750000` through `test:logged`
+   (a fixed 10.5-minute hold plus an unheld five-minute control; the command
+   is in [agent-testing.md](agent-testing.md)). If the new binary starts
+   sending `autoResolutionMs` or a different `isBlocking`, update the fake
+   app-server's `question` script (`fake-codex-app-server.mjs`) so
+   `fake-question-deadline.test.ts` keeps matching what Codex sends.
 
    Then check that approving a command still saves no rule, on the same kind
    of loopback endpoint and without credits:

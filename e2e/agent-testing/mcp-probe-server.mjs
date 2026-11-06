@@ -12,8 +12,12 @@
  *
  *   node mcp-probe-server.mjs --label alpha --tag v1 --log /tmp/x.jsonl
  *   node mcp-probe-server.mjs --sse --port-file /tmp/port ...   (legacy SSE)
+ *
+ * `--hold-file PATH` (stdio only) leaves the client's messages unanswered while
+ * PATH exists, so the server stays `connecting` until the test removes it
+ * (`mcp-ui-matrix.spec.ts`).
  */
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
@@ -155,10 +159,31 @@ if (options.sse) {
     }
   });
 } else {
+  readStdio(options["hold-file"]);
+}
+
+function readStdio(hold) {
   let buffer = "";
+  let held = Boolean(hold && existsSync(hold));
+  // Read while held so EOF is observable even when the client gives up before
+  // releasing the file. Only handling messages is deferred, with bounded input.
+  const poll = held
+    ? setInterval(() => {
+        if (existsSync(hold)) return;
+        clearInterval(poll);
+        held = false;
+        flush();
+      }, 100)
+    : undefined;
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {
     buffer += chunk;
+    if (Buffer.byteLength(buffer) > 1024 * 1024) exit("input-too-large");
+    if (!held) flush();
+  });
+  process.stdin.on("end", () => exit("stdin-closed"));
+
+  function flush() {
     let newline = buffer.indexOf("\n");
     while (newline >= 0) {
       const line = buffer.slice(0, newline).trim();
@@ -168,6 +193,5 @@ if (options.sse) {
       }
       newline = buffer.indexOf("\n");
     }
-  });
-  process.stdin.on("end", () => exit("stdin-closed"));
+  }
 }

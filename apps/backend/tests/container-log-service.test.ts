@@ -199,6 +199,78 @@ describe("container log service", () => {
     expect(children[1]!.killed).toBe(true);
     expect(() => service.open("container-3")).toThrow("resource-exhausted");
   });
+
+  test.skipIf(process.platform === "win32")(
+    "a follower does not outlive a SIGKILLed backend",
+    async () => {
+      // 0019 task 6: with a log view open, a SIGKILLed backend left
+      // `docker logs -f` on a quiet container running under systemd. The
+      // backend here is a child process using the real default spawn.
+      const root = mkdtempSync(path.join(tmpdir(), "ork-log-follower-"));
+      const isAlive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      let follower = 0;
+      let backend: Bun.Subprocess<"ignore", "pipe", "ignore"> | undefined;
+      let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        writeFileSync(path.join(root, "docker"), '#!/bin/sh\necho "$$"\nexec sleep 30\n', {
+          mode: 0o755,
+        });
+        const modulePath = path.join(import.meta.dir, "../src/core/container-log-service.ts");
+        backend = Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            `const { ContainerLogService } = await import(${JSON.stringify(modulePath)});
+const service = new ContainerLogService();
+const opened = service.open("fixture");
+for (let attempt = 0; attempt < 250; attempt += 1) {
+  const read = service.read(opened.subscriptionId, opened.sourceId, opened.cursor);
+  if (read.records.length > 0) { console.log(read.records[0].text.trim()); break; }
+  await Bun.sleep(20);
+}
+setInterval(() => {}, 1_000);`,
+          ],
+          { env: { PATH: `${root}:/usr/bin:/bin` }, stdout: "pipe", stderr: "ignore" },
+        );
+        // Bound a silent startup so cleanup runs before the test timeout.
+        const ownedBackend = backend;
+        readinessTimer = setTimeout(() => ownedBackend.kill("SIGKILL"), 5_000);
+        const reader = backend.stdout.getReader();
+        let line = "";
+        while (!line.includes("\n")) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          line += new TextDecoder().decode(value);
+        }
+        clearTimeout(readinessTimer);
+        follower = Number(line.trim());
+        expect(follower).toBeGreaterThan(0);
+        expect(isAlive(follower)).toBe(true);
+        backend.kill("SIGKILL");
+        await backend.exited;
+        const deadline = Date.now() + 5_000;
+        while (isAlive(follower) && Date.now() < deadline) await Bun.sleep(25);
+        expect(isAlive(follower)).toBe(false);
+      } finally {
+        clearTimeout(readinessTimer);
+        if (backend) {
+          if (backend.exitCode === null && backend.signalCode === null) backend.kill("SIGKILL");
+          await backend.exited;
+        }
+        // Our own grandchild, recorded from its own output above.
+        if (follower > 0 && isAlive(follower)) process.kill(follower, "SIGKILL");
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
 });
 
 describe("bounded bridge output", () => {

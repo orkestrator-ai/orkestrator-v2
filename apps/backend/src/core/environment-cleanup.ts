@@ -36,7 +36,12 @@ export type EnvironmentCleanupContext = Pick<
 export type CleanupCommandRunner = (
   command: string,
   args: string[],
-  options: { timeoutMs: number },
+  options: {
+    timeoutMs: number;
+    signal?: AbortSignal;
+    waitForTermination?: boolean;
+    waitForDescendants?: boolean;
+  },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export type CleanupStepOptions = {
@@ -49,6 +54,12 @@ export type CleanupStepOptions = {
    * never sets this: a retry runs long after that check.
    */
   containerOwnershipVerified?: boolean;
+  /**
+   * Fires at the delete's deadline for this step. Every command the step runs
+   * is killed, the confined-removal helper too, and no further command starts.
+   * The reconciler never sets it.
+   */
+  signal?: AbortSignal;
 };
 
 // Kept branches are state notices, not faults. Keep retry deduplication bounded
@@ -134,6 +145,11 @@ class CleanupRefusedError extends Error {
   override name = "CleanupRefusedError";
 }
 
+/** Starts nothing more once the delete's deadline for this step has passed. */
+function throwIfStopped(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new CleanupRefusedError("deletion deadline passed");
+}
+
 /** Returns `root`-relative `target`, or null unless it is strictly inside. */
 function confinedRelativePath(root: string, target: string): string | null {
   const relative = path.relative(path.resolve(root), path.resolve(target));
@@ -161,7 +177,7 @@ async function cleanupContainer(
   if (containerId) {
     // Refuses a container another development profile owns, and an
     // unreachable daemon; a container the daemon has forgotten passes.
-    if (!ownershipVerified) await assertDockerContainerOwned(containerId, context);
+    if (!ownershipVerified) await assertDockerContainerOwned(containerId, context, { run });
     try {
       await run("docker", ["rm", "-f", containerId], { timeoutMs: DOCKER_TIMEOUT_MS });
     } catch (error) {
@@ -170,7 +186,7 @@ async function cleanupContainer(
   }
   // Recovery copies go with the environment, each verified on its own.
   for (const retained of entry.retainedContainers ?? []) {
-    await assertDockerContainerOwned(retained, context);
+    await assertDockerContainerOwned(retained, context, { run });
     try {
       await run("docker", ["rm", "-f", retained], { timeoutMs: DOCKER_TIMEOUT_MS });
     } catch (error) {
@@ -272,6 +288,7 @@ async function cleanupWorktree(
       throw new CleanupRefusedError("worktree is outside the workspaces root");
     }
   }
+  const signal = options.signal;
   const environments = await context.storage.loadEnvironments();
   if (
     environments.some(
@@ -284,6 +301,7 @@ async function cleanupWorktree(
     return;
   }
   await options.beforeWorktreeRemoval?.();
+  throwIfStopped(signal);
   const projectPath =
     entry.projectPath && (await pathExists(entry.projectPath)) ? entry.projectPath : null;
   // An fsmonitor daemon outlives its worktree and is never reaped, so stop it
@@ -294,12 +312,14 @@ async function cleanupWorktree(
       timeoutMs: 120_000,
     }).catch(() => undefined);
   }
+  throwIfStopped(signal);
   if (await directoryExists(worktreePath)) {
     // Git refuses to remove a directory it no longer registers, and a process
     // that outlived the terminals can re-create part of the tree after git
     // removed it. Only a path inside the workspaces root is ours to delete.
-    await removeConfinedDirectory(baseDir, relative);
+    await removeConfinedDirectory(baseDir, relative, undefined, { signal });
   }
+  throwIfStopped(signal);
   if (projectPath) {
     await run("git", ["-C", projectPath, "worktree", "prune"], {
       timeoutMs: GIT_TIMEOUT_MS,
@@ -503,8 +523,21 @@ export async function runEnvironmentCleanupStep(
   options: CleanupStepOptions = {},
 ): Promise<boolean> {
   const ledger = environmentCleanupLedger(context.storage.getDataDir());
-  const run = options.run ?? runCommand;
+  const baseRun = options.run ?? runCommand;
+  const signal = options.signal;
+  const run: CleanupCommandRunner = signal
+    ? async (command, args, runOptions) => {
+        throwIfStopped(signal);
+        return baseRun(command, args, {
+          ...runOptions,
+          signal,
+          waitForTermination: true,
+          waitForDescendants: true,
+        });
+      }
+    : baseRun;
   try {
+    throwIfStopped(signal);
     if (step === "container") {
       await cleanupContainer(entry, context, run, options.containerOwnershipVerified === true);
     } else if (step === "volumes") {
@@ -519,7 +552,7 @@ export async function runEnvironmentCleanupStep(
       if ((current ?? entry).pending.includes("container")) {
         throw new CleanupRefusedError("container removal is still pending");
       }
-      const result = await removeEnvironmentNetwork(context, entry.environmentId);
+      const result = await removeEnvironmentNetwork(context, entry.environmentId, run);
       if (result === "in-use") throw new CleanupRefusedError("network still has containers");
       if (result === "unreachable") throw new CleanupRefusedError("docker unreachable");
     } else if (step === "worktree") await cleanupWorktree(entry, context, run, options);
@@ -545,6 +578,10 @@ export async function runEnvironmentCleanupStep(
       error: formatLogError(error, { message: false }),
     });
     await ledger.fail(entry.environmentId, step, summary).catch(() => undefined);
+    return false;
+  }
+  if (signal?.aborted) {
+    await ledger.fail(entry.environmentId, step, "deletion deadline passed").catch(() => undefined);
     return false;
   }
   await ledger.complete(entry.environmentId, step).catch((error: unknown) => {

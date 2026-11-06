@@ -17,6 +17,8 @@ Analysed 2026-11-03 against main at `7b48c23fb`.
 
 **Investigation.** Creation dates of the 29 networks on 2026-11-03: 13 on 2026-10-31, 9 on 2026-11-01 and 7 on 2026-11-02 (the latest 05:50 UTC). All have no containers attached. The 2026-11-01 and 2026-11-02 networks postdate 0241's qualification, so either some harness still leaks or a `dev:test` profile was removed without `dev:reset` (which removes its own probe network). Not checked: which owners map to which data directories. Found while working on to-do 2922 task 5.
 
+On 2026-11-06 [7041](7041-manual-docker-profiles-on-exhausted-pools.md) task 2 did the owner correlation and the reruns for these same 29 networks. No owner matches any profile directory under `~/.config/orkestrator-v2-dev/profiles/`, so they belong to temporary data directories. The reruns leaked nothing, and the likeliest source is agent-test Electron spec backends; the follow-up is [7470](7470-electron-spec-backends-run-the-boot-probe.md). The networks were left in place for task 2.
+
 **Decisions.**
 
 - **How to find the source?**
@@ -50,3 +52,4 @@ Analysed 2026-11-03 against main at `7b48c23fb`.
 - [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md), the original leak and its fix.
 - To-do 2922 (finished and removed), task 5, where this was found.
 - [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md), a way to run live suites while the pools are full.
+- [7041-manual-docker-profiles-on-exhausted-pools.md](7041-manual-docker-profiles-on-exhausted-pools.md), the trace of these networks and the documented shim for manual container profiles on full pools.

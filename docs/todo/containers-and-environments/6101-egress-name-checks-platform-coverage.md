@@ -127,7 +127,7 @@ host (or the decision to accept CI's), and rootless Docker (task 2).
 
 ## Related
 
-- [6100](6100-default-allowlist-telemetry-hosts.md), [6102](6102-egress-name-check-residual-channels.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
+- [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6102](6102-egress-name-check-residual-channels.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
 - [0018](0018-container-network-and-credential-isolation.md): the egress gateway and its qualification
 - [7000](7000-name-checks-hold-newline-less-first-writes.md): a newline-less first write is held, found by task 1
 - [4730](4730-disposable-docker-daemon-for-live-suites.md): the disposable daemon task 1 had to build by hand

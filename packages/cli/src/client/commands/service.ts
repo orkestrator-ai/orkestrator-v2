@@ -422,7 +422,15 @@ export const serviceCommands: CommandSpec[] = [
             ? [
                 "",
                 ...keyValues([
-                  ["address", connection.browserUrl ?? "(no browser listener; see the log)"],
+                  [
+                    "address",
+                    connection.browserUrl ??
+                      // Local clients can remain available after a remote browser
+                      // listener fails, so keep the log hint in both cases.
+                      (connection.clientUrls.length > 0
+                        ? "(no remote browser listener; see local listeners and the log)"
+                        : "(no browser listener; see the log)"),
+                  ],
                   ...(connection.clientUrls.length > 0
                     ? [["local listeners", connection.clientUrls.join(", ")] as [string, string]]
                     : []),

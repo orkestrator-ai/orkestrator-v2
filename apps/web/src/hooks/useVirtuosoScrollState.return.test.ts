@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { useRestorePlaceAfterHistoryDrop } from "./useRestorePlaceAfterHistoryDrop";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { clearPersistedVirtuosoState, useVirtuosoScrollState } from "./useVirtuosoScrollState";
 
 afterEach(() => {
@@ -75,6 +77,71 @@ describe("returning a detached reader to their semantic place", () => {
     expect(second.result.current.scrollProps.followOutput(true)).toBe(false);
     expect(second.result.current.getScrollDiagnostics().lastOutcome).toBe("converged");
     secondScroller.remove();
+  });
+
+  test("a remount reserves activation while paging to its persisted source part", async () => {
+    const first = renderHook(
+      ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "return-key" }),
+      { initialProps: { isActive: true } },
+    );
+    first.result.current.virtuosoRef.current = handle() as never;
+    const oldScroller = scrollerWithRow(() => 2000);
+    oldScroller.firstElementChild!.setAttribute("data-transcript-part-id", "call5");
+    oldScroller.scrollTop = 4400;
+    act(() => {
+      first.result.current.scrollProps.scrollerRef(oldScroller);
+    });
+    act(() => {
+      oldScroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      oldScroller.scrollTop = 1920;
+      oldScroller.dispatchEvent(new Event("scroll"));
+    });
+    // A workspace switch may unmount directly without an inactive commit.
+    first.unmount();
+    oldScroller.remove();
+    const tail: NativeMessage[] = [
+      { id: "tail", role: "assistant", content: "", createdAt: "2026-11-06", parts: [] },
+    ];
+    const loadEarlier = mock(() => new Promise<void>(() => {}));
+    const second = renderHook(
+      ({ messages }) => {
+        const scroll = useVirtuosoScrollState({ isActive: true, persistKey: "return-key" });
+        const restoring = useRestorePlaceAfterHistoryDrop({
+          sessionKey: "return-key",
+          messages,
+          controller: scroll.scrollProps.controller,
+          loading: false,
+          canLoadEarlier: true,
+          loadEarlier,
+          scrollToIndex: scroll.scrollToIndex,
+        });
+        return { ...scroll, restoring };
+      },
+      { initialProps: { messages: tail } },
+    );
+    expect(second.result.current.scrollProps.controller.readingAnchor?.partId).toBe("call5");
+    expect(second.result.current.restoring).toBe(true);
+    const virtualizer = handle();
+    second.result.current.virtuosoRef.current = virtualizer as never;
+    const scroller = scrollerWithRow(() => 2300);
+    scroller.firstElementChild!.setAttribute("data-transcript-part-id", "call5");
+    act(() => second.result.current.scrollProps.scrollerRef(scroller));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+    expect(loadEarlier).toHaveBeenCalledTimes(1);
+    second.rerender({
+      messages: [
+        {
+          ...tail[0]!,
+          id: "k5",
+          parts: [{ type: "text", content: "restored", sourcePartId: "call5" }],
+        },
+        ...tail,
+      ],
+    });
+    await waitFor(() => expect(scroller.scrollTop).toBe(2220));
+    expect(second.result.current.restoring).toBe(false);
+    scroller.remove();
   });
 
   test("a follower is not restored to a row: growth keeps them at the end", async () => {

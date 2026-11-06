@@ -5,20 +5,20 @@ below was taken at `9b3f53a2`, before the 2026-10-23 code changes.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 against `main` at `7b48c23f`: nothing between those commits changed the idle observation path, so its problem still held.
+Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 against `main` at `7b48c23f`: nothing between those commits changed the idle observation path, so its problem still held. Tasks 1, 2, 9 and 10 worked 2026-11-06 against `main` at `c1724ab74`, live with loopback fake models (see "Live check (2026-11-06, loopback models)").
 
 ### Tasks
 
-1. **Bridge restart while backed off**: Claude and Codex; the next turn must be seen within the 3 s completion budget. Status: open.
-2. **Claude background-task output**: the background case still fails its fresh tool-result assertion. Status: open (likely a spec expectation, see below).
+1. **Bridge restart while backed off**: Claude and Codex; the next turn must be seen within the 3 s completion budget. Status: done (2026-11-06, both providers, loopback models).
+2. **Claude background-task output**: the background case still fails its fresh tool-result assertion. Status: done (2026-11-06: a spec expectation; the output is in the finished task's output file, which the case now reads).
 3. **Codex live async question and background shell**: neither has been exercised live. Status: open.
 4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: partly done (every invalidation is tagged and counted; a fake idle Codex minute emits none; the live per-cause count is still owed).
 5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: open.
 6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code).
 7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: blocked (on current host logins).
 8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: open (depends on the model choosing the tool).
-9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: open.
-10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: open.
+9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: partly done (2026-11-06: a current-image container's stream is live and its idle group backs off; turns after the first are blocked on this host by [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md); no older image exists here).
+10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: done for Claude (2026-11-06); Codex open in [7380](7380-codex-idle-detach-observation.md).
 
 All five code items match HEAD. The only later changes in this area are refactors (#1180, #1284) and #1298's stopped-runtime fencing in `native-agent-launch-activity-reconciler.ts`; no behaviour described here moved. 0048 hands its live-provider task to this file. Live cases run between the 2026-10-24 marker change and [0199](0199-idle-observation-spec-sidebar-probe.md)'s 2026-10-28 probe fix are blind on the sidebar, because the probe read `unknown`. The 2026-10-23 sidebar timings predate that change and are valid. The fixed probe reads the marker's `data-state`; the 2026-10-28 review qualification below confirms real working/idle transitions and missed-final recovery on Claude and Codex. Other outstanding live cases remain open.
 
@@ -54,7 +54,7 @@ the other outstanding scenarios listed above. Evidence lives in
 
 **Context.** Code item 1's "still owed". The design says every disconnect and every connect hints the whole group, and that a stream which does not confirm `observe: true` is closed for good.
 
-**Investigation.** The wakeup is `HttpBridgeObservationWakeup` (`apps/backend/src/core/http-bridge-observation-stream.ts:253`); the stream opens `/event/subscribe?observe=1` (`:144`), confirms `"observe":true` (`:177`), and has a 75 s silence watchdog (`:54`). The backoff gate reads `idleBackoffWakeup === "provider-event-stream"` (`native-agent-launch-activity-reconciler.ts:986`), with one 4 s safety step (`STABLE_IDLE_BACKOFF_MS`, `native-agent-observation.ts:83`). The deterministic test covers reconnecting from the cursor after a restart. The live spec has no restart case (cases at `e2e/agent-testing/idle-observation-live.spec.ts:906`-`:1378`). The backend already exposes `stop_local_claude_server_cmd`, `stop_local_codex_server_cmd` and their `start_` pairs, and `design-resume-clients-live.spec.ts:219` uses the Codex pair.
+**Investigation.** The wakeup is `HttpBridgeObservationWakeup` (`apps/backend/src/core/http-bridge/observation-stream.ts:253`); the stream opens `/event/subscribe?observe=1` (`:144`), confirms `"observe":true` (`:177`), and has a 75 s silence watchdog (`:54`). The backoff gate reads `idleBackoffWakeup === "provider-event-stream"` (`native-agent-launch-activity-reconciler.ts:986`), with one 4 s safety step (`STABLE_IDLE_BACKOFF_MS`, `native-agent-observation.ts:83`). The deterministic test covers reconnecting from the cursor after a restart. The live spec has no restart case (cases at `e2e/agent-testing/idle-observation-live.spec.ts:906`-`:1378`). The backend already exposes `stop_local_claude_server_cmd`, `stop_local_codex_server_cmd` and their `start_` pairs, and `design-resume-clients-live.spec.ts:219` uses the Codex pair.
 
 **Decisions.**
 
@@ -72,6 +72,17 @@ the other outstanding scenarios listed above. Evidence lives in
   - **The group stops skipping sweeps until the stream is confirmed again.**
     - Pros: directly checks the mechanism.
     - Cons: says nothing about what the user sees.
+
+**Outcome (2026-11-06).** Done as recommended: the `bridge-restart` case in
+`idle-observation-live.spec.ts` waits until the backend skips the idle
+group's sweeps, stops and starts the local bridge
+(`stop_local_*_server_cmd`/`start_local_*_server_cmd`), waits 30 s, counts the
+group's sweeps, then dispatches a turn from outside the view. It passed for
+both providers against loopback models: the group was read again after the
+restart (9 of 15 sweeps), skipped again (Claude 6, Codex 5, so the stream came
+back), the page showed the turn 67 ms (Claude) and 114 ms (Codex) after
+backend truth, and the group backed off again about 12 s after the turn. One
+sample per provider, not a p95. No defect found.
 
 ### 2. Claude background-task output
 
@@ -93,6 +104,22 @@ the other outstanding scenarios listed above. Evidence lives in
   - **Downgrade the Claude assertion to the task card and status only.**
     - Pros: passes today.
     - Cons: no longer proves the output arrived, which is the point of the check.
+
+**Outcome (2026-11-06).** Done as recommended. The investigation's reading is
+confirmed by the bridge itself (`recordShellResult` in
+`session-manager-background-tasks.ts`: a backgrounded call's result only says
+the command moved to the background; its output is in the task's output
+file). The case now accepts a fresh tool result or, failing that, a completed
+task started by the case whose output file has the marker on a line of its own
+(`completedTaskOutputFiles`, `backgroundOutputEvidence` in
+`idle-observation-live-support.ts`). No backend command reads the file, so
+the spec reads it on the host (or with `docker exec` in a container) and
+records only which evidence matched. Live with the Claude loopback model it
+passed twice: the running-task indicator 17 and 57 ms after the task started,
+the page 275 and 34 ms behind backend truth, the sidebar idle with the last
+busy read, and the evidence `output-file` both times; no tool result carried
+the marker. Codex, whose scripted turn runs the command in the foreground,
+recorded `not-exercised`.
 
 ### 3. Codex live async question and background shell
 
@@ -278,6 +305,36 @@ billed provider turns.
     - Pros: no old image needed.
     - Cons: the older-image case is deterministic only (partly covered already by the "older bridge closed for good" test).
 
+**Outcome (2026-11-06).** The container variant exists
+(`ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container`, Claude only): it creates
+a container environment from the profile's development image, copies the
+scripted Claude model into the container and serves it on the container's
+loopback (`installContainerFakeClaude`), because a host firewall may refuse the
+container's route to the host. One run on beelink, image built from this
+checkout:
+
+- The warm-up turn completed: page 3.2 s and sidebar 3.2 s behind backend
+  truth (the container model holds each reply 3 s), sidebar `working` then
+  `idle`.
+- Over `missed-final`'s 35 s idle wait the backend read the group on 10 sweeps
+  and skipped 7, so the container bridge's observation stream was confirmed
+  live and the group backed off.
+- Every turn after the first was refused by the bridge with 409 "Claude
+  required MCP server is not connected; retry the prompt", so `missed-final`,
+  `background` and `no-renderer` failed before any observation. The required
+  server is the injected Orkestrator agent MCP, reached from the container
+  through the host's agent-tools port, which beelink's firewall drops for an
+  isolated profile ([7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)).
+  A first turn launches the CLI without checking it; a later turn joins the
+  running CLI and `syncClaudeRuntimeMcp` refuses it. The firewall was not
+  changed, as the ticket required.
+
+No image older than #1182 exists on this host (the oldest is 2026-10-29), so
+the older-image half ran only as the deterministic tests already listed under
+code item 1. Left: no-renderer completion in a container on a host whose
+firewall admits the profile's agent-tools port, and one run against a pre-#1182
+image if one can be kept.
+
 ### 10. Full detach wait
 
 **Problem.** The observation stream must not keep a Claude or Codex session attached. Only a full detach wait proves it, and the 2026-10-23 run used a shortened, cadence-only wait.
@@ -295,6 +352,22 @@ billed provider turns.
   - **For every provider.**
     - Pros: complete.
     - Cons: Cursor, Pi and Grok have no stream to keep sessions attached, and some lack detach telemetry (`not-exercised`).
+
+**Outcome (2026-11-06).** Neither Claude nor Codex reported attachment on the
+no-touch runtime read, so the case could only ever be `not-exercised` for
+them. Claude's `/session/:id/runtime-health` now reports `summary.state`
+`attached` while the session's CLI is open and `detached` once the idle
+window released it (`sessionRuntimeHealthBody`, read from memory only, as
+Cursor and Pi do; `runtime-health-body.test.ts`). The case now also requires
+`attached` through the same read before the wait starts. Claude, loopback
+model, default 630 s wait: `attached` before, `detached` after, `attached`
+after the follow-up turn on the same session; 8.1 idle reads a minute, the
+largest gap 15.0 s, the backend skipped 174 sweeps and read 142, one
+`discovery-renewal` invalidation, and the follow-up showed 18 ms after backend
+truth. So the observation stream does not keep an idle Claude CLI attached.
+Codex reports its engine's health in that field and detaches a thread only
+after 30 minutes without a touch; that half moved to
+[7380](7380-codex-idle-detach-observation.md).
 
 An idle native session used to cost a no-touch activity read on every 2 s
 backend sweep for each HTTP-bridge provider, and a 1,500 ms client read for
@@ -322,7 +395,7 @@ open qualification cases from the 2026-10-21 run.
   Claude and Codex (`HttpBridgeProvider.observationStreamLive`) have one.
   Cursor, Pi and Grok bridges publish no event stream, so their groups are
   read on every sweep.
-- Bridge observation stream (`apps/backend/src/core/http-bridge-observation-stream.ts`).
+- Bridge observation stream (`apps/backend/src/core/http-bridge/observation-stream.ts`).
   The first `observationStreamLive()` call from the sweep opens
   `GET /event/subscribe?observe=1` on the Claude or Codex bridge. In that mode
   the bridge sends each event's type, cursor and session id, never its
@@ -384,6 +457,10 @@ open qualification cases from the 2026-10-21 run.
   then succeeded with the same value) and the runtime drift counter
   (`unknownEvents`) are stored but not announced. An expired environment
   model-catalogue refresh is compared order-insensitively (`modelCatalogKey`).
+- Claude's no-touch runtime read (`/session/:id/runtime-health`) reports
+  `summary.state` `attached` while the session's CLI is open and `detached`
+  once the idle window released it (2026-11-06, task 10), as Cursor and Pi
+  report their SDK sessions. Codex's field is its engine's health (7380).
 - Mail presence keeps its 2 s refresh and 4 s TTL (`OBSERVED_PRESENCE_TTL_MS`
   in `agent-mail-service.ts`). `mailInjectPresence`
   (`native-agent-service.ts`) answers `unknown` instead of `idle` when
@@ -436,8 +513,9 @@ open qualification cases from the 2026-10-21 run.
    a stably idle Claude group skipped 38 of 75 sweeps and a Codex group 33 of
    75, and a turn started from outside the view with every frame naming the
    environment dropped was still seen within 53 ms (Claude) and 6 ms (Codex).
-   Still owed: a bridge restart while the group is backed off, and the
-   container case (an older bridge image must keep every sweep). The wakeup lives in
+   A bridge restart while the group is backed off passed live for both on
+   2026-11-06 (task 1). Still owed: the container case's older image (an
+   older bridge image must keep every sweep; task 9). The wakeup lives in
    `HttpBridgeObservationWakeup`; `listResumableSessions` moved to
    `http-bridge-resumable-sessions.ts` to keep `http-bridge-provider.ts` under
    the 1,500-line provider module limit. The live spec now records
@@ -471,11 +549,11 @@ open qualification cases from the 2026-10-21 run.
    view at maximum backoff reads a resumed working turn immediately"; the
    backend test fails without the fix). Live, 2026-10-23: idle Claude views
    reached the 15 s step (12 reads a minute, against 120.5 on 2026-10-21) and
-   Codex views 27 a minute (against 126.8). Still owed: the Claude background
-   case still fails its fresh-output assertion, exactly as it did before this
-   change on 2026-10-21 (the task card appeared in 298 ms, but the marker
-   never reached a fresh tool result); Codex ran the background command in the
-   foreground; no live async question was exercised.
+   Codex views 27 a minute (against 126.8). The Claude background case's
+   failure (2026-10-21 and 2026-10-23) was the spec's expectation; with the
+   task output file accepted it passed on 2026-11-06 (task 2). Still owed:
+   Codex ran the background command in the foreground; no live async question
+   was exercised.
 3. ~~Share native reads across hook instances.~~ **Done (2026-10-23), by a
    different route than written.** The coordinated read is keyed by session
    and identical requests are joined per round; each view keeps its own fenced
@@ -522,11 +600,9 @@ open qualification cases from the 2026-10-21 run.
 The live run of 2026-10-21 is recorded below. What it left open, plus what the
 2026-10-23 code changes need:
 
-- Claude and Codex, after the 2026-10-23 live check below: the background
-  case (Claude's fresh tool-result output assertion fails, as before this
-  change; Codex never backgrounded), a live async question on Codex, a bridge
-  restart while the group is backed off (the next turn must be seen within the
-  3 s completion budget), the remaining cases (approval, sub-agents,
+- Claude and Codex, after the 2026-10-23 live check below: Codex's background
+  shell (never backgrounded), a live async question on Codex, the remaining
+  cases (approval, sub-agents,
   reconnect, hidden, no-renderer) at the new cadence, and Codex's idle gaps
   under 12 s (27 reads a minute against Claude's 12: something still
   invalidates an idle Codex view, the same symptom as OpenCode in code item
@@ -541,8 +617,9 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
   the foreground). Cursor's approval case ran under an `approvals: "ask"`
   policy and still ran the command without asking, which is the documented
   Cursor mapping (it reports `ask` as the auto-approval it runs).
-- Completion with no renderer was observed for a local environment only; a
-  container environment was not part of this run. Re-run with the corrected
+- Completion with no renderer was observed for a local environment only; the
+  2026-11-06 container run (task 9) could not reach it on beelink, where only
+  the first turn of a container runs (7080). Re-run with the corrected
   exact-prompt assertion to qualify missing/duplicate prompt protection. A
   container environment also runs the bridge from its image: an image built
   before this change answers without `contentRevision` and ignores
@@ -555,9 +632,67 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
   Shortened detach waits are cadence-only (`not-exercised`); a full wait must
   observe `detached` before dispatch and `attached` afterwards through no-touch
   runtime discovery. Providers without session detach telemetry on that route
-  are also `not-exercised`, pending an observable lifecycle. The observation
-  stream must not keep a Claude or Codex session attached: it touches no
-  session, but the full detach wait is the evidence.
+  are also `not-exercised`, pending an observable lifecycle. The full wait
+  passed for Claude on 2026-11-06 (task 10); Codex is in 7380. The background
+  case passed for Claude the same day (task 2).
+
+## Live check (2026-11-06, loopback models)
+
+Tasks 1, 2, 9 and 10 on beelink (Arch Linux, kernel 7.1.8, Docker Engine
+29.9.2, no display), at `c1724ab74` plus this change. No login and no billed
+turn: the pinned Claude CLI 2.1.314 and Codex 0.166.0 talked to scripted
+loopback models (`idle-observation-fake-claude.ts`,
+`idle-observation-fake-codex.ts`) that answer the spec's own prompts and run
+its shell commands for real. Disposable profile `idleqa-0049-fake`, started
+headless with the Docker address-pool shim and a made-up Codex API key from a
+throwaway `CODEX_HOME`, and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  CODEX_HOME=<throwaway dir with an API-key auth.json> \
+  ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+  PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run dev:test --profile idleqa-0049-fake --fixture --credential-source codex \
+  --agent-platforms claude,codex --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=idleqa-0049-fake ORKESTRATOR_AGENT_TEST_RUN_ID=<run> \
+  ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1 \
+  ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=<claude|codex> \
+  ORKESTRATOR_AGENT_TEST_IDLE_CASES=<cases> [ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container] \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/idle-observation-live.spec.ts --workers=1 --reporter=line
+```
+
+One provider at a time, on a profile with no other environment (the sweep
+counters are profile-wide). Single samples, not p95 estimates.
+
+| Case | Claude | Codex |
+| --- | --- | --- |
+| Warm-up (UI / sidebar lag) | 385 / 1,903 ms | 417 / 2,182 ms |
+| `missed-final` (every frame naming the environment dropped) | passed: page 813 ms, sidebar 60 ms | passed: page 13.9 s (inside the 17.5 s lost-announcement bound, over the 3 s budget; D7), sidebar 28 ms; group read 9 and skipped 8 sweeps while idle |
+| `bridge-restart` (task 1) | passed: backed off in 12.1 s; after the restart 9 sweeps read, 6 skipped; page 67 ms, sidebar 79 ms; backed off again in 12.2 s | passed: backed off in 12.1 s; 9 read, 5 skipped; page 114 ms, sidebar 162 ms; backed off again in 12.1 s |
+| `background` (task 2) | passed: indicator 57 ms, page 34 ms, evidence `output-file` | not exercised: the scripted Codex turn runs the command in the foreground |
+| `detach`, full 630 s wait (task 10) | passed: runtime `attached`, then `detached` after the wait, `attached` after the follow-up; 8.1 reads a minute; follow-up page 18 ms | not run: no session attachment on Codex's runtime read (7380) |
+| Container (task 9, Claude) | warm-up settled (page 3.2 s); idle group read 10, skipped 7 sweeps; every later turn refused (required agent MCP unreachable, 7080) | not run |
+
+Harness defects found and fixed in the spec on the way (no product defect in
+these paths):
+
+- `openEnvironment` clicked a "Continue Without …" startup notice with no
+  action timeout. With fake keys both Claude and Codex report no login, the
+  notices stack, and a click on a covered one waited for ever (two runs hung
+  for 15 minutes). Clicks are now bounded and repeated until no notice has
+  shown for 2 s.
+- A run of several minutes records a trace over the 64 MiB artifact
+  sanitizer bound, which then fails the global teardown, as on 2026-10-21 and
+  2026-10-23. The trace is now opt-in (`ORKESTRATOR_AGENT_TEST_IDLE_TRACE=1`).
+- The spec printed nothing until a case finished, so the logged runner's
+  300 s no-output watchdog killed a run before its first case; it now prints
+  content-free progress lines.
+
+Evidence: `output/agent-testing/idleqa-0049-*/idle-observation-live/<platform>.json`
+in the worktree that ran it. The profile was stopped and reset, every
+environment the runs created was deleted, and the development image built for
+the container run was removed.
 
 ## Live check (2026-10-23)
 
@@ -909,8 +1044,48 @@ pins that a stable idle Codex view gets no backend invalidations. Cons: it
 cannot reproduce a real bridge's revision movement, so the live surplus is
 still unattributed (see task 4, "Still owed").
 
+**D15. Tasks 1, 2, 9 and 10: which model behind the live runs.** Options: a
+real login (billed turns, the 2026-10-23 method), or scripted loopback models.
+Chosen: loopback models. Why: the ticket forbids real logins and billed
+turns, and every behaviour these tasks measure (the bridge, its stream, the
+backend sweep, the page and sidebar) is real; only the model's choices are
+scripted. Pros: repeatable, free, and the model always does what the case
+asks, so no case is `not-exercised` for model choice. Cons: a CLI release that
+changes how it talks to the API can break the fake without breaking real use;
+the scripted Codex turn never backgrounds a command.
+
+**D16. Task 2: what counts as Claude background output.** Options: accept the
+finished task's output file, prompt the model to read the file, or drop the
+output check. Chosen: accept the output file, after a fresh tool result. Why:
+it is the output Claude really emits, and it keeps the prompt excluded. Pros:
+no dependence on the model; content-free (only the evidence kind is
+recorded). Cons: the spec reads the file directly (host path or `docker exec`)
+because no backend command serves it.
+
+**D17. Task 10: how a Claude detach is observed.** Options: report the CLI's
+state on the existing no-touch runtime read, or watch the CLI process from
+outside. Chosen: the runtime read, `attached`/`detached` as Cursor and Pi
+already report. Why: the spec already reads that field and treats only those
+two values as detach telemetry, and the bridge knows the answer in memory
+(`openClaudeRuntime`). Pros: no new route, no touch, a bridge test pins it.
+Cons: the agent info panel's runtime line now shows `attached` or `detached`
+for Claude; an older bridge still reports nothing there, so the case stays
+`not-exercised` against it.
+
+**D18. Task 9: what to do when the container's later turns are refused.**
+Options: change the host firewall, disable the agent MCP for the test, or
+record the block. Chosen: record it (7080). Why: the ticket forbids firewall
+changes, and turning the agent MCP off would test a configuration users do not
+run. Pros: no host change. Cons: no-renderer completion in a container is still
+unobserved.
+
 **Assumptions.**
 
+- Task 9: the only server a Claude join requires is the injected Orkestrator
+  agent MCP (`AGENT_MCP_SERVER_NAME`, `session-manager-prompt-launch.ts`).
+  That its route was blocked is assumed from 7080, which observed the same
+  route dropped on the same host the same day; the container was not probed
+  with `curl` in this run.
 - Task 4 assumes the renderer re-reads once per backend invalidation it
   receives. The fake count models that one-to-one; a round joined into an
   in-flight read would make the live read count lower than the
@@ -932,6 +1107,13 @@ still unattributed (see task 4, "Still owed").
 
 - [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): client-side
   bandwidth and the data-saving preference.
+- [7380-codex-idle-detach-observation.md](7380-codex-idle-detach-observation.md):
+  the Codex half of task 10.
+- [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md):
+  the host firewall that blocks task 9's later container turns on beelink.
+- [5040-revision-token-spec-background-output.md](5040-revision-token-spec-background-output.md):
+  another spec that expects a background command's output on its launching
+  row; task 2 found that Claude puts it only in the task's output file.
 - `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06):
   disconnect signals for the read coordinator.
 - [0048-recurring-work-qualification.md](0048-recurring-work-qualification.md): live

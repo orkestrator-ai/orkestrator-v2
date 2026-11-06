@@ -231,7 +231,7 @@ function toolsOf(props: DesignToolbarProps): DesignTool[] {
       label: "Design history",
       icon: History,
       pressed: props.historyOpen,
-      disabled: !canvas || projection?.legacy === true,
+      disabled: !canvas,
       onSelect: props.onToggleHistory,
     },
     {
@@ -356,7 +356,7 @@ export function DesignToolbar(props: DesignToolbarProps) {
         <RenameField
           key={canvas.name}
           name={canvas.name}
-          disabled={!props.canEdit || projection?.legacy === true}
+          disabled={!props.canEdit}
           onRename={props.onRename}
         />
       ) : (

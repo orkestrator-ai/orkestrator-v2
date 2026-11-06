@@ -1,7 +1,5 @@
 import type {
   DesignCanvas,
-  DesignCanvasState,
-  DesignChanges,
   DesignHierarchyPage,
   DesignElement,
 } from "@orkestrator/protocol/design-canvas";
@@ -108,15 +106,24 @@ export function designBackendKey(): string {
   return getGatewayBaseUrl() || "local";
 }
 
-const capabilities = new Map<string, Promise<DesignCapabilities | null>>();
+const capabilities = new Map<string, Promise<DesignCapabilities>>();
 
-/** `null` means a v1 backend: use the legacy snapshot/action path. */
-export function getCapabilities(backend = designBackendKey()): Promise<DesignCapabilities | null> {
+/**
+ * Every backend in the support window serves `design_capabilities` (it shipped
+ * in v2.21.0, the floor), so a backend without it is too old for the canvas and
+ * gets a typed failure rather than a v1 fallback. Failures are not cached.
+ */
+export function getCapabilities(backend = designBackendKey()): Promise<DesignCapabilities> {
   let cached = capabilities.get(backend);
   if (!cached) {
     cached = designCommand<DesignCapabilities>("design_capabilities").catch((error: unknown) => {
-      if (classifyTransportError(error) === "unsupported") return null;
       capabilities.delete(backend);
+      if (classifyTransportError(error) === "unsupported")
+        throw new DesignClientError({
+          code: "unsupported",
+          message: "This backend is too old for the design canvas. Update it to continue.",
+          retry: "never",
+        });
       throw error;
     });
     capabilities.set(backend, cached);
@@ -128,30 +135,13 @@ export function resetCapabilities() {
   capabilities.clear();
 }
 
-// Legacy v1 surface (retained for old backends and existing callers).
+// The `design_action` surface, still used for canvas lifecycle and listing.
 export function designAction<T>(
   environmentId: string,
   action: string,
   input: Record<string, unknown> = {},
 ): Promise<T> {
   return invoke<T>("design_action", { environmentId, action, input });
-}
-export function getCanvas(environmentId: string, canvasId: string) {
-  return designAction<DesignCanvas>(environmentId, "get_canvas", { canvasId });
-}
-export function getCanvasState(environmentId: string, canvasId: string) {
-  return designAction<DesignCanvasState>(environmentId, "get_canvas_state", { canvasId });
-}
-export function getChanges(
-  environmentId: string,
-  canvasId: string,
-  generation: string | undefined,
-  after: number,
-) {
-  return invoke<DesignChanges>("design_changes", { environmentId, canvasId, generation, after });
-}
-export function getLegacyDesignStatus() {
-  return invoke<{ ready: boolean; error?: string }>("design_status");
 }
 /** Imports a serialized `.orkdes` document as a new canvas. */
 export function importDesignDocument(environmentId: string, document: string) {

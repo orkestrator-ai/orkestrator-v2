@@ -56,6 +56,16 @@ export function headlessElectronRequested(
 }
 
 /**
+ * The specs that honour `headlessElectronRequested()` everywhere they launch
+ * Electron and pass without a display. `playwright.electron-headless.config.ts`
+ * runs exactly these, and only a run limited to them may start with no display.
+ */
+export const HEADLESS_CAPABLE_ELECTRON_SPECS: readonly string[] = [
+  "design-canvas-electron.spec.ts",
+  "web-annotations-electron.spec.ts",
+];
+
+/**
  * What `playwright.electron.config.ts` needs and this host lacks, or `null`.
  * Without a display Electron exits at launch and every spec reports a launch
  * timeout that names nothing, so the run says it up front.
@@ -71,6 +81,6 @@ export function electronSpecDisplayProblem(
     "The Electron specs open a real window, and this run has neither DISPLAY nor WAYLAND_DISPLAY.",
     "Give them a disposable display: xvfb-run -a mise run test:agent:electron.",
     "dev:test --headless does not apply to them; they launch their own Electron.",
-    "For headless design-canvas only, set ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 and use playwright.electron-headless.config.ts.",
+    `For a headless run of ${HEADLESS_CAPABLE_ELECTRON_SPECS.join(" or ")}, set ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 and use playwright.electron-headless.config.ts.`,
   ].join("\n");
 }

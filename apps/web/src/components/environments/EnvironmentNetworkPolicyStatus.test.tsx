@@ -159,6 +159,30 @@ describe("environment network policy status", () => {
     await screen.findByText(/cannot\s+change it in place/);
     expect(screen.queryAllByRole("button", { name: "Apply now" })).toHaveLength(0);
   });
+  test("shows how many connections and queries the name checks refused, never which names", async () => {
+    const effective = base.effective!;
+    const show = async (refusals: { connections: number; queries: number }) => {
+      cleanup();
+      install({
+        ...base,
+        policyVersion: 3,
+        enforcement: "gateway",
+        effective: { ...effective, egressFilter: "enforced", refusals },
+      });
+      render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+      await screen.findByText(/Names are checked too/);
+    };
+    await show({ connections: 3, queries: 2 });
+    expect(
+      screen.getByText(/name checks have refused 3 connections and 2 DNS queries/),
+    ).toBeTruthy();
+    expect(screen.getByText(/does not record which names/)).toBeTruthy();
+    await show({ connections: 1, queries: 1 });
+    expect(screen.getByText(/refused 1 connection and 1 DNS query\./)).toBeTruthy();
+    await show({ connections: 0, queries: 0 });
+    expect(screen.getByText(/name checks have refused nothing/)).toBeTruthy();
+  });
+
   test("says whether the gateway also checks names, and what it cannot see", async () => {
     const effective = base.effective!;
     install({
@@ -170,6 +194,8 @@ describe("environment network policy status", () => {
     render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
     await screen.findByText(/Names are checked too/);
     expect(screen.getByText(/hidden inside encrypted traffic/)).toBeTruthy();
+    // A gateway from before the counts: nothing said about refusals.
+    expect(screen.queryByText(/name checks have refused/) === null).toBe(true);
     cleanup();
     install({
       ...base,

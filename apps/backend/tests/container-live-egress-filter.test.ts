@@ -804,6 +804,121 @@ describe("M12 name checks at the egress gateway", () => {
   );
 
   live(
+    "the firewall report counts refused connections and queries since boot, and keeps no name",
+    async () => {
+      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const { environment, context, containerId, gateway } = await createRuntime("refusals");
+      expect(gateway).not.toBe(containerId);
+      await startRuntime(containerId);
+      // A label no other part of this gateway's state can contain.
+      const secret = `r${RUN}c2VjcmV0`;
+      const refused = (suffix: string) => `${secret}.${suffix}.invalid`;
+      const refusals = async () =>
+        (await environmentNetworkPolicy(environment.id, context)).effective?.refusals;
+      const settle = async (expected: { connections: number; queries: number }) => {
+        // The daemon rewrites its counts at most once a second.
+        let seen = await refusals();
+        for (let i = 0; i < 20 && JSON.stringify(seen) !== JSON.stringify(expected); i++) {
+          await Bun.sleep(250);
+          seen = await refusals();
+        }
+        return seen;
+      };
+
+      // The firewall's own boot checks ask for names off the list; they are
+      // not counted, and neither is anything the workload's boot did.
+      expect(await refusals()).toEqual({ connections: 0, queries: 0 });
+
+      // Allowed traffic is not a refusal.
+      expect(
+        await inRuntime(
+          containerId,
+          "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry.npmjs.org/",
+        ),
+      ).toMatch(/^200\nrc=0$/);
+      expect(await dig(containerId, "registry.npmjs.org A")).toContain("status: NOERROR");
+      const address = (
+        await inRuntime(
+          containerId,
+          "getent ahostsv4 registry.npmjs.org | awk 'NR == 1 { print $1 }'",
+        )
+      ).split("\n")[0]!;
+      expect(address).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+      expect(await settle({ connections: 0, queries: 0 })).toEqual({ connections: 0, queries: 0 });
+
+      // Three refused connections: two foreign SNIs at an allowed address,
+      // and a foreign Host in plain HTTP on 443.
+      for (const suffix of ["tls-one", "tls-two"]) {
+        expect(
+          await inRuntime(
+            containerId,
+            `curl -k -sS -o /dev/null --max-time 15 --resolve ${refused(suffix)}:443:${address} https://${refused(suffix)}/`,
+          ),
+        ).toMatch(/alert access denied[\s\S]*rc=35$/);
+      }
+      expect(
+        await inRuntime(
+          containerId,
+          `curl -sS -w '\\n%{http_code}' --max-time 15 -H 'Host: ${refused("http")}' http://${address}:443/`,
+        ),
+      ).toMatch(/egress gateway refused this request[\s\S]*403\nrc=0$/);
+      // Three refused queries: over UDP, over TCP, and sent straight to a
+      // resolver off the host.
+      for (const args of [
+        `${refused("udp")} A`,
+        `+tcp ${refused("tcp")} A`,
+        `@192.0.2.53 ${refused("direct")} TXT`,
+      ]) {
+        expect(await dig(containerId, args)).toContain("status: REFUSED");
+      }
+      expect(await settle({ connections: 3, queries: 3 })).toEqual({ connections: 3, queries: 3 });
+
+      // Counts only: the file holds two numbers, and no refused name is in
+      // the gateway's files or its log.
+      expect(
+        await inGateway(gateway, "cat", "/run/orkestrator-firewall/egress-refusals.json"),
+      ).toBe('{"refusedConnections":3,"refusedQueries":3}');
+      expect(
+        await inGateway(
+          gateway,
+          "sh",
+          "-c",
+          `grep -rlF '${secret}' /run /etc /tmp /var/log /root 2>/dev/null; echo "found=$?"`,
+        ),
+      ).toBe("found=1");
+      const logs = await runCommand("docker", ["logs", gateway], { timeoutMs: 30_000 });
+      expect(`${logs.stdout}${logs.stderr}`).not.toContain(secret);
+
+      // A worker restart keeps the counts; the next refusal adds to them.
+      const worker = await inGateway(
+        gateway,
+        "cat",
+        "/run/orkestrator-firewall/egress-filter.ready",
+      );
+      await inGateway(gateway, "kill", "-KILL", worker);
+      let restarted = "";
+      for (let i = 0; i < 50; i++) {
+        restarted = await inGateway(
+          gateway,
+          "cat",
+          "/run/orkestrator-firewall/egress-filter.ready",
+        ).catch(() => "");
+        if (/^\d+$/.test(restarted) && restarted !== worker) break;
+        await Bun.sleep(100);
+      }
+      expect(restarted).not.toBe(worker);
+      expect(await refusals()).toEqual({ connections: 3, queries: 3 });
+      expect(await dig(containerId, `${refused("after-restart")} A`)).toContain("status: REFUSED");
+      expect(await settle({ connections: 3, queries: 4 })).toEqual({ connections: 3, queries: 4 });
+
+      // A new boot of the gateway counts from zero again.
+      await restart(containerId);
+      expect(await refusals()).toEqual({ connections: 0, queries: 0 });
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
     "a full-mode runtime has no gateway and no name checks",
     async () => {
       const { environmentNetworkPolicy } = await import("../src/core/container-network");

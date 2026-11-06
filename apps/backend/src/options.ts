@@ -24,6 +24,15 @@ export type BackendOptions = {
   controlHost?: string;
   controlPort?: number;
   /**
+   * `--agent-tools-port`: the exact port of the agent tools server, which
+   * containers reach for signal rings and the Agent MCP. Busy means the
+   * backend fails to start rather than taking another port. Absent keeps the
+   * installation's recorded port, or a free one (`AgentToolsServer.start`).
+   * `dev:test --agent-tools-port` sets it so one host firewall rule can admit
+   * every agent-test profile.
+   */
+  agentToolsPort?: number;
+  /**
    * Additional loopback-only client gateway (127.0.0.1) for SSH forwarding;
    * 0 selects an ephemeral port. Never a control listener.
    */
@@ -148,6 +157,11 @@ export function parseOptions(
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
   const explicitPort = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
+  const agentToolsPort = parsePortOption(
+    valueAfter(args, "--agent-tools-port"),
+    "--agent-tools-port",
+  );
+  if (agentToolsPort === 0) throw new Error("Invalid --agent-tools-port value: 0");
   const loopbackClientPort = parsePortOption(
     valueAfter(args, "--loopback-client-port") ?? env.ORKESTRATOR_LOOPBACK_CLIENT_PORT,
     "--loopback-client-port",
@@ -197,6 +211,7 @@ export function parseOptions(
     port: explicitPort ?? implicitGatewayPort(runtimeFlavor, dataDir, env),
     controlHost: valueAfter(args, "--control-host"),
     controlPort,
+    agentToolsPort,
     loopbackClientPort,
     compression,
     // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown

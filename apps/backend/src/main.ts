@@ -126,6 +126,7 @@ const backend = new OrkestratorBackend({
   dockerImage: options.dockerImage,
   strictDockerOwner: options.strictDockerOwner,
   credentialSources: options.credentialSources,
+  agentToolsPort: options.agentToolsPort,
   hostUpdater: options.desktopUpdater
     ? "desktop"
     : standaloneLayoutForService

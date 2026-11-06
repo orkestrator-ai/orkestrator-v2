@@ -8,7 +8,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03, see "Assumptions and decisions"); the four moves and placing `keyed-record-format.ts` are open.
+1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), and the `http-bridge` move is done (2026-11-06, the procedure proof; see "Assumptions and decisions"); the `opencode`, `web-annotations` and `control-mcp` moves and placing `keyed-record-format.ts` are open.
 2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: open.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
@@ -198,6 +198,16 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `exec-control.js`, `operation-ledger.js` and `revisions.js`.
   `mcp-management/` needs none. No domain folder is now without an
   `index.ts`.
+- Done (task 1's `http-bridge` slice, 2026-11-06, against `main` at
+  `c1724ab7`): the 20 `http-bridge-*` source files and their 20 tests are in
+  `core/http-bridge/` without the prefix (`http-bridge/provider.ts`,
+  `http-bridge/transport.ts`, …), with an `index.ts` and both lint
+  patterns. `index.ts` re-exports the six symbols the seven production
+  importers outside the folder use (`HttpBridgeProvider`, `boundedJson`,
+  `bridgeFetch`, `openCodeSdkFetch` and the types `HttpBridgeAgent` and
+  `HttpBridgeProviderDependencies`), and all seven import it. No named
+  exceptions were needed: routing them through `index.ts` closes no runtime
+  cycle.
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -216,14 +226,16 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   the `import("…")` edges the largest component is 289 (base) and 297 (with
   task 6). The 2026-10-14 figure of 112 files used an unrecorded method and is
   not comparable.
-- The `core/` root holds 378 non-test `.ts` files and 299 tests.
+- The `core/` root holds 378 non-test `.ts` files and 299 tests (the
+  2026-10-15 count; after the `http-bridge` slice on 2026-11-06 it holds 827
+  and 842).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
   | --- | --- | ---: | ---: |
   | opencode | `opencode-*` | 29 | 22 |
   | web-annotations | `web-annotation-*` | 28 | 22 |
-  | http-bridge | `http-bridge-*` | 13 | 11 |
+  | http-bridge | `http-bridge-*` | done (20 / 20 moved, 2026-11-06) | |
   | control-mcp | `control-mcp-*` | 2 | 1 |
   | keyed-records | `keyed-record-*` | 1 | 0 |
   | plan-usage | `plan-usage*` | 2 | 2 |
@@ -273,9 +285,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 Order: move the domains few others depend on first, so the procedure is proven
 before the busy ones move.
 
-1. **Wave 1 (leaves):** `opencode`, `web-annotations`, `http-bridge`,
-   `control-mcp`. (Done: an `index.ts` and both lint patterns for
-   `mcp-management/` and `public-api/`.) Place `keyed-record-format.ts` rather
+1. **Wave 1 (leaves):** `opencode`, `web-annotations`, `control-mcp`.
+   (Done: an `index.ts` and both lint patterns for `mcp-management/` and
+   `public-api/`; the `http-bridge` move.) Place `keyed-record-format.ts` rather
    than giving it a folder (see "Open questions").
 2. **Wave 2 (mid-tier):** `plan-usage`, `features`, `coordinator`,
    `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`,
@@ -305,7 +317,16 @@ change, no edits beyond paths, the new `index.ts` and the lint patterns):
    the symbols they use. That symbol list is the `index.ts`.
 2. **Move with the codemod** from a clean tree, `--dry-run` first. If a run
    fails midway, reset with `git reset -q && git checkout -- . && rm -rf <new
-   folder>` and run it again.
+   folder>` and run it again. Then fix by hand what it gets wrong or leaves
+   alone:
+   - it also rewrites paths that name a historical commit
+     (`` `<sha>^:apps/backend/src/core/<old>.ts` `` in test comments and
+     `git show <sha>:…` commands in flake records), which must keep the old
+     name; revert those (todo [7490](7490-move-codemod-rewrites-revision-paths.md));
+   - it does not rewrite bare file names (`` `http-bridge-provider.ts` ``) in
+     source comments, living docs, `AGENTS.md` globs, or file-name lists that
+     tests read by path (`agent-provider-boundaries.test.ts`). Grep for the old
+     prefix afterwards; leave dated reports and flake records as they are.
 3. **Write `index.ts`** with explicit named re-exports only
    (`export { X } from "./x.js"`, never `export *`). Point production
    importers outside the folder at `<domain>/index.js`. White-box tests and
@@ -315,7 +336,11 @@ change, no edits beyond paths, the new `index.ts` and the lint patterns):
 5. **Validate** with `mise run format:check`, `mise run lint`,
    `mise run typecheck`, `mise run test`, `mise run build:backend` and
    `mise run verify:packaged-backend`. The last two catch a bundled entry point
-   or worker that names a moved file.
+   or worker that names a moved file. `verify:packaged-backend` reads a
+   packaged app under `release/`, so it needs the packaging build first; it is
+   not a quick per-slice check. Run backend tests with `NODE_ENV=test` in a
+   shell that sets `NODE_ENV=production`
+   (`host-model-catalog-refresh.test.ts` fails otherwise).
 6. **Merge quickly** and announce it, so open branches rebase promptly.
 
 Done when:
@@ -328,9 +353,50 @@ Done when:
 
 ## Assumptions and decisions
 
-Decisions taken while doing tasks 5 and 6 (2026-10-28) and task 1's
-`index.ts` step (2026-11-03). The moves in waves 1 to 4 (tasks 1 to 4) were
+Decisions taken while doing tasks 5 and 6 (2026-10-28), task 1's
+`index.ts` step (2026-11-03) and task 1's `http-bridge` slice (2026-11-06). The moves in waves 1 to 4 (tasks 1 to 4) were
 left open on purpose: they move many files that other work in flight touches.
+
+### Task 1: `http-bridge` as the procedure proof
+
+- Chosen: the recommended option, one domain (`http-bridge`) moved on its own
+  with the codemod (`--prefix http-bridge- --into http-bridge`), against
+  `main` at `c1724ab7`. `control-mcp` was not chosen because an open PR
+  (#1912) is splitting `control-mcp-tools.ts`; `web-annotations` had another
+  build in flight; `opencode` and `keyed-record-format.ts` are left for later
+  slices.
+- Measured before the move: 20 source files, 20 tests. Importers outside the
+  folder: 7 production files in `apps/backend/src/core/`
+  (`bridge-session-close.ts`, `host-model-catalog-refresh.ts`,
+  `log-policy-service.ts`, `native-agent-provider.ts`,
+  `opencode-provider-login.ts`, `opencode-sdk-client.ts`,
+  `session-held-model.ts`) using six symbols; 10 co-located tests at the
+  root, plus one test that lists file names (`agent-provider-boundaries.test.ts`);
+  3 `apps/backend/tests` files and `apps/backend/scripts/conditional-reads-baseline.ts`
+  (all `HttpBridgeProvider`); 3 `e2e/fixtures` files
+  (`HttpBridgeInteractionAdapter`), `scripts/benchmark-slash-command-catalogue.ts`
+  (`HttpBridgeCatalogAdapter`), a dynamic import in
+  `bridges/claude-bridge/src/routes/session-interactions.test.ts`, and path
+  strings in `scripts/efficiency/workloads-projection.ts`,
+  `tests/unit/auth-secret-guards.test.ts` and `.oxlintrc.json` (the
+  raw-`console` allowlist). The codemod moved 40 files and rewrote 98.
+- `index.ts` holds exactly the six production symbols. Importers that use only
+  those (the `apps/backend/tests` files and the baseline script, too) go
+  through it; co-located tests, the e2e fixtures, the benchmark script and
+  the claude-bridge test keep deep imports, because they use internals no
+  other domain needs (procedure step 3).
+- Hand fixes after the codemod: reverted its rewrite of historical
+  `ff4026b4e^:…` paths in four bridge test files and a `git show 0d254a3a^:…`
+  command in flake record 0255; renamed bare file names in source comments,
+  five `docs/architecture/` files, the root and `bridges/` `AGENTS.md`
+  globs, and the file list `agent-provider-boundaries.test.ts` reads by path.
+  Dated reports and flake records keep the path rewrites the codemod made,
+  as the `design` slice (#979) did, except the `git show` command.
+- Lint patterns: `**/http-bridge/*` with `!**/http-bridge/index.js` under
+  `apps/backend/src/**`, and the `**/backend/src/core/http-bridge/*` form
+  under `tests/unit/**`. No other import path contains an `http-bridge/`
+  segment, so no negation is needed. Checked with probe files (deleted): a
+  deep import is reported under both overrides, `index.js` is not.
 
 ### Task 1: the `index.ts` step for `mcp-management/` and `public-api/` first
 

@@ -361,6 +361,13 @@ iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 
 echo "Firewall configuration complete"
 echo "Verifying firewall rules..."
+# These checks ask for names off the allowlist on purpose. The name-check
+# daemon does not count refusals while this marker exists (and ignores one
+# older than two minutes), so the report's counts are the workload's own.
+if [ "$FILTER_STATE" = enforced ]; then
+    trap 'rm -f "$ORK_FILTER_QUIET"' EXIT
+    : > "$ORK_FILTER_QUIET"
+fi
 # Probe a reserved example host the allowlist does not name: a user may allow
 # example.com itself, which must not make every boot fail.
 BLOCKED_PROBE=""
@@ -407,6 +414,7 @@ if [ "$FILTER_STATE" = enforced ]; then
         exit 1
     fi
     echo "Firewall verification passed - names off the allowlist are refused by DNS and at TLS"
+    rm -f "$ORK_FILTER_QUIET"
 fi
 
 # Verify GitHub is reachable. Any HTTP answer proves the path is open; the

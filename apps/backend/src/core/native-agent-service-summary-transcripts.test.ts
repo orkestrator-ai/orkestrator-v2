@@ -20,7 +20,7 @@ import type {
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
 import { applyNativeAgentTranscriptDelta } from "@orkestrator/protocol/native-agent";
-import { positionedCursorBefore } from "./http-bridge-transcript-v2.js";
+import { positionedCursorBefore } from "./http-bridge/transcript-v2.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";

@@ -868,7 +868,10 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   [Rollout switches and legacy runtimes](#rollout-switches-and-legacy-runtimes)).
   A runtime created from one keeps its read-only home mounts until it is
   rebuilt; `get_environment_inputs` reports that as `host-mounts`, never as
-  narrowed.
+  narrowed. It uses the cleanup review's evidence (`legacy-runtime-shape.ts`):
+  no inputs-revision label *and* a bind at one of the old mount points. A
+  runtime with no label and no such bind is `none`, and a failed inspect is
+  `unknown`, never `host-mounts`.
 - Credentials (staged inputs, the staged Anthropic key, the Cursor key and the
   start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
@@ -1239,6 +1242,23 @@ never run it. The daemon listens on 31443 and 31453 in the shared namespace,
 so a workload cannot listen there, and a connection to them that was not
 redirected is refused.
 
+The daemon counts what it refuses since the gateway booted: connections (a
+name off the list in the ClientHello or Host, another protocol on TCP 443,
+or a connection that never finished its first bytes) and DNS queries
+answered REFUSED. It writes the two numbers to
+`/run/orkestrator-firewall/egress-refusals.json` at most once a second when
+one moved; a restarted worker carries them on, and a new boot (fresh `/run`)
+starts at zero. The backend reads the file in the same `docker exec` as the
+firewall report and returns it as `effective.refusals` only beside
+`egressFilter: enforced` (`null` from an image before the counts), and the
+Network section says how many were refused. Counts only: no refused name,
+part of one or digest of one is stored, logged or reported, because a refused
+name can carry the data an agent tried to send (`<secret>.attacker.tld`).
+`init-firewall.sh` holds `egress-filter.quiet` while its own boot checks ask
+for names off the list, and the daemon does not count during it (a marker
+older than two minutes is ignored, so one left by a script that died cannot
+mute counting for long).
+
 What it does not stop: a name hidden inside TLS (an encrypted ClientHello
 whose outer name is allowed, domain fronting), a second request with another
 Host on a kept-alive HTTP connection, an HTTP/2 connection a client reuses
@@ -1312,6 +1332,48 @@ network pane shows "Agent tools unavailable" for a container environment
 while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
 gateway runtimes snapshot their host address at gateway boot and need a
 rebuild after host loopback is enabled.
+
+### Port selection and the loopback address (`agent-tools-listen.ts`)
+
+The server asks first for the port it used last time (saved by
+`recordCapabilityPort`, so workflow-result capabilities and container
+firewall rules survive a restart) and takes an ephemeral port when that one
+is in use. Host agents are handed `http://127.0.0.1:<port>/mcp`, so the port
+is only usable if `127.0.0.1:<port>` reaches this backend.
+
+A wildcard bind does not prove that on macOS. BSD socket rules let
+`0.0.0.0:<port>` succeed beside another process's `127.0.0.1:<port>`
+listener, and the kernel then gives every loopback connection to the more
+specific bind: host agents sent their bearer token to the other process and
+got 401 (todo 7220, closed 2026-11-06; seen with a second `dev:test` backend that had taken the
+saved port). `listenAgentTools` therefore:
+
+- After a wildcard bind, also binds `127.0.0.1:<port>` with the same handler
+  and peer gate, for the server's lifetime. On macOS that succeeds when the
+  address is free and then stops any later process from taking it.
+- When that bind is refused on Linux, keeps the wildcard listener: Linux's
+  exclusive wildcard bind already owns loopback and prevents later takeover.
+  Every other platform must acquire both listeners. A runtime overlap probe
+  cannot safely establish exclusivity, because a competing process can win
+  the probe's loopback port and produce the same `EADDRINUSE` as Linux.
+  The port is released, `[docker.reachability] port.loopback-taken` is logged,
+  and an ephemeral port is tried (up to three). The new port is saved, and
+  containers follow it through the `host-service-ports` repair above.
+- Treats an explicit `start(port)` as exact: a held loopback address fails the
+  start with `EADDRINUSE` instead of moving.
+
+Nothing is ever sent to the other process, and container reach
+(`host.docker.internal`, the same port) and the peer gate below are
+unchanged. A bind address that is not a wildcard (tests bind `127.0.0.1`)
+gets one listener. Tests: `agent-tools-listen.test.ts` (both rule sets, and
+the real kernel of whichever OS runs it; it also passed in a Linux container)
+and `agent-tools-loopback-port.test.ts` (the saved-port clash through
+`AgentToolsServer`).
+
+Platform coverage: macOS and Linux were checked by those tests against the
+real kernel (Linux in a container). Windows was not checked; the backend
+refuses to start on `win32`, so the non-Linux branch is what would apply if
+that ever changed, and its bind rules would need measuring first.
 
 ### Who may connect
 
@@ -1649,12 +1711,22 @@ Without this, every container that never ran terminal Claude stayed on the
 1 s poll with a confirmed doorbell (seen in a 2026-10-24 profile run).
 
 `ClaudeStatePollManager.status()` reports the signal's health, per state
-(`unarmed`, `arming`, `armed`, `confirmed`, `demoted`, `unsupported`), how
-many containers run the 1 s poll (`fallback`), lifetime demotions by reason
-(`missed-change`, `rang-too-often`, `arm-failed`) and accepted rings, in the
-`signals` block of recurring diagnostics (`claude-state-signal`). It is
-content-free: no container id. The demotion log line still names the
-container.
+(`unarmed`, `arming`, `armed`, `unconfirmed`, `confirmed`, `demoted`,
+`unsupported`), how many containers run the 1 s poll (`fallback`), lifetime
+demotions by reason (`missed-change`, `rang-too-often`, `arm-failed`) and
+accepted rings, in the `signals` block of recurring diagnostics
+(`claude-state-signal`). It is content-free: no container id. The demotion log
+line still names the container.
+
+`unconfirmed` is a lineage that has stayed `armed` for a whole retry window
+(5 min) since its first install with no ring, so its rings cannot reach the
+backend: typically a host firewall that drops container traffic to the agent
+tools port. The install's probe ring is fire-and-forget (the hook path must
+never wait on the network), so this is the only place the backend can see it;
+it cannot say why. A re-arm on the window keeps the lineage `unconfirmed`; a
+ring confirms it and a demotion starts a new `armed` stretch. The worktree
+signal and the claude-tmux hook doorbell report the same state the same way
+(to-do 7080).
 
 A poll is adopted for every running container, but it runs the 1 s cadence
 only while the container can run terminal Claude: a terminal shell in it or a
@@ -1889,7 +1961,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 | Where | What it holds | Who reads it |
 | --- | --- | --- |
 | `/run/orkestrator-bridge/<kind>-token`, 0600 in a 0700 root directory | The token | The backend, with a root exec |
-| The bridge's environment | `<TOKEN_ENV>_SHA256`, removed from `process.env` at start | Anything, harmlessly |
+| `/run/orkestrator-bridge/<kind>-authority`, beside it (`bridge-launch=1`) | The private half of the bridge's authority key | The backend, in the same root exec |
+| The bridge's environment | `<TOKEN_ENV>_SHA256` and, with `bridge-launch=1`, `<TOKEN_ENV>_AUTHORITY_KEY`, both removed from `process.env` at start | Anything, harmlessly |
 | The bridge's memory | The token, briefly, on each request | Nobody: the bridge is non-dumpable, so `/proc/<pid>/{environ,mem,fd}` belong to root and a same-uid ptrace is refused |
 
 - **Nothing reaches `docker exec` argv.** The root file is written on stdin. What
@@ -1898,11 +1971,20 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   deletes first (`launchContainerScript`). `docker exec -d` has no stdin of its
   own, hence the separate exec.
 - **The bridge entrypoint bypasses checkout Bun configuration.** The bridge
-  runs from root-owned `/opt` with `bun --config=/dev/null`. Its working directory
-  stays `/workspace`. This does not prevent SDK resource loading: when project
-  resources are enabled, Pi discovers project extensions and executes them in
-  the bridge process. Such code can observe later presented credentials; see
-  to-do 4980 task 2.
+  runs from root-owned `/opt` with `bun --config=/dev/null`. On a
+  `bridge-launch=1` image the root-owned `orkestrator-bridge-launch` starts it
+  under `env -i` from the backend's own exec, so nothing in the `node` login
+  shell (a profile, the runtime snapshot, `BUN_OPTIONS`) runs inside it; the
+  bridge hands the start script's environment to the agents it spawns
+  ([agent-approvals.md](agent-approvals.md#fixed-launch-bridge-launch1)). This
+  does not prevent SDK resource loading: when project resources are enabled,
+  Pi discovers project extensions and executes them in the bridge process.
+  Such code can observe later presented credentials; see to-do
+  [7251](../todo/containers-and-environments/7251-pi-project-extensions-in-the-bridge-process.md).
+- **What changes an agent's authority is signed.** On a `bridge-launch=1` image
+  every mutating request except close, the activity batch and the log policy
+  carries the backend's Ed25519 signature, so a token caught in flight answers
+  nothing ([agent-approvals.md](agent-approvals.md#signed-authority)).
 - **Root never reads a `node`-writable path.** `readContainerBridgeToken` reads the
   root file as root, and only then the old `/tmp` file as `node`, because `node` can
   make that a symlink to anything.
@@ -1923,16 +2005,20 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   a policy, the backend replaces the bridge and resumes
   (`replaceBridgeForWiderPolicy` in `native-agent-service.ts`), and refuses while
   a turn is running in that environment. `readOnly` stays a per-turn intent;
-  that is safe only because the backend alone holds the bridge token. A separate
-  uid for the bridge was not built: the token is already out of the agent's
-  reach, and what the shared uid still allows is in to-do 4980.
+  that is safe only because the backend alone holds the bridge token and, on a
+  `bridge-launch=1` image, signs the turn. A separate uid for the bridge was not
+  built: the token is already out of the agent's reach, and what the shared uid
+  still allows is in [agent-approvals.md](agent-approvals.md).
 
 What the agent's uid can still do is in
-[to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):
-kill the bridge and listen on its port, or plant code for the next start through
-its login shell or runtime environment. OpenCode has no bridge and takes the plain
-password, in `opencode-token` in the same directory; a plugin inside the server keeps
-it from the agent (`buildOpenCodeCredentialPluginSource` in
+[agent-approvals.md](agent-approvals.md#what-the-agents-uid-can-still-do):
+replace the bridge with one it runs
+([7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md)),
+and on an older image catch the token on the bridge's port or plant code for the
+next start. OpenCode has no bridge and takes the plain password, in
+`opencode-token` in the same directory
+([7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md));
+a plugin inside the server keeps it from the agent (`buildOpenCodeCredentialPluginSource` in
 `agent-credential-files.ts`). In a container, a server the plugin could not harden
 refuses tools; on a host it only logs, because a host's OpenCode can be any build.
 A host server gets the plugin through `OPENCODE_CONFIG_DIR`

@@ -19,6 +19,7 @@ import {
 import { bundleElectron, formatBuildLogs } from "../electron-bundle.js";
 import type { DevArguments } from "./arguments.js";
 import {
+  assertAgentToolsPortFree,
   atomicWriteJson,
   initializeProfile,
   liveness,
@@ -503,6 +504,26 @@ export function resolveElectronHeadless(options: {
 }
 
 /**
+ * What the launcher says about the headless decision, or `null` for an
+ * ordinary window. On macOS and Windows anything that would make Linux
+ * headless (the flag, a variable, no terminal) is accepted and changes
+ * nothing, so it says that rather than opening a window silently.
+ */
+export function electronHeadlessNotice(
+  options: Parameters<typeof resolveElectronHeadless>[0],
+): string | null {
+  const { headless, reason } = resolveElectronHeadless(options);
+  if (headless) {
+    return `Electron is headless (${reason}); the app is at browserUrl and no window will open.${options.requested === true ? "" : " Pass --no-headless for a real window."}`;
+  }
+  if (options.flavor !== "agent-test" || options.platform === "linux") return null;
+  const onLinux = resolveElectronHeadless({ ...options, platform: "linux" });
+  if (!onLinux.headless) return null;
+  const cause = onLinux.reason === "no terminal" ? "running without a terminal" : onLinux.reason;
+  return `Electron opens a window: headless mode exists only on Linux, so ${cause} changes nothing on ${options.platform}.`;
+}
+
+/**
  * Check that Electron announced everything this particular run depends on.
  *
  * The backend gateway is always required: without an auth file and a backend
@@ -615,6 +636,7 @@ export async function startDevelopment(
     spawn?: typeof spawn;
     waitForUrl?: typeof waitForUrl;
     writeStatus?: typeof atomicWriteJson;
+    checkAgentToolsPort?: typeof assertAgentToolsPortFree;
   } = {},
 ): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
@@ -634,6 +656,15 @@ export async function startDevelopment(
   }
   await pruneOrphanedProfiles(existingProfile.id, dependencies.roots, dependencies.prune);
 
+  // Recorded in the profile, so a restart without the flag keeps the port the
+  // host firewall admits; `dev:reset` forgets it.
+  const agentToolsPort =
+    flavor === "agent-test" ? (args.agentToolsPort ?? existingProfile.agentToolsPort) : undefined;
+  if (agentToolsPort !== undefined) {
+    // Before the profile is written, so a busy port is never recorded.
+    await (dependencies.checkAgentToolsPort ?? assertAgentToolsPortFree)(agentToolsPort);
+  }
+
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const profile = resolveRuntimeProfile({
     repositoryRoot,
@@ -643,6 +674,7 @@ export async function startDevelopment(
     gatewayPort,
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
+    agentToolsPort,
     roots: dependencies.roots,
     ...(await profileWorktreeLocation(
       existingProfile,
@@ -779,18 +811,16 @@ export async function startDevelopment(
     await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
     const platform = dependencies.platform ?? process.platform;
-    const { headless, reason } = resolveElectronHeadless({
+    const headlessInputs = {
       flavor,
       platform,
       requested: args.headless,
       env: process.env,
       interactive: dependencies.interactive ?? launcherIsInteractive(),
-    });
-    if (headless) {
-      console.log(
-        `Electron is headless (${reason}); the app is at browserUrl and no window will open.${args.headless === true ? "" : " Pass --no-headless for a real window."}`,
-      );
-    }
+    };
+    const { headless } = resolveElectronHeadless(headlessInputs);
+    const notice = electronHeadlessNotice(headlessInputs);
+    if (notice) console.log(notice);
     const launch = electronLaunch(headless, platform, process.env);
     const electronEnv = launch.env;
     electron = (dependencies.spawn ?? spawn)(

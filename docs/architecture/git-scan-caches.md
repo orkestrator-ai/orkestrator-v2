@@ -235,8 +235,10 @@ arktech-mini (macOS, worktrees on an external APFS volume and in
 - **Hangs:** some daemons stopped answering, so `git status` blocked for good.
   Multi Review then failed with "Git status could not be read" and "Review
   validation has not completed", and `launch_multi_review` timed out.
-- **Leaks:** a daemon outlives its worktree. Nothing stopped them, and about
-  700 had piled up; test fixtures leaked one per temporary repository.
+- **Leaks:** a daemon outlived its worktree. Nothing stopped them, and about
+  700 had piled up; test fixtures leaked one per temporary repository. (On
+  2026-11-06 the same host and Git 2.56.0 did not reproduce this on its
+  internal disk: see "Daemons left by older versions".)
 
 The win fsmonitor offers (skipping the tree walk on very large trees) did not
 show up at these worktree sizes, and the untracked cache keeps most of the walk
@@ -262,8 +264,30 @@ counts describe the raw worktree bytes rather than an external filter's output.
 The daemon is not macOS-only. Git 2.56.0 on Linux reports
 `feature: fsmonitor--daemon` in `git version --build-options`, and a daemon
 starts, watches and stops there. On that Linux host it costs nothing per call
-(about 8 ms with a daemon, 10–12 ms without, in a 6,903-file worktree), so the
-cookie wait above is an APFS cost, not a cost of the daemon itself.
+(about 8 ms with a daemon, 10–12 ms without, in a 6,903-file worktree).
+
+Nor is the cookie wait a cost of APFS as such. On 2026-11-06 the same
+arktech-mini (Apple M5 Pro, macOS 27.2, Git 2.56.0, load average about 26)
+measured throwaway repositories on its internal APFS disk, under `$TMPDIR`,
+with `core.untrackedCache=true`. Each figure is the p50 of 20 `git status
+--porcelain` calls after three warm-up calls, two rounds:
+
+| Repository | `-c core.fsmonitor=false` | Running daemon |
+| --- | --- | --- |
+| Clone of this repository, 9,394 files | 16–17 ms | 11–12 ms |
+| Linked worktree of that clone, worktree-config fsmonitor | 16–17 ms | 12–13 ms |
+| Synthetic, 100,000 files | 72–74 ms | 20–27 ms |
+
+The daemon's query, cookie included, took 2–9 ms (`GIT_TRACE2_PERF`,
+`fsm_client` region). The figures did not change with 103 daemons running at
+once. The 1.1 s wait was seen only with worktrees on the external USB volume
+and in `/private/tmp` while about 700 daemons ran; which of those caused it is
+not established. The largest win, about 50 ms per call at 100,000 files, is
+below the 100 ms that would justify revisiting an opt-in setting.
+
+Measure in separate blocks, not by alternating the two forms: a status with
+fsmonitor off rewrites the index without the daemon's token, so the next
+daemon call rescans the tree and the two times come out the same.
 
 ## The review worktree probe
 
@@ -345,10 +369,32 @@ ps -eo pid=,lstart=,args= |
   done
 ```
 
-On macOS, the daemon's IPC socket names the repository: `lsof -a -U -p <pid>`
-lists `<git-dir>/fsmonitor--daemon.ipc` (or a socket under `~/.git-fsmonitor-*`
-for a repository on a network volume). This command has not been run on a Mac
-for this document.
+On macOS the daemon's working directory is the user's home and its
+environment carries no `GIT_DIR`, and `lsof` shows only the socket's relative
+name, `fsmonitor--daemon.ipc`. What names the repository is the daemon's
+first open directory: it holds the worktree and each of its parents open for
+FSEvents, worktree first. Run on arktech-mini on 2026-11-06 against 101
+daemons in throwaway repositories:
+
+```sh
+pgrep -f 'fsmonitor--daemon run' |
+  while read -r pid; do
+    dir=$(lsof -a -p "$pid" -d '^cwd' -Fftn 2>/dev/null |
+      awk '/^tDIR/ {d = 1; next} /^t/ {d = 0} /^n/ && d {print substr($0, 2); exit}')
+    if [ -e "$dir" ]; then state=present; else state=gone; fi
+    echo "$pid $state $dir"
+  done
+```
+
+A daemon that exits while the loop runs shows as `gone` with no path.
+
+On that internal disk the daemon does not outlive its worktree: after
+`git worktree remove --force`, `rm -rf` of the worktree or of its `.git`, a
+`mv` of the worktree, and a repository deleted straight after the `git
+status` that started its daemon (eight times), every daemon had exited within
+4 s. The host has had Git 2.56.0 since 2026-09-28, a month before its
+700 orphans were counted. Those came from worktrees on the external volume
+and in `/private/tmp`, which were not retested.
 
 ## Bounded reads
 

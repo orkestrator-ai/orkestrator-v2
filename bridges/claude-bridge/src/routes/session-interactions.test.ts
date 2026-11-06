@@ -243,7 +243,7 @@ for (const mode of ["form", "url"] as const) {
 
 test("concurrent large forms stay readable and answerable through backend normalization", async () => {
   const { HttpBridgeInteractionAdapter } =
-    await import("../../../../apps/backend/src/core/http-bridge-interactions.js");
+    await import("../../../../apps/backend/src/core/http-bridge/interactions.js");
   const session = createSession("route-saturation");
   track(session.id);
   const prompt = sendPrompt(session.id, "go");

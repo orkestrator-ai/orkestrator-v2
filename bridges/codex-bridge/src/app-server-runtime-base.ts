@@ -87,6 +87,11 @@ export interface AppServerRuntimeOptions {
   /** Test/embedding override for the one allowed initial-prompt overload retry. */
   initialPromptRetryDelayMs?: number;
   /**
+   * Test/embedding override for how often a running sub-agent's card is probed
+   * from its rollout (`SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS` by default).
+   */
+  subagentProbeIntervalMs?: number;
+  /**
    * Test/embedding override for retrying a turn the model refused for
    * capacity (`sessions/capacity-retry.ts`); unset fields keep the defaults.
    */
@@ -218,6 +223,11 @@ export interface ThreadRuntimeState {
    */
   releasedAssistantRows: Map<string, ReleasedAssistantRow>;
   coalescer: UpdateCoalescer;
+  /**
+   * The follow-up publish that probes sub-agent cards while the parent stream
+   * is quiet; see `scheduleSubagentProbe`.
+   */
+  subagentProbeTimer?: ReturnType<typeof setTimeout>;
   /** Bounded estimate for adapting the cadence of whole-message snapshots. */
   lastPublishedSnapshotChars: number;
   /** Assistant message currently being streamed into. */

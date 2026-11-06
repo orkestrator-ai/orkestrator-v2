@@ -137,7 +137,11 @@ feature validation still follow the normal requirements.
 ### Public-site smoke tests
 
 `mise run test:browser` also runs `e2e/public-site/` against a fresh production
-build of the public client. To run only that smoke flow:
+build of the public client. On Linux both suites run in a private loopback-only
+network namespace (`scripts/loopback-network.ts`), so other builds' Docker
+networks cannot abort their page loads (flake
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md));
+set `ORKESTRATOR_E2E_HOST_NETWORK=1` to keep them on the host network. To run only that smoke flow:
 
 ```bash
 mise run test:logged -- --name public-browser -- \
@@ -676,6 +680,14 @@ ORKESTRATOR_SCENARIO_MODEL=gpt-5.6-sol \
 # docker:build:dev prints the tag it built
 mise run docker:build:dev
 mise run test:cli:scenarios -- --environment-type container \
+  --docker-image orkestrator-v2:dev-<worktree hash>
+
+# The same, on a host whose Docker address pools are full (every start fails
+# with resource-exhausted): the test-only shim retries only owner-labelled
+# network creates on an unrouted /29 in 172.16.240.0/22
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run test:cli:scenarios -- --environment-type container \
   --docker-image orkestrator-v2:dev-<worktree hash>
 ```
 

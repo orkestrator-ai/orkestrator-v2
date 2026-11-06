@@ -625,7 +625,7 @@ did not 404 on the session route. They all served `{ commands: [...] }` without
 `catalogueVersion`. A 404 there comes only from bridges before #599 or from an
 old Codex bridge asked about a session it does not hold. Both are covered.
 
-- **New backend, old bridge** (`apps/backend/src/core/http-bridge-commands.test.ts`,
+- **New backend, old bridge** (`apps/backend/src/core/http-bridge/commands.test.ts`,
   all five bridges): pre-#827 rows read as non-enhanced `legacy:` rows that run
   as typed text, and a guessed enhanced id is refused with nothing sent; a 404
   fell back per read (never stickily) to the agent's legacy route, and ACP,

@@ -54,7 +54,13 @@ export const TOOL_GROUP_BODY_MAX_HEIGHT = "min(28rem, 55dvh)";
 /** Bootstrap estimate for an unmeasured entry; measured sizes replace it. */
 const ENTRY_ESTIMATE_PX = 40;
 
-const INNER_FOLLOW = () => "auto" as const;
+/**
+ * Virtuoso passes its synchronous at-end flag (or a programmatic scroll still
+ * in progress). `atBottomStateChange`, and with it `following`, arrives 50 ms
+ * after the scroll, so an append inside that window would otherwise pull a
+ * reader who has just left the end back to it.
+ */
+const INNER_FOLLOW = (atEnd: boolean) => (atEnd ? ("auto" as const) : false);
 
 /** Within this of the inner end, the inner list counts as following its tail. */
 const INNER_END_TOLERANCE_PX = 2;
@@ -268,6 +274,8 @@ function VirtualizedToolGroupBody({
   const entriesRef = useRef(entries);
   const innerScrollerRef = useRef<HTMLElement | null>(null);
   const [following, setFollowing] = useState(initialPlace.atEnd);
+  // `following` as of the latest event, for the scroll listener below.
+  const followingNow = useRef(initialPlace.atEnd);
   useLayoutEffect(() => {
     baseRef.current = base;
     entriesRef.current = entries;
@@ -301,15 +309,42 @@ function VirtualizedToolGroupBody({
     };
     const onFocusIn = (event: FocusEvent) => setFocusedIndex(entryIndexOf(event.target));
     const onFocusOut = (event: FocusEvent) => setFocusedIndex(entryIndexOf(event.relatedTarget));
+    // A reader moving up away from the inner end releases following at once.
+    // Virtuoso keeps a follow's scroll "in progress" for at least 150 ms after
+    // its last list refresh, and reports leaving the end 50 ms late; until
+    // then an append or a retry would pull the reader back to the end. Its own
+    // corrections only move down or keep the end, so an upward move is the
+    // reader's.
+    let lastScrollTop: number | null = null;
+    const onScroll = (event: Event) => {
+      const element = innerScrollerRef.current;
+      if (!element || event.target !== element) return;
+      const movedUp = lastScrollTop !== null && element.scrollTop < lastScrollTop;
+      lastScrollTop = element.scrollTop;
+      if (
+        !followingNow.current ||
+        !movedUp ||
+        element.scrollHeight - element.clientHeight - element.scrollTop <= INNER_END_TOLERANCE_PX
+      ) {
+        return;
+      }
+      handle.current?.cancelPendingNavigation();
+      writePlace({ ...readPlace(), atEnd: false });
+      followingNow.current = false;
+      setFollowing(false);
+    };
     host.ownerDocument.addEventListener("selectionchange", onSelectionChange);
     host.addEventListener("focusin", onFocusIn);
     host.addEventListener("focusout", onFocusOut);
+    // Scroll does not bubble; capture sees the inner scroller's.
+    host.addEventListener("scroll", onScroll, true);
     return () => {
       host.ownerDocument.removeEventListener("selectionchange", onSelectionChange);
       host.removeEventListener("focusin", onFocusIn);
       host.removeEventListener("focusout", onFocusOut);
+      host.removeEventListener("scroll", onScroll, true);
     };
-  }, []);
+  }, [readPlace, writePlace]);
   // The transcript asks for a member this list virtualized away (a reader's
   // held place inside the group); bring it in, and the transcript then holds
   // it at its offset.
@@ -389,6 +424,7 @@ function VirtualizedToolGroupBody({
             element.scrollHeight - element.clientHeight - element.scrollTop <=
               INNER_END_TOLERANCE_PX;
           writePlace({ ...readPlace(), atEnd });
+          followingNow.current = atEnd;
           setFollowing(atEnd);
         }}
         scrollerRef={(element) => {

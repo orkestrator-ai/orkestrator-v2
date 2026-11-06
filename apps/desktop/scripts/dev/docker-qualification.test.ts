@@ -149,3 +149,48 @@ console.log(JSON.stringify([route]));
     }
   },
 );
+
+test.skipIf(process.platform === "win32")(
+  "qualification Docker shim execs the real CLI, so stopping a follower stops Docker",
+  async () => {
+    // A follower the backend stops with SIGTERM (`docker logs -f`) used to run
+    // as the shim's child and outlive it (0019 task 6). The PATH shim must be
+    // the Docker process itself.
+    const root = await mkdtemp(path.join(tmpdir(), "qualification-exec-"));
+    let child: Bun.Subprocess<"ignore", "pipe", "inherit"> | undefined;
+    try {
+      await writeFile(path.join(root, "docker"), '#!/bin/sh\necho "$$ $*"\nexec sleep 30\n', {
+        mode: 0o755,
+      });
+      const shim = path.join(import.meta.dir, "docker-qualification-bin", "docker");
+      // Only PATH, as in the isolated backend's safe environment.
+      const env = {
+        PATH: [
+          path.join(import.meta.dir, "docker-qualification-bin"),
+          root,
+          path.dirname(process.execPath),
+          "/usr/bin",
+          "/bin",
+        ].join(":"),
+      };
+      child = Bun.spawn([shim, "logs", "-f", "fixture"], { env, stdout: "pipe" });
+      const reader = child.stdout.getReader();
+      let line = "";
+      while (!line.includes("\n")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        line += new TextDecoder().decode(value);
+      }
+      expect(line.trim()).toBe(`${child.pid} logs -f fixture`);
+      child.kill("SIGTERM");
+      expect(await child.exited).not.toBe(0);
+      expect(child.signalCode).toBe("SIGTERM");
+    } finally {
+      if (child) {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await child.exited;
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

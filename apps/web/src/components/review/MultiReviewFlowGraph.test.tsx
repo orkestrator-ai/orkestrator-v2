@@ -1159,6 +1159,60 @@ describe("zoom and pan", () => {
     }
   });
 
+  for (const layout of ["graph", "stacked"] as const) {
+    test(`fullscreen preserves a manual pan at 125% in the ${layout} layout`, () => {
+      const width = layout === "stacked" ? 390 : 1200;
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+      const heightDescriptor = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        "offsetHeight",
+      );
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+        configurable: true,
+        get: () => width,
+      });
+      // happy-dom does not lay out the column; give its natural-height
+      // measurement a value so the stacked canvas can actually scale.
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+        configurable: true,
+        get: () => 1800,
+      });
+      try {
+        render(<MultiReviewFlowGraph {...panel(4)} layout={layout} />);
+        fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+        const original = viewport();
+        // Use a reader's manual pan rather than a selected stage's centre.
+        original.scrollLeft = 35;
+        original.scrollTop = layout === "graph" ? 120 : 0;
+        fireEvent.scroll(original);
+        const expectedTop = original.scrollTop;
+
+        for (const fullscreen of [true, false]) {
+          const previous = viewport();
+          fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+          const replacement = viewport();
+          expect(replacement === previous).toBe(false);
+          expect(document.querySelector("[data-flow-fullscreen]") !== null).toBe(fullscreen);
+          expect(
+            document.querySelector("[data-flow-layout]")?.getAttribute("data-flow-layout"),
+          ).toBe(layout);
+          expect(zoomLevel()).toBe("125%");
+          expect(
+            screen.getByRole("tablist", { name: "Multi Review pipeline" }).style.transform,
+          ).toBe("scale(1.25)");
+          expect(replacement.scrollLeft).toBe(35);
+          expect(replacement.scrollTop).toBe(expectedTop);
+        }
+      } finally {
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
+        else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+        if (heightDescriptor)
+          Object.defineProperty(HTMLElement.prototype, "offsetHeight", heightDescriptor);
+        else delete (HTMLElement.prototype as { offsetHeight?: number }).offsetHeight;
+      }
+    });
+  }
+
   for (const observeHide of [true, false]) {
     test(`centres a stage selected at zero width after showing (hide observed: ${observeHide})`, () => {
       let width = 1200;

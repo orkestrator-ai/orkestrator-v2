@@ -770,6 +770,17 @@ A pipeline has one such tab, separate from its key information tab, which keeps
 showing the brief alone. Both keep only the pipeline id and read the record, so
 they follow every update and survive a reload.
 
+A run seen finishing also opens that tab and activates it
+(`apps/web/src/lib/build-pipeline-completion-notes.ts`), in the pane holding the
+pipeline tab, else the environment's active pane. The trigger is a completion
+the renderer observed: a pipeline the store held in an earlier phase arriving
+as `complete`. A run already complete when first loaded opens nothing, so a
+reload or a new window never reopens old notes. The intent is held outside
+React and waits for the environment's layout to be installed, so a run that
+finishes while another environment is on screen has its notes tab open and
+active on return. An open notes tab is focused rather than duplicated; a full
+layout opens nothing, leaving the Notes step selected.
+
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the
 pipeline's Ship stage does this. A graph's `pull-request-description` builder

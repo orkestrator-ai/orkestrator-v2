@@ -12,6 +12,9 @@
  * model id is a `provider/model` pair, and "signed in" is one answer per
  * provider — and stops there. See `models.ts` and `credentials.ts`.
  */
+// First, before any module reads the environment: what the bridge launcher
+// recorded for the agents this bridge spawns (bridge-launch-environment.ts).
+import "@orkestrator/protocol/node/bridge-launch-environment";
 export * from "./config.js";
 export * from "./state.js";
 export * from "./timeout.js";

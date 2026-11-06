@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  requireRecoveredBackoff,
   IDLE_OBSERVATION_CASES,
+  backgroundOutputEvidence,
+  completedTaskOutputFiles,
   droppableGatewayEvent,
   failedCases,
   freshToolResults,
@@ -146,4 +149,38 @@ describe("idle observation live support", () => {
       }),
     ).toEqual(["approval: no card"]);
   });
+
+  test("only completed tasks started after the snapshot offer an output file", () => {
+    const tasks = [
+      { id: "old", status: "completed", outputFile: "/tmp/old.output" },
+      { id: "running", status: "running", outputFile: "/tmp/running.output" },
+      { id: "done", status: "completed", outputFile: "/tmp/done.output" },
+      { id: "failed", status: "failed", outputFile: "/tmp/failed.output" },
+      { id: "no-file", status: "completed" },
+    ];
+    expect(completedTaskOutputFiles(tasks, new Set(["old"]))).toEqual(["/tmp/done.output"]);
+    expect(completedTaskOutputFiles(undefined, new Set())).toEqual([]);
+  });
+
+  test("background output evidence prefers a tool result, then a task output file", () => {
+    const files: Record<string, string> = {
+      "/tmp/a.output": "IDLEQA-BGOUT-1 is the marker\n",
+      "/tmp/b.output": "started\nIDLEQA-BGOUT-1\n",
+    };
+    const read = (file: string) => files[file];
+    expect(backgroundOutputEvidence(true, [], read, "IDLEQA-BGOUT-1")).toBe("tool-result");
+    // A line merely mentioning the marker (an echoed command) is not output.
+    expect(backgroundOutputEvidence(false, ["/tmp/a.output"], read, "IDLEQA-BGOUT-1")).toBe("none");
+    expect(
+      backgroundOutputEvidence(false, ["/tmp/a.output", "/tmp/b.output"], read, "IDLEQA-BGOUT-1"),
+    ).toBe("output-file");
+    // An unreadable file is no evidence.
+    expect(backgroundOutputEvidence(false, ["/tmp/missing"], read, "IDLEQA-BGOUT-1")).toBe("none");
+  });
+});
+
+test("restart qualification rejects a lost stream despite fallback turn completion", () => {
+  expect(() => requireRecoveredBackoff(null)).toThrow("did not recover backoff");
+  expect(requireRecoveredBackoff(0)).toBe(0);
+  expect(requireRecoveredBackoff(12000)).toBe(12000);
 });

@@ -313,7 +313,7 @@ targets for a live profile; the deterministic harness does not measure them.
 | Background environment activity indicator | 2 s sweep (B06), 4 s idle safety read | ≤ 4 s | |
 | Turn completion visible, queued prompt dispatched | Turn-end edge plus 2 s sweep (B06, B07) | ≤ 3 s | The edge path should dominate |
 | Mail presence | 2 s refresh, 4 s TTL (B10) | ≤ 4 s | Never inject into an active session |
-| Diff badge, watched local worktree | 400 ms settle plus scan (B03) | ≤ 2 s after the save settles | A missed hint is recovered by the 120 s safety scan |
+| Diff badge, watched local worktree | 400 ms settle plus scan, and at least 2 s from one scan's end to the next hinted one (`LOCAL_SCAN_MIN_GAP_MS`, B03) | ≤ 2 s after the save settles | A missed hint is recovered by the 120 s safety scan. Saves less than 2 s apart wait out the gap; back-to-back saves measured 1.6 to 1.7 s after settling in the packaged macOS app (todo 0048, task 7) |
 | Diff badge, container or unwatched | 15 s poll (B03) | ≤ 20 s | |
 | Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action | Explicit refresh waits for a read started after the click |
 | PR merge confirmation after merge-pending | 1 s (B01) | ≤ 3 s | |

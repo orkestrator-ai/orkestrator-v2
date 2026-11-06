@@ -83,9 +83,10 @@ calls them (`apps/backend/src/core/http-bridge/provider*.ts`,
 
 The agent a bridge runs shares its uid, so anything the bridge keeps in a file,
 its startup environment or an open descriptor the agent can read too (security
-H4). So a bridge holds no token: it checks a hash of it. What the agent's uid can
-still do to catch a token is
-[todo 4980](../docs/todo/containers-and-environments/4980-agent-uid-process-control.md).
+H4). So a bridge holds no token: it checks a hash of it, and what changes an
+agent's authority also needs the backend's signature. What the agent's uid can
+still do is in
+[agent-approvals.md](../docs/architecture/agent-approvals.md#what-the-agents-uid-can-still-do).
 
 - **Read the credential with `loadBridgeCredential`** (`@orkestrator/protocol/node/bridge-credential`)
   at startup, as every bridge does. It takes `<TOKEN_ENV>_SHA256` from a current
@@ -96,9 +97,21 @@ still do to catch a token is
   `/proc/self/environ` once non-dumpable. Spawn children through
   `node:child_process` or with an explicit `env`: `Bun.spawn` with no `env` option
   passes the startup environment.
-- **`readOnly` and approval answers stay behind that one credential.** Both are
-  decisions a request makes, so a narrow-only rule cannot cover them, and neither
-  has a second secret: a second secret would have the same storage problem.
+- **`readOnly` and approval answers need the backend's signature.** Both are
+  decisions a request makes, so a narrow-only rule cannot cover them. The
+  credential carries `credential.authority` (`@orkestrator/protocol/node/bridge-authority`),
+  from `<TOKEN_ENV>_AUTHORITY_KEY`: check every request with
+  `admitFetchBridgeRequest` (Hono) or `admitNodeBridgeRequest` (`node:http`)
+  right after the token, before routing, and parse the body it hands back
+  (`takeAdmittedBody` for `node:http`), so the body checked is the body acted on.
+  Every mutating method is signed except the routes in `UNSIGNED_ROUTES`, which
+  only narrow or read; add a route there only if a caught token gains nothing
+  from it. The backend signs in `bridgeFetch`, so a backend call that changes a
+  session must go through it. A bridge given no key checks nothing.
+- **Start through the launcher on a `bridge-launch=1` image.** Import
+  `@orkestrator/protocol/node/bridge-launch-environment` first in the entry
+  point: it applies the start script's environment for the agents the bridge
+  spawns. A new bridge also needs a `case` in `docker/orkestrator-bridge-launch.sh`.
 - **A token holder may only narrow a live session's policy.** Every route that
   takes a policy refuses a wider one with 403 `policy-widening-refused`, leaving
   the session as it was: compare with `executionPolicyWidenings` or

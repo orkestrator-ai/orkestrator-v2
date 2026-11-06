@@ -1143,8 +1143,26 @@ async function measureCanvas(
   const binding = await bindHost(page, host);
   try {
     const openStart = Date.now();
+    // Failed requests by error code only (no URLs), so a canvas that never
+    // renders can be told apart from Chromium aborting loads on a host whose
+    // network keeps changing (flake 2340: net::ERR_NETWORK_CHANGED).
+    const failedRequests = new Map<string, number>();
+    const countFailure = (request: { failure(): { errorText: string } | null }) => {
+      const code = request.failure()?.errorText ?? "unknown";
+      failedRequests.set(code, (failedRequests.get(code) ?? 0) + 1);
+    };
+    page.on("requestfailed", countFailure);
     await page.goto(`${url}/design-canvas?canvasId=${canvasId}`);
-    await page.waitForSelector("section[data-frame-id]", { timeout: 60_000 });
+    try {
+      await page.waitForSelector("section[data-frame-id]", { timeout: 60_000 });
+    } catch (error) {
+      const failed = [...failedRequests].map(([code, count]) => `${code} x${count}`).join(", ");
+      throw new Error(
+        `The canvas did not render a frame within 60 s; failed requests: ${failed || "none"}`,
+        { cause: error },
+      );
+    }
+    page.off("requestfailed", countFailure);
     await waitRendered(page);
     const openToRenderedMs = Date.now() - openStart;
     await sleep(1_500);

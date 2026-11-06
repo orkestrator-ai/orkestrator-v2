@@ -7,7 +7,8 @@ import type {
 } from "@orkestrator/protocol/design-operations";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import { userPromptDisplayText } from "@/lib/chat/user-prompt-display";
-import { DesignClientError } from "@/lib/design-client";
+import { DesignClientError, getCapabilities, resetCapabilities } from "@/lib/design-client";
+import { invoke } from "@/lib/native/backend";
 import {
   buildDesignAgentPrompt,
   DesignLaunchError,
@@ -19,6 +20,8 @@ import {
   validateDesignName,
   type DesignLaunchOptions,
 } from "./design-launch";
+
+const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 const canvas = {
   format: "orkdes",
@@ -287,7 +290,6 @@ describe("loadDesignReadiness", () => {
     const view = await loadDesignReadiness(true, {
       capabilities: async () => capabilities,
       readiness,
-      legacyStatus: async () => ({ ready: true }),
     });
     expect(readiness).toHaveBeenCalledWith(true);
     expect(view.protocol).toBe("v2");
@@ -296,21 +298,30 @@ describe("loadDesignReadiness", () => {
     expect(view.renderer.state).toBe("missing-executable");
   });
 
-  test("falls back to design_status on an old backend", async () => {
-    const view = await loadDesignReadiness(true, {
-      capabilities: async () => null,
-      readiness: async () => {
-        throw new Error("must not be called");
-      },
-      legacyStatus: async () => ({
-        ready: false,
-        error:
-          "Design workspaces require Chromium. Install Chromium or set ORKESTRATOR_DESIGN_CHROMIUM_PATH.",
-      }),
+  test("a backend without design_capabilities is refused, not read as v1", async () => {
+    resetCapabilities();
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (command: string) => {
+      throw new Error(`Unknown backend command: ${command}`);
     });
-    expect(view.protocol).toBe("v1");
+    const readiness = mock(async (): Promise<DesignReadiness> => {
+      throw new Error("must not be called");
+    });
+    const view = await loadDesignReadiness(true, {
+      capabilities: () => getCapabilities("old-backend"),
+      readiness,
+    });
+    expect(readiness).not.toHaveBeenCalled();
+    expect(view.protocol).toBe("unknown");
     expect(view.capabilities).toBeNull();
-    expect(view.renderer.state).toBe("missing-executable");
+    expect(view.backend.state).toBe("failed");
+    expect(view.backend.message).toMatch(/too old for the design canvas/);
+    expect(view.renderer.state).toBe("unknown");
+    // Nothing falls back to the retired `design_status` command.
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual(["design_capabilities"]);
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(() => Promise.resolve());
+    resetCapabilities();
   });
 
   test("reports a disconnected backend without guessing renderer state", async () => {
@@ -321,7 +332,6 @@ describe("loadDesignReadiness", () => {
       readiness: async () => {
         throw new Error("unreachable");
       },
-      legacyStatus: async () => ({ ready: true }),
     });
     expect(view.backend.state).toBe("disconnected");
     expect(view.renderer.state).toBe("unknown");
@@ -333,7 +343,6 @@ describe("loadDesignReadiness", () => {
       readiness: async () => {
         throw new DesignClientError({ code: "storage", message: "disk full", retry: "never" });
       },
-      legacyStatus: async () => ({ ready: true }),
     });
     expect(view.backend.state).toBe("connected");
     expect(view.storage).toEqual({ state: "unavailable", message: "disk full" });

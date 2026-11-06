@@ -12,6 +12,11 @@
  *   turn is dispatched from outside the view (as another client would) while
  *   the browser drops every event frame that names the environment. The view
  *   has to find the turn and its completion through its own reads.
+ * - `bridge-restart`: Claude and Codex in a local environment. Once the
+ *   backend skips the idle group's sweeps behind the bridge's observation
+ *   stream, the bridge process is stopped and started again, then a turn is
+ *   dispatched from outside the view. The group must be read again and the
+ *   turn seen within the completion budget (todo 0049 task 1).
  * - `approval`: in the provider's "ask" approval mode a shell command parks
  *   an approval. The card must appear within the 2 s budget, survive a hidden
  *   period, and approving it must let the turn finish and settle.
@@ -36,6 +41,27 @@
  * whose provider never did the thing asked (no sub-agent, no background task,
  * no "ask" mode) is recorded `not-exercised` or `skipped`, never `passed`.
  * Real turns cost tokens; this spec runs only when asked for.
+ *
+ * `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs Claude and Codex against
+ * scripted loopback models instead (`idle-observation-fake-claude.ts`,
+ * `idle-observation-fake-codex.ts`): no login, nothing billed. The spec
+ * points the profile's own isolated Claude settings and Codex config at them
+ * for the run and restores both. Start the profile with no host Claude login
+ * and a made-up Codex API key:
+ *
+ *   CODEX_HOME=<throwaway dir whose auth.json is {"auth_mode":"apikey","OPENAI_API_KEY":"<made up>"}> \
+ *     mise run dev:test --profile idleqa --fixture --credential-source codex \
+ *     --agent-platforms claude,codex --headless
+ *
+ * The models answer the spec's own prompts only; the `approval` and
+ * `subagents` cases need a real model.
+ *
+ * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
+ * container environment (todo 0049 task 9) instead of a local one, from the
+ * profile's development image. With fake models the scripted Claude model is
+ * copied into the container and serves on its loopback, because a host
+ * firewall may refuse the container's route to the host. `bridge-restart`
+ * is local only.
  */
 import {
   expect,
@@ -47,10 +73,20 @@ import {
 } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
+  installContainerFakeClaude,
+  readContainerFile,
+  withFakeModelCleanup,
+  startLocalFakeModel,
+  type FakeModelHandle,
+} from "./idle-observation-fake-models";
+import {
+  requireRecoveredBackoff,
+  backgroundOutputEvidence,
+  completedTaskOutputFiles,
   failedCases,
   freshToolResults,
   gapHistogram,
@@ -70,9 +106,15 @@ type Status = {
   profile?: string;
   browserUrl?: string;
   testProject?: string;
+  dataDir?: string;
 };
 type Project = { id: string; name: string; localPath: string | null };
-type Environment = { id: string; name: string; worktreePath?: string | null };
+type Environment = {
+  id: string;
+  name: string;
+  worktreePath?: string | null;
+  containerId?: string | null;
+};
 type Message = { id: string; role: string; content?: unknown; parts?: unknown };
 type Interaction = {
   id: string;
@@ -94,7 +136,12 @@ type Projection = {
     selectedModeId?: string;
     selectedModelId?: string;
   };
-  backgroundTasks?: Array<{ id: string; status: string; description?: string }>;
+  backgroundTasks?: Array<{
+    id: string;
+    status: string;
+    description?: string;
+    outputFile?: string;
+  }>;
   completionBlockedByBackgroundTasks?: boolean;
   runtime?: { state?: string };
 };
@@ -129,6 +176,8 @@ const MODELS = new Map(
 const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIMEOUT_MS ?? "240000");
 /** Longer than every bridge's 10 min idle detach. */
 const DETACH_WAIT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS ?? "630000");
+const FAKE_MODELS = process.env.ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS === "1";
+const IN_CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT === "container";
 
 // Budgets (p95) from docs/architecture/recurring-work.md#latency-budgets.
 const COMPLETION_BUDGET_MS = 3_000;
@@ -367,17 +416,40 @@ async function openEnvironment(page: Page, projectName: string, environmentName:
   });
   const entry = page.getByText(environmentName, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
-  for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-    const continueButton = page.getByRole("button", {
-      name: label,
-      exact: true,
-    });
-    if (await continueButton.isVisible()) await continueButton.click();
+  // Startup notices can stack (a fake model's key is not a provider login,
+  // so the startup check reports none for each) and one can cover another or
+  // the sidebar. Clicks are bounded, and the loop ends once none has shown
+  // for 2 s; an unbounded click on a covered button would wait forever.
+  const labels = [
+    "Continue Without Docker",
+    "Continue Without GitHub CLI",
+    "Continue Without Claude",
+    "Continue Without Codex",
+  ];
+  let quietSince = Date.now();
+  for (const deadline = Date.now() + 60_000; Date.now() < deadline;) {
+    let shown = false;
+    for (const label of labels) {
+      const button = page.getByRole("button", { name: label, exact: true });
+      if (!(await button.isVisible())) continue;
+      shown = true;
+      await button.click({ timeout: 5_000 }).catch(() => undefined);
+    }
+    if (shown) quietSince = Date.now();
+    else if (Date.now() - quietSince > 2_000) break;
+    await page.waitForTimeout(250);
   }
-  if (await expand.isVisible()) await expand.click();
+  if (await expand.isVisible()) await expand.click({ timeout: 15_000 });
   await dismissSidebarTooltip(page, projectName);
-  await entry.click();
+  await entry.click({ timeout: 15_000 });
 }
+
+// A run of several minutes records a trace far over the artifact sanitizer's
+// bound, which then refuses it (2026-10-21, 2026-10-23, 2026-11-06), so it is
+// opt-in for a short diagnostic run.
+test.use({
+  trace: process.env.ORKESTRATOR_AGENT_TEST_IDLE_TRACE === "1" ? "retain-on-failure" : "off",
+});
 
 test.describe("live idle observation", () => {
   test.skip(
@@ -391,14 +463,28 @@ test.describe("live idle observation", () => {
       const detachSelected = CASES.includes("detach");
       test.setTimeout(TURN_TIMEOUT_MS * 9 + (detachSelected ? DETACH_WAIT_MS : 0) + 300_000);
       testInfo.annotations.push({ type: "profile", description: profile });
+      /** A content-free progress line; it also keeps the logged runner's watchdog fed. */
+      const progress = (step: string) => console.log(`[idle-live] ${platform} ${step}`);
       const status = profileStatus();
+      progress("profile status read");
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
+
+      test.skip(
+        FAKE_MODELS && platform !== "claude" && platform !== "codex",
+        "the loopback models stand in for Claude and Codex only",
+      );
+      test.skip(
+        IN_CONTAINER && platform !== "claude",
+        "the container variant runs Claude (its loopback model runs inside the container)",
+      );
 
       const records: Record<string, CaseRecord> = {};
       const summary: Record<string, unknown> = {
         platform,
         profile,
+        environmentKind: IN_CONTAINER ? "container" : "local",
+        fakeModel: FAKE_MODELS,
         startedAt: new Date().toISOString(),
         cases: records,
       };
@@ -420,103 +506,132 @@ test.describe("live idle observation", () => {
       const tabId = `idle-live-${platform}`;
       let environmentId = "";
       let environmentName = "";
+      let containerId: string | null = null;
+      const fakeModels: FakeModelHandle[] = [];
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
-      const bootstrapInvoke = client.invoke;
-      const config = await bootstrapInvoke<{
-        global?: { enabledAgentPlatforms?: string[] };
-      }>("get_config").catch(() => null);
-      const enabled = config?.global?.enabledAgentPlatforms;
-      test.skip(
-        Array.isArray(enabled) && !enabled.includes(platform),
-        `${label} is not enabled in profile "${profile}" (dev:test --agent-platforms)`,
-      );
-      const fixture = (await bootstrapInvoke<Project[]>("get_projects")).find(
-        (project) => project.localPath === status.testProject,
-      );
-      expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
-      const environment = await bootstrapInvoke<Environment>("create_environment", {
-        projectId: fixture!.id,
-        name: `idle-live-${platform}-${Date.now()}`,
-        networkAccessMode: "restricted",
-        environmentType: "local",
-      });
-      environmentId = environment.id;
-      environmentName = environment.name;
-      summary.environment = environment.name;
-      // Reopen with the read counter keyed to this session.
-      await client.context.close();
-      client = await openClient(browser, status, logicalSessionKey());
-      const identity = () => ({
-        environmentId,
-        agent: platform,
-        logicalSessionKey: logicalSessionKey(),
-      });
-      const projection = () =>
-        client.invoke<Projection | null>("get_native_agent_projection", {
-          ...identity(),
-          messageLimit: 200,
-        });
-
-      const model = MODELS.get(platform);
-      if (model) summary.model = model;
-      /** Start the current environment with one native tab and its session. */
-      const prepareEnvironment = async () => {
-        await client.invoke("start_environment", { environmentId });
-        const layout = await client.invoke<{ revision?: number } | null>("get_pane_layout", {
-          environmentId,
-        });
-        await client.invoke("save_pane_layout", {
-          environmentId,
-          expectedRevision: layout?.revision ?? 0,
-          layout: {
-            version: PANE_LAYOUT_VERSION,
-            containerId: null,
-            activePaneId: "pane-idle-live",
-            root: {
-              kind: "leaf",
-              id: "pane-idle-live",
-              activeTabId: tabId,
-              tabs: [
-                {
-                  id: tabId,
-                  type: "agent-native",
-                  displayTitle: `${label} idle observation`,
-                  nativeAgentData: { environmentId, platform, isLocal: true },
-                  ...(model ? { initialAgentModel: model } : {}),
-                },
-              ],
-            },
-          },
-        });
-        try {
-          // The tab's `initialAgentModel` belongs to the launcher; pin the model here.
-          await client.invoke("ensure_native_agent_session", {
-            ...identity(),
-            ...(model ? { model } : {}),
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (signedOut(message)) {
-            summary.skipped = `${label} is not signed in: ${message.slice(0, 300)}`;
-            testInfo.skip(true, summary.skipped as string);
-          }
-          throw error;
-        }
-      };
-
+      progress("signed in");
       try {
+        const bootstrapInvoke = client.invoke;
+        const config = await bootstrapInvoke<{
+          global?: { enabledAgentPlatforms?: string[] };
+        }>("get_config").catch(() => null);
+        const enabled = config?.global?.enabledAgentPlatforms;
+        test.skip(
+          Array.isArray(enabled) && !enabled.includes(platform),
+          `${label} is not enabled in profile "${profile}" (dev:test --agent-platforms)`,
+        );
+        const fixture = (await bootstrapInvoke<Project[]>("get_projects")).find(
+          (project) => project.localPath === status.testProject,
+        );
+        expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
+        if (FAKE_MODELS && !IN_CONTAINER) {
+          expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
+          const fake = await startLocalFakeModel(platform as "claude" | "codex", status.dataDir!);
+          fakeModels.push(fake);
+          summary.fakeModelOrigin = fake.origin;
+          progress("loopback model started");
+        }
+        const environment = await bootstrapInvoke<Environment>("create_environment", {
+          projectId: fixture!.id,
+          name: `idle-live-${platform}-${Date.now()}`,
+          networkAccessMode: "restricted",
+          environmentType: IN_CONTAINER ? "containerized" : "local",
+        });
+        environmentId = environment.id;
+        environmentName = environment.name;
+        progress("environment created");
+        summary.environment = environment.name;
+        // Reopen with the read counter keyed to this session.
+        await client.context.close();
+        client = await openClient(browser, status, logicalSessionKey());
+        const identity = () => ({
+          environmentId,
+          agent: platform,
+          logicalSessionKey: logicalSessionKey(),
+        });
+        const projection = () =>
+          client.invoke<Projection | null>("get_native_agent_projection", {
+            ...identity(),
+            messageLimit: 200,
+          });
+
+        const model = MODELS.get(platform);
+        if (model) summary.model = model;
+        /** Start the current environment with one native tab and its session. */
+        const prepareEnvironment = async () => {
+          await client.invoke("start_environment", { environmentId });
+          if (IN_CONTAINER) {
+            const started = await client.invoke<Environment | null>("get_environment", {
+              environmentId,
+            });
+            containerId = started?.containerId ?? null;
+            expect(
+              containerId,
+              "the container environment started without a container",
+            ).toBeTruthy();
+            if (FAKE_MODELS) {
+              const fake = await installContainerFakeClaude(containerId!);
+              fakeModels.push(fake);
+              summary.fakeModelOrigin = fake.origin;
+            }
+          }
+          const layout = await client.invoke<{ revision?: number } | null>("get_pane_layout", {
+            environmentId,
+          });
+          await client.invoke("save_pane_layout", {
+            environmentId,
+            expectedRevision: layout?.revision ?? 0,
+            layout: {
+              version: PANE_LAYOUT_VERSION,
+              containerId,
+              activePaneId: "pane-idle-live",
+              root: {
+                kind: "leaf",
+                id: "pane-idle-live",
+                activeTabId: tabId,
+                tabs: [
+                  {
+                    id: tabId,
+                    type: "agent-native",
+                    displayTitle: `${label} idle observation`,
+                    nativeAgentData: { environmentId, platform, isLocal: !IN_CONTAINER },
+                    ...(model ? { initialAgentModel: model } : {}),
+                  },
+                ],
+              },
+            },
+          });
+          try {
+            // The tab's `initialAgentModel` belongs to the launcher; pin the model here.
+            await client.invoke("ensure_native_agent_session", {
+              ...identity(),
+              ...(model ? { model } : {}),
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (signedOut(message)) {
+              summary.skipped = `${label} is not signed in: ${message.slice(0, 300)}`;
+              testInfo.skip(true, summary.skipped as string);
+            }
+            throw error;
+          }
+        };
+
         await prepareEnvironment();
+        progress("session ready");
         const auth = await client
           .invoke<{ state?: string } | null>("get_native_agent_auth_status", identity())
           .catch(() => null);
         summary.auth = auth?.state ?? null;
+        progress(`auth ${summary.auth ?? "unknown"}`);
         if (auth?.state && /signed-out|unauthenticated|authentication-required/.test(auth.state)) {
           summary.skipped = `${label} is not signed in (${auth.state})`;
           testInfo.skip(true, summary.skipped as string);
         }
 
         const initial = await projection();
+        progress("first projection read");
         const approvalModes = initial?.composer?.approvalModes ?? [];
         summary.approvalModes = approvalModes.map((mode) => `${mode.id}:${mode.kind}`);
         summary.initialApprovalMode = initial?.composer?.selectedApprovalModeId ?? null;
@@ -555,14 +670,22 @@ test.describe("live idle observation", () => {
         const qa = <T>(script: string) => page().evaluate<T>(script);
 
         const goToEnvironment = async () => {
-          await page().goto(status.browserUrl!);
+          progress("opening the page");
+          // The app's `load` event can wait on a long-lived request; the
+          // sidebar and composer checks below are what say it is ready.
+          await page().goto(status.browserUrl!, {
+            waitUntil: "domcontentloaded",
+            timeout: 60_000,
+          });
           await openEnvironment(page(), fixture!.name, environmentName);
+          progress("environment selected");
           await expect(composer()).toBeVisible({ timeout: 90_000 });
           await page().evaluate((id) => {
             (window as unknown as { __idleQa: { watch: string | null } }).__idleQa.watch = id;
           }, environmentId);
         };
         await goToEnvironment();
+        progress("environment open");
 
         /** Every pending approval is approved for the session, so unattended cases finish. */
         const autoAnswered = new Set<string>();
@@ -628,6 +751,50 @@ test.describe("live idle observation", () => {
             : undefined;
         };
 
+        /*
+         * Backend side of the idle cost (0049 code item 1): a provider group
+         * the activity sweep skips counts as a `native-activity-sweep` cache
+         * hit, a group it reads as a miss. Profile-wide counters, so only an
+         * otherwise idle profile isolates one provider.
+         *
+         * And what told the view to read (0049 task 4): every session
+         * invalidation the backend emits carries a content-free cause, and
+         * the diagnostics count them per platform.
+         */
+        const sweepCounters = async () => {
+          const diagnostics = (await client
+            .invoke("get_recurring_work_diagnostics", {})
+            .catch(() => null)) as {
+            metrics?: {
+              kinds?: Record<string, { cacheHits?: number; cacheMisses?: number }>;
+            };
+            sessionInvalidations?: { byScope?: InvalidationCounts };
+          } | null;
+          const sweep = diagnostics?.metrics?.kinds?.["native-activity-sweep"];
+          return {
+            skipped: sweep?.cacheHits ?? 0,
+            read: sweep?.cacheMisses ?? 0,
+            invalidations: diagnostics?.sessionInvalidations?.byScope,
+          };
+        };
+
+        /**
+         * Wait until the backend skips the idle group's sweeps: it has backed
+         * off behind a live observation stream. Returns how long that took,
+         * or null when it never did within `timeoutMs`.
+         */
+        const waitForGroupBackoff = async (timeoutMs: number) => {
+          const startedAt = Date.now();
+          let previous = await sweepCounters();
+          while (Date.now() - startedAt < timeoutMs) {
+            await sleep(4_000);
+            const next = await sweepCounters();
+            if (next.skipped - previous.skipped >= 1) return Date.now() - startedAt;
+            previous = next;
+          }
+          return null;
+        };
+
         /** Send through the composer, as a user would. */
         const sendFromComposer = async (prompt: string) => {
           await expect(composer()).toBeVisible({ timeout: 90_000 });
@@ -683,6 +850,7 @@ test.describe("live idle observation", () => {
           },
         ) => {
           const deadline = Date.now() + (options.timeoutMs ?? TURN_TIMEOUT_MS);
+          let nextProgressAt = Date.now() + 30_000;
           let backendIdleAt: number | null = null;
           let uiSettledAt: number | null = null;
           let sidebarIdleAt: number | null = null;
@@ -701,6 +869,12 @@ test.describe("live idle observation", () => {
               throw new Error(`${label} turn failed: ${current.turn.error ?? "no error"}`);
             }
             if (current?.turn.phase && current.turn.phase !== "idle") sawWorking = true;
+            if (Date.now() > nextProgressAt) {
+              nextProgressAt = Date.now() + 30_000;
+              progress(
+                `waiting: phase ${current?.turn.phase ?? "none"}, ${current?.messages.length ?? 0} rows`,
+              );
+            }
             const replied = (current?.messages ?? []).some(
               (message) =>
                 message.role === "assistant" &&
@@ -908,6 +1082,7 @@ test.describe("live idle observation", () => {
             `Run a shell command that sleeps for 5 seconds, then prints ${word}. ` +
               `Wait for it to finish, then reply with exactly ${word} and nothing else.`,
           );
+          progress("warm-up sent");
           const warm = await watchSettle(before, word, {
             uiBoundMs: COMPLETION_BUDGET_MS,
           });
@@ -926,7 +1101,13 @@ test.describe("live idle observation", () => {
         await runCase("missed-final", async (record) => {
           // Long enough for a qualified provider's view to reach its 15 s step.
           const idleStart = Date.now();
+          const sweepsBefore = await sweepCounters();
           await sleep(35_000);
+          // Whether the backend backed the idle group off behind its bridge's
+          // observation stream (skips), or kept every sweep (an older bridge).
+          const sweepsAfter = await sweepCounters();
+          record.timings.backendGroupReads = sweepsAfter.read - sweepsBefore.read;
+          record.timings.backendGroupSkips = sweepsAfter.skipped - sweepsBefore.skipped;
           record.timings.idleReadsBefore = readCadence(
             client.readTimes,
             idleStart,
@@ -987,6 +1168,63 @@ test.describe("live idle observation", () => {
             record.status = "not-exercised";
             record.notes.push("no activity announcement was emitted, so none was missed");
           }
+        });
+
+        await runCase("bridge-restart", async (record) => {
+          if (IN_CONTAINER || (platform !== "claude" && platform !== "codex")) {
+            record.status = "skipped";
+            record.notes.push("restarts a local Claude or Codex bridge only");
+            return;
+          }
+          // Precondition: the idle group is backed off behind the stream.
+          const backoffMs = await waitForGroupBackoff(60_000);
+          record.timings.backoffReachedMs = backoffMs;
+          if (backoffMs === null)
+            throw new Error("the idle group never backed off before the restart");
+          const before = await client.invoke<{ pid: number | null }>(
+            `get_local_${platform}_server_status`,
+            { environmentId },
+          );
+          const sweepsBefore = await sweepCounters();
+          const restartStartedAt = Date.now();
+          await client.invoke(`stop_local_${platform}_server_cmd`, { environmentId });
+          const restarted = await client.invoke<{ pid: number | null }>(
+            `start_local_${platform}_server_cmd`,
+            { environmentId },
+          );
+          record.timings.restartMs = Date.now() - restartStartedAt;
+          expect(restarted.pid, "the bridge came back as a new process").toBeGreaterThan(0);
+          expect(restarted.pid).not.toBe(before.pid);
+          // Long enough for the group to back off again if the stream came
+          // back, and for a group left un-backed to show it.
+          await sleep(30_000);
+          const sweepsAfter = await sweepCounters();
+          record.timings.groupReadsAfterRestart = sweepsAfter.read - sweepsBefore.read;
+          record.timings.groupSkipsAfterRestart = sweepsAfter.skipped - sweepsBefore.skipped;
+          expect(
+            record.timings.groupReadsAfterRestart,
+            "the group is read again after the bridge restarted",
+          ).toBeGreaterThan(0);
+          if ((record.timings.groupSkipsAfterRestart ?? 0) === 0) {
+            record.notes.push(
+              "the group kept every sweep after the restart (stream not live again)",
+            );
+          }
+          // A turn started from outside the view, while the group is idle again.
+          const word = `IDLEQA-RESTART-${nonce()}`;
+          const ids = await messageIds();
+          const dispatchedAt = Date.now();
+          await sendFromBackend(replyPrompt(word));
+          const settled = await watchSettle(ids, word, { uiBoundMs: COMPLETION_BUDGET_MS });
+          record.timings.turnMs = settled.backendIdleAt - dispatchedAt;
+          record.timings.sidebarLagMs = settled.sidebarLagMs;
+          expectWithin(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
+          noteBudget(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS);
+          expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
+          // And the stream backs the group off again afterwards.
+          record.timings.backoffAfterTurnMs = requireRecoveredBackoff(
+            await waitForGroupBackoff(60_000),
+          );
         });
 
         await runCase("approval", async (record) => {
@@ -1165,6 +1403,9 @@ test.describe("live idle observation", () => {
           const marker = `IDLEQA-BGOUT-${nonce()}`;
           const word = `IDLEQA-BG-${nonce()}`;
           const before = await messageIds();
+          const tasksBefore = new Set(
+            ((await projection())?.backgroundTasks ?? []).map((task) => task.id),
+          );
           await sendFromComposer(
             [
               `Start this shell command as a background task and do not wait for it: sleep 20; echo ${marker}`,
@@ -1223,13 +1464,38 @@ test.describe("live idle observation", () => {
           await expect(stopButton()).toHaveCount(0, {
             timeout: COMPLETION_BUDGET_MS + 1_000,
           });
-          const shownMarker = await freshToolOutputContains(before, marker);
-          record.notes.push(`task output reached the transcript: ${shownMarker}`);
+          /*
+           * Claude never puts a backgrounded command's stdout in a tool result
+           * (0049 task 2): the call's result says the command moved to the
+           * background, and the finished task carries its output as a file.
+           * Either proves the output reached the view; the text is never kept.
+           */
+          const outputFiles = completedTaskOutputFiles(
+            (await projection())?.backgroundTasks,
+            tasksBefore,
+          );
+          const readOutputFile = (file: string) => {
+            if (containerId) return readContainerFile(containerId, file);
+            try {
+              return readFileSync(file, "utf8");
+            } catch {
+              return undefined;
+            }
+          };
+          const evidence = backgroundOutputEvidence(
+            await freshToolOutputContains(before, marker),
+            outputFiles,
+            readOutputFile,
+            marker,
+          );
+          record.notes.push(
+            `task output evidence: ${evidence} (${outputFiles.length} completed task output files)`,
+          );
           if (sawRunningTask) {
             expect(
-              shownMarker,
-              "the exercised background task produced fresh tool-result output",
-            ).toBe(true);
+              evidence,
+              "the exercised background task's output reached a tool result or its task output file",
+            ).not.toBe("none");
           }
         });
 
@@ -1397,34 +1663,21 @@ test.describe("live idle observation", () => {
 
         await runCase("detach", async (record) => {
           const before = await projection();
-          record.notes.push(`runtime before: ${before?.runtime?.state ?? "unknown"}`);
-          /*
-           * Backend side of the idle cost (0049 code item 1): a provider group
-           * the activity sweep skips counts as a `native-activity-sweep` cache
-           * hit, a group it reads as a miss. Profile-wide counters, so only an
-           * otherwise idle profile isolates one provider.
-           */
-          /*
-           * And what told the view to read (0049 task 4): every session
-           * invalidation the backend emits carries a content-free cause, and
-           * the diagnostics count them per platform.
-           */
-          const sweepCounters = async () => {
-            const diagnostics = (await client
-              .invoke("get_recurring_work_diagnostics", {})
-              .catch(() => null)) as {
-              metrics?: {
-                kinds?: Record<string, { cacheHits?: number; cacheMisses?: number }>;
-              };
-              sessionInvalidations?: { byScope?: InvalidationCounts };
-            } | null;
-            const sweep = diagnostics?.metrics?.kinds?.["native-activity-sweep"];
-            return {
-              skipped: sweep?.cacheHits ?? 0,
-              read: sweep?.cacheMisses ?? 0,
-              invalidations: diagnostics?.sessionInvalidations?.byScope,
-            };
-          };
+          // The no-touch read, not the projection's cached runtime: a provider
+          // that reports attachment must start the wait attached, or the
+          // detached reading afterwards proves no transition.
+          await expect
+            .poll(runtimeState, { timeout: 40_000, intervals: [500] })
+            .not.toBeUndefined();
+          let stateAtStart = await runtimeState();
+          if (stateAtStart === "detached") {
+            await expect
+              .poll(runtimeState, { timeout: 40_000, intervals: [1_000] })
+              .toBe("attached")
+              .catch(() => undefined);
+            stateAtStart = await runtimeState();
+          }
+          record.notes.push(`no-touch runtime before the wait: ${stateAtStart ?? "unknown"}`);
           const sweepsBefore = await sweepCounters();
           const idleStart = Date.now();
           const commandsBefore = { ...client.readCommands };
@@ -1471,7 +1724,9 @@ test.describe("live idle observation", () => {
           record.notes.push(`no-touch runtime after idle wait: ${detachedState ?? "unknown"}`);
           const cadenceOnly = DETACH_WAIT_MS < 630_000;
           // OpenCode's server lifetime and Codex's engine health are not a
-          // session detach observation; Claude currently exposes no state here.
+          // session detach observation. Claude reports whether its CLI is open
+          // (attached) or released by the idle window (detached), as Cursor
+          // and Pi report their SDK sessions.
           const reportsSessionDetach = detachedState === "attached" || detachedState === "detached";
           if (cadenceOnly || !reportsSessionDetach) {
             record.status = "not-exercised";
@@ -1481,6 +1736,9 @@ test.describe("live idle observation", () => {
                 : "provider exposes no session detach state on its no-touch runtime observation",
             );
           } else {
+            expect(stateAtStart, "the session was attached when the idle wait began").toBe(
+              "attached",
+            );
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("detached");
           }
           expect(sawStop, "Stop never shows on an idle tab").toBe(false);
@@ -1516,10 +1774,14 @@ test.describe("live idle observation", () => {
         });
         expect(failures, "every live idle-observation case settled").toEqual([]);
       } finally {
-        writeSummary();
-        await client.invoke("stop_environment", { environmentId }).catch(() => undefined);
-        await client.invoke("delete_environment", { environmentId }).catch(() => undefined);
-        await client.context.close().catch(() => undefined);
+        await withFakeModelCleanup(fakeModels, async () => {
+          writeSummary();
+          if (environmentId) {
+            await client.invoke("stop_environment", { environmentId }).catch(() => undefined);
+            await client.invoke("delete_environment", { environmentId }).catch(() => undefined);
+          }
+          await client.context.close().catch(() => undefined);
+        });
       }
     });
   }

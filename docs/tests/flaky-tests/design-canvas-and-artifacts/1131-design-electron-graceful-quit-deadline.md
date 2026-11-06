@@ -32,3 +32,14 @@ failures concerned service-preview HMR, annotation process shutdown, and a
 workspace-realm screenshot. No new isolated reproduction or root-cause claim
 is made for this recurrence. Compressed evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Fk5GUs/agent-electron.log.gz`.
+
+## Headless recurrences on beelink (2026-11-06)
+
+Two runs of the design journey alone, headless
+(`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`,
+`playwright.electron-headless.config.ts`, one worker), at `main` `c1724ab74`
+during 7041 task 2, ended with `Owned processes did not exit`. That was the only
+error with the host-reachability probe off, and it followed a title timeout with
+the probe on. A third run, with the probe on and no Docker shim, passed in 18.5 s.
+The process table at the deadline was again not captured. Details are in
+[4250](4250-design-electron-reachability-dialog-race.md).

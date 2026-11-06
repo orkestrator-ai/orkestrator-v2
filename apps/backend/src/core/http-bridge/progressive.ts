@@ -323,8 +323,11 @@ export async function readHttpBridgeSessionState(input: {
   const runtime = normalizeProviderRuntimeSummary(payload.runtime);
   const reportedKinds = asRecord(asRecord(payload.capabilities)?.interactions)?.kinds;
   const backgroundTasks = normalizeClaudeBackgroundTasks(payload.backgroundTasks);
+  // Pi reports `activity: "compacting"` in the same shape while it compacts.
   const turnActivity =
-    input.agent === "claude" ? claudeTurnActivityFromPayload(payload) : undefined;
+    input.agent === "claude" || input.agent === "pi"
+      ? claudeTurnActivityFromPayload(payload)
+      : undefined;
   return {
     status,
     phase,

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { resetCapabilities } from "@/lib/design-client";
@@ -8,20 +9,47 @@ import { DesignLaunchButton } from "./DesignLaunchButton";
 // `@/lib/native/backend` is mocked once in tests/setup.ts; vary its behavior here.
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
 
+const capabilities: DesignCapabilities = {
+  protocolVersion: 2,
+  responseVersion: 2,
+  snapshot: true,
+  operations: true,
+  sync: true,
+  save: true,
+  history: true,
+  lifecycle: true,
+  rendererHealth: true,
+  library: true,
+  batch: true,
+  sessions: true,
+  validation: true,
+  hierarchyPaging: true,
+};
+
 beforeEach(() => {
   resetCapabilities();
   invokeMock.mockClear();
-  // An old backend whose renderer has no Chromium.
+  // A backend whose renderer has no Chromium.
   invokeMock.mockImplementation(async (command: string) => {
-    if (command === "design_capabilities")
-      throw new Error("Unknown backend command: design_capabilities");
-    if (command === "design_status")
+    if (command === "design_capabilities") return { ok: true, value: capabilities };
+    if (command === "design_readiness")
       return {
-        ready: false,
-        error:
-          "Design workspaces require Chromium. Install Chromium or set ORKESTRATOR_DESIGN_CHROMIUM_PATH to its executable.",
+        ok: true,
+        value: {
+          capabilities,
+          storage: { available: true, canvases: 0, limit: 256 },
+          renderer: {
+            state: "missing-executable",
+            ready: false,
+            message:
+              "Design workspaces require Chromium. Install Chromium or set ORKESTRATOR_DESIGN_CHROMIUM_PATH to its executable.",
+            queued: 0,
+            running: 0,
+            generation: 0,
+            executableConfigured: false,
+          },
+        },
       };
-    if (command === "design_action") return [];
     throw new Error(`Unexpected command: ${command}`);
   });
   usePaneLayoutStore.setState((state) => ({
@@ -78,7 +106,7 @@ describe("DesignLaunchButton", () => {
     await flush();
     expect(invokeMock.mock.calls.map((call) => call[0])).toEqual([
       "design_capabilities",
-      "design_status",
+      "design_readiness",
     ]);
     expect(screen.getByText(/Creating a design needs the renderer/)).toBeTruthy();
   });

@@ -106,5 +106,5 @@ Analysed 2026-11-05 against `main` at `704809a20`.
 
 ## Related
 
-- [6100](6100-default-allowlist-telemetry-hosts.md), [6101](6101-egress-name-checks-platform-coverage.md)
+- [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6101](6101-egress-name-checks-platform-coverage.md)
 - [Container lifecycle, name checks](../../architecture/container-lifecycle.md#name-checks-egress-filter1)

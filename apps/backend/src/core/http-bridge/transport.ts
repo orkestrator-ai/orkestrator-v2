@@ -28,6 +28,7 @@ import {
   isTransientHttpStatus,
   nonEmptyString,
 } from "../agent-provider-runtime.js";
+import { bridgeAuthorityHeaders } from "../bridge-authority-keys.js";
 import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
@@ -422,6 +423,18 @@ export async function bridgeFetch(
 ): Promise<Response> {
   const headers = authHeaders(connection);
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  // A request that changes an agent's authority carries a signature a token
+  // caught in flight cannot make (`bridge-authority-keys.ts`).
+  for (const [name, value] of Object.entries(
+    bridgeAuthorityHeaders(
+      connection.authToken,
+      init.method,
+      `${connection.baseUrl}${path}`,
+      init.body,
+    ),
+  )) {
+    headers.set(name, value);
+  }
   const timeoutMs = bridgeRequestTimeoutMs(connection, timeoutKind);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;

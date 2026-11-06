@@ -16,6 +16,10 @@ import {
   Trash2,
 } from "lucide-react";
 import type { ChangeProjection } from "@orkestrator/protocol/change-resources";
+import {
+  environmentDeletionStepLabel,
+  type EnvironmentDeletionStep,
+} from "@orkestrator/protocol/node-summaries";
 import type { EnvironmentDiffStats } from "@orkestrator/protocol/diff-stats";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -291,7 +295,13 @@ export const SLOW_DELETE_NOTICE_MS = 2 * 60_000;
 const SLOW_DELETE_TICK_MS = 15_000;
 
 /** Tells apart a delete that is slow from a spinner that may never stop. */
-function SlowDeleteNotice({ since }: { since: string }) {
+function SlowDeleteNotice({
+  since,
+  step,
+}: {
+  since: string;
+  step: EnvironmentDeletionStep | null;
+}) {
   const startedAt = Date.parse(since);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -300,9 +310,12 @@ function SlowDeleteNotice({ since }: { since: string }) {
   }, []);
   const elapsedMs = now - startedAt;
   if (!Number.isFinite(elapsedMs) || elapsedMs < SLOW_DELETE_NOTICE_MS) return null;
+  const text = `Still deleting after ${Math.floor(elapsedMs / 60_000)} min${
+    step ? `: ${environmentDeletionStepLabel(step)}` : ""
+  }`;
   return (
-    <span className="truncate text-[11px] font-normal leading-4 text-zinc-500">
-      Still deleting after {Math.floor(elapsedMs / 60_000)} min
+    <span className="truncate text-[11px] font-normal leading-4 text-zinc-500" title={text}>
+      {text}
     </span>
   );
 }
@@ -636,7 +649,7 @@ export function EnvironmentRow({
                   </span>
                 )}
                 {facts.deleting && facts.deletingSince && (
-                  <SlowDeleteNotice since={facts.deletingSince} />
+                  <SlowDeleteNotice since={facts.deletingSince} step={facts.deletingStep} />
                 )}
               </span>
               {changes && (

@@ -16,6 +16,7 @@ import {
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "./constants.js";
 import { imageCapabilities } from "./docker-image.js";
+import { restrictedContainerReachesGitRemote } from "./project-git-mirror.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import type { AppConfig, Environment } from "./models.js";
 
@@ -354,6 +355,7 @@ interface ContainerNetworkFacts {
   liveUpdates: boolean;
   running: boolean;
   hasGitMirror: boolean;
+  gitUrl: string;
 }
 
 async function containerNetworkFacts(
@@ -366,18 +368,20 @@ async function containerNetworkFacts(
       [
         "inspect",
         "-f",
-        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}\t{{range .Mounts}}{{if eq .Destination "/orkestrator-git-mirror"}}mirror{{end}}{{end}}`,
+        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}\t{{range .Mounts}}{{if eq .Destination "/orkestrator-git-mirror"}}mirror{{end}}{{end}}\n{{range .Config.Env}}{{if eq (index (split . "=") 0) "GIT_URL"}}{{println .}}{{end}}{{end}}`,
         containerId,
       ],
       { timeoutMs: 10_000 },
     );
-    const [policy = "", imageId = "", running = "", mirror = ""] = stdout.trim().split("\t");
+    const [summary = "", ...env] = stdout.split("\n");
+    const [policy = "", imageId = "", running = "", mirror = ""] = summary.trim().split("\t");
     const capabilities = await imageCapabilities(imageId || undefined, context).catch(() => null);
     return {
       policyVersion: policy === "3" ? 3 : policy === "2" ? 2 : 1,
       liveUpdates: (capabilities?.["network-refresh"] ?? 0) >= 1,
       running: running === "true",
       hasGitMirror: mirror === "mirror",
+      gitUrl: env.find((value) => value.startsWith("GIT_URL="))?.slice("GIT_URL=".length) ?? "",
     };
   } catch {
     return null;
@@ -446,13 +450,20 @@ export async function environmentNetworkPolicy(
   } catch {
     result.effective = null;
   }
-  // A shared mirror bind cannot be revoked by the firewall. Keep the old
-  // policy visibly in force until a rebuild removes the mount. Conservatively
-  // require that rebuild for every allowlist revision, including global edits;
-  // the shared project mirror must remain intact for other environments.
+  // A firewall update cannot revoke a shared mirror bind. Only require a
+  // rebuild when the saved policy would block its remote. Use the runtime's
+  // original clone URL, so later project edits cannot change this decision.
+  // Missing or unrecognised URLs fail closed through the reachability check.
   const state = domainsState(result.configured, result.effective, facts.liveUpdates);
   result.domains =
-    facts.hasGitMirror && result.configured.mode === "restricted" && state !== "applied"
+    facts.hasGitMirror &&
+    result.configured.mode === "restricted" &&
+    state !== "applied" &&
+    !restrictedContainerReachesGitRemote(
+      facts.gitUrl,
+      containerAllowedDomains(environment, config, facts.policyVersion),
+      facts.policyVersion,
+    )
       ? "rebuild-required"
       : state;
   return result;

@@ -1721,10 +1721,14 @@ need it once cloned.
   under a network policy before 3). Otherwise it is withheld
   (`git-mirror.mount-withheld`, reason `remote-unreachable`) and the clone goes to
   the remote as before, so the mirror never hands it what its firewall would not.
-  A runtime that already mounts the mirror requires a rebuild for any allowlist
-  revision (including inherited global changes). The status and apply routes
-  report `rebuild-required` and retain the previous firewall policy until then:
-  changing the firewall alone cannot revoke a bind mount. Other environments'
+  A runtime that already mounts the mirror requires a rebuild when an allowlist
+  revision (including inherited global changes) blocks its original clone remote.
+  Other edits apply live on capable images, including unrelated domain removals
+  for GitHub projects. The runtime's `GIT_URL` supplies the original remote; a
+  missing or unrecognised URL conservatively requires rebuilding. When remote
+  access would be revoked, the status and apply routes report `rebuild-required`
+  and retain the previous firewall policy until then: changing the firewall
+  alone cannot revoke a bind mount. Other environments'
   shared mirror is never removed to revoke one reader. Rebuilt runtimes that
   reuse their checkout have no mirror mount and can apply later edits live.
 - **Credentials.** A refresh runs on the host through `runRemoteGit` and

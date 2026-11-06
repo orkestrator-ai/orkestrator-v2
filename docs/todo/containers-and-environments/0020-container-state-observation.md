@@ -1,10 +1,10 @@
 # Container state observation
 
-Checked against `main` at `930189337` (2026-10-26).
-
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`.
+
+Checked against `main` at `930189337` (2026-10-26).
 
 ### Tasks
 
@@ -328,6 +328,11 @@ minute; Files panel open, plus 1.5 tree walks a minute; a change announced in
 
 ## Assumptions and decisions
 
+### Tasks 1–5: retirement pointers (2026-11-06)
+
+Mark 0200 and 0051 as deleted and give the still-owed Changes-tab check one
+explicit home in 0048 task 19. No qualification is claimed by this pointer repair.
+
 ### Signal health: aggregate counts, not a per-container list (item 2)
 
 - **Options.** (a) Counts per state, a fallback count and demotion reasons in
@@ -611,16 +616,18 @@ None; see "Open questions answered" above.
 ## Related
 
 - [0199-idle-observation-spec-sidebar-probe.md](../transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md)
-  and [0200-dev-test-reused-profile-bind-mount.md](../cross-cutting/0200-dev-test-reused-profile-bind-mount.md)
+  and `0200-dev-test-reused-profile-bind-mount.md` (deleted 2026-11-06;
+  completed fix retained in git history)
   (found during the 2026-10-26 qualification).
 
 - [0049-native-agent-idle-observation.md](../transcripts-and-observation/0049-native-agent-idle-observation.md) (idle
   observation of bridge sessions),
   [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
   (container fetch failure-ladder tuning, app-level fetch qualification),
-  [0051-client-reconnect-and-freshness.md](../transcripts-and-observation/0051-client-reconnect-and-freshness.md)
-  (`WorktreeSnapshotState.remote` is rendered on the Files panel's Changes tab;
-  its real-browser check is still owed),
+  retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
+  its remaining checks are in 0048 tasks 16–20).
+  The real-browser check of `WorktreeSnapshotState.remote` on the Files panel's
+  Changes tab is open in [0048 task 19](../transcripts-and-observation/0048-recurring-work-qualification.md#19-changes-tab-remote-freshness),
   [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md)
   (Docker status sampler), [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
   (Linux Engine and rootless hosts).

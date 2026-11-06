@@ -130,8 +130,11 @@ import { readableHostFileRoots } from "./readable-host-roots.js";
 import { containerGitBlobReadCommand, decodeGitBatchOutput } from "./git-blob-read.js";
 import {
   parseReviewWorktreeFingerprint,
-  REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
+  REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS,
+  REVIEW_WORKTREE_PROBE_TIMEOUT_MS,
+  reviewWorktreeProbeArgs,
 } from "./review-worktree-fingerprint.js";
+import { KeyedTrailingFlight } from "./keyed-trailing-flight.js";
 import type { TerminalHistory } from "./terminal-history.js";
 import {
   activeAgentAccountShellEnvironment,
@@ -237,6 +240,14 @@ function resizeTerminalHistoryBestEffort(
       .catch(() => undefined);
   }
 }
+
+/**
+ * One worktree probe at a time per environment and kind. A guard, a stage
+ * start and a review fan-out can all ask at once, and on a slow or busy disk
+ * concurrent `git status` walks of one checkout only slow each other down.
+ * Process-wide on purpose: the worktree is shared by every backend that asks.
+ */
+const worktreeProbes = new KeyedTrailingFlight<string>();
 
 export function registerTerminalCommands(
   register: CommandRegistrar,
@@ -1149,12 +1160,17 @@ export function registerTerminalCommands(
     // Electron and need not contain any Node at all. Use the same managed Bun
     // the rest of the local command surface relies on.
     const local = environment.environmentType === "local";
+    const timeoutMs = wantFingerprint
+      ? REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS
+      : REVIEW_WORKTREE_PROBE_TIMEOUT_MS;
     const captured = parseReviewWorktreeFingerprint(
-      await runner(
-        local ? resolveBunBinary(context) : "node",
-        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, ...(wantFingerprint ? ["fingerprint"] : [])],
-        wantFingerprint ? 120_000 : 30_000,
-        local ? envWithManagedBinaries(context) : undefined,
+      await worktreeProbes.run(`${environment.id}\0${wantFingerprint}`, () =>
+        runner(
+          local ? resolveBunBinary(context) : "node",
+          reviewWorktreeProbeArgs(wantFingerprint, timeoutMs),
+          timeoutMs,
+          local ? envWithManagedBinaries(context) : undefined,
+        ),
       ),
     );
     return {

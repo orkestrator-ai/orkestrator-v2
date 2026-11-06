@@ -705,8 +705,7 @@ credentials outside extension bundles and supply required secrets explicitly
 through the environment's credential configuration. No secret-file opt-in is
 provided by staging. Older extension trees retain their existing policy.
 A linked entry is skipped, like any link below a home entry, with one
-exception (input spec version 5, todo
-[2170](../todo/containers-and-environments/2170-shared-and-linked-skills-in-containers.md)):
+exception (input spec version 5):
 a top-level entry of a skill root (Claude's, Codex's, Grok's and Pi's `skills`, and
 `~/.agents/skills`) that links to a skill. It is staged as a real directory
 when its resolved target is a directory holding a regular `SKILL.md`, strictly
@@ -1841,13 +1840,30 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   image ids are resolved by inspecting the running container. An unreadable image
   manifest refuses fresh startup rather than silently selecting weaker storage;
   retry after Docker can read the image. Healthy existing bridges reuse their token.
+- **A live session's execution policy only narrows.** Every bridge refuses a
+  request that would widen a live conversation's policy with 403
+  `policy-widening-refused` (`packages/protocol/src/execution-policy-narrowing.ts`).
+  A session restored from disk keeps its saved policy under an in-memory
+  `policyPending` marker: the next policy a request sends replaces it, and the
+  marker clears once a request sets one or a prompt starts. When the user widens
+  a policy, the backend replaces the bridge and resumes
+  (`replaceBridgeForWiderPolicy` in `native-agent-service.ts`), and refuses while
+  a turn is running in that environment. `readOnly` stays a per-turn intent;
+  that is safe only because the backend alone holds the bridge token. A separate
+  uid for the bridge was not built: the token is already out of the agent's
+  reach, and what the shared uid still allows is in to-do 4980.
 
 What the agent's uid can still do is in
 [to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):
 kill the bridge and listen on its port, or plant code for the next start through
 its login shell or runtime environment. OpenCode has no bridge and takes the plain
 password, in `opencode-token` in the same directory; a plugin inside the server keeps
-it from the agent ([4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)).
+it from the agent (`buildOpenCodeCredentialPluginSource` in
+`agent-credential-files.ts`). In a container, a server the plugin could not harden
+refuses tools; on a host it only logs, because a host's OpenCode can be any build.
+A host server gets the plugin through `OPENCODE_CONFIG_DIR`
+(`opencode-host-credential.ts`), and a server whose user set that variable runs
+without it (`credential-plugin.skipped`).
 Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
 ## Container worktree signal (`container-worktree-signal=1`)

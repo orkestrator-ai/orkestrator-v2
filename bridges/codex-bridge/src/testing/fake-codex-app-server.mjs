@@ -14,10 +14,15 @@
  *                        writes real rollouts under CODEX_HOME;
  *                        `restart` persists content-free turn identities so a
  *                        replacement child can report interrupted turns
+ *                        `elicitation` to raise one MCP elicitation per turn
+ *                        (a URL one when the prompt contains `url`, else a
+ *                        form), record the client's answer in
+ *                        `$CODEX_HOME/elicitation-answers.jsonl` and finish
+ *                        the turn
  *   FAKE_CODEX_CONTROL_SOCKET  where the `subagents` script takes `finish`
  */
 import { createInterface } from "node:readline";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSubagentScenario, listenForControl } from "./fake-codex-subagents.mjs";
 
@@ -125,6 +130,64 @@ function threadObject(id, extra = {}) {
 }
 
 let initialized = false;
+
+/** Elicitations the `elicitation` script raised, by request id, awaiting an answer. */
+const elicitations = new Map();
+let elicitationCounter = 0;
+
+function raiseElicitation(threadId, turn, prompt) {
+  const id = `fake-elicitation-${++elicitationCounter}`;
+  elicitations.set(id, { threadId, turn });
+  const url = /\burl\b/.test(prompt);
+  send({
+    jsonrpc: "2.0",
+    id,
+    method: "mcpServer/elicitation/request",
+    params: {
+      threadId,
+      turnId: turn.id,
+      serverName: "fixture-server",
+      _meta: null,
+      ...(url
+        ? {
+            mode: "url",
+            message: "Sign in to continue",
+            url: "https://example.com/auth",
+            elicitationId: id,
+          }
+        : {
+            mode: "form",
+            message: "Fixture input",
+            requestedSchema: {
+              type: "object",
+              properties: { team: { type: "string", title: "Team" } },
+              required: ["team"],
+            },
+          }),
+    },
+  });
+}
+
+/** The client answered an elicitation: record the answer and finish its turn. */
+function answerElicitation(message) {
+  const pending = elicitations.get(message.id);
+  if (!pending) return;
+  elicitations.delete(message.id);
+  const codexHome = process.env.CODEX_HOME || "/tmp/codex-home";
+  mkdirSync(codexHome, { recursive: true });
+  appendFileSync(
+    join(codexHome, "elicitation-answers.jsonl"),
+    `${JSON.stringify({ id: message.id, result: message.result ?? null, error: message.error ?? null })}\n`,
+  );
+  send({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: {
+      threadId: pending.threadId,
+      turn: { ...pending.turn, status: "completed", completedAt: nowSeconds() },
+    },
+  });
+}
 
 const handlers = {
   "skills/list": (id) => {
@@ -249,6 +312,14 @@ const handlers = {
       return;
     }
 
+    if (process.env.FAKE_CODEX_SCRIPT === "elicitation") {
+      const prompt = (params?.input ?? [])
+        .map((entry) => (entry?.type === "text" ? entry.text : ""))
+        .join("");
+      raiseElicitation(threadId, turn, prompt);
+      return;
+    }
+
     if (process.env.FAKE_CODEX_SCRIPT === "auto-complete") {
       // Stream a delta, then the authoritative item, then finish — the same
       // ordering the real binary uses.
@@ -322,6 +393,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (message.id === undefined) return;
+  if (message.method === undefined) {
+    // A response to a request this fake sent.
+    answerElicitation(message);
+    return;
+  }
 
   const handler = handlers[message.method];
   if (!handler) {

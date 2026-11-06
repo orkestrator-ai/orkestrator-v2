@@ -14,15 +14,22 @@
  *
  * The first test is the control: with project resources on, every canary
  * arrives, so a probe that saw nothing cannot pass the others by accident.
+ *
+ * Project hooks never reach the model, so their canary is a marker file each
+ * hook command writes. The user's Codex config trusts every project hook by
+ * its hash, as Codex's own hook review would, so only the session's pin can
+ * keep a hook from running.
  */
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { AppServerEngine } from "../engine/app-server-engine.js";
 import type { EngineTurnConfig } from "../engine/types.js";
+import { JsonlRpcClient } from "./jsonl-rpc-client.js";
 import { resolveCodexBinary } from "./live-binary.js";
 
 // See `live-contract.test.ts`: the test preload replaces `Response`, and
@@ -56,10 +63,15 @@ function policy(projectResources: boolean): NativeAgentExecutionPolicy {
   };
 }
 
+/** The hook events whose project hooks each write a marker when they run. */
+const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit"] as const;
+
 interface Fixture {
   codexHome: string;
   /** The checkout the thread runs in. */
   workspace: string;
+  /** Markers the project's hooks wrote, by event; empty when none ran. */
+  hookRuns: () => string[];
   /** Connections the project's MCP server received. */
   mcpConnections: () => number;
   frames: Record<string, unknown>[];
@@ -111,6 +123,19 @@ async function fixture(options: { worktree?: boolean } = {}): Promise<Fixture> {
     join(main, ".agents", "skills", "agents-canary", "SKILL.md"),
     `---\nname: agents-canary\ndescription: ${CANARY.agentsSkill}\n---\nUnused.\n`,
   );
+  // Outside the checkout, so a hook run cannot look like a skill change.
+  const hookMarkers = await mkdtemp(join(tmpdir(), "ork-trust-hooks-"));
+  await writeFile(
+    join(main, ".codex", "hooks.json"),
+    JSON.stringify({
+      hooks: Object.fromEntries(
+        HOOK_EVENTS.map((event) => [
+          event,
+          [{ hooks: [{ type: "command", command: `touch ${join(hookMarkers, event)}` }] }],
+        ]),
+      ),
+    }),
+  );
   git(main, "add", ".");
   git(main, "-c", "user.email=probe@example.com", "-c", "user.name=probe", "commit", "-qm", "init");
   let workspace = main;
@@ -129,6 +154,7 @@ async function fixture(options: { worktree?: boolean } = {}): Promise<Fixture> {
     JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
     { mode: 0o600 },
   );
+  await trustProjectHooks(codexHome, workspace);
 
   // Codex opens the Responses API as a WebSocket and sends each request as one
   // `response.create` frame; closing the socket fails the turn.
@@ -157,14 +183,61 @@ async function fixture(options: { worktree?: boolean } = {}): Promise<Fixture> {
   return {
     codexHome,
     workspace,
+    hookRuns: () => HOOK_EVENTS.filter((event) => existsSync(join(hookMarkers, event))),
     mcpConnections: () => connections,
     frames,
     baseUrl: `http://127.0.0.1:${responses.port}/v1`,
     stop: async () => {
       await responses.stop(true);
       await mcp.stop(true);
+      for (const dir of [codexHome, root, hookMarkers]) {
+        await rm(dir, { recursive: true, force: true });
+      }
     },
   };
+}
+
+/**
+ * Records the user's trust in every hook the checkout declares, keyed and
+ * hashed exactly as Codex lists them, the way its hook review writes it.
+ * Codex skips an untrusted project hook on its own, so without this the hook
+ * canaries could not tell the pin apart from Codex's per-hook trust.
+ */
+async function trustProjectHooks(codexHome: string, cwd: string): Promise<void> {
+  const child = spawn(await resolveCodexBinary(), ["app-server", "--stdio"], {
+    cwd,
+    env: { ...process.env, CODEX_HOME: codexHome },
+    stdio: ["pipe", "pipe", "ignore"],
+    shell: false,
+  });
+  const client = new JsonlRpcClient({
+    generation: 1,
+    stdin: child.stdin,
+    stdout: child.stdout,
+    onNotification: () => undefined,
+    onServerRequest: () => undefined,
+  });
+  try {
+    await client.request("initialize", { clientInfo: CLIENT_INFO });
+    await client.notify("initialized");
+    const listing = await client.request<{
+      data: Array<{ hooks: Array<{ key: string; currentHash: string; source: string }> }>;
+    }>("hooks/list", { cwds: [cwd] });
+    const hooks = listing.data.flatMap((entry) => entry.hooks);
+    if (hooks.filter((hook) => hook.source === "project").length !== HOOK_EVENTS.length) {
+      throw new Error(`Codex listed ${hooks.length} hooks for the fixture checkout`);
+    }
+    for (const hook of hooks) {
+      await appendFile(
+        join(codexHome, "config.toml"),
+        `\n[hooks.state.${JSON.stringify(hook.key)}]\ntrusted_hash = ${JSON.stringify(hook.currentHash)}\n`,
+      );
+    }
+  } finally {
+    client.close();
+    child.stdin.end();
+    child.kill("SIGTERM");
+  }
 }
 
 /**
@@ -195,8 +268,26 @@ async function turnRequest(
   return found;
 }
 
+function occurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+/**
+ * Copies of AGENTS.md the bridge put in the developer instructions itself
+ * (`repositoryInstructionsBlock`), which it does exactly when the pin keeps
+ * Codex from loading the file natively.
+ */
+function orkestratorAgentsMdCopies(request: string): number {
+  return occurrences(request, "so Orkestrator includes it here");
+}
+
+/** The canaries Codex itself loaded from the checkout. */
 function canariesIn(request: string): string[] {
-  return Object.values(CANARY).filter((canary) => request.includes(canary));
+  return Object.values(CANARY).filter(
+    (canary) =>
+      occurrences(request, canary) >
+      (canary === CANARY.agentsMd ? orkestratorAgentsMdCopies(request) : 0),
+  );
 }
 
 function engineFor(setup: Fixture, codexPath: string): AppServerEngine {
@@ -226,7 +317,10 @@ describeLive("live project resources", () => {
       const thread = await engine.startThread({ config });
       const request = await turnRequest(engine, setup, thread.handle, config, "TURN-CONTROL");
       expect(canariesIn(request).sort()).toEqual(Object.values(CANARY).sort());
+      // Codex loaded AGENTS.md itself, so the bridge added no copy of its own.
+      expect(orkestratorAgentsMdCopies(request)).toBe(0);
       expect(setup.mcpConnections()).toBeGreaterThan(0);
+      expect(setup.hookRuns()).toEqual([...HOOK_EVENTS]);
     } finally {
       await engine.stop();
       await setup.stop();
@@ -250,15 +344,19 @@ describeLive("live project resources", () => {
       const thread = await engine.startThread({ config });
       const first = await turnRequest(engine, setup, thread.handle, config, "TURN-FIRST");
       expect(canariesIn(first)).toEqual([]);
+      // A writable session still follows AGENTS.md, through the bridge's own
+      // copy rather than Codex's project loader (agent-engines.md).
+      expect(orkestratorAgentsMdCopies(first)).toBe(1);
 
       // A reload rebuilds the thread from its rollout with the same settings.
       const reloaded = await engine.reloadThread(thread.handle, { config });
       const second = await turnRequest(engine, setup, reloaded.handle, config, "TURN-RELOADED");
       expect(canariesIn(second)).toEqual([]);
 
-      // The project's MCP server was never started, and the user's own trust
-      // settings were left as they were.
+      // The project's MCP server was never started, no project hook ran, and
+      // the user's own trust settings were left as they were.
       expect(setup.mcpConnections()).toBe(0);
+      expect(setup.hookRuns()).toEqual([]);
       expect(await readFile(join(setup.codexHome, "config.toml"), "utf8")).toBe(userConfig);
     } finally {
       await engine.stop();
@@ -327,6 +425,7 @@ describeLive("live project resources", () => {
       const request = await turnRequest(engine, setup, thread.handle, config, "TURN-WORKTREE");
       expect(canariesIn(request)).toEqual([]);
       expect(setup.mcpConnections()).toBe(0);
+      expect(setup.hookRuns()).toEqual([]);
     } finally {
       await engine.stop();
       await setup.stop();

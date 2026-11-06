@@ -27,6 +27,26 @@ out at 5,526.42 ms. Artifact:
 This occurrence has no isolated pass, so it remains unresolved; it is not excused
 as environmental based on the timeout alone.
 
+## Interaction-policy review repair validation — 2026-11-06
+
+The exact default aggregate retry (`mise run test:logged -- --name
+review-default-tests -- mise run test`, up to four backend workers) reproduced
+the timeout at 5,977.15 ms. The backend group later hit its no-output watchdog,
+so it has no complete test total. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LRGSlT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The unchanged owner failed alone again: 19 passes, one timeout (6,075.48 ms)
+and one closed-database error, 11.2 s for twenty tests:
+
+```sh
+mise run test:logged -- --name backend-measurement-cap-alone -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures
+```
+
+Artifact: `orkestrator-test-run.gk5LrU/backend-measurement-cap-alone.log.gz`
+under the same temporary root. This branch changes no measurement/capture code
+or tests. The failure remains unresolved; no timeout, assertion or skip changed,
+and no environmental exemption is claimed from the timeout alone.
+
 ## Flow viewport review validation recurrence — 2026-11-06
 
 Observed on `d81fd21ed` in

@@ -555,6 +555,14 @@ describe("backend setup wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_agent_model_catalog_cache", { seed: true });
   });
 
+  test("asks for the stored cache only, without a seed, for startup's first read", async () => {
+    const cache = { schemaVersion: 1 as const };
+    invokeMock.mockResolvedValue(cache);
+
+    await expect(getAgentModelCatalogCache(undefined, { seed: false })).resolves.toEqual(cache);
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_model_catalog_cache", { seed: false });
+  });
+
   test("reads and seeds the selected machine's catalogue", async () => {
     const cache = { schemaVersion: 1 as const };
     const machine = "catalogue-node" as BackendId;

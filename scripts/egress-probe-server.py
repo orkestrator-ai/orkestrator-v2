@@ -7,6 +7,7 @@ by the listening sockets themselves, then published atomically for the caller.
 
 import argparse
 import signal
+import socketserver
 import threading
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -27,6 +28,15 @@ class ProbeHandler(BaseHTTPRequestHandler):
 
 
 class ProbeServer(HTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind names the server with socket.getfqdn, a
+        # reverse-DNS query that blocks for as long as the resolver takes,
+        # even for 127.0.0.1, before any port is published. A slow resolver
+        # turned that into a missing ports file. The fixed-response handler
+        # never reads server_name, so record the bind address instead.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
     def get_request(self):
         connection, address = super().get_request()
         connection.settimeout(2)

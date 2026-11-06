@@ -30,12 +30,12 @@ import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { startBuildPipelineCompletionNotes } from "@/lib/build-pipeline-completion-notes";
-import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
+import { hydrateBootMultiReviewWorkflows, hydrateBootPromptQueues } from "@/lib/boot-hydration";
+import { recordRealmFirstRender } from "@/lib/realm-boot-timing";
 import {
   hydrateBuildPipelinesForProject,
   migrateLegacyBuildPipelines,
 } from "@/lib/build-pipeline-persistence";
-import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { Toaster } from "@/components/ui/sonner";
 import { ArtifactLiveHost } from "@/components/chat/rich/ArtifactLiveHost";
@@ -289,6 +289,10 @@ function App() {
 
 function ConnectedApp() {
   const [workspaceRealm] = useState(isWorkspaceRealm);
+  // A realm reports its first committed render to the desktop's log; a no-op elsewhere.
+  useEffect(() => {
+    recordRealmFirstRender();
+  }, []);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const zoomLevel = useUIStore((state) => state.zoomLevel);
@@ -370,10 +374,13 @@ function ConnectedApp() {
       log.warn("build-pipelines.migrate-failed", { error: formatLogError(error) });
     });
   }, []);
-  // Renderer stores are projections of backend-owned queues.
+  // Renderer stores are projections of backend-owned queues. Both restores
+  // below go through one batcher (`boot-hydration.ts`): the environments a
+  // project load adds are read in one `list_environment_hydration` request
+  // rather than two requests each, within the renderer's hydration bound.
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
   const hydratePromptQueues = useCallback(
-    (environmentId: string) => hydratePromptQueuesForEnvironment(environmentId, promptQueueSources),
+    (environmentId: string) => hydrateBootPromptQueues(environmentId, promptQueueSources),
     [promptQueueSources],
   );
   useHydrateOncePerEnvironment(environments, hydratePromptQueues, warnPromptQueueRestoreFailed);
@@ -383,7 +390,7 @@ function ConnectedApp() {
   // renderer exit/remount, when the store starts empty.
   useHydrateOncePerEnvironment(
     environments,
-    hydrateMultiReviewWorkflowsForEnvironment,
+    hydrateBootMultiReviewWorkflows,
     warnMultiReviewRestoreFailed,
   );
 

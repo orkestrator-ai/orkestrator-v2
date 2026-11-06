@@ -131,13 +131,21 @@ export async function hydratePromptQueuesForEnvironment(
   sources: ReadonlyArray<PromptQueueSource>,
   list: PromptQueueListLoader = backend.listPromptQueues,
 ): Promise<void> {
-  const persisted = await list(environmentId);
+  applyPromptQueuesForEnvironment(environmentId, await list(environmentId), sources);
+}
+
+/** Install one environment's listed queues, however they were read. */
+export function applyPromptQueuesForEnvironment(
+  environmentId: string,
+  persisted: unknown,
+  sources: ReadonlyArray<PromptQueueSource>,
+): void {
   if (!Array.isArray(persisted)) return;
 
   const byAgent = new Map<string, PromptQueueSource>();
   for (const source of sources) byAgent.set(source.agent, source);
 
-  for (const entry of persisted) {
+  for (const entry of persisted as Array<PersistedPromptQueue<QueuedItem>>) {
     if (entry.environmentId !== environmentId) continue;
     const parsed = parsePromptQueueKey(entry.queueKey);
     if (!parsed) continue;

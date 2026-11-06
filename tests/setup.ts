@@ -79,6 +79,20 @@ mock.module("sonner", () => ({
 
 beforeEach(resetSonnerMocks);
 
+// The renderer's hydration-request bound is a module singleton. A test that
+// leaves reads pending (a never-settling invoke mock) must not hold its slots
+// for the next test in the same file.
+import {
+  environmentRequests,
+  hydrationRequests,
+} from "../apps/web/src/lib/hydration-request-limiter";
+import { hydrationActivity } from "../apps/web/src/lib/hydration-activity";
+beforeEach(() => {
+  hydrationActivity.resetForTests();
+  hydrationRequests.resetForTests();
+  environmentRequests.resetForTests();
+});
+
 // NOTE: @/hooks/useClipboardImagePaste is NOT mocked here because
 // useClipboardImagePaste.test.ts needs to import the real module.
 // Tests that need it mocked (terminal-paste.test.ts) do so per-file.

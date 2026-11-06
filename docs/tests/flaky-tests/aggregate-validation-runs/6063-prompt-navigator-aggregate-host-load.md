@@ -135,3 +135,22 @@ apps/backend ./src/core/diff-baseline.test.ts --parallel=1 --only-failures`
 The repair changes deletion-command termination waiting, not baseline selection
 or the Git fixture. This establishes intermittence, not an environmental cause
 or a fix for the incomplete aggregate. No assertions, skips or timeouts changed.
+
+## Cold realm boot review recurrence — 2026-11-06
+
+Preparation at `04849e759` ran `mise run test:logged -- --name
+review-default-tests -- mise run test`. With two workspace workers, `a rebase
+excludes imported history and retains the rebased worker commits` in
+`apps/backend/src/core/diff-baseline.test.ts` timed out after 5,024.52 ms;
+a late `git fetch origin` rejection was reported between tests. The workspace
+group then hit its 300,000 ms no-progress watchdog, so complete totals are
+unknown. Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-13d4da17-25c8-45e9-a2c8-ab247f6cdc2b/validation-04.stderr.txt`
+and the original aggregate's compressed workspace log at
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.PzMZwl/`.
+
+The complete unchanged owner passed alone with
+`mise run test:logged -- --name address-backend-failure-owner -- bun test --cwd
+apps/backend ./src/core/diff-baseline.test.ts --parallel=1 --only-failures`
+(exit 0, 2.4 s). Passing raw output was removed. This establishes intermittence,
+not the cause of the incomplete aggregate. No assertion, skip or timeout changed.

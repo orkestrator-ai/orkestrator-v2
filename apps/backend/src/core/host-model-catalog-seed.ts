@@ -85,7 +85,15 @@ export function seedHostModelCatalogIfMissing(
   const { projectId, now = Date.now } = options;
   return context.runtime.localServers.catalogSeeds.seed(agent, projectId, {
     cached: () => hasCachedModels(context, agent, projectId),
-    download: async () => persistHostCatalog(context, await refresh(context, agent), projectId),
+    download: async () => {
+      const catalog = await refresh(context, agent);
+      // An empty list is a failed download, not a seeded cache: keeping it
+      // would leave `cached()` false and retry it on the next boot anyway.
+      if (catalog.models.length === 0) {
+        throw new Error(`${agent} returned an empty model catalogue`);
+      }
+      await persistHostCatalog(context, catalog, projectId);
+    },
     now,
   });
 }

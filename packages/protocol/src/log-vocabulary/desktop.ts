@@ -114,6 +114,12 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
     description: "Workspace realms the desktop holds on other machines.",
     events: {
       "route.moved-direct": "A relayed workspace moved to its direct route.",
+      "workspace.opened":
+        "The command node issued a node workspace grant; durationMs is the open_node_workspace call.",
+      "workspace.route-probed":
+        "One route of a node workspace was probed; outcome is fixed, durationMs the probe.",
+      "realm.boot-step":
+        "A workspace realm finished a boot step; durationMs is the step, sinceOpenMs since the realm was opened.",
     },
   },
   toolchain: {

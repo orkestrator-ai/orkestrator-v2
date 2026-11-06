@@ -5,9 +5,10 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { InstalledApplicationLogging } from "../../apps/desktop/electron/application-logging";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
@@ -64,6 +65,14 @@ test.beforeAll(() => {
 });
 
 test("a leaf's workspace opens in the window's central region without moving or reloading the window", async () => {
+  await runWorkspaceRealm();
+});
+
+test("realm boot timing reaches the saved desktop log with bound node identity", async () => {
+  await runWorkspaceRealm(true);
+});
+
+async function runWorkspaceRealm(bootTimingOnly = false): Promise<void> {
   test.setTimeout(300_000);
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-realm-"));
   let vite: ChildProcess | null = null;
@@ -124,6 +133,39 @@ test("a leaf's workspace opens in the window's central region without moving or 
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
+    if (bootTimingOnly) {
+      // Agent-test flavor normally does not save application logs. Install the
+      // production writer in this disposable main process, without widening
+      // production logging policy or replacing the real IPC/views/bindings.
+      const writerBundle = path.join(temporaryRoot, "application-logging.cjs");
+      const build = spawnSync(
+        "bun",
+        [
+          "build",
+          path.join(packageRoot, "electron/application-logging.ts"),
+          "--target=node",
+          "--format=cjs",
+          "--outfile",
+          writerBundle,
+        ],
+        { cwd: repositoryRoot, encoding: "utf8" },
+      );
+      expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+      await electronApp.evaluate(
+        ({ app }, { writerBundle, dataDir }) => {
+          const load = process.getBuiltinModule("module").createRequire(app.getAppPath() + "/");
+          const { installProductionApplicationLogging } = load(writerBundle);
+          const writer = installProductionApplicationLogging({
+            dataDir,
+          }) as InstalledApplicationLogging;
+          writer.updateSettings({ enabled: true, retentionDays: 1 });
+          (
+            globalThis as typeof globalThis & { realmTimingLog?: InstalledApplicationLogging }
+          ).realmTimingLog = writer;
+        },
+        { writerBundle, dataDir: profile.dataDir },
+      );
+    }
     dismissStartupDialogs(electronApp);
     await fetchModulesOutsideChromium(electronApp.context());
     const window = await electronApp.firstWindow();
@@ -238,6 +280,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
     };
 
     const leafProject = window.getByRole("button", { name: "Open leaf-app on Leaf", exact: true });
+    const beforeOpen = await electronApp.evaluate(() => performance.now());
     await leafProject.click();
 
     // The main process opened one realm, bound to the leaf, over the central region.
@@ -287,6 +330,35 @@ test("a leaf's workspace opens in the window's central region without moving or 
       .toBe(true);
     await expect.poll(async () => (await realmState())?.visible).toBe(true);
     const opened = (await realmState())!;
+    if (bootTimingOnly) {
+      const savedLines = async () => {
+        const directory = path.join(profile.dataDir, "logs");
+        const files = (await readdir(directory)).filter((file) => file.endsWith(".log"));
+        return (
+          await Promise.all(files.map((file) => readFile(path.join(directory, file), "utf8")))
+        )
+          .join("\n")
+          .split("\n")
+          .filter((line) => line.includes("realm.boot-step"));
+      };
+      // These are automatic renderer reports through the actual preload and
+      // main-process handler, not calls to the logger from the test.
+      await expect
+        .poll(async () => (await savedLines()).some((line) => line.includes("step=first-render")), {
+          timeout: 30_000,
+        })
+        .toBe(true);
+      const afterOpen = await electronApp.evaluate(() => performance.now());
+      const lines = await savedLines();
+      const firstRender = lines.find((line) => line.includes("step=first-render"))!;
+      expect(firstRender).toContain(`nodeId=${leaf.nodeId}`);
+      expect(firstRender).toContain("nodeName=Leaf");
+      const sinceOpenMs = Number(firstRender.match(/sinceOpenMs=(\d+)/)?.[1]);
+      expect(sinceOpenMs).toBeGreaterThan(0);
+      expect(sinceOpenMs).toBeLessThanOrEqual(Math.ceil(afterOpen - beforeOpen));
+      expect(lines.some((line) => line.includes("step=catalogue-read"))).toBe(true);
+      return;
+    }
     expect(opened.count).toBe(1);
     expect(opened.target?.nodeId).toBe(leaf.nodeId);
     expect(opened.sidebar).toBe(false);
@@ -944,6 +1016,15 @@ test("a leaf's workspace opens in the window's central region without moving or 
       .invoke("stop_environment", { environmentId: leaf.environment.id })
       .catch(() => undefined);
   } finally {
+    if (bootTimingOnly && app) {
+      await app
+        .evaluate(async () => {
+          await (
+            globalThis as typeof globalThis & { realmTimingLog?: InstalledApplicationLogging }
+          ).realmTimingLog?.stop();
+        })
+        .catch(() => undefined);
+    }
     await closeElectronWithin(app).catch(() => undefined);
     if (vite) await stopProcessGroup(vite).catch(() => undefined);
     if (leafChild && leafChild.exitCode === null) {
@@ -955,4 +1036,4 @@ test("a leaf's workspace opens in the window's central region without moving or 
     }
     await rm(temporaryRoot, { recursive: true, force: true });
   }
-});
+}

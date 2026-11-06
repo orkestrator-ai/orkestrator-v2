@@ -24,3 +24,24 @@ Evidence: host temporary files
 and `orkestrator-test-run.Iu6GYp/repair-default.log.gz`. The isolated pass
 confirms intermittence. Timer scheduling under aggregate load is a hypothesis,
 not an established cause. No implementation, assertion, timeout or skip changed.
+
+
+## Cold realm boot review recurrence — 2026-11-06
+
+Recorded preparation at `54ab6d570` ran
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+Recovered workspace diagnostics show the mailbox sync count was two instead of one (928.69 ms).
+The aggregate uses the repository scheduler (workspace group six slots;
+bridge group two package slots with one Bun worker per bridge).
+
+The complete unchanged owning file passed alone (exit 0, 3.3 s):
+
+```sh
+mise run test:logged -- --name address-coordinator-recorded-owner -- bun test --cwd apps/backend ./src/core/coordinator-sweep.test.ts --parallel=1 --only-failures
+```
+
+Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-f3469fba-5332-4a76-a6d8-5a4f873cf90f/validation-04.stderr.txt`
+and `orkestrator-test-run.gIhwSP` compressed group logs below the host temporary
+directory. The isolated pass establishes intermittence, not a cause or a fix.
+The case remains open; no implementation, assertion, deadline or skip changed.

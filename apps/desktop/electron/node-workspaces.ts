@@ -1,4 +1,7 @@
-import { checkBackendRoute } from "@orkestrator/protocol/node/node-link/backend-hello";
+import {
+  checkBackendRoute,
+  isConnectionCheckError,
+} from "@orkestrator/protocol/node/node-link/backend-hello";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("workspaces");
@@ -72,24 +75,50 @@ export async function openNodeWorkspace(options: {
   commandNodeName: string;
   fetchImpl?: typeof fetch;
   relay?: () => { baseUrl: string; token: string } | null;
+  now?: () => number;
 }): Promise<WorkspaceBinding> {
+  const now = options.now ?? (() => performance.now());
+  const openStarted = now();
   const opened = (await options.invoke("open_node_workspace", {
     nodeId: options.nodeId,
   })) as OpenedNodeWorkspace;
-  const answers = async (origin: string) => {
+  // Boot timing, content-free: the node, which step, how long. Never an origin.
+  log.info("workspace.opened", {
+    nodeId: opened.nodeId,
+    nodeName: opened.nodeName,
+    durationMs: Math.round(now() - openStarted),
+    directRoutes: opened.directOrigins.length,
+  });
+  const answers = async (origin: string, route: "direct" | "loopback", attempt: number) => {
+    const started = now();
+    let outcome: string;
     try {
-      const outcome = await checkBackendRoute(origin, opened.grant.token, {
+      const checked = await checkBackendRoute(origin, opened.grant.token, {
         timeoutMs: DIRECT_PROBE_TIMEOUT_MS,
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       });
       // The route must reach the node the grant was issued by.
-      return outcome.kind === "hello" && outcome.hello.installationId === opened.nodeId;
-    } catch {
-      return false;
+      outcome =
+        checked.kind !== "hello"
+          ? "legacy"
+          : checked.hello.installationId === opened.nodeId
+            ? "hello"
+            : "other-node";
+    } catch (error) {
+      outcome = isConnectionCheckError(error) ? error.code : "error";
     }
+    log.info("workspace.route-probed", {
+      nodeId: opened.nodeId,
+      nodeName: opened.nodeName,
+      route,
+      attempt,
+      outcome,
+      durationMs: Math.round(now() - started),
+    });
+    return outcome === "hello";
   };
-  for (const origin of opened.directOrigins) {
-    if (await answers(origin)) {
+  for (const [index, origin] of opened.directOrigins.entries()) {
+    if (await answers(origin, "direct", index + 1)) {
       return {
         workspaceId: opened.workspaceId,
         nodeId: opened.nodeId,
@@ -99,7 +128,11 @@ export async function openNodeWorkspace(options: {
       };
     }
   }
-  if (!options.relay && opened.loopbackOrigin && (await answers(opened.loopbackOrigin))) {
+  if (
+    !options.relay &&
+    opened.loopbackOrigin &&
+    (await answers(opened.loopbackOrigin, "loopback", 1))
+  ) {
     return {
       workspaceId: opened.workspaceId,
       nodeId: opened.nodeId,

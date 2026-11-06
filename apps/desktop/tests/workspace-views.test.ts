@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   RealmLayout,
   realmChildViewClass,
@@ -135,6 +135,28 @@ describe("workspace realms in a desktop window", () => {
     });
     // Hidden until the window places it.
     expect(view.visible).toBe(false);
+  });
+
+  test("open timing includes scope binding and expires when the realm closes", async () => {
+    const clock = spyOn(performance, "now").mockReturnValue(100);
+    try {
+      const { views } = harness({
+        bindScope: async () => {
+          clock.mockReturnValue(175);
+        },
+      });
+      const parent = fakeParent();
+      const { viewId } = await views.open(parent as never, { nodeId: "bk_leaf", search: {} });
+      const view = parent.children[0] as FakeView;
+      expect(views.msSinceOpened(view.webContents.id)).toBe(75);
+      clock.mockReturnValue(205.6);
+      expect(views.msSinceOpened(view.webContents.id)).toBe(106);
+      expect(views.msSinceOpened(-1)).toBeNull();
+      views.close(parent.webContents.id, viewId);
+      expect(views.msSinceOpened(view.webContents.id)).toBeNull();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("the window places a realm in CSS pixels at its zoom; the realm follows that zoom", async () => {

@@ -20,57 +20,55 @@ const request = (url: string) =>
 
 const script = join(root, "scripts/qualify-egress-gateway.sh");
 
-/** Bounds the Python listener's start-up; a loaded host can take seconds. */
+/** Bounds listener startup independently of resolver availability. */
 const LISTENER_START_TIMEOUT_MS = 20_000;
-/** The start-up bound plus ten local HTTP requests and the child's exit. */
+/** Startup plus local requests and owned-child cleanup. */
 const LISTENER_TEST_TIMEOUT_MS = 30_000;
+
+const startProbeServer = (dir: string, env: Record<string, string | undefined> = process.env) =>
+  Bun.spawn({
+    cmd: [
+      "python3",
+      join(root, "scripts/egress-probe-server.py"),
+      "--bind",
+      "127.0.0.1",
+      "--ports-file",
+      join(dir, "ports"),
+    ],
+    cwd: dir,
+    env,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+
+/** The two published ports, or a failure naming whether the listener died. */
+async function publishedPorts(dir: string, child: ReturnType<typeof startProbeServer>) {
+  // Both sockets listen before the atomic ports-file publication.
+  // Preserve main's startup allowance for a loaded host (flake 5961).
+  const deadline = performance.now() + LISTENER_START_TIMEOUT_MS;
+  while (performance.now() < deadline) {
+    try {
+      return readFileSync(join(dir, "ports"), "utf8").trim().split(" ");
+    } catch {
+      if (child.exitCode !== null) break;
+      await Bun.sleep(20);
+    }
+  }
+  const state = child.exitCode === null ? "still running" : `exited ${child.exitCode}`;
+  child.kill();
+  await child.exited;
+  const stderr = (await new Response(child.stderr).text()).slice(-2000);
+  throw new Error(`probe listener published no ports (${state}): ${stderr}`);
+}
 
 test(
   "probe listeners serve only the fixed response, even from a directory containing files",
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "ork-egress-listener-"));
     writeFileSync(join(dir, "sentinel"), "private sentinel");
-    const child = Bun.spawn({
-      cmd: [
-        "python3",
-        join(root, "scripts/egress-probe-server.py"),
-        "--bind",
-        "127.0.0.1",
-        "--ports-file",
-        join(dir, "ports"),
-      ],
-      cwd: dir,
-      stdout: "ignore",
-      stderr: "pipe",
-    });
+    const child = startProbeServer(dir);
     try {
-      // Wait for the listener's own readiness signal: it publishes both ports
-      // with an atomic rename once both sockets listen. A fixed two-second poll
-      // raced Python's start-up on a loaded host (flake case 5961), so wait
-      // until the file appears or the child exits, within a bound well inside
-      // the test's budget, and report the child's stderr if it never started.
-      let ports: string[] = [];
-      let exited = false;
-      void child.exited.then(() => {
-        exited = true;
-      });
-      const deadline = performance.now() + LISTENER_START_TIMEOUT_MS;
-      while (!exited && performance.now() < deadline) {
-        try {
-          ports = readFileSync(join(dir, "ports"), "utf8").trim().split(" ");
-          break;
-        } catch {
-          await Bun.sleep(20);
-        }
-      }
-      if (ports.length === 0) {
-        child.kill();
-        await child.exited;
-        const stderr = await new Response(child.stderr).text();
-        throw new Error(
-          `probe listener published no ports (exit ${child.exitCode}, signal ${child.signalCode}): ${stderr.slice(0, 2_000)}`,
-        );
-      }
+      const ports = await publishedPorts(dir, child);
       expect(ports).toHaveLength(2);
       expect(ports[0]).not.toBe(ports[1]);
       for (const port of ports) {
@@ -81,6 +79,39 @@ test(
           expect(response.status).toBe(404);
           expect(response.body).not.toContain("private sentinel");
         }
+      }
+    } finally {
+      child.kill();
+      await child.exited;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+  LISTENER_TEST_TIMEOUT_MS,
+);
+
+// HTTPServer.server_bind names the server with a reverse-DNS query; a slow
+// resolver held both listeners (and the qualification script waiting on them)
+// past their deadlines. A resolver that refuses outright must not matter.
+test(
+  "probe listeners publish their ports without consulting the resolver",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-egress-resolver-"));
+    const site = join(dir, "site");
+    mkdirSync(site);
+    writeFileSync(
+      join(site, "sitecustomize.py"),
+      "import socket\n" +
+        "def refuse(*_args, **_kwargs):\n" +
+        "    raise OSError('resolver consulted')\n" +
+        "socket.getfqdn = refuse\n" +
+        "socket.gethostbyaddr = refuse\n",
+    );
+    const child = startProbeServer(dir, { ...process.env, PYTHONPATH: site });
+    try {
+      const ports = await publishedPorts(dir, child);
+      expect(ports).toHaveLength(2);
+      for (const port of ports) {
+        expect((await request(`http://127.0.0.1:${port}/probe`)).body).toBe("egress-probe\n");
       }
     } finally {
       child.kill();

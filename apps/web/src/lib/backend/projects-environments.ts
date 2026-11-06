@@ -1,4 +1,6 @@
 import { invoke } from "@/lib/native/backend";
+import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
+import { hydrationActivity } from "@/lib/hydration-activity";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
 import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
 import type {
@@ -182,16 +184,22 @@ export async function arrangeProjectsByIntent(
 
 // --- Environment Commands ---
 
+/** Bounded with the other hydration reads (`hydration-request-limiter.ts`). */
 export async function getEnvironments(projectId: string): Promise<Environment[]> {
-  return invoke<Environment[]>("get_environments", { projectId });
+  return environmentRequests.run(() =>
+    hydrationRequests.run(() => invoke<Environment[]>("get_environments", { projectId })),
+  );
 }
 
 /**
  * Read the persisted environment list without reconciling Docker state.
- * Intended for frequent cross-client snapshot refreshes.
+ * Intended for frequent cross-client snapshot refreshes. Bounded with the
+ * other hydration reads.
  */
 export async function getEnvironmentSnapshots(projectId: string): Promise<Environment[]> {
-  return invoke<Environment[]>("get_environment_snapshots", { projectId });
+  return hydrationActivity.track(() =>
+    hydrationRequests.run(() => invoke<Environment[]>("get_environment_snapshots", { projectId })),
+  );
 }
 
 /**

@@ -1,5 +1,6 @@
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
@@ -384,6 +385,11 @@ mock.module("@/lib/backend", () => ({
   listBuildPipelines: mockListBuildPipelines,
   listMultiReviewWorkflows: mockListMultiReviewWorkflows,
   listPromptQueues: mockListPromptQueues,
+  // As an older backend answers: the boot batcher falls back to the
+  // per-environment reads above, which these tests assert on.
+  listEnvironmentHydration: async () => {
+    throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
+  },
   savePaneLayout: mockSavePaneLayout,
   applyPaneLayoutIntent: mockApplyPaneLayoutIntent,
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,

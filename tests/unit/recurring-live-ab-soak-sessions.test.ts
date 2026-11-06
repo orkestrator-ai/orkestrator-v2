@@ -49,7 +49,11 @@ const metrics = (rows: number, owners: number) => ({
 });
 
 /** A soak runtime whose CLI and fake model are in memory. */
-function sessionHarness(options: { cycleRows: (cycle: number) => number; answer?: boolean }) {
+function sessionHarness(options: {
+  cycleRows: (cycle: number) => number;
+  answer?: boolean;
+  catalogue?: string;
+}) {
   let now = 0;
   let cycle = 0;
   let completions = 0;
@@ -70,6 +74,14 @@ function sessionHarness(options: { cycleRows: (cycle: number) => number; answer?
       return {
         status: 0,
         stdout: JSON.stringify({ result: { environment: { id: `env-c${cycle}` } } }),
+      };
+    }
+    if (verb === "agent options") {
+      // The real command refuses options it does not take.
+      if (args.includes("--timeout")) return { status: 2, stdout: "{}" };
+      return {
+        status: 0,
+        stdout: options.catalogue ?? JSON.stringify({ models: [FAKE_PI_MODEL_REF] }),
       };
     }
     if (verb === "session start" || verb === "session prompt") {
@@ -202,6 +214,28 @@ describe("soak sessions and trends", () => {
         h.runtime,
       ),
     ).rejects.toThrow("did not answer on the fake model");
+    expect(h.stop).toHaveBeenCalledTimes(1);
+  });
+
+  test("a catalogue that never lists the fake model stops the soak before any session", async () => {
+    const h = sessionHarness({ cycleRows: () => 1, catalogue: "{}" });
+    await expect(
+      measureSoak(
+        h.gateway,
+        h.cli,
+        {
+          soakCycles: 1,
+          soakEnvironments: ["local"],
+          settleMs: 0,
+          soakSessions: 1,
+          dataDir: "/profile/data",
+        },
+        () => null,
+        undefined,
+        h.runtime,
+      ),
+    ).rejects.toThrow("did not list the fake model");
+    expect(h.calls.some((args) => args[0] === "session")).toBe(false);
     expect(h.stop).toHaveBeenCalledTimes(1);
   });
 

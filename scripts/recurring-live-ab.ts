@@ -687,8 +687,14 @@ export async function measureSoak(
       runtime.writeFakePiModels(options.dataDir, fakeModel.baseUrl);
       const fixtureEnvironment = await runtime.fixtureLocalEnvironmentId(cli, signal);
       if (!fixtureEnvironment) throw new Error("Soak sessions need a ready local environment");
-      // The catalogue was read before the fake provider existed.
-      await step(["agent", "options", "--environment", fixtureEnvironment, "--refresh"]);
+      // The catalogue was read before the fake provider existed. `agent
+      // options` takes no `--timeout`, so it is not a `step`.
+      const refreshed = await cli(
+        ["agent", "options", "--environment", fixtureEnvironment, "--refresh", "--json"],
+        signal,
+      );
+      if (refreshed.status !== 0 || !refreshed.stdout.includes(FAKE_PI_MODEL_REF))
+        throw new Error("The Pi catalogue did not list the fake model after a refresh");
       for (let index = 1; index <= sessionCount; index += 1) {
         const id = await openSession(fixtureEnvironment, `Soak session ${index}: reply briefly.`);
         if (!id) throw new Error("A soak session did not answer on the fake model");
@@ -942,8 +948,13 @@ export async function runArm(
           owner ??= current;
           log(`${profile}: stopping`);
           if (runtime.mise(["dev:stop", "--profile", profile]).status !== 0) {
-            // Stop may report failure for an already stopped profile. Reset
-            // still owns its resources, but only after verifying it is stopped.
+            // Stop may report failure for an already stopped profile, and
+            // gives up after a few seconds while the launcher is still
+            // shutting down, before it records `stopped`. Wait for our own
+            // launcher to exit first. Reset still owns the profile's
+            // resources, but only after verifying it is stopped.
+            for (let waited = 0; !exited && waited < 60_000; waited += 1_000)
+              await runtime.sleep(1_000);
             const stopped = checkedStatus();
             if (stopped.status !== "stopped" || stopped.live?.launcher !== false)
               throw new Error("Owned profile stop failed");

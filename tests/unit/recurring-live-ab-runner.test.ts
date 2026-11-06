@@ -365,6 +365,39 @@ describe("live benchmark lifecycle", () => {
     expect(existsSync(resources)).toBe(false);
   });
 
+  test("a stop that gives up while the launcher is still exiting waits for it, then resets", async () => {
+    const h = harness();
+    let sleepsAfterStop: number | null = null;
+    const sleep = h.runtime.sleep;
+    h.runtime.sleep = (async (ms: number, signal?: AbortSignal) => {
+      if (sleepsAfterStop !== null && ++sleepsAfterStop === 3) {
+        // The launcher finishes its own shutdown a few seconds after dev:stop.
+        h.setStatus({
+          status: "stopped",
+          startedAt: "2026-01-01",
+          processStartTimes: { launcher: 100 },
+          pids: { launcher: h.child.pid },
+          live: { launcher: false },
+          logDir: "/stub/logs",
+        });
+        h.child.emit("exit", 0);
+      }
+      return sleep(ms, signal);
+    }) as typeof sleep;
+    h.runtime.mise = ((args: string[]) => {
+      h.commands.push(args);
+      if (args[0] === "dev:stop") {
+        sleepsAfterStop = 0;
+        return { status: 1 };
+      }
+      return { status: 0 };
+    }) as typeof h.runtime.mise;
+    const result = await runArm(options(), "candidate", 1, "/stub", undefined, "slow", h.runtime);
+    expect(result.error).toBeUndefined();
+    expect(sleepsAfterStop).toBeGreaterThanOrEqual(3);
+    expect(h.commands.map((args) => args[0])).toEqual(["dev:stop", "dev:reset"]);
+  });
+
   test("a failed stop for a live profile prevents reset", async () => {
     const mise = mock(() => ({ status: 1 }));
     const h = harness({ mise: mise as never });

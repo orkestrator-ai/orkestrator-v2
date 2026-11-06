@@ -1,6 +1,6 @@
 # Cold realm boot repair aggregate timeout cluster
 
-- **ID:** 9860
+- **ID:** 9896
 - **Status:** open
 - **Date observed:** 2026-11-06
 - **Revision:** `9794274f9` (first repair aggregate, with the later App fallback fixture repair still outstanding).

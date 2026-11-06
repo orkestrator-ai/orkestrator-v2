@@ -145,9 +145,15 @@ document); `env` prints them again for a running instance, `status` lists
 instances, and `load-image --name <n> <reference>` copies another image in.
 Options: `--net slirp4netns` (default), `gvisor-tap-vsock`, `pasta` or
 `vpnkit`; `--host-loopback` to let containers reach the host's loopback
-(off by default, as in RootlessKit); `--live-restore`; `--address-pool`
+(off by default, as in RootlessKit); `--address-pool`
 (default `172.30.0.0/16` as /24s, which exists only in the daemon's own
 namespace).
+
+The disposable launcher rejects `--live-restore`: restarting its whole RootlessKit
+tree cannot preserve shim and network state safely. Restart accepts no daemon
+settings overrides; choose settings at start. Lifecycle and tool publication
+use separate interprocess `flock` locks (a host prerequisite). Exported suite
+variables clear Docker context and TLS selection so the private socket wins.
 
 - **What it runs.** The host's own `dockerd`, `containerd` and `runc` under
   RootlessKit, through `dockerd-rootless.sh`. RootlessKit and

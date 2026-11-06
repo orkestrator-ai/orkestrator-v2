@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
+import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -235,6 +236,10 @@ export function suiteEnvironment(
 ): Record<string, string> {
   return {
     DOCKER_HOST: `unix://${record.paths.socket}`,
+    DOCKER_CONTEXT: "",
+    DOCKER_TLS: "",
+    DOCKER_TLS_VERIFY: "",
+    DOCKER_CERT_PATH: "",
     [HOST_LOOPBACK_ENV]: record.settings.hostLoopback ? "enabled" : "disabled",
     ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND: restartCommand(record, bun),
   };
@@ -438,7 +443,7 @@ function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-async function download(archive: ToolArchive, destination: string): Promise<void> {
+export async function download(archive: ToolArchive, destination: string): Promise<void> {
   const response = await fetch(archive.url);
   if (!response.ok) throw new Error(`Download of ${archive.url} failed: HTTP ${response.status}`);
   writeFileSync(destination, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 });
@@ -454,7 +459,11 @@ async function download(archive: ToolArchive, destination: string): Promise<void
  * `<root>/tools/`, downloaded once and verified before use. `dockerd`,
  * `containerd` and `runc` come from the host's Docker installation.
  */
-export async function ensureTools(root: string, arch = process.arch): Promise<string> {
+export async function ensureTools(root: string, arch: string = process.arch): Promise<string> {
+  return withLock(root, "tools", () => ensureToolsUnlocked(root, arch));
+}
+
+async function ensureToolsUnlocked(root: string, arch: string): Promise<string> {
   const pinned = PINNED_TOOLS[arch];
   if (!pinned) throw new Error(`No pinned rootless tools for architecture ${arch}`);
   const toolsDir = path.join(
@@ -517,7 +526,15 @@ export function missingPrerequisites(
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     missing.push("run this as an unprivileged user, not root");
   }
-  for (const command of ["dockerd", "containerd", "runc", "newuidmap", "newgidmap", "docker"]) {
+  for (const command of [
+    "dockerd",
+    "containerd",
+    "runc",
+    "newuidmap",
+    "newgidmap",
+    "docker",
+    "flock",
+  ]) {
     if (!has(command)) missing.push(`${command} is not on PATH`);
   }
   for (const file of ["/etc/subuid", "/etc/subgid"]) {
@@ -561,18 +578,62 @@ function launcherDefaults(options: LauncherOptions) {
   };
 }
 
-function docker(record: InstanceRecord | null, args: string[]) {
-  const env = { ...process.env };
-  if (record) env.DOCKER_HOST = `unix://${record.paths.socket}`;
-  return spawnSync("docker", args, { encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024 });
+export function destinationEnvironment(record: InstanceRecord): NodeJS.ProcessEnv {
+  return { ...process.env, ...suiteEnvironment(record) };
 }
 
-async function dockerAnswers(record: InstanceRecord): Promise<boolean> {
+function docker(record: InstanceRecord | null, args: string[], timeout = 30_000) {
+  return spawnSync("docker", record ? ["--host", `unix://${record.paths.socket}`, ...args] : args, {
+    encoding: "utf8",
+    env: record ? destinationEnvironment(record) : process.env,
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: Math.max(1, timeout),
+    killSignal: "SIGKILL",
+  });
+}
+
+export async function dockerAnswers(record: InstanceRecord, timeout = 5_000): Promise<boolean> {
   if (!existsSync(record.paths.socket)) return false;
-  return docker(record, ["info", "--format", "{{.ID}}"]).status === 0;
+  return docker(record, ["info", "--format", "{{.ID}}"], timeout).status === 0;
 }
 
-function spawnDaemon(record: InstanceRecord, toolsDir: string, script: string): ProcessIdentity {
+/** flock releases automatically on process/pipe death; never unlink the lock inode. */
+async function withLock<T>(root: string, name: string, action: () => Promise<T>): Promise<T> {
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  const holder = spawn(
+    "flock",
+    [
+      "--exclusive",
+      "--timeout",
+      "180",
+      path.join(root, `.${name}.lock`),
+      "sh",
+      "-c",
+      "printf ready; cat >/dev/null",
+    ],
+    { stdio: ["pipe", "pipe", "ignore"] },
+  );
+  holder.stdin!.on("error", () => undefined);
+  const closed = new Promise<void>((resolve) => holder.once("close", () => resolve()));
+  // A missing flock or early exit rejects admission before any mutation.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      holder.once("error", reject);
+      holder.once("close", () => reject(new Error(`Could not acquire ${name} lock`)));
+      holder.stdout!.once("data", () => resolve());
+    });
+    return await action();
+  } finally {
+    holder.stdin!.end();
+    await closed;
+  }
+}
+
+async function spawnDaemon(
+  record: InstanceRecord,
+  toolsDir: string,
+  script: string,
+): Promise<ProcessIdentity> {
   mkdirSync(record.paths.runtimeDir, { recursive: true, mode: 0o700 });
   chmodSync(record.paths.runtimeDir, 0o700);
   const log = openSync(record.paths.log, "a", 0o600);
@@ -587,7 +648,13 @@ function spawnDaemon(record: InstanceRecord, toolsDir: string, script: string): 
     child.unref();
     const startTime = readStartTime(child.pid);
     if (startTime === null) throw new Error(`${script} exited at once; see ${record.paths.log}`);
-    return { pid: child.pid, startTime };
+    const identity = { pid: child.pid, startTime };
+    // The spawned child may still be between fork and exec when /proc is first read.
+    if (!(await waitFor(() => isOwnedProcess(identity, record.marker), 1_000, 10))) {
+      child.kill("SIGKILL");
+      throw new Error(`${script} did not acquire its instance identity`);
+    }
+    return identity;
   } finally {
     closeSync(log);
   }
@@ -625,8 +692,9 @@ async function stopProcesses(
 async function launch(record: InstanceRecord, options: LauncherOptions): Promise<InstanceRecord> {
   const settings = launcherDefaults(options);
   const toolsDir = await settings.tools(options.root);
-  record.process = spawnDaemon(record, toolsDir, settings.rootlessScript(toolsDir));
+  record.process = await spawnDaemon(record, toolsDir, settings.rootlessScript(toolsDir));
   writeRecord(record);
+  const deadline = Date.now() + settings.readyTimeoutMs;
   const ready = await waitFor(
     async () => {
       if (!isOwnedProcess(record.process!, record.marker)) {
@@ -634,7 +702,9 @@ async function launch(record: InstanceRecord, options: LauncherOptions): Promise
           `The daemon of ${record.name} exited during start; see ${record.paths.log}`,
         );
       }
-      return settings.ready(record);
+      return options.ready
+        ? options.ready(record)
+        : dockerAnswers(record, Math.min(5_000, Math.max(1, deadline - Date.now())));
     },
     settings.readyTimeoutMs,
     500,
@@ -648,7 +718,7 @@ async function launch(record: InstanceRecord, options: LauncherOptions): Promise
 }
 
 /** Removes instances whose daemon is no longer running: their own leftovers, nothing else. */
-export async function reapStale(options: LauncherOptions): Promise<string[]> {
+async function reapStaleUnlocked(options: LauncherOptions): Promise<string[]> {
   const reaped: string[] = [];
   for (const record of listRecords(options.root)) {
     if (isRunning(record)) continue;
@@ -658,12 +728,14 @@ export async function reapStale(options: LauncherOptions): Promise<string[]> {
   return reaped;
 }
 
-export async function startInstance(
+async function startInstanceUnlocked(
   name: string,
   overrides: Partial<InstanceSettings>,
   options: LauncherOptions,
 ): Promise<InstanceRecord> {
   const settings = { ...DEFAULT_SETTINGS, ...overrides };
+  if (settings.liveRestore)
+    throw new Error("--live-restore is unsupported by the disposable launcher");
   if (!NETWORK_DRIVERS.includes(settings.network)) {
     throw new Error(`--net must be one of ${NETWORK_DRIVERS.join(", ")}`);
   }
@@ -671,7 +743,7 @@ export async function startInstance(
   if (existing && isRunning(existing)) {
     throw new Error(`${name} is already running; stop it first (${stopCommand(existing)})`);
   }
-  for (const reaped of await reapStale(options))
+  for (const reaped of await reapStaleUnlocked(options))
     launcherDefaults(options).log(`Removed stale instance ${reaped}`);
   const paths = instancePaths(options.root, options.runtimeBase, name);
   if (existsSync(paths.instanceDir) || existsSync(paths.runtimeDir)) {
@@ -705,12 +777,14 @@ export async function startInstance(
 }
 
 /** A real daemon restart: the whole RootlessKit tree stops, then starts on the same data root. */
-export async function restartInstance(
+async function restartInstanceUnlocked(
   name: string,
   options: LauncherOptions,
 ): Promise<InstanceRecord> {
   const record = readRecord(options.root, name);
   if (!record) throw new Error(`No disposable daemon named ${name}`);
+  if (record.settings.liveRestore)
+    throw new Error("Cannot restart a legacy live-restore instance; stop it first");
   const settings = launcherDefaults(options);
   await stopProcesses(record, settings.stopTimeoutMs, settings.log);
   // The runtime directory is rebuilt from nothing, as after a reboot.
@@ -718,18 +792,33 @@ export async function restartInstance(
   removeTree(record.paths.runtimeDir, await settings.tools(options.root), record.runtimeBase);
   record.process = null;
   writeRecord(record);
-  return launch(record, options);
+  try {
+    return await launch(record, options);
+  } catch (error) {
+    await remove(record, options);
+    throw error;
+  }
 }
 
 async function remove(record: InstanceRecord, options: LauncherOptions): Promise<void> {
   const settings = launcherDefaults(options);
   const directories = removableDirectories(record, options.root);
+  if (record.settings.liveRestore) {
+    const containers = docker(record, ["ps", "-aq"]);
+    if (containers.status !== 0)
+      throw new Error("Cannot remove live-restore state without confirming container cleanup");
+    const ids = containers.stdout.trim().split(/\s+/).filter(Boolean);
+    for (const id of ids) {
+      if (!/^[a-f0-9]+$/.test(id) || docker(record, ["rm", "-f", id]).status !== 0)
+        throw new Error("Could not remove a live-restore container; retaining daemon state");
+    }
+  }
   await stopProcesses(record, settings.stopTimeoutMs, settings.log);
   const toolsDir = await settings.tools(options.root).catch(() => null);
   for (const directory of directories) removeTree(directory, toolsDir, record.runtimeBase);
 }
 
-export async function stopInstance(name: string, options: LauncherOptions): Promise<boolean> {
+async function stopInstanceUnlocked(name: string, options: LauncherOptions): Promise<boolean> {
   const record = readRecord(options.root, name);
   if (!record) return false;
   await remove(record, options);
@@ -745,7 +834,8 @@ export async function transferImage(
   record: InstanceRecord,
   reference: string,
 ): Promise<{ reference: string; id: string }> {
-  if (/^orkestrator-v2(:latest)?$/.test(reference)) {
+  const leaf = reference.split("/").at(-1)!;
+  if (/^orkestrator-v2(?::latest)?(?:@.*)?$/.test(leaf)) {
     throw new Error("Never use orkestrator-v2:latest as a qualification image");
   }
   if (process.env.DOCKER_HOST === `unix://${record.paths.socket}`) {
@@ -757,16 +847,30 @@ export async function transferImage(
   if (source.status !== 0) throw new Error(`The host daemon has no image ${reference}`);
   const id = source.stdout.trim();
   const save = spawn("docker", ["save", reference], { stdio: ["ignore", "pipe", "inherit"] });
-  const load = spawn("docker", ["load", "--quiet"], {
-    env: { ...process.env, DOCKER_HOST: `unix://${record.paths.socket}` },
+  const load = spawn("docker", ["--host", `unix://${record.paths.socket}`, "load", "--quiet"], {
+    env: destinationEnvironment(record),
     stdio: ["pipe", "ignore", "inherit"],
   });
-  save.stdout!.pipe(load.stdin!);
   const finished = (child: ReturnType<typeof spawn>) =>
-    new Promise<number>((resolve) => child.on("close", (code) => resolve(code ?? 1)));
-  const [saved, loaded] = await Promise.all([finished(save), finished(load)]);
-  if (saved !== 0 || loaded !== 0)
-    throw new Error(`Copying ${reference} failed (save ${saved}, load ${loaded})`);
+    new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) =>
+        code === 0 ? resolve() : reject(new Error(`Docker transfer child exited ${code}`)),
+      );
+    });
+  const saved = finished(save);
+  const loaded = finished(load);
+  const savedClosed = new Promise<void>((resolve) => save.once("close", () => resolve()));
+  const loadedClosed = new Promise<void>((resolve) => load.once("close", () => resolve()));
+  try {
+    await Promise.all([pipeline(save.stdout!, load.stdin!), saved, loaded]);
+  } catch (error) {
+    // These child handles belong to this transfer, never a host daemon.
+    save.kill("SIGKILL");
+    load.kill("SIGKILL");
+    await Promise.all([savedClosed, loadedClosed]);
+    throw new Error(`Copying ${reference} failed`, { cause: error });
+  }
   const copied = docker(record, [
     "image",
     "inspect",
@@ -837,8 +941,7 @@ export function parseArguments(argv: string[], root = defaultInstanceRoot()): Pa
         parsed.settings.hostLoopback = true;
         break;
       case "--live-restore":
-        parsed.settings.liveRestore = true;
-        break;
+        throw new Error("--live-restore is unsupported by the disposable launcher");
       case "--address-pool": {
         const pool = value(flag);
         const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(pool);
@@ -854,6 +957,9 @@ export function parseArguments(argv: string[], root = defaultInstanceRoot()): Pa
         }
         throw new Error(`Unknown argument ${flag}`);
     }
+  }
+  if (command !== "start" && Object.keys(parsed.settings).length) {
+    throw new Error("Daemon settings flags are only accepted by start");
   }
   return parsed;
 }
@@ -874,7 +980,7 @@ Options:
   --image <reference>   With start: copy this image in (repeatable); never orkestrator-v2:latest
   --net <driver>        slirp4netns (default), gvisor-tap-vsock, pasta or vpnkit
   --host-loopback       Let containers reach the host's loopback (RootlessKit default: refused)
-  --live-restore        Keep containers running across a daemon restart
+  --live-restore        Unsupported (refused until safe restart/stop is implemented)
   --address-pool <cidr> Bridge pool inside the daemon's namespace (default 172.30.0.0/16, as /24s)
   --json                Machine-readable output
 `;
@@ -904,16 +1010,7 @@ async function main(argv: string[]): Promise<void> {
       if (missing.length > 0)
         throw new Error(`Cannot start a rootless daemon:\n- ${missing.join("\n- ")}`);
       mkdirSync(parsed.root, { recursive: true });
-      const record = await startInstance(parsed.name, parsed.settings, options);
-      try {
-        for (const image of parsed.images) {
-          console.error(`Copying ${image} into ${record.name}`);
-          await transferImage(record, image);
-        }
-      } catch (error) {
-        await stopInstance(record.name, options).catch(() => undefined);
-        throw error;
-      }
+      const record = await startWithImages(parsed.name, parsed.settings, parsed.images, options);
       printEnvironment(record, parsed.json);
       return;
     }
@@ -977,4 +1074,46 @@ if (import.meta.main) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   }
+}
+
+export async function reapStale(options: LauncherOptions): Promise<string[]> {
+  return withLock(options.root, "lifecycle", () => reapStaleUnlocked(options));
+}
+
+export async function startInstance(
+  name: string,
+  overrides: Partial<InstanceSettings>,
+  options: LauncherOptions,
+): Promise<InstanceRecord> {
+  return withLock(options.root, "lifecycle", () => startInstanceUnlocked(name, overrides, options));
+}
+
+export async function restartInstance(
+  name: string,
+  options: LauncherOptions,
+): Promise<InstanceRecord> {
+  return withLock(options.root, "lifecycle", () => restartInstanceUnlocked(name, options));
+}
+
+export async function stopInstance(name: string, options: LauncherOptions): Promise<boolean> {
+  return withLock(options.root, "lifecycle", () => stopInstanceUnlocked(name, options));
+}
+
+/** Same cleanup boundary used by start --image, exposed for subprocess regressions. */
+export async function startWithImages(
+  name: string,
+  settings: Partial<InstanceSettings>,
+  images: string[],
+  options: LauncherOptions,
+): Promise<InstanceRecord> {
+  return withLock(options.root, "lifecycle", async () => {
+    const record = await startInstanceUnlocked(name, settings, options);
+    try {
+      for (const image of images) await transferImage(record, image);
+      return record;
+    } catch (error) {
+      await remove(record, options);
+      throw error;
+    }
+  });
 }

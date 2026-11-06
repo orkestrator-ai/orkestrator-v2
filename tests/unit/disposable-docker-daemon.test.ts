@@ -1,9 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import {
+  download,
+  ensureTools,
+  PINNED_TOOLS,
+  dockerAnswers,
   DEFAULT_SETTINGS,
   HOST_LOOPBACK_ENV,
   INSTANCE_MARKER_ENV,
@@ -24,6 +37,7 @@ import {
   removableDirectories,
   restartInstance,
   startInstance,
+  startWithImages,
   stopInstance,
   suiteEnvironment,
   transferImage,
@@ -60,7 +74,7 @@ afterEach(async () => {
  */
 function stubScript(): string {
   const script = path.join(stubDir, "fake-rootless.sh");
-  writeFileSync(script, "#!/bin/sh\nsleep 300 &\nwait\n", { mode: 0o755 });
+  if (!existsSync(script)) writeFileSync(script, "#!/bin/sh\nsleep 300 &\nwait\n", { mode: 0o755 });
   return script;
 }
 
@@ -107,13 +121,17 @@ describe("arguments", () => {
 
   test("reads every option and refuses unknown or malformed ones", () => {
     const parsed = parseArguments(
-      ["--", "start", "--name", "q1", "--net", "vpnkit", "--host-loopback", "--live-restore"],
+      ["--", "start", "--name", "q1", "--net", "vpnkit", "--host-loopback"],
       root,
     );
-    expect(parsed.settings).toEqual({ network: "vpnkit", hostLoopback: true, liveRestore: true });
+    expect(parsed.settings).toEqual({ network: "vpnkit", hostLoopback: true });
     expect(parseArguments(["load-image", "--name", "q1", "img:tag"], root).images).toEqual([
       "img:tag",
     ]);
+    expect(() => parseArguments(["start", "--live-restore"], root)).toThrow("unsupported");
+    expect(() => parseArguments(["restart", "--net", "pasta"], root)).toThrow(
+      "only accepted by start",
+    );
     expect(() => parseArguments(["start", "--net", "host"], root)).toThrow("--net");
     expect(() => parseArguments(["start", "--address-pool", "10.0.0.0/28"], root)).toThrow();
     expect(() => parseArguments(["start", "--name", "../x"], root)).toThrow("Instance name");
@@ -245,13 +263,18 @@ describe("lifecycle", () => {
     // A restart replaces the whole tree and keeps the data root.
     writeFileSync(path.join(started.paths.dataRoot, "kept"), "image layers");
     const before = started.process!;
-    const restarted = await restartInstance("unit", options());
+    const restarted = await restartInstance(
+      "unit",
+      options({ runtimeBase: path.join(scratch, "different") }),
+    );
     expect(restarted.process!.pid).not.toBe(before.pid);
     expect(isOwnedProcess(before, started.marker)).toBe(false);
     expect(isRunning(restarted)).toBe(true);
     expect(existsSync(path.join(started.paths.dataRoot, "kept"))).toBe(true);
 
-    expect(await stopInstance("unit", options())).toBe(true);
+    expect(
+      await stopInstance("unit", options({ runtimeBase: path.join(scratch, "different") })),
+    ).toBe(true);
     expect(markedProcesses(started.marker)).toEqual([]);
     expect(existsSync(started.paths.instanceDir)).toBe(false);
     expect(existsSync(started.paths.runtimeDir)).toBe(false);
@@ -277,5 +300,204 @@ describe("lifecycle", () => {
     mkdirSync(path.join(root, "notes"));
     expect(await reapStale(options())).toEqual([]);
     expect(existsSync(path.join(root, "notes"))).toBe(true);
+  });
+});
+
+describe("review regressions", () => {
+  test("concurrent start and restart cannot reap an in-flight launch", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entering = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const first = startInstance(
+      "first",
+      {},
+      options({
+        tools: async () => {
+          entered();
+          await gate;
+          return stubDir;
+        },
+      }),
+    );
+    await entering;
+    const second = startInstance("second", {}, options());
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(isRunning(a)).toBe(true);
+    expect(isRunning(b)).toBe(true);
+    const [restarted, third] = await Promise.all([
+      restartInstance("first", options()),
+      startInstance("third", {}, options()),
+    ]);
+    expect(isRunning(restarted)).toBe(true);
+    expect(isRunning(third)).toBe(true);
+    expect(readRecord(root, "first")?.process).toEqual(restarted.process);
+  });
+
+  test("a checksum mismatch removes the untrusted download", async () => {
+    const destination = path.join(scratch, "untrusted");
+    await expect(
+      download({ url: "data:text/plain,not-an-executable", sha256: "0".repeat(64) }, destination),
+    ).rejects.toThrow("SHA-256");
+    expect(existsSync(destination)).toBe(false);
+    PINNED_TOOLS["test-bad-hash"] = {
+      rootlessExtras: { url: "data:text/plain,not-a-tarball", sha256: "0".repeat(64) },
+      slirp4netns: { url: "data:text/plain,never-used", sha256: "0".repeat(64) },
+    };
+    try {
+      await expect(ensureTools(root, "test-bad-hash")).rejects.toThrow("SHA-256");
+      expect(readdirSync(path.join(root, "tools"))).toEqual([]);
+    } finally {
+      delete PINNED_TOOLS["test-bad-hash"];
+    }
+  });
+
+  test("qualified latest references and live-restore are rejected before mutation", async () => {
+    for (const ref of [
+      "docker.io/library/orkestrator-v2:latest",
+      "registry.example/team/orkestrator-v2",
+      "orkestrator-v2:latest@sha256:abc",
+    ]) {
+      await expect(transferImage(record(), ref)).rejects.toThrow("latest");
+    }
+    await expect(startInstance("unsafe", { liveRestore: true }, options())).rejects.toThrow(
+      "unsupported",
+    );
+    expect(readRecord(root, "unsafe")).toBeNull();
+  });
+});
+
+/** Fake Docker records argv and endpoint selection; it never contacts any daemon. */
+function fakeDocker(mode: string): () => void {
+  const old = { ...process.env };
+  const script = path.join(stubDir, "docker");
+  writeFileSync(
+    script,
+    `#!${process.execPath}
+const fs = require("node:fs");
+let args = process.argv.slice(2);
+fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pid: process.pid, args, context: process.env.DOCKER_CONTEXT, tls: process.env.DOCKER_TLS_VERIFY }) + "\\n");
+const destination = args[0] === "--host";
+if (destination) args = args.slice(2);
+const mode = process.env.FAKE_DOCKER_MODE;
+if (args[0] === "info" && mode === "hang") { setInterval(() => {}, 1000); }
+else if (args[0] === "image") { console.log(destination && mode === "mismatch" ? "sha256:other" : "sha256:expected"); }
+else if (args[0] === "save") {
+  if (mode === "save-fail") process.exit(3);
+  const bytes = Buffer.alloc(1024 * 1024);
+  const write = () => { while (process.stdout.write(bytes)) {} };
+  process.stdout.on("drain", write);
+  if (mode === "load-fail") write();
+  else process.stdout.end(bytes);
+} else if (args[0] === "load") {
+  if (mode === "load-fail") process.exit(4);
+  process.stdin.resume();
+}
+`,
+    { mode: 0o755 },
+  );
+  process.env.PATH = `${stubDir}:${old.PATH}`;
+  process.env.DOCKER_CONTEXT = "production-context";
+  process.env.DOCKER_TLS_VERIFY = "1";
+  process.env.FAKE_DOCKER_LOG = path.join(scratch, "docker.log");
+  process.env.FAKE_DOCKER_MODE = mode;
+  delete process.env.DOCKER_HOST;
+  return () => {
+    for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key];
+    Object.assign(process.env, old);
+  };
+}
+
+describe("Docker subprocesses", () => {
+  test("successful copy preserves source context and forces the private destination", async () => {
+    const restore = fakeDocker("success");
+    try {
+      const started = await startInstance("copy", {}, options());
+      await expect(transferImage(started, "fixture:dev")).resolves.toEqual({
+        reference: "fixture:dev",
+        id: "sha256:expected",
+      });
+      writeFileSync(started.paths.socket, "stand-in socket");
+      expect(await dockerAnswers(started, 500)).toBe(true);
+      const calls = readFileSync(process.env.FAKE_DOCKER_LOG!, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(
+        calls
+          .filter((call) => call.args[0] !== "--host")
+          .every((call) => call.context === "production-context"),
+      ).toBe(true);
+      const destinations = calls.filter((call) => call.args[0] === "--host");
+      expect(destinations.length).toBe(3);
+      expect(
+        destinations.every(
+          (call) =>
+            call.args[1] === `unix://${started.paths.socket}` &&
+            call.context === "" &&
+            call.tls === "",
+        ),
+      ).toBe(true);
+      expect(suiteEnvironment(started).DOCKER_CONTEXT).toBe("");
+      expect(readRecord(root, "copy")?.images).toEqual([
+        { reference: "fixture:dev", id: "sha256:expected" },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  for (const mode of ["load-fail", "save-fail", "mismatch"]) {
+    test(`copy failure (${mode}) rejects normally so startup cleanup can run`, async () => {
+      const restore = fakeDocker(mode);
+      try {
+        await expect(startWithImages("copy", {}, ["fixture:dev"], options())).rejects.toThrow();
+        expect(readRecord(root, "copy")).toBeNull();
+        const calls = readFileSync(process.env.FAKE_DOCKER_LOG!, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        for (const call of calls) expect(readStartTime(call.pid)).toBeNull();
+
+        expect(existsSync(instancePaths(root, runtimeBase, "copy").runtimeDir)).toBe(false);
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  test("hung info is bounded by the startup deadline and cleans up", async () => {
+    const restore = fakeDocker("hang");
+    try {
+      const before = Date.now();
+      await expect(
+        startInstance(
+          "hung",
+          {},
+          options({
+            ready: undefined,
+            rootlessScript: () => {
+              const script = path.join(stubDir, "socket-daemon.sh");
+              writeFileSync(
+                script,
+                '#!/bin/sh\nfor arg in "$@"; do case "$arg" in --host=unix://*) touch "${arg#--host=unix://}";; esac; done\nsleep 300 &\nwait\n',
+                { mode: 0o755 },
+              );
+              return script;
+            },
+            readyTimeoutMs: 150,
+          }),
+        ),
+      ).rejects.toThrow("did not answer");
+      expect(Date.now() - before).toBeLessThan(3000);
+      expect(readRecord(root, "hung")).toBeNull();
+    } finally {
+      restore();
+    }
   });
 });

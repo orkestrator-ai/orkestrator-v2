@@ -231,9 +231,42 @@ async function sendPrompt(
   await expect(sendButton).toBeEnabled({ timeout: 90_000 });
   const before = await projection();
   const previous = new Set((before?.messages ?? []).map((message) => message.id));
+  const reached = async () =>
+    ((await projection())?.messages ?? []).some(
+      (message) =>
+        message.role === "user" && !previous.has(message.id) && String(message.content) === prompt,
+    );
   // Enter rather than a click: a development toast can cover the button.
   await composer.press("Enter");
-  await expect(composer).toHaveText("", { timeout: 30_000 });
+  const sent = async () => (await composer.textContent())?.trim() === "" || (await reached());
+  await expect
+    .poll(sent, { timeout: 30_000 })
+    .toBe(true)
+    .catch(async () => {
+      // The composer kept the draft and the session holds no such message, so
+      // the send was refused before dispatch: nothing ran and resending cannot
+      // run it twice. Record why, so a refusal is evidence rather than a retry
+      // that hides it, then resend once as a user would.
+      const shown = await page
+        .getByRole("alert")
+        .allTextContents()
+        .catch(() => [] as string[]);
+      const current = await projection();
+      test.info().annotations.push({
+        type: "send-refused",
+        description: JSON.stringify({
+          label,
+          shown: shown.map((text) => text.trim()).filter(Boolean),
+          phase: current?.turn.phase,
+          error: current?.turn.error,
+        }),
+      });
+      await expect(composer).toBeEditable({ timeout: 30_000 });
+      await composer.press("Enter");
+      await expect
+        .poll(sent, { timeout: 30_000, message: `${label} refused the prompt twice` })
+        .toBe(true);
+    });
   return previous;
 }
 

@@ -22,7 +22,7 @@ Analysed 2026-11-06 against `main` at `cbe0f9a5b`. The E10 batch file (efficienc
 - **The profile baseline (2026-11-06).** `e2e/agent-testing/conditional-reads-live.spec.ts` is opt-in (`ORKESTRATOR_AGENT_TEST_E10_BASELINE=1`) and runs against a profile started with `mise run dev:test --profile e10-baseline --fixture --headless-electron --no-agent-credentials --agent-platforms claude,pi`. The spec writes an `env` block into the profile's own Claude settings (`<dataDir>/agent-credentials/claude/settings.json`, the profile's isolated `CLAUDE_CONFIG_DIR`). The block points the profile's real Claude CLI at `conditional-reads-fake-model.ts`, a loopback Anthropic Messages endpoint, with a fixture API key. A conversation turn (a request with tools whose user text holds the marker) streams 120 characters every 100 ms for 5 s and then calls `Glob`, 18 times, so each response becomes a new transcript row. The spec also writes a `bun` wrapper into the profile backend's own `--toolchain-bin-dir`, which `resolveBunBinary` prefers for every bridge it starts. The wrapper adds `--preload conditional-reads-bridge-counter.ts`. That counter patches `http.Server.prototype.emit` inside the bridge to record, per route with ids and query values removed: requests, wire and decoded bytes, and handler time. It also records whether a state body was byte-identical to that session's previous one, and, for each v2 transcript snapshot, the bytes of the rows that changed plus the id order, which is what a delta would carry. Both files are removed at the end. Viewers are real browser pages on the profile's gateway, recording each native-session answer's outcome, size and round-trip time. The spec measures 20 s with one viewer and 20 s with a second page on the same tab, both while the turn streams, then 30 s idle. It writes counts, bytes and milliseconds to `output/agent-testing/<run id>/conditional-reads.json`.
 - **The fake-bridge baseline (2026-11-05).** `apps/backend/scripts/conditional-reads-baseline.ts` runs the real `NativeAgentService` and `HttpBridgeProvider` against an in-process fake bridge reached through `fetchImpl`, whose transcript routes are the shared bridge code. It covers Claude, Codex and Pi (Pi with 10 and 300 composer models), a lagging viewer polling every 1.5 s, the TX-1 ring on and off, and windows of 161 KB and 517 KB. It uses a temporary data directory, binds no port and runs no provider.
 
-Profile figures from two runs on commit `39192c189` with the spec added, Claude only. With one viewer the runs' counts matched exactly; with two they differed by one or two requests. The ranges cover both runs:
+Historical profile figures from two runs on commit `39192c189` with the spec added, Claude only. With one viewer the runs' counts matched exactly; with two they differed by one or two requests. The ranges cover both runs. These original bridge aggregates used periodic flush boundaries and included traffic outside the renderer windows; they are retained as historical evidence only and must not be used as exact 20 s rates or compared directly with renderer counts. The aligned rerun below supersedes them:
 
 | Part | Measure | One viewer, streaming, 20 s | Two viewers, streaming, 20 s | Idle, 30 s |
 | --- | --- | --- | --- | --- |
@@ -35,6 +35,23 @@ Profile figures from two runs on commit `39192c189` with the spec added, Claude 
 | 0190 | What a delta would carry | 7.8–8.2 KB per snapshot (about 1.05 changed rows of 4.5), 4.7–5 times less | 7.5–8.1 KB per snapshot, 14–15 times less | — |
 | Other | `GET /global/health` | 84 (two per poll) | 167–168 | 7–8 |
 | Other | Activity sweep (`POST /sessions/activity`, `/change-evidence`, its ack) | 11 each | 10–11 each | 6–8 each |
+
+Aligned rerun on 2026-11-06, profile `e10-window-repair`, after the round 2 repair (136.5 s, passed; stopped and reset). Response-completion timestamps in both sources use the same [from, to) windows; only the delayed file read waits for flush. Results: `output/agent-testing/e10-window-repair/conditional-reads.json` (git-ignored).
+
+| Measure | One viewer, 20.001 s | Two viewers, 20.001 s | Idle, 30.002 s |
+| --- | --- | --- | --- |
+| Renderer transcript outcomes | 39 deltas (38 live updates and one separate transcript read) | 40 deltas per viewer | 3 unchanged |
+| Renderer bytes; round trip p50 | 148,741 B; 11 ms | 143,057 / 143,603 B; 8 ms each | 51,963 B total; 9 ms |
+| Bridge state polls; repeated bodies | 39; 35 repeated | 80; 76 repeated | 3; 3 repeated |
+| Bridge mean state time | 0.29 ms | 0.13 ms | 0.15 ms |
+| Bridge transcript reads; snapshots | 39; 39 | 80; 75 (5 unchanged) | 3; 0 |
+| Transcript decoded / wire bytes | 1,502,959 / 49,166 B | 8,424,507 / 183,552 B | 294 / 321 B |
+| Mean bridge transcript time | 0.84 ms | 0.78 ms | 0.47 ms |
+| Estimated delta / snapshot decoded bytes | 308,411 / 1,502,959 B (4.9× smaller) | 565,503 / 8,424,022 B (14.9× smaller) | — |
+| Health probes | 78 | 160 | 8 |
+| Activity / change-evidence / ack | 10 each | 10 each | 7 each |
+
+These replace the historical bridge totals for rate comparisons. They preserve the small-cost deferral decision: five state-related requests and two health probes per streaming poll; state bodies repeat frequently, and bridge transcript handling remains below 1 ms per read in this run. Timing varies with host load.
 
 The fake filler text gzips far better than real text, so the wire bytes understate a real turn; the decoded bytes are what the backend parses. The window was small: the turn had just started, and the measured windows held 4 to 10 rows.
 
@@ -50,7 +67,7 @@ Fake-bridge figures from 2026-11-05, for what the profile did not cover:
 | 0190 | 517 KB windows | A delta would carry 7.2–7.8 KB, 68 times less; an 8-entry bridge ring held the base on 100% of reads |
 | 0190 | Provider source time per read, one viewer, p50 | 2 ms on 161 KB windows and 10 ms on 517 KB ones in the corrected run; load-sensitive, not a bound |
 
-**Investigation.** The profile run contradicted the fake in one place. The fake modelled Claude's state body as moving with every event, so no state body repeated while streaming. On the real bridge, Claude's `GET /session/:id` body repeated on 88–94% of streaming polls. Everything else agreed with the fake: 5 bridge requests per state poll, every viewer read getting a delta from the backend, and a delta of about 8 KB against a whole snapshot. The profile also showed two things the fake could not. Each viewer's poll reads the bridge transcript once, so bridge reads grow with the number of viewers: 42 in 20 s for one viewer and 84 for two. And each poll also makes two `GET /global/health` requests (task 6).
+**Investigation.** The profile run contradicted the fake in one place. The fake modelled Claude's state body as moving with every event, so no state body repeated while streaming. On the real bridge, Claude's `GET /session/:id` body repeated on 88–94% of streaming polls. Everything else agreed with the fake: 5 bridge requests per state poll, every viewer read getting a delta from the backend, and a delta of about 8 KB against a whole snapshot. The profile also showed two things the fake could not. Each viewer's poll reads the bridge transcript once, so bridge reads grow with the number of viewers: 39 in 20.001 s for one viewer and 80 for two in the aligned rerun. And each poll also makes two `GET /global/health` requests (task 6).
 
 Not measured on the profile, each for a stated reason:
 
@@ -78,7 +95,7 @@ Not measured on the profile, each for a stated reason:
 
 **Context.** Part 0180 recommended a bridge state revision that the backend sends as `knownToken`, with an older bridge answering whole. The report's constraint was that a bridge answering "unchanged" must still reach the backend's interaction and queue reads.
 
-**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSessionState` (`apps/backend/src/core/http-bridge-progressive.ts`) still reads the state route with no condition, plus Codex `/config` and Pi `/queue`. `readProgressiveSessionState` (`native-agent-transcript-projection.ts`) still adds the interaction reads and the steer probe. On the profile, Claude's state body repeated on 37 of 42 streaming polls with one viewer, 79 of 84 with two, and 3 of 3 idle. A revision could therefore have answered `unchanged` on most polls, unlike the fake's prediction. What it saves is small. The body is about 1 KB, and the bridge answered it in 0.15–0.22 ms on average. The request itself, a loopback round trip, stays. So do the four other requests of each poll. Codex's and Pi's state bodies carry `messageRevision` and were not measured on the profile.
+**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSessionState` (`apps/backend/src/core/http-bridge-progressive.ts`) still reads the state route with no condition, plus Codex `/config` and Pi `/queue`. `readProgressiveSessionState` (`native-agent-transcript-projection.ts`) still adds the interaction reads and the steer probe. In the aligned profile rerun, Claude's state body repeated on 35 of 39 streaming polls with one viewer, 76 of 80 with two, and 3 of 3 idle. A revision could therefore have answered `unchanged` on most polls, unlike the fake's prediction. What it saves is small. The body is about 1 KB, and the bridge answered it in 0.15–0.22 ms on average. The request itself, a loopback round trip, stays. So do the four other requests of each poll. Codex's and Pi's state bodies carry `messageRevision` and were not measured on the profile.
 
 **Decisions.**
 
@@ -136,7 +153,7 @@ On the profile, each viewer poll made one bridge transcript read. A snapshot was
 
 **Context.** `readProgressiveSessionState` calls `steerSupported` on every read for platforms that advertise steer, so that the steer control can be cleared when the bridge cannot steer. #1870 (`dc9e818f9`) recently added diagnostics to this path.
 
-**Investigation.** The fake run counted 47 probes for 47 state polls with three viewers, and 20 for 20 with one. On the profile there were 42 for 42 with one viewer and 84 for 84 with two. Each answer is about 22 bytes and took the bridge 0.05–0.06 ms, so the cost is a request, not bytes. E10 did not cover this, and it was not changed.
+**Investigation.** The fake run counted 47 probes for 47 state polls with three viewers, and 20 for 20 with one. In the aligned profile rerun there were 39 for 39 with one viewer and 80 for 80 with two. Each answer is about 22 bytes and took the bridge 0.05–0.06 ms, so the cost is a request, not bytes. E10 did not cover this, and it was not changed.
 
 **Decisions.**
 
@@ -150,7 +167,7 @@ On the profile, each viewer poll made one bridge transcript read. A snapshot was
 
 ### 6. Two bridge health probes on every poll
 
-**Problem.** On the profile, the Claude bridge answered `GET /global/health` twice for every live-update poll: 84 times in 20 s for 42 polls with one viewer, and 167–168 times for 84 polls with two. Idle, it answered 7–8 times in 30 s for 3 polls.
+**Problem.** On the profile, the Claude bridge answered `GET /global/health` twice for every live-update poll: 78 times for 39 polls with one viewer, and 160 times for 80 polls with two in the aligned rerun (20.001 s each). Idle, it answered 8 times in 30.002 s for 3 polls.
 
 **Context.** The local bridge health check is `checkHttpHealth` (`apps/backend/src/core/commands-server-health.ts`). It is used where the backend decides whether a local bridge is running and can be reused (`commands-servers.ts`, `commands-registry-servers.ts`). Each probe took the bridge under 0.15 ms and returned 33 bytes.
 
@@ -179,6 +196,12 @@ Chose to point the profile's real Claude CLI at a loopback endpoint through the 
 ### Task 1: what was not measured
 
 Codex, Pi, a lagging viewer and windows near the bound were left to the fake run, for the reasons in task 1. The decisions in tasks 2 to 4 do not change for them: tasks 2 and 3 are bounded by per-poll costs already measured, and task 4 names large windows as what would reopen it.
+
+### Task 1: align bridge and renderer windows and make setup recoverable
+
+The round 2 repair timestamps each bridge response completion and filters those samples and renderer answers to the same half-open wall-clock interval. The one-second file flush is only transport latency, not a measurement boundary. A history bounded to 20,000 samples and 8 MiB records a dropped-through timestamp; a stale flush, lost window or missing instrumentation fails instead of returning a misleading zero. Streaming windows require bridge state reads, transcript reads and measured snapshots, plus state and transcript answers for every expected viewer. The counter's route normalization, state repeats and changed-row estimates now have deterministic coverage.
+
+The second viewer uses an explicitly created and routed browser context, which satisfies the browser-suite guard without weakening it. Bun resolution precedes profile mutation; cleanup starts immediately after model acquisition, tracks owned files, and runs file removal and model shutdown even if setup or artifact writing fails.
 
 ## Current state
 

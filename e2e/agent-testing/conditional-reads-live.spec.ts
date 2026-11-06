@@ -24,11 +24,17 @@
  * `output/agent-testing/<run id>/conditional-reads.json`; no prompt, row
  * content, token or session id is written.
  */
-import { expect, test, type Page, type Request } from "./browser-test";
+import { expect, test, fetchModulesOutsideChromium, type Page, type Request } from "./browser-test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  summarizeCounters,
+  assertWindowEvidence,
+  withCleanup,
+} from "./conditional-reads-measurement";
+import type { CounterFile } from "./conditional-reads-bridge-counter";
 import { startFakeModel } from "./conditional-reads-fake-model";
 
 type Status = {
@@ -42,30 +48,6 @@ type Status = {
 type Project = { id: string; localPath: string | null; name: string };
 type Environment = { id: string; name: string };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-type RouteTotals = {
-  count: number;
-  bytes: number;
-  decodedBytes: number;
-  ms: number;
-  maxMs: number;
-  repeats: number;
-};
-const EMPTY_ROUTE: RouteTotals = {
-  count: 0,
-  bytes: 0,
-  decodedBytes: 0,
-  ms: 0,
-  maxMs: 0,
-  repeats: 0,
-};
-type DeltaTotals = {
-  snapshots: number;
-  snapshotBytes: number;
-  estimatedDeltaBytes: number;
-  changedRows: number;
-  rows: number;
-};
-type Counters = { routes: Record<string, RouteTotals>; delta: DeltaTotals };
 type Answer = {
   at: number;
   viewer: string;
@@ -131,55 +113,22 @@ function toolchainBinDir(status: Status): string {
 /** Counter files of bridges an earlier run started; they keep writing while they live. */
 const earlierBridges = new Set<string>();
 
-function readCounters(): Counters {
-  const total: Counters = {
-    routes: {},
-    delta: { snapshots: 0, snapshotBytes: 0, estimatedDeltaBytes: 0, changedRows: 0, rows: 0 },
-  };
-  if (!existsSync(counterDirectory)) return total;
-  for (const name of readdirSync(counterDirectory)) {
-    if (!name.endsWith(".json") || earlierBridges.has(name)) continue;
-    const counters = JSON.parse(
-      readFileSync(path.join(counterDirectory, name), "utf8"),
-    ) as Counters;
-    for (const [route, value] of Object.entries(counters.routes)) {
-      const into = (total.routes[route] ??= { ...EMPTY_ROUTE });
-      into.count += value.count;
-      into.bytes += value.bytes;
-      into.decodedBytes += value.decodedBytes;
-      into.ms += value.ms;
-      into.maxMs = Math.max(into.maxMs, value.maxMs);
-      into.repeats += value.repeats;
-    }
-    for (const key of Object.keys(total.delta) as Array<keyof DeltaTotals>)
-      total.delta[key] += counters.delta[key];
-  }
-  return total;
-}
-
-function countersBetween(before: Counters, after: Counters) {
-  const routes: Record<string, Omit<RouteTotals, "maxMs"> & { meanMs: number }> = {};
-  for (const [route, value] of Object.entries(after.routes)) {
-    const start = before.routes[route] ?? EMPTY_ROUTE;
-    const count = value.count - start.count;
-    if (count > 0)
-      routes[route] = {
-        count,
-        bytes: value.bytes - start.bytes,
-        decodedBytes: value.decodedBytes - start.decodedBytes,
-        ms: Math.round(value.ms - start.ms),
-        meanMs: Number(((value.ms - start.ms) / count).toFixed(2)),
-        repeats: value.repeats - start.repeats,
-      };
-  }
-  const delta = { ...after.delta };
-  for (const key of Object.keys(delta) as Array<keyof DeltaTotals>) delta[key] -= before.delta[key];
-  return { routes, delta };
+function readCounters(from: number, to: number) {
+  const files = existsSync(counterDirectory)
+    ? readdirSync(counterDirectory)
+        .filter((name) => name.endsWith(".json") && !earlierBridges.has(name))
+        .map(
+          (name) =>
+            JSON.parse(readFileSync(path.join(counterDirectory, name), "utf8")) as CounterFile,
+        )
+    : [];
+  return summarizeCounters(files, from, to);
 }
 
 /** Every native-session answer a page receives: command, outcome and size only. */
 function recordAnswers(page: Page, viewer: string, answers: Answer[]): void {
   page.on("requestfinished", (request: Request) => {
+    const at = Date.now();
     void (async () => {
       if (!request.url().endsWith("/__orkestrator/invoke")) return;
       let command: string | undefined;
@@ -210,7 +159,7 @@ function recordAnswers(page: Page, viewer: string, answers: Answer[]): void {
       }
       const timing = request.timing();
       answers.push({
-        at: Date.now(),
+        at,
         viewer,
         command,
         transcript,
@@ -253,18 +202,21 @@ async function openViewer(page: Page, status: Status, fixture: Project, environm
   const dismiss = page.getByRole("button", {
     name: /^Continue Without (Docker|GitHub CLI|Claude)$/,
   });
-  for (let quiet = 0; quiet < 6;) {
-    if (await dismiss.first().isVisible()) {
-      await dismiss.first().click();
-      quiet = 0;
-    } else {
-      quiet += 1;
+  const dockerNotice = page.getByRole("dialog").filter({
+    has: page.getByRole("heading", {
+      name: "Docker containers can't reach Orkestrator",
+      exact: true,
+    }),
+  });
+  await expect(async () => {
+    if (await dockerNotice.isVisible()) {
+      await dockerNotice.getByRole("button", { name: "Close", exact: true }).first().click();
     }
-    await page.waitForTimeout(500);
-  }
-  if (await expand.isVisible()) await expand.click();
-  await page.mouse.move(1100, 20);
-  await entry.click({ timeout: 15_000 });
+    if (await dismiss.first().isVisible()) await dismiss.first().click();
+    if (await expand.isVisible()) await expand.click({ timeout: 1_000 });
+    await page.mouse.move(1100, 20);
+    await entry.click({ timeout: 1_000 });
+  }).toPass({ timeout: 30_000, intervals: [500] });
   await expect(page.getByTestId("shared-native-compose-bar")).toBeVisible({ timeout: 90_000 });
 }
 
@@ -279,7 +231,7 @@ async function turnPhase(invoke: Invoke, identity: Record<string, unknown>): Pro
 test.describe("E10 baseline: conditional reads and deltas", () => {
   test.skip(!OPT_IN, "Set ORKESTRATOR_AGENT_TEST_E10_BASELINE=1 on a credential-free profile");
 
-  test("a streaming Claude turn against a loopback model", async ({ page, context }) => {
+  test("a streaming Claude turn against a loopback model", async ({ page, browser }) => {
     test.setTimeout(10 * 60_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -290,6 +242,13 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
     expect(existsSync(settingsFile), "the profile already has Claude settings").toBe(false);
     expect(existsSync(wrapper), "the profile toolchain already has a bun").toBe(false);
 
+    const realBun = execFileSync("mise", ["which", "bun"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    }).trim();
+    const results: Record<string, unknown> = { profile, windowMs: WINDOW_MS };
+    let ownsSettings = false;
+    let ownsWrapper = false;
     const model = await startFakeModel({
       marker: MARKER,
       rounds: Number(process.env.E10_ROUNDS ?? 18),
@@ -297,160 +256,185 @@ test.describe("E10 baseline: conditional reads and deltas", () => {
       deltaMs: 100,
       deltaChars: 120,
     });
-    rmSync(counterDirectory, { recursive: true, force: true });
-    mkdirSync(counterDirectory, { recursive: true });
-    // A bridge from an earlier run rewrites its file within a second.
-    await page.waitForTimeout(1_500);
-    for (const name of readdirSync(counterDirectory)) earlierBridges.add(name);
-    mkdirSync(claudeConfigDir, { recursive: true });
-    writeFileSync(
-      settingsFile,
-      JSON.stringify({
-        env: {
-          ANTHROPIC_BASE_URL: model.origin,
-          ANTHROPIC_API_KEY: "sk-ant-e10-fixture-only",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-          DISABLE_AUTOUPDATER: "1",
-        },
-      }),
-    );
-    const realBun = execFileSync("mise", ["which", "bun"], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-    }).trim();
-    writeFileSync(
-      wrapper,
-      [
-        "#!/bin/sh",
-        `export E10_BRIDGE_COUNTER_DIR=${JSON.stringify(counterDirectory)}`,
-        `exec ${JSON.stringify(realBun)} --preload ${JSON.stringify(path.join(import.meta.dirname, "conditional-reads-bridge-counter.ts"))} "$@"`,
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
+    await withCleanup(
+      async () => {
+        rmSync(counterDirectory, { recursive: true, force: true });
+        mkdirSync(counterDirectory, { recursive: true });
+        // A bridge from an earlier run rewrites its file within a second.
+        await page.waitForTimeout(1_500);
+        for (const name of readdirSync(counterDirectory)) earlierBridges.add(name);
+        mkdirSync(claudeConfigDir, { recursive: true });
+        ownsSettings = true;
+        writeFileSync(
+          settingsFile,
+          JSON.stringify({
+            env: {
+              ANTHROPIC_BASE_URL: model.origin,
+              ANTHROPIC_API_KEY: "sk-ant-e10-fixture-only",
+              CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+              DISABLE_AUTOUPDATER: "1",
+            },
+          }),
+        );
+        ownsWrapper = true;
+        writeFileSync(
+          wrapper,
+          [
+            "#!/bin/sh",
+            `export E10_BRIDGE_COUNTER_DIR=${JSON.stringify(counterDirectory)}`,
+            `exec ${JSON.stringify(realBun)} --preload ${JSON.stringify(path.join(import.meta.dirname, "conditional-reads-bridge-counter.ts"))} "$@"`,
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
 
-    const results: Record<string, unknown> = { profile, windowMs: WINDOW_MS };
-    try {
-      const invoke = await signIn(page, status);
-      const fixture = (await invoke<Project[]>("get_projects")).find(
-        (project) => project.localPath === status.testProject,
-      );
-      expect(fixture, "the profile has no seeded fixture project").toBeTruthy();
-      const environment = await invoke<Environment>("create_environment", {
-        projectId: fixture!.id,
-        name: `e10-${Date.now()}`,
-        environmentType: "local",
-        networkAccessMode: "restricted",
-      });
-      await invoke("start_environment", { environmentId: environment.id });
-      const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
-        environmentId: environment.id,
-      });
-      await invoke("save_pane_layout", {
-        environmentId: environment.id,
-        expectedRevision: layout?.revision ?? 0,
-        layout: {
-          version: PANE_LAYOUT_VERSION,
-          containerId: null,
-          activePaneId: "e10-pane",
-          root: {
-            kind: "leaf",
-            id: "e10-pane",
-            activeTabId: TAB_ID,
-            tabs: [
-              {
-                id: TAB_ID,
-                type: "agent-native",
-                displayTitle: "E10 baseline",
-                nativeAgentData: {
-                  environmentId: environment.id,
-                  platform: "claude",
-                  isLocal: true,
+        const invoke = await signIn(page, status);
+        const fixture = (await invoke<Project[]>("get_projects")).find(
+          (project) => project.localPath === status.testProject,
+        );
+        expect(fixture, "the profile has no seeded fixture project").toBeTruthy();
+        const environment = await invoke<Environment>("create_environment", {
+          projectId: fixture!.id,
+          name: `e10-${Date.now()}`,
+          environmentType: "local",
+          networkAccessMode: "restricted",
+        });
+        await invoke("start_environment", { environmentId: environment.id });
+        const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+          environmentId: environment.id,
+        });
+        await invoke("save_pane_layout", {
+          environmentId: environment.id,
+          expectedRevision: layout?.revision ?? 0,
+          layout: {
+            version: PANE_LAYOUT_VERSION,
+            containerId: null,
+            activePaneId: "e10-pane",
+            root: {
+              kind: "leaf",
+              id: "e10-pane",
+              activeTabId: TAB_ID,
+              tabs: [
+                {
+                  id: TAB_ID,
+                  type: "agent-native",
+                  displayTitle: "E10 baseline",
+                  nativeAgentData: {
+                    environmentId: environment.id,
+                    platform: "claude",
+                    isLocal: true,
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-      });
-      const identity = {
-        environmentId: environment.id,
-        agent: "claude" as const,
-        logicalSessionKey: `env-${environment.id}:${TAB_ID}`,
-      };
-      const answers: Answer[] = [];
-      recordAnswers(page, "first", answers);
-      await openViewer(page, status, fixture!, environment);
+        });
+        const identity = {
+          environmentId: environment.id,
+          agent: "claude" as const,
+          logicalSessionKey: `env-${environment.id}:${TAB_ID}`,
+        };
+        const answers: Answer[] = [];
+        recordAnswers(page, "first", answers);
+        await openViewer(page, status, fixture!, environment);
 
-      const composeBar = page.getByTestId("shared-native-compose-bar");
-      const composer = composeBar.getByRole("textbox", { name: /^Message Claude/ });
-      await composer.fill(`${MARKER}: stream the scripted baseline turn.`);
-      await composer.press("Enter");
-      await expect.poll(() => model.conversationCalls(), { timeout: 120_000 }).toBeGreaterThan(0);
-      await expect
-        .poll(() => turnPhase(invoke, identity), { timeout: 60_000, intervals: [500] })
-        .toBe("running");
-      await page.waitForTimeout(5_000);
+        const composeBar = page.getByTestId("shared-native-compose-bar");
+        const composer = composeBar.getByRole("textbox", { name: /^Message Claude/ });
+        await composer.fill(`${MARKER}: stream the scripted baseline turn.`);
+        await composer.press("Enter");
+        await expect.poll(() => model.conversationCalls(), { timeout: 120_000 }).toBeGreaterThan(0);
+        await expect
+          .poll(() => turnPhase(invoke, identity), { timeout: 60_000, intervals: [500] })
+          .toBe("running");
+        await page.waitForTimeout(5_000);
 
-      const oneFrom = Date.now();
-      const oneBefore = readCounters();
-      await page.waitForTimeout(WINDOW_MS);
-      const oneTo = Date.now();
-      // The counter files are flushed once a second.
-      await page.waitForTimeout(1_200);
-      const oneAfter = readCounters();
-      results.oneViewer = {
-        seconds: (oneTo - oneFrom) / 1_000,
-        renderer: answersBetween(answers, oneFrom, oneTo),
-        bridge: countersBetween(oneBefore, oneAfter),
-        phaseAtEnd: await turnPhase(invoke, identity),
-        modelCalls: model.conversationCalls(),
-      };
+        console.info("E10: measuring one viewer");
+        const oneFrom = Date.now();
+        await page.waitForTimeout(WINDOW_MS);
+        const oneTo = Date.now();
+        // The counter files are flushed once a second.
+        await page.waitForTimeout(1_200);
+        const oneAfter = readCounters(oneFrom, oneTo);
+        results.oneViewer = {
+          seconds: (oneTo - oneFrom) / 1_000,
+          renderer: answersBetween(answers, oneFrom, oneTo),
+          bridge: oneAfter,
+          phaseAtEnd: await turnPhase(invoke, identity),
+          modelCalls: model.conversationCalls(),
+        };
 
-      const second = await context.newPage();
-      await second.setViewportSize({ width: 1440, height: 1000 });
-      recordAnswers(second, "second", answers);
-      await openViewer(second, status, fixture!, environment);
-      await page.waitForTimeout(3_000);
-      const twoFrom = Date.now();
-      const twoBefore = readCounters();
-      await page.waitForTimeout(WINDOW_MS);
-      const twoTo = Date.now();
-      await page.waitForTimeout(1_200);
-      const twoAfter = readCounters();
-      results.twoViewers = {
-        seconds: (twoTo - twoFrom) / 1_000,
-        renderer: answersBetween(answers, twoFrom, twoTo),
-        bridge: countersBetween(twoBefore, twoAfter),
-        phaseAtEnd: await turnPhase(invoke, identity),
-        modelCalls: model.conversationCalls(),
-      };
-      await second.close();
+        const secondContext = await browser.newContext({
+          storageState: await page.context().storageState(),
+        });
+        await fetchModulesOutsideChromium(secondContext);
+        const second = await secondContext.newPage();
+        await second.setViewportSize({ width: 1440, height: 1000 });
+        recordAnswers(second, "second", answers);
+        await openViewer(second, status, fixture!, environment);
+        await page.waitForTimeout(3_000);
+        console.info("E10: measuring two viewers");
+        const twoFrom = Date.now();
+        await page.waitForTimeout(WINDOW_MS);
+        const twoTo = Date.now();
+        await page.waitForTimeout(1_200);
+        const twoAfter = readCounters(twoFrom, twoTo);
+        results.twoViewers = {
+          seconds: (twoTo - twoFrom) / 1_000,
+          renderer: answersBetween(answers, twoFrom, twoTo),
+          bridge: twoAfter,
+          phaseAtEnd: await turnPhase(invoke, identity),
+          modelCalls: model.conversationCalls(),
+        };
+        await secondContext.close();
+        console.info("E10: waiting for the scripted turn to finish");
 
-      await expect
-        .poll(() => turnPhase(invoke, identity), { timeout: 5 * 60_000, intervals: [1_000] })
-        .toBe("idle");
-      await page.waitForTimeout(5_000);
-      const idleFrom = Date.now();
-      const idleBefore = readCounters();
-      await page.waitForTimeout(IDLE_WINDOW_MS);
-      const idleTo = Date.now();
-      await page.waitForTimeout(1_200);
-      const idleAfter = readCounters();
-      results.idle = {
-        seconds: (idleTo - idleFrom) / 1_000,
-        renderer: answersBetween(answers, idleFrom, idleTo),
-        bridge: countersBetween(idleBefore, idleAfter),
-      };
-      results.modelCalls = model.conversationCalls();
-    } finally {
-      mkdirSync(outputDirectory, { recursive: true });
-      writeFileSync(
-        path.join(outputDirectory, "conditional-reads.json"),
-        `${JSON.stringify(results, null, 2)}\n`,
-      );
-      rmSync(wrapper, { force: true });
-      rmSync(settingsFile, { force: true });
-      await model.stop();
-    }
+        await expect
+          .poll(() => turnPhase(invoke, identity), { timeout: 5 * 60_000, intervals: [1_000] })
+          .toBe("idle");
+        await page.waitForTimeout(5_000);
+        console.info("E10: measuring idle");
+        const idleFrom = Date.now();
+        await page.waitForTimeout(IDLE_WINDOW_MS);
+        const idleTo = Date.now();
+        await page.waitForTimeout(1_200);
+        const idleAfter = readCounters(idleFrom, idleTo);
+        results.idle = {
+          seconds: (idleTo - idleFrom) / 1_000,
+          renderer: answersBetween(answers, idleFrom, idleTo),
+          bridge: idleAfter,
+        };
+        for (const [name, viewers] of [
+          ["oneViewer", ["first"]],
+          ["twoViewers", ["first", "second"]],
+          ["idle", ["first"]],
+        ] as const) {
+          assertWindowEvidence(
+            results[name] as Parameters<typeof assertWindowEvidence>[0],
+            viewers,
+            name !== "idle",
+          );
+        }
+        results.modelCalls = model.conversationCalls();
+      },
+      async () => {
+        try {
+          mkdirSync(outputDirectory, { recursive: true });
+          writeFileSync(
+            path.join(outputDirectory, "conditional-reads.json"),
+            `${JSON.stringify(results, null, 2)}\n`,
+          );
+        } finally {
+          try {
+            if (ownsWrapper) rmSync(wrapper, { force: true });
+          } finally {
+            try {
+              if (ownsSettings) rmSync(settingsFile, { force: true });
+            } finally {
+              await model.stop();
+            }
+          }
+        }
+      },
+    );
   });
 });

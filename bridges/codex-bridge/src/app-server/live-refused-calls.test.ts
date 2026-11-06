@@ -25,9 +25,10 @@
  * bridge shows no row for it.
  */
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AppServerRuntime } from "../app-server-runtime.js";
 import type { RuntimeSseEvent } from "../app-server-runtime-base.js";
 import { codexAppServerConfigOverrides, codexCoordinatorPolicy } from "../codex-config.js";
@@ -50,6 +51,18 @@ const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9
 const PROFILE = "coordinator-refused-calls";
 const CREATED = "coordinator-live-created.txt";
 const TOUCHED = "coordinator-live-shell.txt";
+
+/**
+ * The platform's own errno text for a write the sandbox refused: macOS
+ * Seatbelt answers EPERM, Linux bubblewrap's read-only bind EROFS.
+ */
+const REFUSED_WRITE =
+  process.platform === "linux" ? "Read-only file system" : "Operation not permitted";
+/** How `touch` reports {@link TOUCHED} refused: GNU quotes the name, BSD does not. */
+const REFUSED_TOUCH =
+  process.platform === "linux"
+    ? `cannot touch '${TOUCHED}': ${REFUSED_WRITE}`
+    : `${TOUCHED}: ${REFUSED_WRITE}`;
 
 /** The model's one cell: two calls the sandbox refuses, then the control. */
 const CELL = [
@@ -193,16 +206,24 @@ describeLive("live refused calls", () => {
       { mode: 0o600 },
     );
     const responses = startScriptedResponses();
+    // As the backend launches a coordinator (`coordinatorCodexRuntime`): the
+    // canonical executable, its directory the readable runtime root. On Linux
+    // Codex re-executes itself inside bubblewrap for every command, so a root
+    // without it fails each one with `execvp …: No such file or directory`.
+    const codexPath = await realpath(await resolveCodexBinary());
     const engine = new AppServerEngine({
-      codexPath: await resolveCodexBinary(),
+      codexPath,
       cwd: workspace,
       codexHome,
       clientInfo: CLIENT_INFO,
       configOverrides: {
         ...codexAppServerConfigOverrides({
+          // The engine's child inherits this TMPDIR, and the profile's
+          // temporary-directory denials depend on it, as in the bridge.
+          TMPDIR: process.env.TMPDIR,
           ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
           CODEX_BRIDGE_PERMISSION_PROFILE: PROFILE,
-          CODEX_BRIDGE_READABLE_RUNTIME_ROOT: workspace,
+          CODEX_BRIDGE_READABLE_RUNTIME_ROOT: dirname(codexPath),
           CWD: workspace,
         }),
         openai_base_url: JSON.stringify(responses.baseUrl),
@@ -241,7 +262,10 @@ describeLive("live refused calls", () => {
       // Codex refused both and said so to the model.
       const told = responses.cellOutput();
       expect(told).toContain("patch rejected");
-      expect(told).toContain("Operation not permitted");
+      expect(told).toContain(REFUSED_TOUCH);
+      // ...and neither write happened.
+      expect(existsSync(join(workspace, CREATED))).toBe(false);
+      expect(existsSync(join(workspace, TOUCHED))).toBe(false);
 
       // The control became an item, so the item stream was being read...
       const commands = items.filter((item) => item.type === "command_execution");
@@ -269,7 +293,7 @@ describeLive("live refused calls", () => {
       expect(responses.cellOutput(2)).toContain(
         "patch rejected: writing is blocked by read-only sandbox",
       );
-      expect(responses.cellOutput(3)).toContain(`${TOUCHED}: Operation not permitted`);
+      expect(responses.cellOutput(3)).toContain(REFUSED_TOUCH);
       expect(rollout).toContain("call_probe_2");
       expect(rollout).toContain("call_probe_3");
     } finally {
@@ -347,9 +371,11 @@ describeLive("live refused calls", () => {
         ["call_probe_2", "failure"],
         ["call_probe_3", "failure"],
       ]);
-      expect(cells[0]?.toolError).toContain("Operation not permitted");
+      expect(cells[0]?.toolError).toContain(REFUSED_TOUCH);
       expect(cells[1]?.toolError).toContain("patch rejected");
-      expect(cells[2]?.toolError).toContain(`${TOUCHED}: Operation not permitted`);
+      expect(cells[2]?.toolError).toContain(REFUSED_TOUCH);
+      expect(existsSync(join(workspace, CREATED))).toBe(false);
+      expect(existsSync(join(workspace, TOUCHED))).toBe(false);
       // The control still has its own row; the cell holding it is shown for
       // the refusals beside it.
       expect(

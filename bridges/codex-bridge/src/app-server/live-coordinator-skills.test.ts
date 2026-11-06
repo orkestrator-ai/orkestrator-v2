@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { COORDINATOR_CODEX_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import {
   codexAppServerConfigOverrides,
@@ -49,6 +49,8 @@ const CANARY = {
 
 interface Fixture {
   root: string;
+  /** The canonical executable, as the backend launches a coordinator's. */
+  codexPath: string;
   codexHome: string;
   workspace: string;
   userSkills: string;
@@ -68,6 +70,10 @@ async function skill(dir: string, name: string, description: string): Promise<vo
 
 async function fixture(): Promise<Fixture> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ork-coordinator-skills-")));
+  // `coordinatorCodexRuntime` in the backend: the canonical executable, its
+  // directory the readable runtime root. On Linux Codex re-executes itself
+  // inside bubblewrap for every command, so it must be readable there.
+  const codexPath = await realpath(await resolveCodexBinary());
   const codexHome = join(root, "coordinator-codex-home");
   const workspace = join(root, "checkout");
   const userSkills = join(root, "account-codex-home", "skills");
@@ -109,13 +115,17 @@ async function fixture(): Promise<Fixture> {
   });
   return {
     root,
+    codexPath,
     codexHome,
     workspace,
     userSkills,
     env: {
+      // The engine's child inherits this TMPDIR, and the profile's
+      // temporary-directory denials depend on it, as in the bridge.
+      TMPDIR: process.env.TMPDIR,
       ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
       CODEX_BRIDGE_PERMISSION_PROFILE: PROFILE,
-      CODEX_BRIDGE_READABLE_RUNTIME_ROOT: join(root, "runtime"),
+      CODEX_BRIDGE_READABLE_RUNTIME_ROOT: dirname(codexPath),
       CWD: workspace,
       [COORDINATOR_CODEX_USER_SKILLS_DIR_ENV]: userSkills,
     },
@@ -188,7 +198,7 @@ describeLive("live coordinator skills", () => {
 
   test("the user's and the project's skills are listed, enabled and offered", async () => {
     const setup = await fixture();
-    const engine = engineFor(setup, await resolveCodexBinary());
+    const engine = engineFor(setup, setup.codexPath);
     try {
       await engine.start();
       const listed = (await engine.listSkills({ cwd: setup.workspace, forceReload: true }))
@@ -223,7 +233,7 @@ describeLive("live coordinator skills", () => {
 
   test("commands can read a user skill and still cannot write or read anything else", async () => {
     const setup = await fixture();
-    const engine = engineFor(setup, await resolveCodexBinary());
+    const engine = engineFor(setup, setup.codexPath);
     try {
       await engine.start();
       const userSkill = join(setup.userSkills, "user-canary", "SKILL.md");

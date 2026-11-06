@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "bun:test";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { keyInformation } from "./key-information-test-fixture";
 import { build, session } from "./pipeline-test-fixture";
@@ -14,8 +14,17 @@ const taskSnapshot = {
   acceptanceCriteriaItems: [{ id: "ac-1", text: "Works on a real phone" }],
 };
 
+/** Opens the collapsed "Needs a look" box and returns it. */
+function expandNeedsALook() {
+  const region = screen.getByRole("region", { name: "Needs a look" });
+  fireEvent.click(within(region).getByRole("button", { name: /^Needs a look/ }));
+  return region;
+}
+
 describe("PipelineNotesView", () => {
-  test("shows what needs a look under the summary, then the rest of the brief", () => {
+  afterEach(cleanup);
+
+  test("leads with what needs a look, then the rest of the brief", () => {
     render(
       <PipelineNotesView
         pipeline={build({
@@ -33,7 +42,7 @@ describe("PipelineNotesView", () => {
       />,
     );
 
-    const flagged = within(screen.getByRole("region", { name: "Needs a look" }));
+    const flagged = within(expandNeedsALook());
     expect(flagged.getByText("Works on a real phone")).toBeTruthy();
     expect(flagged.getByText("Needs a device.")).toBeTruthy();
     expect(flagged.getByText("Rich text formatting")).toBeTruthy();
@@ -44,7 +53,7 @@ describe("PipelineNotesView", () => {
         .getAllByRole("region")
         .slice(0, 3)
         .map((region) => region.getAttribute("aria-label")),
-    ).toEqual(["Summary", "Needs a look", "Objective"]);
+    ).toEqual(["Needs a look", "Summary", "Objective"]);
 
     // Outlined in orange, with no shading behind it.
     const outline = screen.getByRole("region", { name: "Needs a look" }).classList;
@@ -69,6 +78,44 @@ describe("PipelineNotesView", () => {
         .filter((heading) => !heading.closest('[aria-label="Needs a look"]'));
       expect(headings).toHaveLength(1);
     }
+  });
+
+  test("starts collapsed and toggles only from its header", () => {
+    render(
+      <PipelineNotesView
+        pipeline={build({
+          phase: "complete",
+          taskSnapshot,
+          keyInformation,
+          sessions: [
+            session("verify", "verify-1", 0, {
+              acceptanceCriteriaResults: [
+                { id: "ac-1", status: "not-checked", evidence: "Needs a device." },
+              ],
+            }),
+          ],
+        })}
+      />,
+    );
+
+    const region = screen.getByRole("region", { name: "Needs a look" });
+    const header = within(region).getByRole("button", { name: /^Needs a look/ });
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(within(region).queryByText("Works on a real phone") === null).toBe(true);
+
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    const body = document.getElementById(header.getAttribute("aria-controls")!)!;
+    expect(within(body).getByText("Works on a real phone")).toBeTruthy();
+
+    // Clicking inside the items, as selecting text does, leaves it open.
+    fireEvent.click(within(region).getByText("Works on a real phone"));
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(header.hasAttribute("aria-controls")).toBe(false);
+    expect(within(region).queryByText("Works on a real phone") === null).toBe(true);
   });
 
   test("shows what needs a look ahead of a brief with no summary", () => {
@@ -96,12 +143,12 @@ describe("PipelineNotesView", () => {
       />,
     );
 
-    const flagged = within(screen.getByRole("region", { name: "Needs a look" }));
+    const flagged = within(expandNeedsALook());
     expect(flagged.getByText("Works on a real phone")).toBeTruthy();
     expect(screen.getByText("Nothing has been recorded yet")).toBeTruthy();
   });
 
-  test("shows the nothing-flagged note between the summary and the rest of a recorded brief", () => {
+  test("shows the nothing-flagged note ahead of a recorded brief", () => {
     render(
       <PipelineNotesView
         pipeline={build({
@@ -119,8 +166,10 @@ describe("PipelineNotesView", () => {
     const summary = screen.getByRole("region", { name: "Summary" });
     const note = screen.getByText("Nothing was flagged for a person to look at.");
     const objective = screen.getByRole("region", { name: "Objective" });
-    expect(summary.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(note.compareDocumentPosition(objective) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      summary.compareDocumentPosition(objective) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Needs a look" }) === null).toBe(true);
     expect(screen.queryByText("Nothing has been recorded yet") === null).toBe(true);
   });

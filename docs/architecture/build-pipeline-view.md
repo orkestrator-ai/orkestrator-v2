@@ -754,9 +754,11 @@ stays readable, its status says "So far", and selection stays on the step that
 failed. Only a cancelled run that never shipped omits it.
 
 Its inspector (`PipelineNotesView`) shows the whole key information document
-(`KeyInformationDocument`, the same one the key information tab renders), with
-**Needs a look** directly under the summary, or ahead of the sections when the
-brief has no summary. The list comes from `pipelineFollowUps`
+(`KeyInformationDocument`, the same one the key information tab renders), led
+by **Needs a look** at the top, ahead of the at-a-glance tiles and the summary.
+It opens collapsed to its header and count; only the header toggles it, so the
+items inside stay selectable, and each mount starts collapsed again. With
+nothing flagged it is a one-line note instead. The list comes from `pipelineFollowUps`
 (`@orkestrator/protocol/build-pipeline-notes`), a pure reading of the record:
 
 - criteria the newest live Verify marked `not-checked`, with what was missing;

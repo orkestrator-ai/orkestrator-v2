@@ -6,6 +6,7 @@ import process from "node:process";
 import { parseWorktreeLocationSettings } from "@orkestrator/protocol/disk-usage";
 
 import {
+  AGENT_TEST_HIDDEN_WINDOWS_ENV,
   defaultRuntimeProfileRoots,
   HEADLESS_ELECTRON_SWITCHES,
   resolveRuntimeProfile,
@@ -418,10 +419,11 @@ export async function seedAgentTestProfileState(
 const ELECTRON_READINESS_TIMEOUT_MS = 60_000;
 
 /**
- * Electron's leading switches and environment. Headless selects Chromium's
- * headless Ozone platform and drops the display variables, so the profile
- * cannot open a window in the session that started it. Ozone exists only on
- * Linux, so headless changes nothing on any other platform.
+ * Electron's leading switches and environment. On Linux headless selects
+ * Chromium's headless Ozone platform and drops the display variables, so the
+ * profile cannot open a window in the session that started it. macOS has no
+ * Ozone, so there it asks the main process to keep every window hidden and
+ * the app out of the Dock instead. Headless changes nothing on Windows.
  */
 export function electronLaunch(
   headless: boolean,
@@ -430,8 +432,22 @@ export function electronLaunch(
 ): { switches: string[]; env: NodeJS.ProcessEnv } {
   const result = { ...env };
   delete result.ELECTRON_RUN_AS_NODE;
-  if (!headless || platform !== "linux") return { switches: [], env: result };
-  return { switches: [...HEADLESS_ELECTRON_SWITCHES], env: withoutDisplay(result) };
+  // Only this decision sets it; one inherited from a shell must not hide a
+  // profile started with --no-headless.
+  delete result[AGENT_TEST_HIDDEN_WINDOWS_ENV];
+  if (!headless) return { switches: [], env: result };
+  if (platform === "linux") {
+    return { switches: [...HEADLESS_ELECTRON_SWITCHES], env: withoutDisplay(result) };
+  }
+  if (platform === "darwin") {
+    return { switches: [], env: { ...result, [AGENT_TEST_HIDDEN_WINDOWS_ENV]: "1" } };
+  }
+  return { switches: [], env: result };
+}
+
+/** Platforms where an agent-test profile can keep Electron off the desktop. */
+function supportsHeadless(platform: NodeJS.Platform): boolean {
+  return platform === "linux" || platform === "darwin";
 }
 
 /**
@@ -450,7 +466,7 @@ export function electronReadinessTimeoutMs(flavor: "development" | "agent-test")
   return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
 }
 
-/** `1` starts an agent-test profile's Electron headless (Linux only), `0` keeps its window. */
+/** `1` starts an agent-test profile's Electron headless (Linux and macOS), `0` keeps its window. */
 export const AGENT_TEST_HEADLESS_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS";
 /** The earlier opt-in; `1` still means headless, for scripts that set it. */
 export const AGENT_TEST_HEADLESS_ELECTRON_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON";
@@ -470,12 +486,13 @@ export function launcherIsInteractive(
  * Whether the profile's Electron runs headless, and why.
  *
  * On a shared Linux host the inherited `DISPLAY` and `WAYLAND_DISPLAY` belong
- * to whoever is signed in, so an agent-test window would open on their desktop,
- * take focus and receive their keystrokes. The browser suites drive the
- * gateway, not this window, so a run with nobody at its terminal goes headless
- * unless told otherwise. An explicit flag wins over the variables, and they win
- * over the terminal check. Other flavors and platforms are never headless, so a
- * variable left in a shell cannot hide `mise run dev`.
+ * to whoever is signed in, and on macOS there is only the signed-in desktop, so
+ * an agent-test window would open there, take focus and receive their
+ * keystrokes. The browser suites drive the gateway, not this window, so a run
+ * with nobody at its terminal goes headless unless told otherwise. An explicit
+ * flag wins over the variables, and they win over the terminal check. Other
+ * flavors and platforms are never headless, so a variable left in a shell
+ * cannot hide `mise run dev`.
  */
 export function resolveElectronHeadless(options: {
   flavor: "development" | "agent-test";
@@ -486,7 +503,9 @@ export function resolveElectronHeadless(options: {
 }): { headless: boolean; reason: string } {
   const { flavor, platform, requested, env, interactive } = options;
   if (flavor !== "agent-test") return { headless: false, reason: `${flavor} profile` };
-  if (platform !== "linux") return { headless: false, reason: `not supported on ${platform}` };
+  if (!supportsHeadless(platform)) {
+    return { headless: false, reason: `not supported on ${platform}` };
+  }
   if (requested !== undefined) {
     return { headless: requested, reason: requested ? "--headless" : "--no-headless" };
   }
@@ -504,22 +523,26 @@ export function resolveElectronHeadless(options: {
 
 /**
  * What the launcher says about the headless decision, or `null` for an
- * ordinary window. On macOS and Windows anything that would make Linux
- * headless (the flag, a variable, no terminal) is accepted and changes
- * nothing, so it says that rather than opening a window silently.
+ * ordinary window. On Windows anything that would make Linux headless (the
+ * flag, a variable, no terminal) is accepted and changes nothing, so it says
+ * that rather than opening a window silently.
  */
 export function electronHeadlessNotice(
   options: Parameters<typeof resolveElectronHeadless>[0],
 ): string | null {
   const { headless, reason } = resolveElectronHeadless(options);
-  if (headless) {
-    return `Electron is headless (${reason}); the app is at browserUrl and no window will open.${options.requested === true ? "" : " Pass --no-headless for a real window."}`;
+  const getWindow = options.requested === true ? "" : " Pass --no-headless for a real window.";
+  if (headless && options.platform === "darwin") {
+    return `Electron's windows are hidden (${reason}); the app is at browserUrl, with no window or Dock icon.${getWindow}`;
   }
-  if (options.flavor !== "agent-test" || options.platform === "linux") return null;
+  if (headless) {
+    return `Electron is headless (${reason}); the app is at browserUrl and no window will open.${getWindow}`;
+  }
+  if (options.flavor !== "agent-test" || supportsHeadless(options.platform)) return null;
   const onLinux = resolveElectronHeadless({ ...options, platform: "linux" });
   if (!onLinux.headless) return null;
   const cause = onLinux.reason === "no terminal" ? "running without a terminal" : onLinux.reason;
-  return `Electron opens a window: headless mode exists only on Linux, so ${cause} changes nothing on ${options.platform}.`;
+  return `Electron opens a window: headless mode exists only on Linux and macOS, so ${cause} changes nothing on ${options.platform}.`;
 }
 
 /**

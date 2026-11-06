@@ -28,13 +28,18 @@ function electronValueImports(): string[] {
 }
 
 describe("main process startup switches", () => {
-  for (const [flavor, platform, switches] of [
-    ["agent-test", "darwin", ["use-mock-keychain"]],
-    ["agent-test", "linux", []],
-    ["development", "darwin", []],
-    ["production", "darwin", []],
+  // The last two columns: whether the launcher asked for hidden windows, and the
+  // activation policies main then set. Only an agent-test profile on macOS
+  // honours the request.
+  for (const [flavor, platform, switches, hidden, policies] of [
+    ["agent-test", "darwin", ["use-mock-keychain"], false, []],
+    ["agent-test", "darwin", ["use-mock-keychain"], true, ["accessory"]],
+    ["agent-test", "linux", [], false, []],
+    ["agent-test", "linux", [], true, []],
+    ["development", "darwin", [], true, []],
+    ["production", "darwin", [], false, []],
   ] as const) {
-    test(`${flavor} on ${platform} appends its switches during module loading`, () => {
+    test(`${flavor} on ${platform}${hidden ? " asked for hidden windows" : ""} appends its switches during module loading`, () => {
       // Isolate Electron's module mock and process.platform from other suites.
       // Stop at setPath, before logging, locks, backend processes or windows can
       // touch user state. Moving the switch wiring past this boundary must fail.
@@ -57,6 +62,7 @@ describe("main process startup switches", () => {
         }));
         Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });
         const calls = [];
+        const policies = [];
         let aboutPanel;
         const boundary = new Error("startup boundary");
         mock.module("electron", () => ({
@@ -67,6 +73,7 @@ describe("main process startup switches", () => {
             setName() {},
             setAboutPanelOptions(options) { aboutPanel = options; },
             setDesktopName() {},
+            setActivationPolicy(policy) { policies.push(policy); },
             commandLine: { appendSwitch(name) { calls.push(name); } },
             setPath() { throw boundary; },
             whenReady() { throw new Error("readiness reached before startup boundary"); },
@@ -85,16 +92,21 @@ describe("main process startup switches", () => {
             !installedSetter[Symbol.for("orkestrator.socketTypeOfServiceGuard")]) {
           throw new Error("socket guard was not installed before startup side effects");
         }
-        process.stdout.write(JSON.stringify({ calls, aboutPanel }));
+        process.stdout.write(JSON.stringify({ calls, policies, aboutPanel }));
       `;
+      const env = { ...process.env };
+      delete env.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS;
+      if (hidden) env.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS = "1";
       const output = execFileSync(process.execPath, ["--eval", source], {
         cwd: new URL("..", import.meta.url),
+        env,
         encoding: "utf8",
         timeout: 20_000,
         maxBuffer: 64 * 1024,
       });
       const result = JSON.parse(output);
       expect(result.calls).toEqual(switches);
+      expect(result.policies).toEqual(policies);
       // Set before ready, with the profile's title and the package version,
       // not Electron's own. main.ts runs from source here rather than from
       // the emitted bundle, so only the icon's unpackaged branch is checked;

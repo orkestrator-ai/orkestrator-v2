@@ -315,6 +315,28 @@ export const HEADLESS_ELECTRON_SWITCHES: readonly string[] = [
   "--password-store=basic",
 ];
 
+/**
+ * Set to `1` by `dev:test` when an agent-test profile on macOS must stay off the
+ * desktop. macOS has no headless Ozone platform, so Electron runs normally with
+ * every window hidden and no Dock icon (`hiddenWindowConstructor`).
+ */
+export const AGENT_TEST_HIDDEN_WINDOWS_ENV = "ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS";
+
+/**
+ * Whether this process keeps all its windows off the desktop. Only an
+ * agent-test profile on macOS honours the variable, so one left in a shell
+ * cannot hide `mise run dev` or an installed app.
+ */
+export function hiddenWindowsForRuntime(
+  flavor: RuntimeFlavor,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    flavor === "agent-test" && platform === "darwin" && env[AGENT_TEST_HIDDEN_WINDOWS_ENV] === "1"
+  );
+}
+
 /** `env` without the variables that would put a window on the signed-in desktop. */
 export function withoutDisplay(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result = { ...env };

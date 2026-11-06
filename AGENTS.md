@@ -1500,8 +1500,9 @@ alive to supervise Vite, Electron, the backend, bridges, and their process trees
 mise run dev:test --profile agent-settings-dialog --fixture
 ```
 
-On Linux, a run with no terminal (an agent's shell) starts Electron headless, so
-no window opens on the host's desktop; `browserUrl` still serves the app. If your
+On Linux and macOS, a run with no terminal (an agent's shell) keeps Electron off
+the desktop (headless on Linux; hidden windows and no Dock icon on macOS), so no
+window opens on the host's desktop; `browserUrl` still serves the app. If your
 shell has a pseudo-terminal, pass `--headless`. For native-window QA, pass
 `--no-headless` and use a disposable display. The one-shot isolated runners are
 always headless. See

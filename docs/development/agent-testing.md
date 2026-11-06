@@ -522,14 +522,25 @@ place them in that folder instead; `mise run dev` always uses it.
 
 #### Headless Electron
 
-A profile's Electron inherits `DISPLAY` and `WAYLAND_DISPLAY`, which on a shared
-Linux host belong to whoever is signed in. Its window would open on their
-desktop, take focus and receive their keystrokes. `--headless` (`dev:test`
-only) starts it on Chromium's headless Ozone platform instead, with the GPU off,
-`--password-store=basic` (so `safeStorage` never reaches the signed-in user's
-keyring, and the desktop's remote connection tokens last only for the session)
-and neither display variable. No window opens, and the app is at `browserUrl`.
-The launcher prints when this mode is on and why.
+A profile's Electron opens its window on whatever desktop started it. On a
+shared Linux host `DISPLAY` and `WAYLAND_DISPLAY` belong to whoever is signed
+in, and on macOS there is only the signed-in desktop, so the window would open
+there, take focus and receive their keystrokes. `--headless` (`dev:test` only)
+keeps it off the desktop. No window opens, and the app is at `browserUrl`. The
+launcher prints when this mode is on and why.
+
+- **Linux** starts Electron on Chromium's headless Ozone platform, with the GPU
+  off, `--password-store=basic` (so `safeStorage` never reaches the signed-in
+  user's keyring, and the desktop's remote connection tokens last only for the
+  session) and neither display variable.
+- **macOS** has no Ozone, so Electron runs normally with
+  `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS=1`: the app takes the `accessory`
+  activation policy (no Dock icon, no menu bar, never the active app), every
+  window it constructs is hidden (`hidden-windows.ts`), and the development
+  DevTools window stays closed. The keychain is already mocked for every
+  agent-test profile on macOS. Only an agent-test profile honours the variable,
+  and the launcher sets or clears it itself.
+- **Windows** has neither, so the flags change nothing there.
 
 The first of these that applies decides:
 
@@ -548,14 +559,15 @@ it cannot be told apart from a person. Conversely, a person piping the launcher
 to `tee` who wants the window passes `--no-headless`. `--headless-electron`
 still works as another spelling of `--headless`.
 
-`mise run dev` never goes headless and rejects these flags. On macOS and Windows
-they are accepted and change nothing, because Ozone does not exist there. When
-anything above would have made Linux headless (the flag, a variable, or no
-terminal), the launcher says that Electron opens a window and which input it
-ignored, so an agent's run there does open a window on the desktop.
+`mise run dev` never goes headless and rejects these flags. On Windows they are
+accepted and change nothing; when anything above would have made Linux headless
+(the flag, a variable, or no terminal), the launcher says that Electron opens a
+window and which input it ignored, so an agent's run there does open a window
+on the desktop.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
-`capturePage` hangs in this mode. The switch has to be on Electron's command
+`capturePage` hangs in this mode on Linux, and on macOS the menu bar and the
+window are never shown. On Linux the switch has to be on Electron's command
 line, so the launcher adds it; Electron's main script cannot apply it.
 
 None of this reaches the [Electron specs](#electron-specs-and-their-display),

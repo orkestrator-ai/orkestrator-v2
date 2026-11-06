@@ -23,6 +23,7 @@ import {
 import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
 import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-stats";
 import { isEnvironmentAttentionReason } from "@orkestrator/protocol/environment-attention";
+import { isEnvironmentDeletionStep } from "@orkestrator/protocol/node-summaries";
 import type { AgentActivityCompletionOutcome, EnvironmentUnreadReason } from "./models.js";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
@@ -1023,6 +1024,11 @@ export class ProjectsRepository {
             (environment as unknown as Record<string, unknown>)[field] = value ?? undefined;
           }
         }
+      }
+      if ("deletionStep" in updates) {
+        const value = updates.deletionStep;
+        if (value === null || value === undefined) environment.deletionStep = undefined;
+        else if (isEnvironmentDeletionStep(value)) environment.deletionStep = value;
       }
       if ("lifecycleError" in updates) {
         const value = updates.lifecycleError;

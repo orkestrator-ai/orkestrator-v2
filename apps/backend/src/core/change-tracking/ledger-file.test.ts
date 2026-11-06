@@ -101,7 +101,7 @@ describe("the change ledger's own file (report 0760)", () => {
         },
       },
       emit: () => {},
-      refreshEnvironment: () => {},
+      diffStats: { service: { refresh: () => {} }, refreshExplicitly: () => {} },
     });
     try {
       // First ledger write must migrate before it can replace the old rows.

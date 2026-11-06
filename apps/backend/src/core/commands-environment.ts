@@ -49,6 +49,7 @@ import {
   operationFailureCode,
   releaseActiveContainerOperation,
   resolveContainerOwnership,
+  type ContainerOwnershipOptions,
   runContainerOperation,
 } from "./container-lifecycle-service.js";
 import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
@@ -278,7 +279,7 @@ export function isMissingDockerObjectError(error: unknown): boolean {
 export async function assertDockerContainerOwned(
   containerId: string,
   context: Pick<CommandContext, "storage" | "strictDockerOwner">,
-  options: { trustExactAssociation?: boolean } = {},
+  options: ContainerOwnershipOptions = {},
 ): Promise<void> {
   const ownership = await resolveContainerOwnership(containerId, context, options);
   // A container the daemon has already forgotten belongs to nobody, so there

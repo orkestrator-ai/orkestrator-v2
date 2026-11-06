@@ -596,6 +596,29 @@ test("preserves the read-only review restriction across bridge restart", async (
   expect(sessions.get(state.id)?.readOnly).toBe(true);
 });
 
+test("keeps a session's auto-compaction choice across a restart, and omits an unset one", async () => {
+  const off = newSessionState("auto-compaction-off");
+  off.autoCompaction = false;
+  const unset = newSessionState("auto-compaction-unset");
+  // Pi's own setting is re-read after a restart, never restored from here.
+  unset.autoCompactionSetting = false;
+  sessions.set(off.id, off);
+  sessions.set(unset.id, unset);
+  schedulePersist();
+  await drainPersistence();
+  const written = await readState();
+  expect(written.sessions.find((entry) => entry.id === off.id)?.autoCompaction).toBe(false);
+  expect(written.sessions.find((entry) => entry.id === unset.id)).not.toHaveProperty(
+    "autoCompaction",
+  );
+  sessions.clear();
+  clientSessionKeys.clear();
+  await loadPersistedState();
+  expect(sessions.get(off.id)?.autoCompaction).toBe(false);
+  expect(sessions.get(unset.id)?.autoCompaction).toBeUndefined();
+  expect(sessions.get(unset.id)?.autoCompactionSetting).toBeUndefined();
+});
+
 test("restores the command list as stale, with no path, and still validates a selection", async () => {
   const path = "/home/someone/.pi/agent/prompts/review.md";
   const state = newSessionState("commands-key");

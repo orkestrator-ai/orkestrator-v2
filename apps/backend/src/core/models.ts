@@ -308,6 +308,11 @@ export interface Environment {
    */
   deletionError?: string;
   /**
+   * The step the running (or last failed) delete reached. Rows show it while a
+   * delete is running, so a slow one says what it is waiting for.
+   */
+  deletionStep?: import("@orkestrator/protocol/node-summaries").EnvironmentDeletionStep;
+  /**
    * Durable container lifecycle record: runtime/storage identity, the one
    * unresolved operation and recent outcomes. Backend-private; clients receive
    * `ContainerLifecycleSnapshot`. Always read through `parseContainerLifecycle`

@@ -179,3 +179,35 @@ changed. The aggregate remains failed; no new cause or fix is claimed.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.5NH72Y/review-browser-suite.log.gz`.
 - **Isolated rerun:** with `ORKESTRATOR_E2E_PORT` set to a free port, `mise run test:logged -- --name data-saving-isolated -- bunx playwright test --config e2e/playwright.config.ts DataSavingGateway.spec.ts --workers=1 --output=output/playwright/data-saving-results` passed, exit 0, 69.1 s. Both viewport cases ran; passing output was deleted by the logged runner.
 - **Assessment:** the unchanged owner again passes alone. Host contention is a hypothesis, not an established cause. No assertion, timeout or skip in this owner was changed.
+
+## Transcript restoration review — 2026-11-06
+
+The mobile case again failed to reconnect within its 60 s deadline in
+`ORKESTRATOR_E2E_PORT=14827 mise run test:logged -- --name browser -- mise run test:browser`:
+1,510 passed, 135 skipped, nine failed, 1,403.5 s. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.hIh8H2/browser.log.gz`.
+The unchanged complete owner passed alone, exit 0, in 37.6 s:
+`ORKESTRATOR_E2E_PORT=14840 mise run test:logged -- --name repair-DataSavingGateway-alone -- bunx playwright test --config e2e/playwright.config.ts --output output/playwright/repair-DataSavingGateway-alone e2e/DataSavingGateway.spec.ts`.
+Both viewports ran with the config's default worker allocation. Passing output
+was deleted by the logged runner. No assertion, timeout, skip or gateway code
+changed; the cause remains unconfirmed.
+
+## Bridge authority review repairs — 2026-11-06
+
+At `451fccdf1`, the nine-worker command
+`mise run test:logged -- --name repair-browser -- mise run test:browser`
+reported 1,513 passed, 135 skipped and six failed (1,654 cases; 1,225.3 s).
+Evidence: host temporary artifact
+`orkestrator-test-run.C3ovaT/repair-browser.log.gz`. The browser implementation
+and this test are unchanged by the bridge-authority branch.
+
+The mobile case exceeded its 60 s deadline and cleanup reported a closed
+browser context at line 170. The complete unchanged owner passed both viewports
+alone (exit 0, 45.8 s):
+
+```sh
+mise run test:logged -- --name isolate-data-saving -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/agent-testing/address-browser-reruns/data-saving
+```
+
+The isolated pass confirms intermittence; the cause remains unconfirmed. Status
+stays open. No assertion, timeout or skip changed.

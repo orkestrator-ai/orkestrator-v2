@@ -2,11 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `2882b30ee`.
+Analysed 2026-11-05 against `main` at `2882b30ee`. Run on a real Mac
+2026-11-06 against `main` at `c1724ab74`.
 
 ### Tasks
 
-1. **Run the start-time check on a real Mac**: the macOS path of the CLI's descriptor start-time check has only run against fakes. Status: open.
+1. **Run the start-time check on a real Mac**: the macOS path of the CLI's descriptor start-time check has only run against fakes. Status: done (2026-11-06, macOS 27.2).
 
 ### 1. Run the start-time check on a real Mac
 
@@ -56,6 +57,50 @@ runner there only checks preview-worker staging).
     - Pros: keeps proving it on every change.
     - Cons: macOS runners are slower and billed at a higher rate; a whole new job for one parser.
 
+## Current state
+
+Done on 2026-11-06 on macOS 27.2 (build 26B123, Darwin 27.2.0, arm64),
+against `main` at `c1724ab74`. No defect was found.
+
+- **`ps` output shape.** `LC_ALL=C TZ=UTC0 /bin/ps -o lstart= -p PID` printed
+  `Fri Nov  6 05:25:20 2026` followed by four padding spaces and a newline:
+  BSD's `%a %b %e %T %Y` with a space-padded day, as the parser expects;
+  `parsePsLstart` trims the padding. Without the pinned environment the same
+  command prints `Fr.  6 Nov. 05:25:30 2026` under `LC_ALL=de_DE.UTF-8` and
+  shifts the hour with `TZ`, so both overrides are needed and both work.
+- **CLI package tests.** After `bun run --cwd packages/cli build`,
+  `bun --cwd packages/cli test --preload ../../tests/setup-node.ts tests/client-descriptor-process.test.ts tests/cli.test.ts --parallel=2`
+  from the repository root: 567 pass, 2 skip, 0 fail across 39 files (the
+  filter arguments also match other CLI test files). A JUnit report of the
+  descriptor file shows "reads a real child's start time on this host" ran
+  with 3 assertions; the two skips are the Linux-only process-identity tests.
+- **Packaged client against a real backend.** A throwaway `dev:test` profile
+  (`--fixture --no-agent-credentials`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`)
+  published a descriptor with `startedAt` `05:27:52.791Z` for a backend whose
+  `ps` start time was `05:27:51`. With a scratch `ORKESTRATOR_CLI_CONFIG_DIR`,
+  `bun packages/cli/bin/orkestrator.js connection add qa6220 --data-dir <profile data>`
+  exited 0 with `verified: true`, and `connection check` reported the
+  installation, version `2.36.5-beta` and 121 actions. The profile was
+  stopped and reset afterwards.
+- **Stale descriptors.** Copies of the descriptor in a scratch directory,
+  each with only `pid` changed, were refused with exit 4
+  (`connection-failed`) and saved nothing:
+  - a `sleep` started 32 s after `startedAt`: "is not running: pid 79571
+    belongs to a process started at 2026-11-06T05:28:25.000Z, but the backend
+    started at 2026-11-06T05:27:52.791Z (its descriptor is stale)";
+  - a user process started 16 hours earlier (`distnoted`): the same message
+    with its start time `2026-11-05T13:16:13.000Z`;
+  - the `sleep` pid once it had exited: "is not running as your user (its
+    descriptor is stale)".
+- **Tests added.** `client-descriptor-process.test.ts` now pins the padded
+  macOS 27.2 shape in "parses ps lstart as UTC", and a macOS-only real-host
+  test reads a child's start time with the caller's `LC_ALL`/`LANG` set to
+  `de_DE.UTF-8` and `TZ` to `Pacific/Kiritimati`. With the reader's
+  `LC_ALL`/`TZ` override removed that test fails (`null`); restored, it passes.
+
+The CI decision stands: no macOS job runs these tests, so a later `ps` change
+would surface only on a Mac run.
+
 ## Related
 
 - `docs/architecture/public-cli.md` (the instance descriptor section)
@@ -66,3 +111,15 @@ runner there only checks preview-worker staging).
 ### Task 1: real macOS qualification
 
 The review repair ran on Linux, so the real macOS run remains open. Fake BSD ps coverage and the portable real-child test do not substitute for that evidence.
+
+### Task 1: run on macOS 27.2, 2026-11-06
+
+Took the recommended option: one run of the CLI package tests and one
+packaged-client connection, with no CI job. The run passed, so the task is
+done. Two tests were added although no defect was found, because they pin
+what this run observed: the padded `lstart` column, and that the reader's own
+`LC_ALL=C TZ=UTC0` is what makes it independent of the caller's locale and
+zone (only checkable on a Mac, where `ps` rather than `/proc` is read).
+The stale-descriptor check used `connection add --data-dir` on a scratch copy
+rather than editing the profile's descriptor, so the live profile was never
+pointed at another process.

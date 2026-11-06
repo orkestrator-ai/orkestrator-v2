@@ -25,11 +25,12 @@ export type DevArguments = {
   useDevWorktreeFolder?: boolean;
   /**
    * `dev:test` only: `true` (`--headless`) runs Electron on Chromium's headless
-   * Ozone platform with no display variables, so the profile opens no window in
-   * the desktop session it was started from; the renderer is still reachable
+   * Ozone platform with no display variables on Linux, and with every window
+   * hidden and no Dock icon on macOS, so the profile opens no window in the
+   * desktop session it was started from; the renderer is still reachable
    * through `browserUrl`. `false` (`--no-headless`) keeps the window. Absent
-   * leaves it to `resolveElectronHeadless`. Only Linux has Ozone; elsewhere
-   * neither flag changes anything.
+   * leaves it to `resolveElectronHeadless`. On Windows neither flag changes
+   * anything.
    */
   headless?: boolean;
   /**

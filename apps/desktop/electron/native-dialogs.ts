@@ -24,6 +24,9 @@ const desktopLog = createLogger("desktop");
  * Electron's own callers through here: web contents' JavaScript dialogs and its
  * default uncaught-exception box have no other hook.
  *
+ * Hidden agent-test profiles cancel every dialog before resolving a parent: a
+ * sheet would surface even a hidden window. No host is created in that mode.
+ *
  * Log lines name the dialog's source and never its text, which can carry paths
  * and errors.
  */
@@ -74,6 +77,8 @@ export type NativeDialogs<Window> = {
 export function createNativeDialogs<Window extends DialogWindow>(options: {
   dialog: NativeDialogApi<Window>;
   platform: NodeJS.Platform;
+  /** Cancel without opening native UI in a hidden agent-test profile. */
+  hiddenWindows?: boolean;
   currentWindow(): Window | null;
   createHostWindow(): Promise<Window>;
   /** Tells someone away from the app that a dialog is waiting for them. */
@@ -159,6 +164,11 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
     dialogOptions: Electron.MessageBoxOptions,
     window?: Window | null,
   ): Promise<MessageBoxResult> => {
+    if (options.hiddenWindows) {
+      const response = dialogOptions.cancelId ?? 0;
+      log.info("hidden-cancelled", { source, response });
+      return { response, checkboxChecked: false };
+    }
     const requested = usable(window);
     // Elsewhere a windowless box does not hold the main thread, and a parent
     // would newly block that window, so the caller's choice stands.

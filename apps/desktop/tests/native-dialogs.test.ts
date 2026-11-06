@@ -54,6 +54,7 @@ const OPTIONS: Electron.MessageBoxOptions = {
 function harness(
   input: {
     platform?: NodeJS.Platform;
+    hiddenWindows?: boolean;
     current?: FakeWindow | null;
     createHostWindow?: () => Promise<FakeWindow>;
   } = {},
@@ -81,6 +82,7 @@ function harness(
   });
   const dialogs = createNativeDialogs<FakeWindow>({
     dialog,
+    hiddenWindows: input.hiddenWindows,
     platform: input.platform ?? "darwin",
     currentWindow: () => input.current ?? null,
     createHostWindow,
@@ -112,6 +114,62 @@ function harness(
 }
 
 describe("native dialogs", () => {
+  test.each(["none", "current", "explicit"] as const)(
+    "hidden mode cancels with %s parent without native UI or attention",
+    async (parent) => {
+      const window = fakeWindow("hidden", { visible: false });
+      const run = harness({
+        hiddenWindows: true,
+        current: parent === "current" ? window : null,
+      });
+      expect(
+        await run.dialogs.showMessageBox(
+          "remote-restart",
+          OPTIONS,
+          parent === "explicit" ? window : undefined,
+        ),
+      ).toEqual({ response: 1, checkboxChecked: false });
+      expect(run.calls).toEqual([]);
+      expect(run.createHostWindow).not.toHaveBeenCalled();
+      expect(run.requestAttention).not.toHaveBeenCalled();
+      expect(run.logs).toEqual([
+        "[desktop.dialog] hidden-cancelled source=remote-restart response=1",
+      ]);
+      expect(run.dialogs.describeStall(100)).toBe("");
+    },
+  );
+
+  test("hidden mode cancels Electron, renderer and uncaught-exception dialogs", async () => {
+    const run = harness({ hiddenWindows: true });
+    run.dialogs.install();
+    expect(await run.dialog.showMessageBox(OPTIONS)).toEqual({
+      response: 1,
+      checkboxChecked: false,
+    });
+    run.dialog.showErrorBox("secret title", "secret content");
+    let listener!: (error: Error) => void;
+    installUncaughtExceptionDialog(
+      {
+        on: (_event, added) => {
+          listener = added;
+        },
+      },
+      run.dialogs,
+      { error: mock(() => undefined) },
+    );
+    listener(new Error("secret exception"));
+    await Bun.sleep(0);
+    expect(run.logs).toEqual([
+      "[desktop.dialog] hidden-cancelled source=unrouted response=1",
+      "[desktop.dialog] hidden-cancelled source=error-box response=0",
+      "[desktop.dialog] hidden-cancelled source=uncaught-exception response=0",
+    ]);
+    expect(run.calls).toEqual([]);
+    expect(run.errorBox).not.toHaveBeenCalled();
+    expect(run.createHostWindow).not.toHaveBeenCalled();
+    expect(run.requestAttention).not.toHaveBeenCalled();
+  });
+
   test("logs the source and parent before opening and the time after, never the text", async () => {
     const run = harness();
     const window = fakeWindow("main");

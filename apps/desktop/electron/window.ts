@@ -28,6 +28,11 @@ export type CreateMainWindowOptions = {
   partition?: string;
   beforeLoad?: (window: BrowserWindow) => void | Promise<void>;
   platform?: NodeJS.Platform;
+  /**
+   * Development only. Off for hidden windows: detached DevTools is a window of
+   * its own, and it opens on the desktop.
+   */
+  openDevTools?: boolean;
 };
 
 type GuardedWebContents = {
@@ -113,7 +118,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
 
   if (options.isDev) {
     await mainWindow.loadURL(trustedRendererUrl);
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+    if (options.openDevTools !== false) mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     await mainWindow.loadFile(rendererIndexPath);
   }

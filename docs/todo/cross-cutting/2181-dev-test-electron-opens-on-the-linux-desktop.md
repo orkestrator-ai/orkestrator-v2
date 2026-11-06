@@ -11,6 +11,7 @@ macOS half, tasks 2 and 3, on the Mac `arktech-mini`).
 1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; macOS qualified 2026-11-06; real-display Electron and Windows qualification remain open).
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
+4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: open (implementation done 2026-11-06 on Linux with unit tests; the live check on a Mac remains).
 
 ### 1. A headless mode for agent-test Electron
 
@@ -69,7 +70,68 @@ task 2 host. Do not change shell startup to hide the issue.
 (recommended): retains completion semantics, but needs an owner-by-owner check.
 Substring matching costs less but can pass on the echoed command.
 
+### 4. Keep agent-test Electron off the macOS desktop
+
+**Problem.** Task 1 left macOS alone ("no shared desktop problem to solve").
+In practice the user works on the Mac while agents run builds and QA there, and
+each `dev:test` profile opened an Electron window plus a detached DevTools
+window on that desktop, taking focus from whatever the user was doing.
+
+**Context.** macOS has no headless Ozone platform, so task 1's switches do not
+apply. The browser suites reach the app through `browserUrl`, not the Electron
+window, so the window has no test value in these runs. Every window factory in
+`main.ts` takes its `BrowserWindow` constructor as a parameter.
+
+**Investigation.** On macOS the launcher now sets
+`ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS=1` whenever Linux would go headless.
+Main honours it only for an agent-test profile on macOS
+(`hiddenWindowsForRuntime`): it sets the `accessory` activation policy before
+`ready`, passes a constructor that builds every window with `show: false`,
+`paintWhenInitiallyHidden` and no background throttling
+(`hidden-windows.ts`), and skips the development DevTools window. The paths
+that call `show()`/`focus()` on an existing window are user-driven (Window
+menu, Dock activation, notification click, second launch), and an accessory app
+has neither a Dock icon nor a menu bar; dialog attention already does nothing
+for agent-test.
+
+**Decisions.**
+
+- **How should a macOS profile stay off the desktop?**
+  - **Hidden windows plus the `accessory` activation policy, from the existing `--headless` decision (recommended; implemented).**
+    - Pros: no new flag; the same inputs decide on both platforms; the renderer still runs, so the profile behaves as on Linux.
+    - Cons: windows exist, only unseen; hidden-mode native dialogs must be cancelled because macOS sheets surface even hidden parents. The shared dialog router now enforces this before parent lookup or host creation.
+  - **Offscreen rendering (`webPreferences.offscreen`).**
+    - Pros: no native window at all.
+    - Cons: changes how the renderer paints and how `WebContentsView` previews attach; far more surface than the runs need.
+  - **Leave it and document the window.**
+    - Pros: no code.
+    - Cons: the reported problem stays.
+
 ## Assumptions and decisions
+
+### Task 4: cancel native dialogs while hidden (2026-11-06 review repair)
+
+Chose cancellation at the shared native-dialog router before parent lookup,
+host creation or attention requests. This preserves the off-desktop promise
+for exceptions, renderer boxes and remote restart prompts. Logs name the
+source and cancel response without dialog text. The alternative, allowing
+sheets for error visibility, would surface hidden parents and defeat task 4;
+cancellation means unattended errors must be diagnosed from logs. Unit tests
+cover cancellation and main's constructor, dialog-gate and DevTools wiring.
+Live macOS qualification remains open on this Linux host; the full procedure
+now lives in `docs/development/agent-testing.md`, including unattended and
+toolchain-bootstrap launches, browser smoke, native-dialog triggers and the
+`--no-headless` opt-out. No live macOS evidence is claimed by this repair.
+
+### Task 4: macOS hides windows instead of opening one (2026-11-06)
+
+Supersedes "Task 1: macOS and Windows" for macOS: the shared-desktop problem is
+real there too. The variable is set and cleared only by the launcher, so one
+inherited from a shell cannot hide a `--no-headless` profile, and main ignores
+it outside agent-test on macOS, so it cannot hide `mise run dev` or an
+installed app. `BrowserWindow` is wrapped in a `Proxy` rather than subclassed,
+which keeps Electron's statics and instances and stays clear of the
+inheritance-chain rule. Windows is unchanged.
 
 ### Tasks 2 and 3: retain 4741's unrun checks (2026-11-06)
 
@@ -373,6 +435,12 @@ not a terminal snapshot, so it is outside this audit. The backend scripts under
   with and without this change. CI's native-menu job covers two of them under Xvfb.
 - Windows. The no-op there is covered by unit tests with an injected platform and
   has not run on Windows. macOS ran on 2026-11-06 (see Current state).
+- Task 4 on a Mac. Implemented and unit-tested on Linux only. Start a profile
+  from an agent shell with no flag, then with `--no-headless`, and check that
+  the first shows no window, Dock icon or DevTools and keeps focus where it was,
+  that `mise run test:agent:browser` passes against it, and that the second
+  still opens its window. Also check that the `accessory` policy set before
+  `ready` holds, with no Dock icon flashing at launch.
 
 ## Related
 

@@ -157,9 +157,11 @@ import {
 import {
   agentToolsPortForRuntime,
   chromiumSwitchesForRuntime,
+  hiddenWindowsForRuntime,
   previewRetentionTimingForRuntime,
   runtimeProfileFromEnvironment,
 } from "./runtime-profile.js";
+import { hiddenWindowConstructor } from "./hidden-windows.js";
 import {
   installProductionApplicationLogging,
   readApplicationLogPolicy,
@@ -246,6 +248,12 @@ app.setAboutPanelOptions(
 for (const name of chromiumSwitchesForRuntime(runtimeFlavor, process.platform)) {
   app.commandLine.appendSwitch(name);
 }
+// An agent-test profile on macOS, which has no headless platform: no Dock icon,
+// no menu bar, never the active app, and every window constructed hidden. The
+// browser suites reach the app through the gateway, not these windows.
+const hiddenWindows = hiddenWindowsForRuntime(runtimeFlavor, process.platform);
+if (hiddenWindows) app.setActivationPolicy("accessory");
+const WindowCtor = hiddenWindows ? hiddenWindowConstructor(BrowserWindow) : BrowserWindow;
 if (process.platform === "linux") app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME);
 app.setPath(
   "userData",
@@ -410,12 +418,13 @@ const requestDialogAttention = createDialogAttention({
   Notification,
 });
 const nativeDialogs = createNativeDialogs<BrowserWindow>({
+  hiddenWindows,
   dialog,
   platform: process.platform,
   currentWindow: currentDialogWindow,
   createHostWindow: async () => {
     await app.whenReady();
-    return createDialogHostWindow({ BrowserWindowCtor: BrowserWindow, dirname: __dirname });
+    return createDialogHostWindow({ BrowserWindowCtor: WindowCtor, dirname: __dirname });
   },
   requestAttention: requestDialogAttention,
 });
@@ -441,7 +450,7 @@ let hostUpdates: HostUpdateExecutor | null = null;
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
     createToolchainBootstrapWindow({
-      BrowserWindowCtor: BrowserWindow,
+      BrowserWindowCtor: WindowCtor,
       dirname: __dirname,
     }),
   reportProgress: (window, progress) => reportToolchainProgress(window as BrowserWindow, progress),
@@ -951,7 +960,7 @@ async function createWindow(connectionId?: string): Promise<void> {
   const allocation: { window: BrowserWindow | null } = { window: null };
   try {
     await createMainWindow({
-      BrowserWindowCtor: BrowserWindow,
+      BrowserWindowCtor: WindowCtor,
       menu: Menu,
       writeClipboardText,
       dirname: __dirname,
@@ -961,6 +970,7 @@ async function createWindow(connectionId?: string): Promise<void> {
       devServerUrl,
       title: `${productName} — ${activeConnection?.name ?? "Local"}`,
       partition: rendererPartitionForWindow(slot, activeConnectionId, useLegacyDefaultSession),
+      openDevTools: !hiddenWindows,
       beforeLoad: (createdWindow) => {
         allocation.window = createdWindow;
         const emitToOwner = (event: string, payload: unknown) =>
@@ -1468,7 +1478,7 @@ async function startApplication(): Promise<void> {
     ? { enabled: runtimeProfile?.agentPlatforms ?? [], needsFirstRunChoice: false }
     : await loadAgentPlatformSelection(dataDir);
   const enabledAgentPlatforms = storedPlatformSelection.needsFirstRunChoice
-    ? await chooseAgentPlatforms({ BrowserWindowCtor: BrowserWindow, dirname: __dirname })
+    ? await chooseAgentPlatforms({ BrowserWindowCtor: WindowCtor, dirname: __dirname })
     : storedPlatformSelection.enabled;
   if (storedPlatformSelection.needsFirstRunChoice) {
     await saveAgentPlatformSelection(dataDir, enabledAgentPlatforms);
@@ -1523,7 +1533,7 @@ async function startApplication(): Promise<void> {
     })
   ) {
     const splash = await createMacOsPermissionSplashWindow({
-      BrowserWindowCtor: BrowserWindow,
+      BrowserWindowCtor: WindowCtor,
       dirname: __dirname,
     });
     try {

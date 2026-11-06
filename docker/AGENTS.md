@@ -11,6 +11,7 @@ These rules apply to `docker/` and to container lifecycle code such as
 | `workspace-setup.sh`    | Repo clone, `.env` files, project config, shown in terminal |
 | `init-firewall.sh`      | Network firewall rules applied at startup                |
 | `orkestrator-egress-gateway.sh` | Entrypoint of a restricted runtime's egress gateway |
+| `orkestrator-egress-filter.pl` | The gateway's name checks: TLS SNI, HTTP Host and DNS against the allowlist |
 | `update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
@@ -247,6 +248,41 @@ whichever container owns the network namespace.
   ranges also allow TCP 22. Earlier policies open every port of an allowed
   address. Host access and the rest of the policy are in the root
   `AGENTS.md` "Network Isolation".
+- Name checks (`egress-filter=1`, `orkestrator-egress-filter.pl`): a gateway
+  on network policy 3 also runs a Perl daemon (base-system `perl-base`, so
+  nothing new to download or pin) that the firewall redirects to. New TCP
+  connections to an allowed tuple are DNATed to it, and it relays one only
+  when the client's first bytes ask for an allowed name for that port: TLS
+  SNI, or the Host of a plain HTTP request. Anything else is refused on TCP
+  443 and relayed by address on any other named port (SSH to GitHub, a
+  database). Every DNS query, to Docker's resolver or straight to any
+  server, is redirected to it, and only allowlisted names (exact), GitHub's
+  own names and `*.docker.internal` are forwarded; the rest get REFUSED with
+  EDE 18. Its sockets carry `SO_MARK` (`0x6f726b`), which the workload
+  cannot set (no `NET_ADMIN`, `NET_RAW` dropped), and only marked TCP and DNS
+  pass the ACCEPT rules. Keep these when changing it:
+  - It fails closed. With it dead, redirected connections are refused and
+    queries get no answer; its supervisor restarts a dead worker within a
+    second and the refresher a dead supervisor. Never add a fallback that
+    lets unmarked traffic out.
+  - Redirect to the namespace's own address, not to 127.0.0.1 (a
+    non-loopback source routed to loopback is a martian, and
+    `route_localnet` cannot be set from a container), and admit the
+    redirected packet by its new destination: under iptables-nft the filter
+    chain still sees the pre-NAT output interface.
+  - Start it detached from the caller's jobs (`ork_start_filter`):
+    `ork_resolve_all` waits for every background job.
+  - `update-firewall.sh --set-domains` stages proposed DNS lookup names while
+    retaining current connection permissions until the rebuild succeeds. A
+    failure restores the prior names without revoking streams; success publishes
+    the final permissions, and a name that leaves loses its open connections.
+  - The gateway records `egress-filter` (`on`, or `off` when created with
+    `ORKESTRATOR_EGRESS_FILTER=off`) at its first boot; a start never
+    changes it, and an older image's gateway never runs it.
+  - It does not see a name hidden inside TLS (an encrypted ClientHello,
+    domain fronting), checks only the first request of a kept-alive HTTP
+    connection, and leaves UDP entries and other protocols to the address
+    rules. Never describe it as preventing exfiltration.
 
 ## Building
 

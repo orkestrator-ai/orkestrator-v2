@@ -43,6 +43,7 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
+import { TabLaunchOverrideMarker } from "./TabLaunchOverrideMarker";
 import { TAB_ICON_CLASS, TabShell } from "./TabShell";
 import { useConfigStore } from "@/stores/configStore";
 import { usePreviewServiceStore } from "@/stores/previewServiceStore";
@@ -424,6 +425,11 @@ export function DraggableTab({
     >
       {icon}
       {titleElement}
+      {/* Only an agent tab can be a coordinator's worker; others never ask. A
+          native tab can show before its platform is known, so its type is enough. */}
+      {(mailAgent || tab.type === "agent-native") && owningEnvironmentId && (
+        <TabLaunchOverrideMarker environmentId={owningEnvironmentId} tabId={tab.id} />
+      )}
       {isDirty && (
         <span className="h-2 w-2 rounded-full bg-muted-foreground" title="Unsaved changes" />
       )}

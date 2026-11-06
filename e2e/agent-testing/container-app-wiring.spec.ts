@@ -530,7 +530,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
     expect(selected, "The original main conversation is retained").toBeDefined();
     expect(selected?.agent, "The explicit coordinator selection survives returning").toBe("codex");
     await expect(
-      panel.getByRole("button", {
+      panel.getByRole("tab", {
         name: `Coordinator, ${AGENT_PLATFORM_LABELS.codex}`,
         exact: true,
       }),

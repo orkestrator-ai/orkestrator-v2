@@ -364,5 +364,5 @@ On this host the catalogue call took about 0.9 s and was refused with
   namespace only (a 200 ms race on the prompt 502). They never appeared in a
   recorded recurrence and were not investigated.
 - The unbounded account lookup is a product gap: todo
-  [1173](../../../todo/agent-engines/1173-cursor-status-account-lookup-unbounded.md).
+  1173.
 

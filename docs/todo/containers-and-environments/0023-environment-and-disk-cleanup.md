@@ -10,7 +10,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Test temp-dir leaks (Code 1)**: fix the listed leaks at source. Status: done (2026-10-26, `7809191f`); the newly found leaks moved to [0247](0247-test-temp-dir-leaks-from-full-sweep.md).
+1. **Test temp-dir leaks (Code 1)**: fix the listed leaks at source. Status: done (2026-10-26, `7809191f`); the newly found leaks moved to 0247.
 2. **Surface permanently failing cleanup (Code 2)**: a `disk:report` row for ledger entries that stopped retrying. Status: done.
 3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: blocked (needs a macOS host).
 4. **Failing entry and namespace reuse (open question)**: should an exhausted ledger entry block re-creating an environment in the same namespace? Status: done (2026-11-01): no guard; the invariant is documented and pinned by a test (decision 9).
@@ -242,7 +242,7 @@ What remains is a live macOS run of the Keychain change.
    normal path. `ork-runtime-` and `orkestrator-state-sync-` were believed to
    be, but the direct sweep below left several of each; they and every other
    leak that sweep found are in
-   [0247](0247-test-temp-dir-leaks-from-full-sweep.md).
+   0247.
    `orkestrator-test-run.*` is kept for 7 days on purpose by
    `scripts/test-all.ts`, because it holds failure logs.
 2. ~~Optional: surface permanently failing cleanup.~~ Done 2026-10-26 as a
@@ -350,7 +350,7 @@ passed; the backend had 11,721 passed, 142 skipped and 2 failed (flake 0785,
 and a test that reads the host's `XDG_STATE_HOME`). It left about twenty
 directories under fifteen test-owned prefixes. They are new work and are
 inventoried, with owners, in
-[0247](0247-test-temp-dir-leaks-from-full-sweep.md).
+0247.
 
 ## Qualification results (2026-10-17)
 
@@ -542,7 +542,7 @@ Decisions made on 2026-10-26 while working through the file.
    in Keychain Access.
 7. **Leaks the sweep found beyond item 1's list.** Options: fix them all
    here; or record them in a new file. Chose a new file,
-   [0247](0247-test-temp-dir-leaks-from-full-sweep.md), as `docs/README.md`
+   0247, as `docs/README.md`
    requires (an existing file takes no new todos). The one found in the
    root group's aggregate sweep (`recurring-live-ab-cli-*`) was fixed here
    because it was the only leak that sweep showed. Pros: item 1 stays the

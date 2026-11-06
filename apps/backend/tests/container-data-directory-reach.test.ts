@@ -110,7 +110,7 @@ async function fixture(
       version: "1.0.0",
       global: {
         enabledAgentPlatforms: providers,
-        allowedDomains: ["one.example"],
+        allowedDomains: ["one.example", "example.invalid"],
         ...(providers.includes("claude") ? { anthropicApiKey: FAKE_ANTHROPIC_KEY } : {}),
         ...(providers.includes("cursor") ? { cursorApiKey: FAKE_CURSOR_KEY } : {}),
       },

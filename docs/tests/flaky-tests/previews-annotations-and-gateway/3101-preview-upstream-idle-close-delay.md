@@ -104,7 +104,7 @@ pooled client, which the pool correctly kept idle for its 60 s limit, so
 wrong-peer lookup. This explains why it failed every time on detached `main`
 and why the earlier "passed alone" observation was the exception.
 
-Fix: [2920](../../../todo/previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md).
+Fix: 2920.
 `socket()` now waits for the server-side socket whose `remotePort` equals the
 client's `localPort` and returns `{ client, peer }`; the case ends and writes
 to its own peer. No timeout, poll budget, assertion or skip changed, and the

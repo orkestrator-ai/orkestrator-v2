@@ -92,7 +92,7 @@ backend workspace group of a full `mise run test` failed on this test alone:
 ## Status
 
 Resolved by todo
-[0930](../../../todo/backend-structure/0930-storage-test-files-over-size-limit.md)
+0930
 task 4. No assertion, timeout or skip was changed: raising the budget would
 only have loosened the test without making it any cheaper.
 

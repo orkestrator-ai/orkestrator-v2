@@ -2965,10 +2965,30 @@ reports its rows the same way, plus `autoFix` and `autoPr` with a source of
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
 per-field `source`; a step's stored instructions are reported as
 `instructionsBytes`, not echoed. A reviewer's lens is reported in every
-`selection` as `{ label, instructionBytes }`. No screen marks an override
-since the Work panel was removed; the environment and tab UI do not show a
-marker yet:
-[4943](../todo/coordinator-and-multi-review/4943-launch-override-marker-in-environment-ui.md).
+`selection` as `{ label, instructionBytes }`.
+
+A local worker's tab marks an override ("requested"). It reads
+`delegation.request.source` by one rule
+(`coordinatorTabLaunchRequest`, `@orkestrator/protocol/coordinator-launch-overrides`):
+the newest of that tab's requests that states a source. Only a launch states one,
+so mail sent to the worker afterwards does not clear the marker, and a tab the
+coordinator only messaged has none. There is no field on the environment record.
+
+The tab reads `list_coordinator_launch_overrides`, which answers from the
+coordinator store alone, across every project, with only the overridden tabs. The
+renderer holds one projection of it
+(`apps/web/src/stores/coordinatorLaunchOverrideStore.ts`): the first agent tab
+mounted reads, every other tab shares the answer, and it re-reads on a coordinator
+store change and on the transport's resync and safety checks. A tab with no
+delegation is absent from the answer, so it shows nothing and adds no read of its
+own, and a tab that cannot be a worker (a terminal, a file) never asks. Against a
+backend without the command nothing is shown. A delegation that retention has
+removed takes its marker with it.
+
+A worker on another node has no marker on its tab. Its delegation is kept on the
+command node, while its tab renders in that node's realm and reads that node's
+backend, which holds no such record. The gap is
+[6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
 
 ## Complete application actions
 

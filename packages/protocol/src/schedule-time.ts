@@ -521,5 +521,8 @@ export function formatInstantInZone(instantMs: number, timeZone: string): string
   } catch {
     // keep the IANA name
   }
+  // ICU versions may spell the same zero offset GMT or GMT+0. Keep the
+  // result stable without changing a nonzero offset or a daylight abbreviation.
+  if (/^GMT[+-]00?(?::00)?$/.test(zoneName)) zoneName = "GMT";
   return `${wall.year}-${pad(wall.month)}-${pad(wall.day)} ${pad(wall.hour)}:${pad(wall.minute)} ${zoneName}`;
 }

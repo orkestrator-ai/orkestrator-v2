@@ -25,6 +25,14 @@ IFS=$'\n\t'       # Stricter word splitting
 # This limits destinations. It does not stop data leaving through an allowed
 # service, and a workload running as root in full mode can change it.
 #
+# An egress gateway on policy 3 also checks names (orkestrator-egress-filter,
+# firewall-domains.sh): new TCP connections to an allowed address are
+# redirected to a local daemon that checks the TLS SNI or HTTP Host against
+# the allowlist before relaying them, and every DNS query is redirected to the
+# same daemon, which answers only allowlisted names. The daemon's own sockets
+# are marked, and only marked TCP and DNS leave the namespace. With the daemon
+# gone, redirected traffic has nowhere to go: the namespace stays closed.
+#
 # Allowed domains are resolved into a set whose addresses expire (see
 # firewall-domains.sh); a root refresher re-resolves them on their TTL, and
 # `update-firewall.sh --set-domains` replaces the list in place, durably.
@@ -129,9 +137,72 @@ else
     echo "No Docker DNS rules to restore"
 fi
 
+# The stored ALLOWED_DOMAINS list (comma-separated); `none` for an empty list
+# (only GitHub); or the image defaults when nothing was configured at all.
+if [ "${ALLOWED_DOMAINS:-}" = "none" ]; then
+    echo "No allowed domains beyond GitHub"
+    DOMAINS_CSV=""
+elif [ -n "${ALLOWED_DOMAINS:-}" ]; then
+    echo "Using custom allowed domains from ALLOWED_DOMAINS environment variable"
+    DOMAINS_CSV="$ALLOWED_DOMAINS"
+else
+    echo "Using default allowed domains"
+    DOMAINS_CSV=$(ork_default_domains)
+    [ -n "$DOMAINS_CSV" ] || echo "WARNING: $ORK_DEFAULT_DOMAINS_FILE is missing or empty; allowing only GitHub"
+fi
+
+# Name checks run in an egress gateway on policy 3 (firewall-domains.sh). The
+# daemon starts before any lookup below, because every query from here on,
+# the firewall's own included, is redirected to it.
+FILTER_STATE=$(ork_filter_state)
+FILTER_MATCH=()
+if [ "$FILTER_STATE" = enforced ]; then
+    echo "Starting name checks (SNI, Host and DNS)"
+    ork_write_filter_names "$DOMAINS_CSV"
+    if ! ork_start_filter; then
+        echo "ERROR: the name-check daemon did not start"
+        exit 1
+    fi
+    FILTER_MATCH=(-m mark --mark "$ORK_FILTER_MARK")
+    # Redirected traffic goes to this namespace's own address rather than to
+    # 127.0.0.1: a packet with a non-loopback source routed to loopback is a
+    # martian unless route_localnet is set, which a container cannot change.
+    FILTER_ADDRESS=$(ip -4 route get 192.0.2.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
+    if [[ ! "$FILTER_ADDRESS" =~ $ORK_IPV4 ]]; then
+        echo "ERROR: no address to redirect to for the name checks"
+        exit 1
+    fi
+    # Docker's resolver and any resolver off this host; a resolver the
+    # workload runs on loopback itself is left alone.
+    for protocol in udp tcp; do
+        iptables -t nat -I OUTPUT 1 -p "$protocol" --dport 53 ! -d 127.0.0.0/8 -m mark ! --mark "$ORK_FILTER_MARK" \
+            -j DNAT --to-destination "$FILTER_ADDRESS:$ORK_FILTER_DNS_PORT"
+        iptables -t nat -I OUTPUT 1 -p "$protocol" --dport 53 -d 127.0.0.11 -m mark ! --mark "$ORK_FILTER_MARK" \
+            -j REDIRECT --to-ports "$ORK_FILTER_DNS_PORT"
+    done
+fi
+
+# Docker's actual embedded resolver port is discoverable through procfs.
+# Only marked daemon queries may reach it, including after Docker's DNAT.
+if [ "$FILTER_STATE" = enforced ]; then
+    iptables -A OUTPUT -d 127.0.0.11 -m mark ! --mark "$ORK_FILTER_MARK" -j REJECT
+    # Docker's resolver sends from its private high port here and SNATs to
+    # 53 in POSTROUTING. A workload can bind the unused .11:53 itself, but
+    # must not impersonate that post-NAT endpoint on a connected query socket.
+    iptables -A OUTPUT -p udp -s 127.0.0.11 --sport 53 -m mark ! --mark "$ORK_FILTER_MARK" -j REJECT
+fi
+
 # Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
+if [ "$FILTER_STATE" = enforced ]; then
+    # Traffic redirected to the daemon. The filter sees a redirected packet
+    # with the output interface it was first routed to, not loopback, so it
+    # is admitted by its new destination.
+    iptables -A OUTPUT -p tcp -d "$FILTER_ADDRESS" --dport "$ORK_FILTER_PROXY_PORT" -j ACCEPT
+    iptables -A OUTPUT -p tcp -d "$FILTER_ADDRESS" --dport "$ORK_FILTER_DNS_PORT" -j ACCEPT
+    iptables -A OUTPUT -p udp -d "$FILTER_ADDRESS" --dport "$ORK_FILTER_DNS_PORT" -j ACCEPT
+fi
 
 # Responses are allowed only for connections this namespace initiated.
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -141,22 +212,31 @@ iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 # 53 from becoming a general-purpose exfiltration channel.
 while read -r resolver; do
     [ -n "$resolver" ] || continue
-    iptables -A OUTPUT -p udp -d "$resolver" --dport 53 -j ACCEPT
-    iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 -j ACCEPT
+    iptables -A OUTPUT -p udp -d "$resolver" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT
+    iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT
 done < <(awk '$1 == "nameserver" { print $2 }' "$ORK_RESOLV_CONF")
 
 # On a user-defined network the nameserver is Docker's embedded resolver,
 # which forwards to its upstream servers from inside this namespace. Docker
 # names them in resolv.conf ("# ExtServers: [a b]"); an entry written as
-# host(...) is contacted from the host namespace and needs no rule.
+# host(...) is contacted from the host namespace and needs no rule. With name
+# checks the daemon asks these upstreams itself, and only its marked queries
+# may reach them; the embedded resolver's own relays are redirected to it.
 while read -r upstream; do
     [[ "$upstream" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || continue
-    iptables -A OUTPUT -p udp -d "$upstream" --dport 53 -j ACCEPT
-    iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 -j ACCEPT
+    iptables -A OUTPUT -p udp -d "$upstream" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT
+    iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT
 done < <(sed -n 's/^# ExtServers: \[\(.*\)\]$/\1/p' "$ORK_RESOLV_CONF" | tr ' ' '\n')
 
 # Create ipset with CIDR and per-entry expiry support
 ork_create_set allowed-domains
+if [ "$FILTER_STATE" = enforced ]; then
+    # Every new TCP connection the workload opens to an allowed tuple goes to
+    # the daemon first; the daemon's own, marked, connection is the one that
+    # leaves.
+    iptables -t nat -I OUTPUT 1 -p tcp ! --dport 53 -m mark ! --mark "$ORK_FILTER_MARK" \
+        -m set --match-set allowed-domains dst,dst -j DNAT --to-destination "$FILTER_ADDRESS:$ORK_FILTER_PROXY_PORT"
+fi
 
 # Bootstrap only the GitHub metadata endpoint needed to discover the complete
 # published git/web/API ranges. The ordinary allowlist rule is already active,
@@ -166,7 +246,11 @@ if [ "$ORK_TUPLES" = 1 ]; then BOOTSTRAP_PORT=",$ORK_DEFAULT_PORT"; fi
 while read -r ip; do
     [ -n "$ip" ] && ipset add -exist allowed-domains "$ip$BOOTSTRAP_PORT" timeout 0
 done < <(ork_dig +short A api.github.com | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/')
-if [ "$ORK_TUPLES" = 1 ]; then
+if [ "$FILTER_STATE" = enforced ]; then
+    # UDP entries (`host:port/udp`) carry no name the daemon could check.
+    iptables -A OUTPUT -p tcp "${FILTER_MATCH[@]}" -m set --match-set allowed-domains dst,dst -j ACCEPT
+    iptables -A OUTPUT -p udp -m set --match-set allowed-domains dst,dst -j ACCEPT
+elif [ "$ORK_TUPLES" = 1 ]; then
     iptables -A OUTPUT -m set --match-set allowed-domains dst,dst -j ACCEPT
 else
     iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
@@ -223,20 +307,6 @@ fi
 # Refreshes rebuild the set from the ranges this boot accepted.
 ork_remember_github_ranges "$GITHUB_FILE"
 echo "GitHub ranges from: $GITHUB_SOURCE"
-
-# The stored ALLOWED_DOMAINS list (comma-separated); `none` for an empty list
-# (only GitHub); or the image defaults when nothing was configured at all.
-if [ "${ALLOWED_DOMAINS:-}" = "none" ]; then
-    echo "No allowed domains beyond GitHub"
-    DOMAINS_CSV=""
-elif [ -n "${ALLOWED_DOMAINS:-}" ]; then
-    echo "Using custom allowed domains from ALLOWED_DOMAINS environment variable"
-    DOMAINS_CSV="$ALLOWED_DOMAINS"
-else
-    echo "Using default allowed domains"
-    DOMAINS_CSV=$(ork_default_domains)
-    [ -n "$DOMAINS_CSV" ] || echo "WARNING: $ORK_DEFAULT_DOMAINS_FILE is missing or empty; allowing only GitHub"
-fi
 
 # Resolve the allowed domains within fixed bounds (count, addresses per
 # domain, parallel lookups, per-query deadline). Each address expires unless
@@ -315,6 +385,30 @@ else
     echo "Firewall verification passed - unable to reach https://$BLOCKED_PROBE as expected"
 fi
 
+if [ "$FILTER_STATE" = enforced ]; then
+    # A name off the allowlist gets no answer, and an allowed address asked
+    # for a name off the allowlist refuses the connection.
+    PROBE_ANSWER=$(ork_dig +time=3 +tries=1 orkestrator-dns-probe.invalid A 2>&1 || true)
+    case "$PROBE_ANSWER" in
+        *"status: REFUSED"*) ;;
+        *)
+            echo "ERROR: Firewall verification failed - a name off the allowlist was not refused by DNS"
+            exit 1
+            ;;
+    esac
+    PROBE_ADDRESS=$( { ork_dig +short A api.github.com || true; } | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && !found++')
+    if [ -z "$PROBE_ADDRESS" ]; then
+        echo "ERROR: Firewall verification failed - api.github.com did not resolve through the name checks"
+        exit 1
+    fi
+    if curl -k -sS -o /dev/null --connect-timeout 5 --max-time 10 \
+        --resolve "orkestrator-sni-probe.invalid:443:$PROBE_ADDRESS" https://orkestrator-sni-probe.invalid/ >/dev/null 2>&1; then
+        echo "ERROR: Firewall verification failed - an allowed address accepted a name off the allowlist"
+        exit 1
+    fi
+    echo "Firewall verification passed - names off the allowlist are refused by DNS and at TLS"
+fi
+
 # Verify GitHub is reachable. Any HTTP answer proves the path is open; the
 # web host is used rather than the API, whose unauthenticated calls count
 # against a 60-an-hour budget per address.
@@ -329,7 +423,7 @@ NOW=$(ork_now)
 NEXT_DELAY=$(ork_next_delay 0)
 printf '%s\n' "$NEXT_DELAY" > "$ORK_DELAY_FILE"
 printf '0\n' > "$ORK_FAILURES_FILE"
-write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"applied\",\"appliedAt\":\"$(ork_iso "$NOW")\",\"refreshedAt\":\"$(ork_iso "$NOW")\",\"nextRefreshAt\":\"$(ork_iso $((NOW + NEXT_DELAY)))\",\"domainsRevision\":\"$(ork_domains_revision "$(ork_revision_list "${ALLOWED_DOMAINS:-}")")\",\"resolvedDomains\":$RESOLVED_DOMAINS,\"unresolvedDomains\":$UNRESOLVED_DOMAINS,\"carriedDomains\":$ORK_CARRIED_DOMAINS,\"invalidDomains\":$ORK_INVALID_DOMAINS,\"refreshFailures\":0,\"allowedEntries\":$(ork_members allowed-domains | awk 'NF { count++ } END { print count + 0 }'),\"hostServicePorts\":\"$HOST_SERVICE_PORTS\",\"ipv6\":\"$IPV6_STATE\",\"githubRanges\":\"$GITHUB_SOURCE\"}"
+write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"applied\",\"appliedAt\":\"$(ork_iso "$NOW")\",\"refreshedAt\":\"$(ork_iso "$NOW")\",\"nextRefreshAt\":\"$(ork_iso $((NOW + NEXT_DELAY)))\",\"domainsRevision\":\"$(ork_domains_revision "$(ork_revision_list "${ALLOWED_DOMAINS:-}")")\",\"resolvedDomains\":$RESOLVED_DOMAINS,\"unresolvedDomains\":$UNRESOLVED_DOMAINS,\"carriedDomains\":$ORK_CARRIED_DOMAINS,\"invalidDomains\":$ORK_INVALID_DOMAINS,\"refreshFailures\":0,\"allowedEntries\":$(ork_members allowed-domains | awk 'NF { count++ } END { print count + 0 }'),\"hostServicePorts\":\"$HOST_SERVICE_PORTS\",\"ipv6\":\"$IPV6_STATE\",\"githubRanges\":\"$GITHUB_SOURCE\",\"egressFilter\":\"$FILTER_STATE\"}"
 trap - ERR
 
 # Keep resolved addresses current. The refresher runs as root, so the

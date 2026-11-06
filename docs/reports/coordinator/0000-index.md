@@ -66,7 +66,7 @@ version of its deleted report, which the deletion commit's diff shows in full:
 The Work panel itself was removed on 2026-11-05. What it left is in to-dos
 [4941](../../todo/coordinator-and-multi-review/4941-coordinator-report-desktop-notification.md),
 [4942](../../todo/coordinator-and-multi-review/4942-c7-live-checks.md) and
-[4943](../../todo/coordinator-and-multi-review/4943-launch-override-marker-in-environment-ui.md).
+[6580](../../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
 
 Batch C8 (Tab strip) is closed. Its task-by-task outcome table ends the last
 version of its deleted report, which the deletion commit's diff shows in full:
@@ -145,7 +145,7 @@ Every task was done, so it left no to-do.
 | U13: narrow screens | Done | Icon-only New side agent, Sync and Pause, and a badge showing only its icon and tier name, below `sm` (`CoordinatorPanel.tsx`, `CoordinatorToolbar.tsx`, `CoordinatorPanelNotices.tsx`); the toolbar fits one row at 390 px. |
 | U13: research Add limit and Enter | Done | `CoordinatorWebResearchSettings.tsx`, tested in `CoordinatorWebResearchSettings.test.tsx`. |
 | U13: research duplicate check is case-sensitive | No action | Names can only be lowercase, `packages/protocol/src/coordinator-web-research.ts:56`. |
-| 5.1: Work rail | Withdrawn | Built in `eb6bf887a`, #1698, with request, agent, model, age and Stop added later; the whole panel was removed on 2026-11-05 as not worth its space. The override marker elsewhere: [4943](../../todo/coordinator-and-multi-review/4943-launch-override-marker-in-environment-ui.md). |
+| 5.1: Work rail | Withdrawn | Built in `eb6bf887a`, #1698, with request, agent, model, age and Stop added later; the whole panel was removed on 2026-11-05 as not worth its space. The local worker tab now marks launch overrides; on another node: [6580](../../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md). |
 | 5.2: first-run card and starter prompts | Done | Starter prompts in `e5245dfd6` (#1644); the dismissible first-run card and the toolbar's "?" in `CoordinatorIntro.tsx`, dismissed per user in the UI store (`coordinatorIntroDismissed`), tested in `CoordinatorPanel.outcome.test.tsx` and `uiStore.persistence.test.ts`. Batch C10. |
 | 5.3: legible read-only tier | Done | A tier pill on the toolbar badge and in the picker; the badge's menu gives the tier's meaning and links Settings → Coordinator (`CoordinatorIsolationBadge`, `CoordinatorPanelNotices.tsx`), tested in `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
 | 5.4: error rule and stale indicator | Done | `readFailuresFreshnessNotice` (`view-freshness.ts`) shown by `CoordinatorToolbar.tsx`, tested in `useCoordinatorPanelData.test.tsx`; the rule's other parts came with U3, U4 and U9. |

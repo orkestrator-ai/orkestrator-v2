@@ -84,6 +84,21 @@ export function egressEnforcement(options: {
   return "gateway";
 }
 
+/**
+ * Rollback switch for the gateway's name checks (`egress-filter=1`): with
+ * `ORKESTRATOR_EGRESS_FILTER=off` (or `0`) in the backend's environment, new
+ * gateways are created with them switched off and enforce addresses only. A
+ * gateway records the choice at its first boot, so neither a start nor a
+ * later change of the variable alters an existing one. An image without the
+ * capability ignores the variable.
+ */
+export function egressFilterEnvironment(
+  value: string | undefined = process.env.ORKESTRATOR_EGRESS_FILTER,
+): Record<string, string> {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "off" || normalized === "0" ? { ORKESTRATOR_EGRESS_FILTER: "off" } : {};
+}
+
 /** Deterministic, so an interrupted create finds its gateway again. */
 export function egressGatewayName(workloadName: string): string {
   return `${workloadName.slice(0, 120)}-egress`;

@@ -20,14 +20,14 @@ const log = createLogger("docker.reachability");
  *
  * The subnet list follows network creation and removal: the network code
  * reports each change ({@link subscribeDockerNetworkChanges}), which marks
- * the list stale and reloads it. A peer outside the list also reloads it once
+ * the list stale and reloads it. A non-loopback peer also reloads it once
  * the list is stale or older than {@link MISS_RELOAD_INTERVAL_MS}, so a
  * network this process did not see created is admitted within that interval,
  * and an outside peer can cost at most one `docker network` read per
  * interval.
  */
 
-/** Minimum spacing of reloads caused by an unknown peer while the list is current. */
+/** Minimum spacing of peer-triggered reloads while the list is current. */
 export const MISS_RELOAD_INTERVAL_MS = 15_000;
 /** Bounds on what one reload reads and keeps. */
 const MAX_NETWORKS = 256;
@@ -88,7 +88,7 @@ export interface AgentToolsPeerFilterOptions {
 
 export class AgentToolsPeerFilter {
   private subnets: Ipv4Subnet[] = [];
-  /** True until the first successful load, and after every reported change. */
+  /** True before the first read, and after every reported change. */
   private stale = true;
   private lastLoadStartedAt = Number.NEGATIVE_INFINITY;
   private loading: Promise<void> | null = null;
@@ -111,26 +111,26 @@ export class AgentToolsPeerFilter {
 
   /**
    * The decision that needs no I/O: `admit`, `refuse`, or `reload` when the
-   * peer is unknown but a reload is due and could admit it.
+   * cached list needs refreshing before the peer can be decided.
    */
   verdict(address: string | undefined | null): PeerVerdict {
     if (isLoopbackPeer(address)) return "admit";
     const value = parseIpv4(address);
     if (value === null) return "refuse";
-    if (this.subnets.some((subnet) => inSubnet(value, subnet))) return "admit";
-    return this.reloadDue() ? "reload" : "refuse";
+    if (this.reloadDue()) return "reload";
+    return this.subnets.some((subnet) => inSubnet(value, subnet)) ? "admit" : "refuse";
   }
 
   /** {@link verdict}, reloading the subnet list first when one is due. */
   async admits(address: string | undefined | null): Promise<boolean> {
     // A load in flight follows a reported change, which may have removed the
     // peer's network: decide on the list it produces.
-    if (this.loading && !isLoopbackPeer(address)) await this.loading;
-    const verdict = this.verdict(address);
-    if (verdict !== "reload") return verdict === "admit";
-    await this.reload();
-    // A change reported during that load starts another; wait for it once.
-    if (this.loading) await this.loading;
+    if (isLoopbackPeer(address)) return true;
+    if (parseIpv4(address) === null) return false;
+    if (this.verdict(address) === "reload") await this.reload();
+    // Every invalidation during a read starts a replacement read. Never
+    // decide from an intermediate snapshot, even across several changes.
+    while (this.loading) await this.loading;
     return this.verdict(address) === "admit";
   }
 
@@ -164,7 +164,7 @@ export class AgentToolsPeerFilter {
     return this.subnets.map((subnet) => subnet.text);
   }
 
-  /** Coalesced reload; never rejects. A failed read keeps the last list. */
+  /** Coalesced reload; never rejects. A failed read revokes cached permissions. */
   reload(): Promise<void> {
     if (!this.options.loadSubnets) {
       this.stale = false;
@@ -183,7 +183,7 @@ export class AgentToolsPeerFilter {
           error: error instanceof Error ? error.message.slice(0, 300) : "unknown",
         });
       }
-      if (loaded) {
+      if (loaded && !this.changedDuringLoad) {
         const parsed: Ipv4Subnet[] = [];
         for (const text of loaded) {
           const subnet = parseIpv4Subnet(text);
@@ -192,9 +192,12 @@ export class AgentToolsPeerFilter {
         }
         this.subnets = parsed;
         log.info("peers.subnets-loaded", { count: parsed.length });
+      } else {
+        // A failed or superseded read cannot authorize a removed network.
+        this.subnets = [];
       }
-      // A failed read stays stale only through the interval, so an outside
-      // peer cannot make every connection read Docker.
+      // Retry failed reads on the interval, not on every connection. Only
+      // a new change bypasses that backoff and starts a replacement read.
       this.stale = this.changedDuringLoad;
     })().finally(() => {
       this.loading = null;

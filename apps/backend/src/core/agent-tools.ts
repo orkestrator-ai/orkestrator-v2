@@ -1014,8 +1014,12 @@ export class AgentToolsServer {
     const start = this.lifecycle.then(async () => {
       if (this.server) return;
       await this.workflowResults?.initializeCapabilityIdentity();
-      const server = createServer((request, response) => {
-        void this.admitAndHandle(request, response).catch((error: unknown) => {
+      const dispatch = (
+        request: IncomingMessage,
+        response: ServerResponse,
+        expectation?: "continue" | "unsupported",
+      ) => {
+        void this.admitAndHandle(request, response, expectation).catch((error: unknown) => {
           if (!response.headersSent) {
             jsonResponse(response, 500, {
               error: error instanceof Error ? error.message : String(error),
@@ -1024,7 +1028,16 @@ export class AgentToolsServer {
             response.destroy(error instanceof Error ? error : new Error(String(error)));
           }
         });
-      });
+      };
+      const server = createServer(dispatch);
+      // These events otherwise write automatic 400/408/431, 100 or 417
+      // replies before the request handler can finish peer admission.
+      server.on("clientError", (_error, socket) => socket.destroy());
+      server.on("timeout", (socket) => socket.destroy());
+      server.on("checkContinue", (request, response) => dispatch(request, response, "continue"));
+      server.on("checkExpectation", (request, response) =>
+        dispatch(request, response, "unsupported"),
+      );
 
       // A peer the filter already refuses is closed on accept, before the
       // request is read; one it cannot decide yet is decided per request.
@@ -1474,13 +1487,24 @@ export class AgentToolsServer {
    * anything is routed: the connection is closed with no status, so an
    * outside peer cannot tell a route, a 405 or a 401 apart.
    */
-  private async admitAndHandle(request: IncomingMessage, response: ServerResponse) {
+  private async admitAndHandle(
+    request: IncomingMessage,
+    response: ServerResponse,
+    expectation?: "continue" | "unsupported",
+  ) {
     const peer = request.socket.remoteAddress;
-    if (!(await this.peerFilter.admits(peer))) {
+    // A broken admission source must never turn into an HTTP error reply.
+    if (!(await this.peerFilter.admits(peer).catch(() => false))) {
       this.peerFilter.recordRefusal(peer);
       request.socket.destroy();
       return;
     }
+    if (expectation === "unsupported") {
+      response.writeHead(417);
+      response.end();
+      return;
+    }
+    if (expectation === "continue") response.writeContinue();
     await this.handle(request, response);
   }
 

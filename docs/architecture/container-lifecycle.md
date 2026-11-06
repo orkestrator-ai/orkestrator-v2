@@ -1336,10 +1336,14 @@ removal: `ensureEnvironmentNetwork`, `removeEnvironmentNetwork`, the probe
 network's create and removal, the stale-probe reap and reviewed cleanup
 report each change (`docker-network-changes.ts`), which marks the list stale
 and reloads it at once. A request that arrives while a reload is running
-waits for it. An unknown peer also reloads the list, at most once every 15 s
+waits for the entire refresh chain, including changes reported during a read.
+Every non-loopback peer, including cached members, reloads the list at most once every 15 s
 unless a change was reported, so a labelled network another process created
 is admitted on its first call after that, and an outside peer costs at most
-one Docker read per 15 s. A failed read keeps the previous list. The first
+one Docker read per 15 s. A failed read revokes cached permissions until a
+successful retry; retries remain rate-limited. Superseded reads cannot admit
+a peer. HTTP parser errors close silently, and automatic Expect responses
+are sent only after admission. The first
 read happens on the first non-loopback peer, so a backend whose containers
 arrive on loopback never reads Docker for this. Refusals are logged
 (`[docker.reachability] peers.refused`) at most once a minute with a count.

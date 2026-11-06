@@ -171,7 +171,7 @@ describe("AgentToolsPeerFilter", () => {
     expect(loads).toBe(1);
   });
 
-  test("a failed read keeps the previous list and waits the interval before retrying", async () => {
+  test("a failed read revokes the previous list and waits the interval before retrying", async () => {
     let now = 0;
     let fail = false;
     let loads = 0;
@@ -187,7 +187,7 @@ describe("AgentToolsPeerFilter", () => {
     fail = true;
     filter.networksChanged();
     await filter.reload();
-    expect(filter.allowedSubnets()).toEqual(["172.17.0.0/16"]);
+    expect(filter.allowedSubnets()).toEqual([]);
     const loadsAfterFailure = loads;
     expect(await filter.admits("10.0.0.2")).toBe(false);
     expect(loads).toBe(loadsAfterFailure);
@@ -197,6 +197,78 @@ describe("AgentToolsPeerFilter", () => {
     // A null answer (Docker unreachable) is a failure too.
     const unreachable = new AgentToolsPeerFilter({ loadSubnets: async () => null });
     expect(await unreachable.admits("172.17.0.2")).toBe(false);
+  });
+
+  for (const failure of ["null", "throw"] as const) {
+    test(`formerly allowed peers retry after a failed removal refresh (${failure})`, async () => {
+      let now = 0;
+      let loads = 0;
+      const filter = new AgentToolsPeerFilter({
+        now: () => now,
+        loadSubnets: async () => {
+          loads += 1;
+          if (loads === 1) return ["10.1.0.0/24"];
+          if (loads === 2) {
+            if (failure === "throw") throw new Error("Docker unavailable");
+            return null;
+          }
+          return [];
+        },
+      });
+      expect(await filter.admits("10.1.0.2")).toBe(true);
+      filter.networksChanged();
+      expect(await filter.admits("10.1.0.2")).toBe(false);
+      expect(filter.allowedSubnets()).toEqual([]);
+      expect(loads).toBe(2);
+      now = MISS_RELOAD_INTERVAL_MS - 1;
+      expect(await filter.admits("10.1.0.2")).toBe(false);
+      expect(loads).toBe(2);
+      now += 1;
+      expect(await filter.admits("10.1.0.2")).toBe(false);
+      expect(loads).toBe(3);
+    });
+  }
+
+  test("cached members refresh on expiry without requests from unknown peers", async () => {
+    let now = 0;
+    let subnets = ["10.1.0.0/24"];
+    const filter = new AgentToolsPeerFilter({ now: () => now, loadSubnets: async () => subnets });
+    expect(await filter.admits("10.1.0.2")).toBe(true);
+    subnets = [];
+    now = MISS_RELOAD_INTERVAL_MS;
+    expect(filter.verdict("10.1.0.2")).toBe("reload");
+    expect(await filter.admits("10.1.0.2")).toBe(false);
+  });
+
+  test("a cached member waits through every superseded refresh before removal is decided", async () => {
+    const refreshes = [deferred<string[]>(), deferred<string[]>(), deferred<string[]>()];
+    let loads = 0;
+    const filter = new AgentToolsPeerFilter({
+      now: () => 0,
+      loadSubnets: () => {
+        loads += 1;
+        return loads === 1 ? Promise.resolve(["10.1.0.0/24"]) : refreshes[loads - 2]!.promise;
+      },
+    });
+    expect(await filter.admits("10.1.0.2")).toBe(true);
+    filter.networksChanged();
+    let settled = false;
+    const waiting = filter.admits("10.1.0.2").then((answer) => {
+      settled = true;
+      return answer;
+    });
+    for (const [index, refresh] of refreshes.entries()) {
+      if (index < refreshes.length - 1) filter.networksChanged();
+      refresh.resolve(index === refreshes.length - 1 ? [] : ["10.1.0.0/24"]);
+      // Flush the async load and its finally/replacement callbacks.
+      for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+      if (index < refreshes.length - 1) {
+        expect(settled).toBe(false);
+        expect(filter.verdict("10.1.0.2")).toBe("reload");
+      }
+    }
+    expect(await waiting).toBe(false);
+    expect(loads).toBe(4);
   });
 
   test("refusals are logged at most once a minute", () => {

@@ -130,6 +130,45 @@ describe("agent-tools peer gate", () => {
     expect(seen.refusals.length).toBe(3);
   });
 
+  test("undecided peers get no parser or Expect replies while admission is pending", async () => {
+    const pending: Array<(admitted: boolean) => void> = [];
+    const { gate } = scriptedGate("reload", false);
+    gate.admits = () => new Promise<boolean>((resolve) => pending.push(resolve));
+    const port = await startWith(gate);
+    const requests = [
+      "INVALID HTTP\r\n\r\n",
+      "GET / HTTP/1.1\r\nHost: agent-tools\r\nOversized: " + "x".repeat(100_000) + "\r\n\r\n",
+      POST_MCP.replace("Content-Length: 2", "Expect: 100-continue\r\nContent-Length: 2"),
+      POST_MCP.replace("Content-Length: 2", "Expect: unsupported\r\nContent-Length: 2"),
+    ];
+    for (const request of requests) {
+      const reply = exchange("127.0.0.1", port, request);
+      // Keep admission unresolved while the parser receives the entire input.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      for (const resolve of pending.splice(0)) resolve(false);
+      expect(await reply).toBe("");
+    }
+  });
+
+  test("admitted Expect requests keep their continue and unsupported-expectation responses", async () => {
+    const { gate } = scriptedGate("reload", true);
+    const port = await startWith(gate);
+    const continued = await exchange(
+      "127.0.0.1",
+      port,
+      POST_MCP.replace("Content-Length: 2", "Expect: 100-continue\r\nContent-Length: 2"),
+    );
+    expect(continued).toStartWith("HTTP/1.1 100 Continue");
+    expect(continued).toContain("HTTP/1.1 401");
+    expect(
+      await exchange(
+        "127.0.0.1",
+        port,
+        POST_MCP.replace("Content-Length: 2", "Expect: unsupported\r\nContent-Length: 2"),
+      ),
+    ).toStartWith("HTTP/1.1 417");
+  });
+
   test("an admitted peer is routed exactly as before", async () => {
     const { gate } = scriptedGate("reload", true);
     const port = await startWith(gate);

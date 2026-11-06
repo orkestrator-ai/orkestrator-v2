@@ -164,7 +164,7 @@ response; see "Assumptions and decisions".
 x86_64) at `c1724ab74`, without the batched Cursor run: that run needs
 credentials, which this run excluded, so it stays with task 1. Local matrix
 10/10, container matrix 8/8 and `mise run smoke:cli` passed; no defect was
-found. The container matrix first failed 6/8 at environment start because
+found. The container matrix first failed 5 of 8 scenarios at environment start because
 Docker's default address pools were full (29 unattached reach-probe networks,
 to-do [7041](../containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md)
 task 2), and passed 8/8 with the test-only Docker shim on `PATH`. See
@@ -477,7 +477,7 @@ model).
     CLI build. Scenario durations 1.0 to 8.2 s, backend start-up 0.8 to 1.5 s,
     no cleanup errors. Manifest `2026-11-06T04-13-17-355Z-90d4f0a4`.
   - Container (`--environment-type container --docker-image
-    orkestrator-v2:dev-0417a01b03be`), first attempt: 2/8 pass. `read-only`,
+    orkestrator-v2:dev-0417a01b03be`), first attempt: 3/8 pass. `read-only`,
     `retry-and-retention` and `wrong-profile` passed, and every scenario that
     starts an environment (`local-lifecycle`, `exec`, `lost-response`,
     `foreign-owner`, `project-cascade`) failed at its first start with exit 1,

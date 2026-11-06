@@ -217,6 +217,7 @@ describe("superseded measurements", () => {
         nowIso: new Date().toISOString(),
         maxMeasurements: 64,
         maxFileRows: 256,
+        owner: { kind: "environment", id: "large", scope: latest.scope },
       });
     const a = ledger.pinMeasurement("large-0");
     const b = ledger.pinMeasurement("large-0");

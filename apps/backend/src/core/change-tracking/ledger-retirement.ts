@@ -69,6 +69,11 @@ export class LedgerRetirement {
    * `store_rows_position` does (docs/architecture/storage.md), so an older build
    * still opens the ledger. On small tables, about one row per turn or thread;
    * the larger tables are walked in row order, which is age order, instead.
+   * Three serve lookups the event loop otherwise paid with a scan (to-do 0741
+   * task 6): a pruning candidate's selection; the open tool windows, which
+   * every retention pass and startup read; and a purged binding's provider
+   * turns, found by frame key. The last two are partial indexes, holding only
+   * the rows those queries ask for.
    */
   ensureIndexes(): void {
     const db = this.db;
@@ -77,6 +82,9 @@ export class LedgerRetirement {
       CREATE INDEX IF NOT EXISTS change_turn_boundaries_environment ON change_turn_boundaries (environment_id);
       CREATE INDEX IF NOT EXISTS change_thread_segments_environment ON change_thread_segments (environment_id);
       CREATE INDEX IF NOT EXISTS change_turn_boundaries_age ON change_turn_boundaries (${TURN_AGE}, turn_id);
+      CREATE INDEX IF NOT EXISTS change_selections_measurement ON change_selections (measurement_id);
+      CREATE INDEX IF NOT EXISTS change_tool_windows_open_only ON change_tool_windows (window_id) WHERE lifecycle = 'open';
+      CREATE INDEX IF NOT EXISTS change_evidence_provider_turn_frames ON change_evidence (frame_key) WHERE owner_kind = 'provider-turn';
     `);
     this.indexedDatabase = db;
   }
@@ -244,9 +252,12 @@ export class LedgerRetirement {
     }
     if (budget.left <= 0) return false;
     // A provider turn's id is a digest, so only its evidence's frames lead to it.
+    // Named, because without statistics the planner would read every provider
+    // turn's rows through the owner index instead.
+    this.ensureIndexes();
     const [from, to] = this.frameRange(bindingId);
     const providerTurns = this.db.query(
-      `SELECT DISTINCT owner_id AS id FROM change_evidence
+      `SELECT DISTINCT owner_id AS id FROM change_evidence INDEXED BY change_evidence_provider_turn_frames
        WHERE owner_kind = 'provider-turn' AND frame_key >= ? AND frame_key < ? LIMIT ?`,
     );
     while (budget.left > 0) {
@@ -608,20 +619,75 @@ export class LedgerRetirement {
     );
   }
 
-  /** Provider turn diffs whose newest evidence is past the window. */
-  retireExpiredProviderTurns(nowIso: string, rows: number): RetirementBatch {
+  /**
+   * One page of evidence, oldest first, retiring the provider turn diffs whose
+   * newest evidence is past the window. Rows are in ingestion order by row id,
+   * so the walk ends at the first row ingested inside the window, and a pass
+   * with nothing expired reads one row. Returns where to go on from.
+   *
+   * Grouping every provider turn's evidence to find its newest row read the
+   * whole table each pass: 3.3 s with a cold page cache at 130,000 rows
+   * (to-do 0741 task 6).
+   */
+  retireExpiredProviderTurns(
+    nowIso: string,
+    afterRowid: number,
+    rows: number,
+  ): RetirementBatch & { next: number } {
     return this.ledger.transaction(() => {
       const budget: Budget = { left: rows };
-      const held = this.heldOwners(nowIso);
-      const turns = this.db
+      const expired = this.expiredSequence();
+      // A quiet pass reads just the frontier row, rather than materializing
+      // a whole page of evidence that is still inside the window.
+      const first = this.db
         .query(
-          `SELECT owner_id AS id FROM change_evidence WHERE owner_kind = 'provider-turn'
-           GROUP BY owner_id HAVING MAX(ingested_seq) <= ? LIMIT ?`,
+          "SELECT ingested_seq AS seq FROM change_evidence WHERE rowid > ? ORDER BY rowid LIMIT 1",
         )
-        .all(this.expiredSequence(), OWNERS_PER_QUERY) as Array<{ id: string }>;
-      const free = turns.filter(({ id }) => !held.has(`provider-turn\0${id}`));
-      for (const { id } of free) if (!this.retireProviderTurn(id, budget)) break;
-      return { rows: rows - budget.left, done: free.length === 0 };
+        .get(afterRowid) as { seq: number } | null;
+      if (!first || first.seq > expired) return { rows: 0, done: true, next: afterRowid };
+      const held = this.heldOwners(nowIso);
+      const page = this.db
+        .query(
+          `SELECT rowid AS row, owner_kind AS kind, owner_id AS id, ingested_seq AS seq
+           FROM change_evidence WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+        )
+        .all(afterRowid, WALK_PAGE_ROWS) as Array<{
+        row: number;
+        kind: string;
+        id: string;
+        seq: number;
+      }>;
+      const newest = this.db.query(
+        "SELECT MAX(ingested_seq) AS seq FROM change_evidence WHERE owner_kind = 'provider-turn' AND owner_id = ?",
+      );
+      const checked = new Set<string>();
+      let next = afterRowid;
+      let done = page.length < WALK_PAGE_ROWS;
+      for (const row of page) {
+        if (row.seq > expired) {
+          done = true;
+          break;
+        }
+        if (row.kind === "provider-turn" && !checked.has(row.id)) {
+          checked.add(row.id);
+          const latest = (newest.get(row.id) as { seq: number | null }).seq;
+          if (
+            latest !== null &&
+            latest <= expired &&
+            !held.has(`provider-turn\0${row.id}`) &&
+            !this.retireProviderTurn(row.id, budget)
+          ) {
+            done = false;
+            break;
+          }
+        }
+        next = row.row;
+        if (budget.left <= 0) {
+          done = false;
+          break;
+        }
+      }
+      return { rows: rows - budget.left, done, next };
     });
   }
 

@@ -271,6 +271,8 @@ export class ChangeTrackingService {
     if (this.started) return;
     this.started = true;
     try {
+      // Before reconciliation, which reads the open tool windows through one of them.
+      this.retention.purges.ensureIndexes();
       this.ledger.transaction(() => this.ledger.recoverRestoreOperations());
       this.turns.reconcileAfterRestart();
       this.publisher.drainOutbox();

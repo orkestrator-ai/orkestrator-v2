@@ -40,6 +40,8 @@ const bridgeArtifact = (name: string) => `resources/${name}/dist/index.js`;
 const ARTIFACTS = [
   "dist/client.js",
   "dist/main.js",
+  // Spawned by dist/main.js for every Mermaid fence and HTML artifact preview.
+  "dist/artifact-runtime/preview-worker.js",
   ...BUNDLED_BRIDGES.map((bridge) => bridgeArtifact(bridge.name)),
 ];
 
@@ -410,7 +412,26 @@ describe("orkestrator CLI package", () => {
     // The `files` allowlist has to win over the repo's `dist/` gitignore rule,
     // and sources must never reach the registry.
     const files = [...stdout.matchAll(/^packed\s+\S+\s+(.+)$/gm)].map((match) => match[1]!.trim());
-    expect(files.sort()).toEqual([
+
+    // The preview runtime the backend resolves beside dist/main.js. Its license
+    // directories are named by bundle version, so only the files the backend
+    // looks up by name are listed; the rest must be built output, not sources.
+    const runtime = files.filter((file) => file.startsWith("dist/artifact-runtime/"));
+    expect(runtime).toEqual(
+      expect.arrayContaining([
+        "dist/artifact-runtime/preview-worker.js",
+        "dist/artifact-runtime/mermaid.min.js",
+        "dist/artifact-runtime/seccomp_profile.json",
+        "dist/artifact-runtime/THIRD_PARTY_NOTICES.txt",
+        "dist/artifact-runtime/worker-context/Dockerfile",
+        "dist/artifact-runtime/worker-context/package-lock.json",
+        "dist/artifact-runtime/worker-context/package.json",
+        "dist/artifact-runtime/worker-context/preview-worker.mjs",
+      ]),
+    );
+    expect(runtime.filter((file) => /\.tsx?$/.test(file))).toEqual([]);
+
+    expect(files.filter((file) => !runtime.includes(file)).sort()).toEqual([
       "README.md",
       "bin/orkestrator-launcher.js",
       "bin/orkestrator.js",

@@ -219,7 +219,7 @@ export function RichPinRecoveryNotice({
       role="status"
       data-rich-chrome="true"
       data-rich-pin-displaced="true"
-      className="flex select-none flex-wrap items-center gap-2 border-b border-border/60 bg-amber-500/10 px-3 py-1 text-[11px] text-foreground"
+      className="flex select-none flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1 text-[11px] text-muted-foreground"
     >
       <span className="min-w-0 flex-1">
         The {what} was closed because too many expanded views are open. Its view settings were kept.

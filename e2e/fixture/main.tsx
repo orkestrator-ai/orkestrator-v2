@@ -130,6 +130,9 @@ import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScro
 const MarkdownEditorDiagramFixture = lazy(async () => ({
   default: (await import("./MarkdownEditorDiagramFixture")).MarkdownEditorDiagramFixture,
 }));
+const RichBlockNoticesFixture = lazy(async () => ({
+  default: (await import("./RichBlockNoticesFixture")).RichBlockNoticesFixture,
+}));
 const ExpandedViewersFixture = lazy(async () => ({
   default: (await import("./ExpandedViewersFixture")).ExpandedViewersFixture,
 }));
@@ -2108,6 +2111,12 @@ function fixtureForPath() {
   if (window.location.pathname === "/focus-visibility") return <FocusVisibilityFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
+  if (window.location.pathname === "/rich-block-notices")
+    return (
+      <Suspense fallback={null}>
+        <RichBlockNoticesFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/markdown-editor-diagram")
     return (
       <Suspense fallback={null}>

@@ -500,6 +500,9 @@ export const MermaidBlock = memo(function MermaidBlock({
           detail: state.deterministic
             ? failureDetail(state.failure)
             : `${failureDetail(state.failure)}. The source is shown instead.`,
+          // A syntax error or limit is the diagram's own fault; an unavailable
+          // renderer is the host's, and the source reads fine without it.
+          tone: state.deterministic ? ("error" as const) : ("warning" as const),
           action: state.deterministic ? undefined : (
             <RichToolbarButton label="Retry rendering" onClick={retry}>
               <RotateCcw aria-hidden="true" />
@@ -609,7 +612,7 @@ export const MermaidBlock = memo(function MermaidBlock({
           {stale && !preview ? (
             <div
               data-rich-chrome="true"
-              className="select-none border-b border-border/60 bg-amber-500/10 px-3 py-1 text-[11px] text-foreground"
+              className="select-none border-b border-border/60 px-3 py-1 text-[11px] text-muted-foreground"
             >
               Showing the preview of an earlier version of this diagram while the current source
               renders.

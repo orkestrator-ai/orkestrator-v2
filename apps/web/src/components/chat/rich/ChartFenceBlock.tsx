@@ -63,6 +63,7 @@ export const ChartFenceBlock = memo(function ChartFenceBlock({
         error={{
           title: "The chart specification is invalid",
           detail: describeErrors(result.errors, result.omittedErrors),
+          tone: "error",
         }}
         fallback={<NativeChartSource source={source} />}
       >

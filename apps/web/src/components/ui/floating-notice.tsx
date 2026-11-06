@@ -38,6 +38,26 @@ const TONE_ICON: Record<FloatingNoticeTone, LucideIcon> = {
   error: AlertCircle,
 };
 
+/**
+ * The tone's dot. Notices carry their tone in this dot on a neutral surface
+ * rather than in a tinted background, here and in the transcript's rich
+ * blocks (`RichBlockFrame`).
+ */
+export function NoticeToneDot({
+  tone,
+  className,
+}: {
+  tone: FloatingNoticeTone;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("inline-block size-2 shrink-0 rounded-full", TONE_DOT[tone], className)}
+    />
+  );
+}
+
 /** Errors first, then warnings, then information. */
 const TONE_ORDER: Record<FloatingNoticeTone, number> = { error: 0, warning: 1, info: 2 };
 
@@ -300,12 +320,7 @@ export function FloatingNotice({
   }, [placement, open]);
 
   const Icon = icon ?? TONE_ICON[tone];
-  const dot = (
-    <span
-      aria-hidden="true"
-      className={cn("inline-block size-2 shrink-0 rounded-full", TONE_DOT[tone])}
-    />
-  );
+  const dot = <NoticeToneDot tone={tone} />;
   const foldable = placement !== "beside";
   const iconButton =
     "-my-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-elevated hover:text-foreground focus-hairline";

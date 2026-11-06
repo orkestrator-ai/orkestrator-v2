@@ -145,7 +145,12 @@ try {
   for (const [artifact, specifier] of [
     ["dist/main.js", "sharp"],
     ["resources/claude-bridge/dist/index.js", "@anthropic-ai/claude-agent-sdk"],
+    // The preview worker renders every Mermaid fence and HTML artifact.
+    ["dist/artifact-runtime/preview-worker.js", "playwright-core"],
   ] as const) {
+    if (!(await Bun.file(path.join(installedRoot, artifact)).exists())) {
+      throw new Error(`Installed package is missing ${artifact}`);
+    }
     // Resolve from the real path, as Bun does when it loads the module: with
     // the isolated linker `node_modules/orkestrator` is a symlink into
     // `node_modules/.bun/`, and the package's dependencies sit beside its real

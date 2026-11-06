@@ -54,7 +54,7 @@ the other outstanding scenarios listed above. Evidence lives in
 
 **Context.** Code item 1's "still owed". The design says every disconnect and every connect hints the whole group, and that a stream which does not confirm `observe: true` is closed for good.
 
-**Investigation.** The wakeup is `HttpBridgeObservationWakeup` (`apps/backend/src/core/http-bridge-observation-stream.ts:253`); the stream opens `/event/subscribe?observe=1` (`:144`), confirms `"observe":true` (`:177`), and has a 75 s silence watchdog (`:54`). The backoff gate reads `idleBackoffWakeup === "provider-event-stream"` (`native-agent-launch-activity-reconciler.ts:986`), with one 4 s safety step (`STABLE_IDLE_BACKOFF_MS`, `native-agent-observation.ts:83`). The deterministic test covers reconnecting from the cursor after a restart. The live spec has no restart case (cases at `e2e/agent-testing/idle-observation-live.spec.ts:906`-`:1378`). The backend already exposes `stop_local_claude_server_cmd`, `stop_local_codex_server_cmd` and their `start_` pairs, and `design-resume-clients-live.spec.ts:219` uses the Codex pair.
+**Investigation.** The wakeup is `HttpBridgeObservationWakeup` (`apps/backend/src/core/http-bridge/observation-stream.ts:253`); the stream opens `/event/subscribe?observe=1` (`:144`), confirms `"observe":true` (`:177`), and has a 75 s silence watchdog (`:54`). The backoff gate reads `idleBackoffWakeup === "provider-event-stream"` (`native-agent-launch-activity-reconciler.ts:986`), with one 4 s safety step (`STABLE_IDLE_BACKOFF_MS`, `native-agent-observation.ts:83`). The deterministic test covers reconnecting from the cursor after a restart. The live spec has no restart case (cases at `e2e/agent-testing/idle-observation-live.spec.ts:906`-`:1378`). The backend already exposes `stop_local_claude_server_cmd`, `stop_local_codex_server_cmd` and their `start_` pairs, and `design-resume-clients-live.spec.ts:219` uses the Codex pair.
 
 **Decisions.**
 
@@ -395,7 +395,7 @@ open qualification cases from the 2026-10-21 run.
   Claude and Codex (`HttpBridgeProvider.observationStreamLive`) have one.
   Cursor, Pi and Grok bridges publish no event stream, so their groups are
   read on every sweep.
-- Bridge observation stream (`apps/backend/src/core/http-bridge-observation-stream.ts`).
+- Bridge observation stream (`apps/backend/src/core/http-bridge/observation-stream.ts`).
   The first `observationStreamLive()` call from the sweep opens
   `GET /event/subscribe?observe=1` on the Claude or Codex bridge. In that mode
   the bridge sends each event's type, cursor and session id, never its

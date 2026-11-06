@@ -255,7 +255,7 @@ projection race; no root cause is established. Original group evidence:
   the test read one projection straight away. A fresh codex-bridge reports
   raw phase `starting` until its new app-server child is up, and
   `HttpBridgeProvider` maps that to `recovering`
-  (`apps/backend/src/core/http-bridge-provider.ts`). Under load the first read
+  (`apps/backend/src/core/http-bridge/provider.ts`). Under load the first read
   came before the child was up.
 - **Fix:** the cold-restart read now uses `stack.waitForProjection` until the
   phase is no longer `recovering`, then asserts `idle` and the same cards and

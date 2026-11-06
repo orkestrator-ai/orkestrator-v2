@@ -23,7 +23,7 @@ import {
 } from "@orkestrator/protocol/node/bridge-authority";
 import { bridgeTokenVerifier } from "@orkestrator/protocol/node/bridge-credential";
 import { bridgeAuthorityHeaders } from "../src/core/bridge-authority-keys";
-import { bridgeFetch } from "../src/core/http-bridge-transport";
+import { bridgeFetch } from "../src/core/http-bridge/transport";
 import {
   containerAuthorityKeyFile,
   containerCredentialFile,

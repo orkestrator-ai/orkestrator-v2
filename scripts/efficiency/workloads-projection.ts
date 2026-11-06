@@ -514,7 +514,7 @@ export async function historyCursorCoverageWorkload(
 ): Promise<WorkloadDefinition> {
   const modules = await loadModules(context);
   const bridge = await context.loadOptional<{ positionedCursorBefore?: PositionedCursorBefore }>(
-    "apps/backend/src/core/http-bridge-transcript-v2.ts",
+    "apps/backend/src/core/http-bridge/transcript-v2.ts",
   );
   const sessions = 40;
   const coverage = (mix: OutputMix): CaseDefinition => ({

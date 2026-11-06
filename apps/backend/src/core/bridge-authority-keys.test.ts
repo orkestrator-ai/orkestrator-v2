@@ -10,7 +10,7 @@ import {
   hasBridgeAuthorityKey,
   rememberBridgeAuthorityKey,
 } from "./bridge-authority-keys.js";
-import { bridgeFetch } from "./http-bridge-transport.js";
+import { bridgeFetch } from "./http-bridge/transport.js";
 import { LocalServerRuntime } from "./local-server-runtime.js";
 
 const TOKEN = `okb_${"k".repeat(43)}`;

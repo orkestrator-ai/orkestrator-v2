@@ -20,7 +20,7 @@ import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import { markLocalBridgesForLoginRefresh } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import { withHostOpenCodeServer, type HostOpenCodeServer } from "./host-model-catalog-refresh.js";
-import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import { openCodeSdkFetch } from "./http-bridge/index.js";
 import type { OpenCodeLoginOperation } from "./opencode-provider-login-slot.js";
 
 /**

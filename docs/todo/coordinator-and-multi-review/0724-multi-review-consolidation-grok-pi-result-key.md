@@ -36,7 +36,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Investigation.** Confirmed by reading the code, not reproduced.
 - Consolidation runs with `READ_ONLY_REPORT_TURN` (`apps/backend/src/core/multi-review-service.ts:209`), on create (`:3777`) and on every send (`:3969`).
 - The send passes `workflowResultTool` but no `workflowResultKey` (`:3975`); so does the attach (`:3944-3951`).
-- `bridgePromptBody` forwards the pair to Grok and Pi only when both are present (`apps/backend/src/core/http-bridge-prompt-body.ts:73-83`), so the bridge receives neither and stores no `workflowResultTurn` (`bridges/pi-bridge/src/http.ts:1419-1422`, `bridges/acp-bridge/src/acp-http.ts:593`, `:678`).
+- `bridgePromptBody` forwards the pair to Grok and Pi only when both are present (`apps/backend/src/core/http-bridge/prompt-body.ts:73-83`), so the bridge receives neither and stores no `workflowResultTurn` (`bridges/pi-bridge/src/http.ts:1419-1422`, `bridges/acp-bridge/src/acp-http.ts:593`, `:678`).
 - Pi: `requestToolApproval` blocks any tool outside `READ_ONLY_TOOLS` on a read-only turn unless `isOwnWorkflowResultCall` holds (`bridges/pi-bridge/src/interactions.ts:72-80`), which needs `state.workflowResultTurn` (`bridges/pi-bridge/src/mcp.ts:172-185`).
 - Grok: `workflowResultPermissionOption` returns nothing without a turn (`bridges/acp-bridge/src/acp-session.ts:761-767`); a read-only turn's policy is `approvals: "deny"` (`acp-policy.ts:53-58`), so `orkestratorToolPermissionOption` also refuses. `acp-workflow-result-permission.test.ts:171` pins that refusal.
 - After the refused turn the step sends its one reminder (`multi-review-service.ts:4184-4199`), refused the same way, then throws `missingWorkflowResultMessage` (`:4201-4209`).

@@ -29,7 +29,7 @@ import type {
   ProviderCommandCatalogue,
   ProviderStatus,
 } from "../apps/backend/src/core/agent-provider-contract";
-import { HttpBridgeCatalogAdapter } from "../apps/backend/src/core/http-bridge-catalog";
+import { HttpBridgeCatalogAdapter } from "../apps/backend/src/core/http-bridge/catalog";
 import {
   COMMAND_CATALOGUE_MAX_BYTES,
   COMMAND_CATALOGUE_MAX_CONCURRENT_READS,

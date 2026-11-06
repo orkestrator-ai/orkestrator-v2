@@ -5,7 +5,7 @@
 - **Date observed:** 2026-10-27
 - **Branch:** `todo-0162-interaction-test-matrix-gaps-aad7b1f9a6f1` at
   `619dd44e1`, based on `origin/main` `863b57821`. Outside tests and docs the
-  branch changes only `apps/backend/src/core/http-bridge-interactions.ts`,
+  branch changes only `apps/backend/src/core/http-bridge/interactions.ts`,
   `opencode-provider.ts` and `opencode-session-close.ts`; its bridge changes
   are test files only.
 - **Command:** `mise run test`, exit 1 after 1282.4 s (artifacts

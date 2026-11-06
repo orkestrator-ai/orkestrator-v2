@@ -21,7 +21,7 @@ import type {
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
 import type { BridgeConnection } from "./agent-provider-contract.js";
-import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
+import { HttpBridgeTranscriptReader } from "./http-bridge/transcript-reader.js";
 import {
   createProviderStub,
   waitForCondition,

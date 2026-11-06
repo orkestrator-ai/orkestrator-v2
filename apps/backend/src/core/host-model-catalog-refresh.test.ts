@@ -9,7 +9,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-catalog-refresh.js";
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
-import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import { openCodeSdkFetch } from "./http-bridge/transport.js";
 import { spawnCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 

@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { HttpBridgeInteractionAdapter } from "../../apps/backend/src/core/http-bridge-interactions";
+import { HttpBridgeInteractionAdapter } from "../../apps/backend/src/core/http-bridge/interactions";
 
 installFatalRejectionGuard({ label: "[claude-interaction-browser-fixture]" });
 const home = mkdtempSync(join(tmpdir(), "claude-interaction-browser-"));

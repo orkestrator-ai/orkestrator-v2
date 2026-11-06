@@ -27,7 +27,7 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 **Context.** Item 3, checked on 2026-10-26. The Claude summary route now materialises a persisted session first, so its 404 means the session is missing. The register row (`docs/architecture/version-compatibility.md:113`) sets the condition: the floor at or above the first Stable release with that change.
 
-**Investigation.** The fallback is at `apps/backend/src/core/http-bridge-progressive.ts:92` and counts `bridge-transcript.messages-fallback` only when `/messages` served the session (`:117`; id at `compatibility-path-usage.ts:29`). The Claude change landed in #1296 (`c9f4043b`), covered by `bridges/claude-bridge/src/services/session-manager-transcript-v2.test.ts:383`. Of the local tags, only `v2.33.0-beta` contains it, and no Stable release does yet. The floor is still v2.21.0 (`version-compatibility.md:18`), so retirement is at least 60 days after the first Stable release with #1296. `/messages` itself stays: bounded `messages({ limit })` reads and the `sync-v1` refresh use it.
+**Investigation.** The fallback is at `apps/backend/src/core/http-bridge/progressive.ts:92` and counts `bridge-transcript.messages-fallback` only when `/messages` served the session (`:117`; id at `compatibility-path-usage.ts:29`). The Claude change landed in #1296 (`c9f4043b`), covered by `bridges/claude-bridge/src/services/session-manager-transcript-v2.test.ts:383`. Of the local tags, only `v2.33.0-beta` contains it, and no Stable release does yet. The floor is still v2.21.0 (`version-compatibility.md:18`), so retirement is at least 60 days after the first Stable release with #1296. `/messages` itself stays: bounded `messages({ limit })` reads and the `sync-v1` refresh use it.
 
 **Decisions.**
 
@@ -180,7 +180,7 @@ found two defects, both fixed.
   serve the v2 summary, detail and page routes built by
   `packages/protocol/src/node/bridge-transcript-routes.ts`
   (`bridgeTranscriptRouteBody`) over `bridge-transcript-summary.ts`. The
-  backend prefers them through `apps/backend/src/core/http-bridge-transcript-v2.ts`
+  backend prefers them through `apps/backend/src/core/http-bridge/transcript-v2.ts`
   and falls back to v1 per bridge connection. Wire bounds (locator and cursor
   lengths, page size, detail ceilings) are the exported constants in
   `bridge-transcript-summary.ts`. Since 2026-10-26 Claude's summary route

@@ -115,7 +115,7 @@ pick its tip so only this branch's own work shows. Commands:
 | Shared Node algorithms | `packages/protocol/src/node/change-tracking/` (`raw-line-diff`, `unified-patch`, `evidence-measure`, `evidence-selection`, `count-policy`, `evidence-spool`, `evidence-builders`, `evidence-routes`) |
 | Backend domain | `apps/backend/src/core/change-tracking/` |
 | Commands | `apps/backend/src/core/commands-registry-changes.ts` |
-| Bridge transport | `apps/backend/src/core/http-bridge-change-evidence.ts` (pull/ack client) |
+| Bridge transport | `apps/backend/src/core/http-bridge/change-evidence.ts` (pull/ack client) |
 | Bridge adapters | `bridges/<bridge>/src/**/change-evidence.ts` (Claude, Codex, Cursor, Pi, ACP/Grok) |
 | OpenCode adapter | `apps/backend/src/core/opencode-change-evidence.ts` |
 | Public CLI | `changes.view` / `changes.history` actions (`public-api/actions-changes.ts`), `orkestrator changes view|history` |

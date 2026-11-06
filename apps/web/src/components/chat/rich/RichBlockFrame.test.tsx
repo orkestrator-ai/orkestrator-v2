@@ -10,6 +10,23 @@ function ThrowingBody(): never {
 afterEach(cleanup);
 
 describe("RichBlockFrame", () => {
+  test("host notices default to warning and retain source and actions", () => {
+    render(
+      <RichBlockFrame
+        title="Block"
+        kind="test"
+        error={{ title: "Unavailable", action: <button>Retry</button> }}
+        fallback={<pre>exact source</pre>}
+      >
+        hidden body
+      </RichBlockFrame>,
+    );
+    expect(screen.getByRole("note").getAttribute("data-rich-notice-tone")).toBe("warning");
+    expect(screen.getByText("exact source")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText("hidden body")).toBeNull();
+  });
+
   test("logs a failed renderer without its message, source or location", () => {
     const logs = captureLogs();
     try {
@@ -20,6 +37,7 @@ describe("RichBlockFrame", () => {
       );
 
       expect(screen.getByText("exact source")).toBeTruthy();
+      expect(screen.getByRole("note").getAttribute("data-rich-notice-tone")).toBe("error");
       expect(logs.records()).toContainEqual(
         expect.objectContaining({
           level: "warn",

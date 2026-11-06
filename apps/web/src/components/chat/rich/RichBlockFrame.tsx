@@ -1,7 +1,8 @@
 import { createLogger } from "@orkestrator/protocol/logger";
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { createLazyLoadFailureDiagnostic } from "@/components/LazyLoadBoundary";
+import { NoticeToneDot } from "@/components/ui/floating-notice";
 import { cn } from "@/lib/utils";
 
 const log = createLogger("web.chat");
@@ -17,6 +18,8 @@ const log = createLogger("web.chat");
  *   caller's fallback slot (normally the exact source).
  * - Loading and final failures use a restrained polite live region; streaming
  *   tokens never announce.
+ * - A failure is a neutral note whose tone is a dot, like the app's floating
+ *   notices, not a tinted strip: the source below it is the content.
  */
 
 export interface RichBlockFrameProps {
@@ -30,7 +33,13 @@ export interface RichBlockFrameProps {
   fallback?: ReactNode;
   loading?: boolean;
   loadingLabel?: string;
-  error?: { title: string; detail?: string; action?: ReactNode } | null;
+  error?: {
+    title: string;
+    detail?: string;
+    action?: ReactNode;
+    /** `warning` (default) for a renderer or host problem, `error` for a fault in the block. */
+    tone?: "warning" | "error";
+  } | null;
   className?: string;
   bodyClassName?: string;
   /** Stable identity for diagnostics and find-reveal targeting. */
@@ -130,16 +139,15 @@ function RichBlockError({
       <div
         role="note"
         data-rich-chrome="true"
-        className="flex select-none items-start gap-2 border-b border-border/70 bg-amber-500/10 px-3 py-2 text-xs text-foreground"
+        data-rich-notice-tone={error.tone ?? "warning"}
+        className="flex select-none items-start gap-2 border-b border-border/60 px-3 py-1.5 text-xs leading-5"
       >
-        <AlertTriangle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
-        <div className="min-w-0 flex-1">
-          <div className="font-medium">{error.title}</div>
-          {error.detail ? (
-            <div className="mt-0.5 break-words text-muted-foreground">{error.detail}</div>
-          ) : null}
+        <NoticeToneDot tone={error.tone ?? "warning"} className="mt-1.5" />
+        <div className="min-w-0 flex-1 break-words">
+          <span className="font-medium text-foreground">{error.title}</span>
+          {error.detail ? <span className="text-muted-foreground"> · {error.detail}</span> : null}
         </div>
-        {error.action ? <div className="shrink-0">{error.action}</div> : null}
+        {error.action ? <div className="-my-0.5 shrink-0">{error.action}</div> : null}
       </div>
       {children}
     </div>
@@ -182,6 +190,7 @@ class RichBlockErrorBoundary extends Component<BoundaryProps, { failed: boolean 
         error={{
           title: "This block could not be displayed",
           detail: "The source is shown instead.",
+          tone: "error",
         }}
       >
         {this.props.fallback}

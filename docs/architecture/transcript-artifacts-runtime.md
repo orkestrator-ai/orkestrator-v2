@@ -267,7 +267,8 @@ when the pinned id is gone, the tag is used and a warning is logged.
 
 Preparing the worker on demand (`transcript_artifact_prepare_worker`,
 `preview-worker-prepare.ts`). Packaged installs carry no repository, so the
-backend build (`apps/backend/scripts/build.ts`) ships the complete worker
+backend build (`apps/backend/scripts/build.ts`, and the CLI package build)
+ships the complete worker
 build context in `dist/artifact-runtime/worker-context/` (exactly what
 `build.sh` stages: Dockerfile, npm manifest and lockfile, the Node worker
 bundle, every hash-verified pinned bundle, licenses) plus the seccomp
@@ -417,7 +418,13 @@ references become data URLs from authorized assets (magic-byte MIME checks,
 dimension and byte bounds). Dependencies come only from the checked-in
 manifest in `dependency-manifest.ts`, are sha256-verified at load, and the
 backend build copies and re-verifies the bundles into `dist/artifact-runtime/`
-with their license texts and `THIRD_PARTY_NOTICES.txt`:
+with their license texts and `THIRD_PARTY_NOTICES.txt`. The staging lives in
+`apps/backend/scripts/artifact-runtime.ts` and the `orkestrator` CLI package
+build calls it too, because the backend looks for the worker and bundles
+beside whichever `main.js` is running; a package without them reports
+"Diagram rendering is unavailable on this host" for every Mermaid fence.
+`packages/cli/scripts/smoke-packed.ts` fails a packed release missing the
+worker:
 
 | Id | Bundle (pinned bytes) | Global | Module specifiers | License |
 | --- | --- | --- | --- | --- |

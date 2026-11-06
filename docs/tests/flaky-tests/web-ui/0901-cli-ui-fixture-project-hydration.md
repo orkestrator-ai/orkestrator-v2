@@ -35,3 +35,20 @@ The 502s came from `cancelProxyForDisconnect` in `apps/backend/src/gateway-proxy
 - **Fix:** skip that destroy when `proxyRequest.destroyed` is true. No assertion or timeout changed. The two `page.reload({ waitUntil: "load" })` arguments added earlier are removed: `load` is the default, so they changed nothing. The `load` waits on login stay.
 - **Verification:** a login-then-reload loop on one profile before the fix had 3 of 40 rounds with these 502s. After it, 0 of 110 and 0 of 45 rounds had a 5xx (two of the 110 had not rendered at that loop's 800 ms check, with no failed request; the 45-round rerun waited for the render and none took over 500 ms). `local environment move…`, `persisted diff baselines…` and `real browser gateway exercises…` passed 9 of 9 with `--repeat-each=3 --workers=1`. The regression test `a client disconnect after its upstream finished…` in `apps/backend/tests/gateway-proxy.test.ts` fails without the guard (twice, `SECOND_REQUEST_FAILED`) and passes with it.
 - **Not established:** flake [0167](0167-dev-renderer-entry-dynamic-import-fetch.md) and the blank page in [2401](../previews-annotations-and-gateway/2401-browser-smoke-terminal-history-marker.md)'s recurrence share this symptom; neither was checked against this cause. The full isolated suite was not rerun at this stage.
+
+## A different cause, 2026-11-06 (fixed)
+
+`a CLI-initialized project and its cascade removal reach an open renderer` failed in
+runs 1 and 2 of the to-do 4222 task 3 qualification (isolated suite, credential-free
+Codex profile on beelink), with no `net::ERR_NETWORK_CHANGED` and no 502 in either
+trace. Both times `openProject` saw the project's Collapse button, so it did not click,
+and 5 s later the project was collapsed (`Collapse project …` not found): the fixture
+project after the first load in run 1, the CLI-created project in run 2. An empty
+project renders expanded until its environments have loaded, then
+`collapseEmptyProjects` (`apps/web/src/stores/uiStore.ts`, called from
+`useSidebarHydration.ts`) collapses it unless the user has made a choice. The helper
+raced that. `ensureProjectExpanded` (`e2e/agent-testing/sidebar-project.ts`) now
+toggles until the expanded state is a recorded choice, which the auto-collapse leaves
+alone, and `cli-ui.spec.ts`'s `openProject` uses it. The case passed in runs 3 to 7.
+The 2026-11-05 failure of `cli-ui.spec.ts:250` recorded in to-do 4222 ("the project row
+did not expand") fits the same race.

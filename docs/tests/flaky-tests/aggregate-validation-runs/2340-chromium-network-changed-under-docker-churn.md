@@ -188,7 +188,7 @@ serves. No other spec changed then; see below for the whole suite.
 A run's output now names the failed cases whose trace has this error
 (`e2e/agent-testing/network-churn-report.ts`). The suite's result does not change.
 
-## The whole browser suite, 2026-11-05 (to-do [4222](../../../todo/cross-cutting/4222-browser-failures-left-after-headless-qualification.md) task 3)
+## The whole browser suite, 2026-11-05 (to-do 4222 task 3)
 
 The isolated browser suite's specs now take `test` from
 `e2e/agent-testing/browser-test.ts`. Its `context` fixture fetches every loopback
@@ -222,7 +222,7 @@ events in each 10-minute run, so these runs show the fixture costs nothing that
 breaks a case, not that it removes this failure from the whole suite. The single-spec
 measurement above (0 of 3 before, 3 of 3 after under network churn) is the evidence
 for the mechanism. Record a recurrence here if a browser-suite case still fails with
-`net::ERR_NETWORK_CHANGED` in its trace. That suite-wide run is the open part of to-do 4222 task 3.
+`net::ERR_NETWORK_CHANGED` in its trace. That suite-wide run was done on 2026-11-06; see the next section.
 
 ## Static HTML review repair, 2026-11-05
 
@@ -309,3 +309,54 @@ This launch failure is separate from Chromium's network-change failures.
   ([6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)).
 - **Change:** the spec launches with the probe off. Its module loads still go through
   Chromium, so other Docker work on the host can still cause this.
+
+## The whole browser suite under churn, 2026-11-06 (to-do 4222 task 3, closed)
+
+Beelink, branch based on `main` at `e6c3da899`. Every isolated run is
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run test:agent:browser:isolated`
+(its default credential-free Codex `--headless --fixture` profile, one worker).
+"Self-made churn" is `docker network create` and `rm` of one network with a
+unique `ork4222-churn-<run>-<hex>` name, an `orkestrator-owner` label of the same
+name and an explicit `--subnet` (10.242.42.0/24, or 10.242.43.0/24 for the
+component runs), every 0.3 s, removed by that exact name afterwards; `docker
+network ls` showed none left after any run. Events are bridge and veth lines from
+`ip monitor link address` during the run, other builds' included. Runs 5 and 6
+overlapped component runs A and B, so their hosts carried both churns and a load
+average of 40 to 60.
+
+| Run | Code | Churn (cycles / events) | Passed / failed / skipped | Failures and attribution |
+| --- | --- | --- | --- | --- |
+| 1 | base (`e6c3da899`) | natural (— / 990) | 48 / 3 / 98 | Churn: host picker narrow (177 module aborts; `browser-gateway.spec.ts` loaded through Chromium). Defect: environment move answered 500 `claude-tmux cleanup incomplete` (to-do [7020](../../../todo/cross-cutting/7020-browser-suites-after-network-churn-qualification.md) task 1). Spec race: `cli-ui` "a CLI-initialized project…" (flake [0901](../web-ui/0901-cli-ui-fixture-project-hydration.md), fixed) |
+| 2 | base | self-made (2,209 / 13,433) | 35 / 16 / 98 | Churn: all 15 `browser-gateway.spec.ts` failures (58 to 336 module aborts each). Spec race: the same `cli-ui` case. Every spec on the shared fixture passed |
+| 3 | `browser-gateway.spec.ts` on the shared fixture, one direct case, helper fix | self-made (1,627 / 11,041) | 51 / 1 / 98 | The new direct case counted Chromium's own `304` revalidations as failures (fixed: `moduleStatusFailure`) |
+| 4 | + 304 fix | self-made (1,664 / 10,651) | 50 / 2 / 98 | Churn on navigations: `page.reload` (`browser-gateway.spec.ts` signed-out Codex) and `page.goto` (`web-annotations-gateway.spec.ts` count bound) failed with `net::ERR_NETWORK_CHANGED` (fixed: `retryNavigationsOnNetworkChange`) |
+| 5 | + navigation retry | self-made, plus component run A's (1,593 / 20,142) | 51 / 1 / 98 | Churn: the direct case's page lost 201 modules and showed neither the app nor its error, so its wait failed (fixed: such a load is classified and retried) |
+| 6 | + blank-load retry | self-made, plus component run B's (2,183 / 26,379) | 49 / 3 / 98 | Churn, by design: the direct case lost modules on all 4 loads and says so. Load (no network error): capped file tree at its 30 s `hidden.o` wait (flake [2930](../previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)); graph designer title (flake [1311](../web-ui/1311-graph-designer-keyboard-undo-edge.md)) |
+| 7 | final | natural (— / 362) | 52 / 0 / 98 | None |
+
+The component suite (`mise run test:browser`'s Playwright half,
+`e2e/playwright.config.ts`, eight workers, `ORKESTRATOR_E2E_PORT=15422` on the host):
+
+| Run | How | Churn (cycles / events) | Result |
+| --- | --- | --- | --- |
+| A | host network | self-made (3,438 / 32,205) | Stopped by `test:logged`'s 30-minute deadline at 1,024 of 1,618; 851 failed. 850 of the 854 failure traces hold `net::ERR_NETWORK_CHANGED`; the other four are three ExpandedViewers cases killed at the deadline and the DataSavingGateway mobile case, whose spec turns traces off (flake 1310) |
+| B | `unshare -rn` by hand | self-made (2,304 / 27,171) | 1,475 passed, 15 failed, 128 skipped (25.1 min); no failure trace holds `net::ERR_NETWORK_CHANGED`. The 15 are ToolGroupFold, TranscriptPaging, VirtuosoFollow, GitHubCliSetup and DesignCanvas cases at load average 50 to 60 (open flakes 0382, 0793, 0153, 1602, 0483) |
+| C | `mise run test:browser` as committed (`scripts/loopback-network.ts`) | self-made (2,200 / 13,222) | The wrapper printed "running in a private loopback-only network namespace". 1,479 passed, 11 failed, 128 skipped (23.4 min); none of the 41 failure directories holds `net::ERR_NETWORK_CHANGED`. The 11 are ToolGroupFold, TranscriptPaging and VirtuosoFollow cases, as in B. The public-site suite did not start because the component suite failed; run alone inside the namespace it passed (16.6 s) |
+
+What changed, so this case no longer explains a failure in these suites:
+
+- `browser-gateway.spec.ts` takes `test` from `browser-test.ts`. Only "the gateway
+  serves the renderer's modules to Chromium's own network stack" sets
+  `modulesThroughChromium` and loads through Chromium; it loads again (up to four
+  times) when its modules were lost only to network changes, and under very heavy
+  churn its error names this case.
+- Every routed context retries a `goto` or `reload` that Chromium aborted with
+  `net::ERR_NETWORK_CHANGED`, up to three times. Navigations are not routed through
+  `route.fetch()`, because they carry the login redirect and cookie.
+- `mise run test:browser` runs both suites in a private user and network namespace
+  with only loopback raised; a host that cannot create one runs them on the host
+  network and prints why, and `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
+
+Still exposed: `client-outage.spec.ts` (opt-in; it tests the browser's own network
+path), the direct case above under heavy churn, and any page navigation started by a
+click rather than `goto` or `reload`. None of these failed in runs 3 to 7.

@@ -76,3 +76,17 @@ or skip was changed.
 Preparation at `c394083df` repeated `root-change approval handles over-limit and still permits rejection` in `apps/web/src/components/federation/node-action-requests.test.tsx`: 5373.35 ms against the 5000 ms deadline. Original command: `mise run test:logged -- --name review-default-tests -- mise run test`. The supplied package does not record the worker grants; visible summaries total 33,391 tests (33,236 passed, 5 failed, 150 skipped). Evidence is `.orkestrator/review-artifacts/review-validation-66eeef27-a031-4c68-a36b-f870e73b9c33/validation-04.stderr.txt`.
 
 The unchanged owning file passed alone (exit 0, 3.1 s) with `NODE_ENV=test mise run test:logged -- --name root-approval-alone -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`. The logged runner removed passing output, so its test count was not retained. A two-owner diagnostic run also passed this test while repeating three fork failures in the other owner (`/tmp/orkestrator-test-run.8u8Xff/federation-focused.log.gz`, 109 passed, 3 failed). No assertion, timeout or production code for this case changed; no cause is established.
+
+## Work panel merge — 2026-11-06
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated the
+over-limit case deadline at 5164.36 ms (workspace six slots; web two Bun
+workers; concurrent validation). The complete unchanged owner passed alone,
+exit 0 in 6.5 s:
+
+```sh
+mise run test:logged -- --name merge-node-action-owner -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.nqin2k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No assertion or implementation changed. The cause remains unestablished.

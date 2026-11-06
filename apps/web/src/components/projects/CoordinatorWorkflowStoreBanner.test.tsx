@@ -17,7 +17,7 @@ describe("CoordinatorWorkflowStoreBanner", () => {
     const banner = screen.getByRole("status");
     expect(banner.textContent).toContain("Coordinator work records are nearly full.");
     expect(banner.textContent).toContain("Delete finished worker environments");
-    expect(banner.textContent).toContain("Clearing rows from the Work panel only hides them.");
+    expect(banner.textContent).not.toContain("Work panel");
     expect(
       banner
         .querySelector("[data-coordinator-workflow-store]")

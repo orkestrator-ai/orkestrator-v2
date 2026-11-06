@@ -14,13 +14,13 @@ Analysed 2026-11-06 against main at `ee2cc8423`.
 6. **Codex, Cursor, Grok and ACP: no behaviour change needed**: protocol, patch and argv rechecks. Status: done.
 7. **OpenCode 2.x gate**: whether 2.2.3–2.2.5 opened 0008's gate. Status: done (still closed).
 8. **Adopt-later and not-relevant calls**: every other change in the changelogs. Status: done (candidates moved to 0007).
-9. **Live evidence at the new pins**: signed-in checks, macOS-only loopback tests, the container image. Status: open.
-10. **One sign-in expiry for every provider**: Claude `credential_expires_at` beside Cursor's `expiresAt`. Status: open.
-11. **One "a person must answer this" marker for every provider**: Claude now, Codex `humanCommand` later. Status: open (depends on 4 for Claude; Codex upstream-blocked).
-12. **Provider-neutral tool safety hints on approval cards**: Codex MCP `tool_annotations`. Status: open.
-13. **Where a turn's cost comes from**: Pi `totalFromProvider`, Grok `costUsdTicks`, ACP `Cost.currency`. Status: open (depends on 0007 task 11 for Grok).
-14. **A transcript notice when a provider could not save the conversation**: Claude `session_writes_lost`, Pi's failed session write. Status: open.
-15. **Grok session writeback**: whether an ACP child uploads sessions to code.grok.com. Status: open (needs a signed-in check, then a product decision).
+9. **Live evidence at the new pins**: signed-in checks, the container image, the Linux loopback failures. Status: open (image built and smoke-tested; Linux loopback failures fixed in the product; signed-in and macOS runs remain).
+10. **One sign-in expiry for every provider**: Claude `credential_expires_at` beside Cursor's `expiresAt`. Status: done (live signed-in check open, task 9).
+11. **One "a person must answer this" marker for every provider**: Claude now, Codex `humanCommand` later. Status: done (Codex path built and fake-tested; live once Codex leaves `experimentalApi`).
+12. **Provider-neutral tool safety hints on approval cards**: Codex MCP `tool_annotations`. Status: done for Codex and Pi; Claude open (annotations only in a cached status read).
+13. **Where a turn's cost comes from**: Pi `totalFromProvider`, Grok `costUsdTicks`, ACP `Cost.currency`. Status: done (Grok ticks still wait on 0007 task 11).
+14. **A transcript notice when a provider could not save the conversation**: Claude `session_writes_lost`, Pi's failed session write. Status: done.
+15. **Grok session writeback**: whether an ACP child uploads sessions to code.grok.com. Status: done (`GROK_STORAGE_MODE=local` for bridge children; whether it outranks remote settings needs a signed-in check, task 9).
 
 ### 1. Upgrade decision for each provider
 
@@ -252,9 +252,11 @@ Analysed 2026-11-06 against main at `ee2cc8423`.
 - Grok and ACP: typecheck, build, `test:bridge`, the argv checks above, `verify:grok:mcp-live`.
 - All: the four artifact records per CLI verified against fresh upstream downloads; `version-drift.test.ts`; `container-state-layout.test.ts` after each re-trace.
 
-Failed, and not caused by the bump: on this Linux host `live-contract.test.ts` "coordinator research MCP survives a thread-scoped Orkestrator replacement" and two cases in `live-refused-calls.test.ts`. Codex's bubblewrap filesystem helper cannot bind the test's `/tmp/ork-test-tmp-*` path (`bwrap: Can't create file …: Read-only file system`), and a refused shell write reads `Read-only file system` where the test expects macOS's `Operation not permitted`. 0.166.0 fails the first case identically on the same host.
+Failed at first, and not caused by the bump: on this Linux host `live-contract.test.ts` "coordinator research MCP survives a thread-scoped Orkestrator replacement", two cases in `live-refused-calls.test.ts` and `live-coordinator-skills.test.ts`. 0.166.0 failed identically. The cause was a product bug, not the fixture: Codex's bubblewrap sandbox mounts each denied directory as a read-only tmpfs, shallowest first and after the read grants, so a coordinator's `":tmpdir" = "deny"` inside `":slash_tmp" = "deny"` (any `TMPDIR` under `/tmp`, such as Debian's `libpam-tmpdir`) failed every sandboxed call, including the AGENTS.md read at `thread/start`, and a checkout under `/tmp` could not read itself. `codexCoordinatorTmpDenials` (`bridges/codex-bridge/src/codex-config.ts`) now leaves out, on Linux only, exactly the entries Codex cannot apply; `":root" = "deny"` still hides both directories there because Linux's `:minimal` binds only system directories. The fixtures now launch Codex as the backend does and expect each platform's own errno text, and also check the refused file does not exist. All four files pass on Linux (each run three times).
 
-Not run: `mise run docker:build` and `docker/tests/final-image-smoke.sh` (the image builds the bridges from the new lockfiles and verifies the Grok and Pi digests); `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move); the macOS sandbox live test; the Linux Claude sandbox probe; the billed coordinator-skills probe; `claude-host-login-refresh.ts`; every signed-in session (streaming, questions, abort, resume, model and effort switch, background task, compaction, sub-agent cards, the inactive-environment path) on every provider; `mise run test:agent:goals`.
+Container image: `docker build … -t orkestrator-v2-upgrade-check:20261106` (a throwaway tag; never `orkestrator-v2:latest`) passed, including the Grok and Pi `sha256sum` checks and every managed CLI's build-time run, and `docker/tests/final-image-smoke.sh` passed against it. Inside it, as `node`: Claude 2.1.319, Codex 0.167.0, OpenCode 1.19.5, Pi 1.5.0, Grok 1.0.77.
+
+Not run: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move); the macOS sandbox live test; the Linux Claude sandbox probe; the billed coordinator-skills probe; `claude-host-login-refresh.ts`; every signed-in session (streaming, questions, abort, resume, model and effort switch, background task, compaction, sub-agent cards, the inactive-environment path) on every provider; `mise run test:agent:goals`.
 
 **Decisions.**
 
@@ -266,12 +268,12 @@ Not run: `mise run docker:build` and `docker/tests/final-image-smoke.sh` (the im
     - Pros: nothing unproven merges.
     - Cons: the pins drift again while a person finds time for billed runs.
 - **The Linux-only Codex loopback failures?**
-  - **Run them on macOS where they were qualified, and open a follow-up to make the fixtures' temporary root bind under Codex's bubblewrap and accept either platform's wording (recommended).**
-    - Pros: separates a host-fixture gap from a product regression; the 0.166.0 control shows it is not new.
-    - Cons: Linux coverage of those three cases stays missing until the follow-up.
-  - **Loosen the assertions now.**
-    - Pros: green on Linux.
-    - Cons: hides whether the coordinator thread really starts under a read-only sandbox on Linux.
+  - **Find the root cause before touching the tests (recommended, done).**
+    - Pros: it was a product bug that stopped every coordinator thread on hosts with `TMPDIR` under `/tmp`; fixed in the bridge.
+    - Cons: a small rule that depends on Codex's mount order, to be removed when Codex skips covered masks.
+  - **Loosen the assertions.**
+    - Pros: green on Linux at once.
+    - Cons: would have hidden the product bug.
 
 ### 10. One sign-in expiry for every provider
 
@@ -401,13 +403,34 @@ Chose the wrapper because the bridge cannot yet know the CLI version before buil
 
 `models.test.ts` reads `dist/core/model-resolver.js` text for both providers' defaults; the command-preview pin test now asserts the install attempt and its warning rather than a rejected `reload()`.
 
-### Tasks 10–15: planned, not built
+### Task 9: the Linux coordinator fix is conditional and Linux-only
 
-They change the shared protocol and the renderer. AGENTS.md requires a screenshot of every visual change, and they are better reviewed as their own changes. Each is ready to start from its Decisions.
+`codexCoordinatorTmpDenials` omits a tmp denial only where Codex's bubblewrap cannot apply it (a denial nested in another, or a read grant inside a denial); every applicable entry stays, so a future `:minimal` that bound `/tmp` would still be refused. macOS (Seatbelt) is byte-identical. Dropping both denials unconditionally on Linux was rejected because it loses that guard.
+
+### Task 10: one line, marked when estimated
+
+The shared account gained `expiresAtEstimated?: true`; Claude's date is always marked estimated because the SDK cannot say whether it is the server's date or its 30-day guess, and estimates get a six-day attention window instead of three. A Claude date is credited to the account of the CLI that wrote the result (read from its initialize answer), never to whatever account the bridge last read, and a numbered result with no date clears it. Codex, Pi, Grok and OpenCode report no login end (Pi and Grok's stored `expires` is an access token they refresh), so they show nothing. Settings → Claude reads the host login outside any bridge and shows no date; a backend cache per agent account would fix that and is left as a follow-up. The line is `SignInExpiry` in Agent Info and the Settings sign-in card.
+
+### Tasks 11 and 12: enforced in every layer, worded for every source
+
+`humanRequired` and `toolHints` are optional fields on `AgentInteractionRequest`. `ruleEligible` stays the gate, and the rule readers and the enforcer also refuse a `humanRequired` request, so a stale snapshot cannot auto-answer it. The card says "You need to answer this yourself: a saved rule can't approve it." (true for Claude's two markers and Codex's managed rule alike) and drops the session and remember options; for Codex `humanCommand` the backend also rejects a session grant and the bridge degrades one to a one-time accept. Tool hints come from Codex MCP approvals only when `_meta.codex_approval_kind` is `mcp_tool_call`, and from Pi's own MCP client's `tools/list`, captured when the call is parked. Claude's annotations exist only in a cached status read whose tool-name format is unverified, so Claude cards show no tag yet; Cursor has no approval callback and Grok's permission request carries no annotations. Read-only is a neutral grey tag, a contradictory server gets no tag, and hints never change eligibility.
+
+### Task 13: one rule for combining
+
+`costSource` sits beside every `costUsd` (`native-agent-cost-source.ts`, re-exported from `native-agent.ts`, which is past 3,000 lines). A total with any estimate is an estimate; it is provider-billed only when every priced part is; anything else is absent. Claude and OpenCode are estimates (both documented as computed from tokens), Cursor's `chargedCents` and an explicit ACP USD amount are provider-billed, and a Pi turn is provider-billed only when every entry the turn added says `totalFromProvider` (counted against a persisted per-turn baseline). Codex reports no cost; `account/usage/read` with a `threadId` returns estimated and native usage and is a possible follow-up. Every cost renders through `CostAmount`: "~$0.12" with "Estimated from token counts", plain for a bill. Found, not fixed: the ACP bridge stores the cumulative session cost as each turn's cost, which would overcount once an ACP agent reports a USD amount (none does today).
+
+### Task 14: a transcript row, not the session notice
+
+The advisory is a `status` warning part on an assistant row with empty content, the shape every bridge already appends, so it renders the same amber line everywhere and is never read as the agent's answer. The session-level `{ kind: "advisory" }` notice was rejected because the backend passes only errors through and it shows as a toast. Claude persists `writesLostAt` in its session preferences and restores the row on reload, because the transcript cannot record its own loss. Pi wraps the session manager's `_persist` (a real-SDK test fails if a release renames it) and rethrows unchanged. Codex, Cursor and Grok report no lost conversation write.
+
+### Task 15: local storage, no setting yet
+
+Signed out against 1.0.77: `agent stdio` reads `GROK_STORAGE_MODE` (the `--storage-mode` flag is global and ignored there); `local` behaves exactly as unset and writes the `sessions/<cwd>/<id>/` layout `session/load` reads. `GROK_STORAGE_MODE=local` is now in the Grok child's `POLICY_ENV`, and the argv liveness checks pass with it set. A provider-neutral "sync sessions to the provider's cloud" setting was not built: no user has asked to upload, and it needs a settings surface.
 
 ## Needs verification
 
 - Task 9's list.
+- Signed in, at the new pins: that Claude results carry `credential_expires_at` and `result_index` (task 10); a Claude ask carrying `suppressAlwaysAllowRule` or `matchedAskRule` (task 11); a Codex MCP approval with `tool_annotations` (task 12, read from Codex source and its tests); billed OpenRouter, Cursor and ACP USD costs (task 13); a real full disk for Claude and Pi (task 14, proved with synthetic frames and `EISDIR` from the real Pi SDK); whether Grok's remote settings can override `GROK_STORAGE_MODE=local` (task 15).
 - `initialize_not_first` may only arrive when `CLAUDE_CODE_STARTUP_FAILURE_RESULTS` is set, which the bridge never sets (unverified).
 - Whether an MCP tool card under Claude 2.1.319's default-on MCP tasks shows the CLI's placeholder text.
 

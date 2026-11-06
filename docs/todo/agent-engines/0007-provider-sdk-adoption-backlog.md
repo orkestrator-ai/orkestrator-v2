@@ -714,11 +714,11 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     and friends in `src/app-server/generated/`). They are in the generated
     protocol but not projected, pending a provider-neutral requirements surface.
     0.167.0 adds a managed `[permissions.network]` table to them.
-  - `humanCommand` approvals and `InitializeCapabilities.requiredHumanApproval`
-    (0.167.0, experimental only). Without them a host's managed `prompt-user`
-    rule rejects matching commands instead of prompting. Blocked on the
-    experimental API; the shared shape is 1031 task 11.
-  - MCP approval `_meta.tool_annotations` (0.167.0): 1031 task 12.
+  - Declaring `InitializeCapabilities.requiredHumanApproval` (0.167.0,
+    experimental only). Without it a host's managed `prompt-user` rule rejects
+    matching commands instead of prompting. The bridge already maps a
+    `humanCommand` approval onto the shared `humanRequired` marker (1031 task
+    11); declaring the capability waits for the API to leave experimental.
   - `features.respect_system_proxy` (0.167.0, experimental, off): only on a
     corporate-proxy report, as a provider-neutral environment setting.
 - Cursor (`bridges/cursor-bridge`):
@@ -748,9 +748,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - Grok `GROK_DISABLE_EXPERIMENTS=1` (1.0.70) for bridge children. It would
     stop config-file experiments changing the default model or update channel,
     but also overrides experiments a user joined. Decide with a user report.
-  - Grok session writeback (`GROK_STORAGE_MODE`, `features.writeback`,
-    documented in 1.0.77): whether an ACP child uploads sessions needs a
-    signed-in check first; 1031 task 15.
   - Grok background-task status `failed` (1.0.77) and
     `PromptResponse._meta.cancelTrigger` (binary strings; capture signed in).
   - ACP unstable `session/archive` (onto `actions.archive`) and `auth/status`
@@ -762,7 +759,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 - Pi (`bridges/pi-bridge`, 1.5.0):
   - `responseModel` (now also from pi-messages providers) into the existing
     `NativeAgentTurnUsage.modelId`.
-  - `Usage.cost.totalFromProvider`: 1031 task 13.
   - `ctx.ui.custom({ blocked })` when extension dialogs are routed;
     `PI_SELF_UPDATE_COMMAND` so `pi update` in a terminal tab defers to the
     managed pin.

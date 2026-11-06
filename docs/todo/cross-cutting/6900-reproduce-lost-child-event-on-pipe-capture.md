@@ -38,7 +38,7 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 
 **Problem.** A reproduction inside the real test is not something Bun's maintainers can run.
 
-**Context.** The real test brings a public API harness, SQLite storage, the diff-stats service with its watchers and admission pool, real Git with a `git clone`, and a nested `bun test`. Task 2 of to-do 4260 rebuilt the test's command pattern standalone with a watched repository, `bun:sqlite`, nested `bun` children and clones, and lost nothing in about 390,000 children.
+**Context.** The real test brings a public API harness, SQLite storage, the diff-stats service with its watchers and admission pool, real Git with a `git clone`, and a nested `bun test`. Task 2 of to-do 4260 rebuilt the test's command pattern standalone with a watched repository, `bun:sqlite`, nested `bun` children and clones, and lost nothing in about 415,000 children.
 
 **Investigation.** Not started; depends on task 1.
 

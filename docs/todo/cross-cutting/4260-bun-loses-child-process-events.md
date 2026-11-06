@@ -7,7 +7,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on
 ### Tasks
 
 1. **Report the defect upstream**: give Bun the evidence and, ideally, a reduced case. Status: open. The report text is drafted in [Draft report](#draft-report), without a reduced case because task 2 found none; checking a canary build and filing are the user's call.
-2. **Find a reduced case**: reproduce the lost event without this repository's code. Status: done (2026-11-06) without a reduced case. About 390,000 more standalone children, and a strict probe of the real test, lost nothing; the attempts are in [Outcome (2026-11-06)](#outcome-2026-11-06), and the next attempt moved to [to-do 6900](6900-reproduce-lost-child-event-on-pipe-capture.md).
+2. **Find a reduced case**: reproduce the lost event without this repository's code. Status: done (2026-11-06) without a reduced case. About 415,000 more standalone children, and a strict probe of the real test, lost nothing; the attempts are in [Outcome (2026-11-06)](#outcome-2026-11-06), and the next attempt moved to [to-do 6900](6900-reproduce-lost-child-event-on-pipe-capture.md).
 3. **Decide on a bound in `runCommand`**: stop a backend command waiting out its whole timeout for a child that has exited. Status: done (2026-11-04), through file capture and a macOS exit watchdog rather than a bound.
 4. **Unblock readers parked on a superseded scan**: a read already waiting when a retarget arrives still waits for that scan. Status: done (2026-11-05). The reader is released when the attempt is aborted; a read it then makes on the same worktree still queues in admission until the old scan settles.
 5. **Move the backend's other pipe captures off Bun's readers**: `node:child_process` captures outside `runCommand` can still stall. Status: done (2026-11-05; the last held folder re-checked 2026-11-06). The files held for E-0580 and S-0080 were re-checked on 2026-11-05 after both merged: nothing to move. `apps/backend/src/core/change-tracking/` was re-checked on 2026-11-06 after E3 (#1833) merged: nothing to move. The one-shot captures that did not fit at first were moved or decided on 2026-11-05; see [Task 5: the captures that did not fit at first](#task-5-the-captures-that-did-not-fit-at-first).
@@ -65,7 +65,7 @@ Attach `lost-child-event-probe.ts` from [Outcome (2026-11-06)](#outcome-2026-11-
 
 #### Outcome (2026-11-06)
 
-**Not reduced.** No standalone script, and no strict probe of the real test, left a child's exit or close undelivered on macOS (Bun 1.4.4, macOS 27.2, arm64, 18 cores, git 2.56.0, host load average 35 to 60 from other work throughout, so no CPU hogs were added). Linux was not tried this round. The attempts, about 390,000 children:
+**Not reduced.** No standalone script, and no strict probe of the real test, left a child's exit or close undelivered on macOS (Bun 1.4.4, macOS 27.2, arm64, 18 cores, git 2.56.0, host load average 35 to 60 from other work throughout, so no CPU hogs were added). Linux was not tried this round. The attempts, about 415,000 children:
 
 | Script | What it adds | Children | Probe | Result |
 | --- | --- | --- | --- | --- |
@@ -77,6 +77,7 @@ Attach `lost-child-event-probe.ts` from [Outcome (2026-11-06)](#outcome-2026-11-
 | The same, reaping a stranded child itself | all ingredients | 25,200 | as above | none stranded |
 | The same, zombie seen through `waitid(WNOWAIT)` | file capture | 50,400 | unreaped zombie for 5 s with no exit | 0; 5 exits delivered 22 to 152 ms after the child was first seen as a zombie |
 | The same, the old `runCommand`'s shape | `node:child_process`, piped output, settle on `close` | 50,400 | unreaped zombie for 5 s with no `exit`, or no `close` 5 s after `exit` | 0 |
+| The script below, as attached | `node:child_process` with file capture, then with pipes, three runs each | 25,200 | as above | 0 |
 
 The real test on this branch's file capture, 150 runs each:
 
@@ -89,7 +90,7 @@ What this changes:
 
 - **A zombie seen at one instant is not a lost exit.** Bun takes milliseconds to handle a child's exit, and a child that runs about a second (a `git clone` or a nested `bun test` under load) can be caught as a zombie in that window. Every "lost" count above that came from a single `ps` look was that: the strict probe found those children's exits delivered. The production watchdog makes the same single look, so its 10 settlements here, and possibly the 8 recorded in [case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md#load-and-stress-runs-2026-11-03-to-2026-11-04) as settled at its first check, were early reads of an exit Bun was about to report. That is harmless: the status read is the same.
 - **The earlier evidence still stands.** The macOS traces in case 1537 showed a child as `Z <defunct>` for a whole 10 s, and the Linux fdinfo showed a delivered, unarmed `EPOLLONESHOT`. Both were on the old pipe-based `runCommand`. Neither has been seen since, with the strict probe, on file capture, or in a standalone pipe script.
-- The script used for the last two standalone rows is kept below so the work can resume from it, and as the attempt to attach to the upstream report.
+- The script used for the last standalone row, a tidied merge of the two before it, is kept below so the work can resume from it, and as the attempt to attach to the upstream report.
 
 <details>
 <summary>Standalone probe: <code>lost-child-event-probe.ts</code></summary>

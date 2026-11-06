@@ -388,6 +388,20 @@ describe("writing", () => {
     ]);
   });
 
+  test("keeps the lost-write advisory's once-per-session mark across a restart", async () => {
+    const state = newSessionState("tab-lost-write");
+    state.lostWriteNoticed = true;
+    sessions.set(state.id, state);
+    schedulePersist();
+    await drainPersistence();
+    expect((await readState()).sessions[0]).toMatchObject({ lostWriteNoticed: true });
+
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+    expect(sessions.get(state.id)?.lostWriteNoticed).toBe(true);
+  });
+
   test("never persists a parked approval", async () => {
     const state = newSessionState();
     state.approvals.set("a1", {

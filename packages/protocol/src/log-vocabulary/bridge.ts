@@ -299,6 +299,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         essential: true,
         fields: ESSENTIAL_ERROR_FIELDS,
       },
+      "session.write-lost":
+        "Pi could not write its session file, so a resume may miss part of the conversation; logged once per session, with no error message because it names the path.",
       "turn.failed":
         "A turn failed; its error message is not logged because it can hold content. A cancelled turn is not a failure.",
       "turn.refused":

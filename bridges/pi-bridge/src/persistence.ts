@@ -223,6 +223,7 @@ function toPersisted(state: SessionState): PersistedSession {
     ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
     ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
     ...(state.resumeFallbackFile ? { resumeFallbackFile: state.resumeFallbackFile } : {}),
+    ...(state.lostWriteNoticed ? { lostWriteNoticed: true as const } : {}),
     ...(state.piSessionId ? { piSessionId: state.piSessionId } : {}),
     ...(state.historyLeaf ? { historyLeaf: state.historyLeaf } : {}),
     // A session that was mid-turn when the process died is not running now.
@@ -326,6 +327,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.policyPending = true;
   if (nonBlank(entry.sessionFile)) state.sessionFile = entry.sessionFile;
   if (nonBlank(entry.resumeFallbackFile)) state.resumeFallbackFile = entry.resumeFallbackFile;
+  if (entry.lostWriteNoticed === true) state.lostWriteNoticed = true;
   if (nonBlank(entry.piSessionId)) state.piSessionId = entry.piSessionId;
   const leaf = entry.historyLeaf;
   if (

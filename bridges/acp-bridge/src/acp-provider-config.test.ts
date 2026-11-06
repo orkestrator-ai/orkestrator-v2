@@ -84,6 +84,7 @@ describe("ACP provider configuration", () => {
     expect(providerEnv(config, { trustProject: true }, { HOME: "/home/u" })).toEqual({
       HOME: "/home/u",
       GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false",
+      GROK_STORAGE_MODE: "local",
       GROK_FOLDER_TRUST: "0",
     });
     expect(providerArgv(config, { trustProject: true })).toEqual([
@@ -96,6 +97,7 @@ describe("ACP provider configuration", () => {
     // Off, Grok keeps its own gate, and a user's own setting is left alone.
     expect(providerEnv(config, { trustProject: false }, { GROK_FOLDER_TRUST: "1" })).toEqual({
       GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false",
+      GROK_STORAGE_MODE: "local",
       GROK_FOLDER_TRUST: "1",
     });
     expect(providerArgv(config, { trustProject: false })).not.toContain("--no-leader");
@@ -228,6 +230,39 @@ describe("ACP provider configuration", () => {
       ACP_PROVIDER_CONFIG: JSON.stringify({ id: "gemini", executable: "gemini", argv: ["--acp"] }),
     });
     expect(providerEnv(generic, {}, {})).toEqual({});
+  });
+
+  test("keeps every Grok child's sessions out of writeback to code.grok.com", () => {
+    // Grok 1.0.77 can sync session history to code.grok.com once signed in.
+    // `agent stdio` reads GROK_STORAGE_MODE (not the hidden flag), and `local`
+    // keeps the on-disk sessions `session/load` reads. Forced over the
+    // inherited environment and the launcher record, whatever the policy.
+    const config = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/bin/grok" });
+    for (const options of [
+      {},
+      { trustProject: true },
+      { withholdGitHub: { ghConfigDir: "/tmp/empty-gh" } },
+    ]) {
+      expect(
+        providerEnv(config, options, { GROK_STORAGE_MODE: "writeback" }).GROK_STORAGE_MODE,
+      ).toBe("local");
+    }
+    const serialized = loadAcpProviderConfig({
+      ACP_PROVIDER_CONFIG: JSON.stringify({
+        id: "grok",
+        executable: "grok",
+        argv: ["agent"],
+        env: { GROK_STORAGE_MODE: "writeback" },
+      }),
+    });
+    expect(providerEnv(serialized, {}, {}).GROK_STORAGE_MODE).toBe("local");
+    // Another ACP agent is left as configured.
+    const generic = loadAcpProviderConfig({
+      ACP_PROVIDER_CONFIG: JSON.stringify({ id: "gemini", executable: "gemini", argv: ["--acp"] }),
+    });
+    expect(providerEnv(generic, {}, { GROK_STORAGE_MODE: "writeback" }).GROK_STORAGE_MODE).toBe(
+      "writeback",
+    );
   });
 });
 

@@ -69,6 +69,7 @@ import {
   waitForPendingPromptDispatchClaim,
 } from "./session-manager-lifecycle.js";
 import { normalizePersistedSessionMessages } from "./session-manager-messages.js";
+import { applyLostWriteAdvisory } from "./session-manager-lost-writes.js";
 import { rehydrateSubagentParts } from "./session-manager-subagent-rehydration.js";
 import { releaseQueryControls } from "./session-manager-background-tasks.js";
 
@@ -235,6 +236,7 @@ export async function reconcilePersistedSessions(): Promise<void> {
       ...(storedPreferences?.localTranscript?.length
         ? { localTranscript: localTranscriptFromPreferences(storedPreferences.localTranscript) }
         : {}),
+      ...(storedPreferences?.writesLostAt ? { writesLostAt: storedPreferences.writesLostAt } : {}),
       ...(sessionPreferencesUnavailable(storedPreferences)
         ? { dispatchJournalUnavailable: true }
         : storedPreferences?.dispatchJournalComplete === true
@@ -302,6 +304,7 @@ export async function materializePersistedSessionState(
     ...(preferences?.localTranscript?.length
       ? { localTranscript: localTranscriptFromPreferences(preferences.localTranscript) }
       : {}),
+    ...(preferences?.writesLostAt ? { writesLostAt: preferences.writesLostAt } : {}),
     ...(sessionPreferencesUnavailable(preferences)
       ? { dispatchJournalUnavailable: true }
       : preferences?.dispatchJournalComplete === true
@@ -451,6 +454,7 @@ export async function hydratePersistedSessionMessages(
       session.backgroundTasks = hydrated.backgroundTasks;
     }
     applyLocalTranscriptOverlay(session);
+    applyLostWriteAdvisory(session);
     session.persistedMessagesLoaded = true;
     // A new history, not an edit of the preview: positions in the preview do
     // not correspond to positions in the hydrated rollout. Installed only after

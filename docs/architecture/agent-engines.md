@@ -1249,6 +1249,12 @@ passes it as `ACP_PROVIDER_CONFIG`, and the bridge falls back to its built-in
 Grok record only when `ACP_PROVIDER` is unset or `grok`. The record also names
 the provider's mode map and its vendor extension, model-update and
 session-update methods, so a second ACP agent is a record plus a platform id.
+Whatever the record says, every Grok child also gets `POLICY_ENV`:
+`GROK_WORKTREE_INHERITS_MAIN_APPROVALS=false`, so the main checkout's saved
+"always allow" answers do not skip a permission request, and
+`GROK_STORAGE_MODE=local`, so its sessions stay on disk rather than syncing to
+code.grok.com (what was and was not verified is in
+`docs/development/upgrade-agents.md`, Grok).
 Grok 1.0.52 still sent `session/request_permission` over ACP before every
 edit, command, fetch and MCP call under that flag (not rechecked at the
 1.0.67 or 1.0.70 pins), so the bridge answers those

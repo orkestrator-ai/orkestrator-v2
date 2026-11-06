@@ -274,6 +274,7 @@ and no site logs a stderr tail.
 | `bridge.pi`, `bridge.cursor` | `session.resume-fell-back` | `warn` | A saved conversation could not be resumed and a new one started. |
 | `bridge.pi`, `bridge.cursor` | `turn.failed` | `warn` | A turn ended in failure. A turn someone stopped stays out, even if stopping it made the run reject. |
 | `bridge.pi` | `turn.startup-timed-out`, `turn.refused` | `warn` | Pi did not start a turn in time, or refused it before any run. |
+| `bridge.pi` | `session.write-lost` | `warn` | Pi could not write its session file; once per session, beside the transcript's lost-write advisory. |
 | `bridge.cursor` | `turn.timed-out`, `turn.send-failed`, `turn.recovery-failed` | `warn` | A turn outlived its budget; `send` rejected, so the outcome is unknown; a run recovered after a restart failed. |
 | `bridge.acp` | `agent.exited` | `warn` | An agent process exited, with `code`, `signal` and `requested` (true when the bridge closed it normally). |
 | `bridge.acp` | `http.route-failed` | `warn` | A route answered 500. A deliberate `HttpError` of another status and a client that hung up stay out. |

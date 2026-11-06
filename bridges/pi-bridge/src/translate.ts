@@ -19,6 +19,7 @@ import {
   encodedJsonBytes,
   jsonStringContentBytes,
 } from "@orkestrator/protocol/node/transcript-budget";
+import { NATIVE_AGENT_LOST_WRITE_ADVISORY } from "@orkestrator/protocol/native-agent-lost-writes";
 import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { rememberHistoryMessage } from "./history-target.js";
@@ -768,6 +769,41 @@ export function appendResumeFallbackNotice(state: SessionState): void {
     id: messageId,
     role: "assistant",
     content: RESUME_FELL_BACK_NOTICE,
+    parts: [part],
+    createdAt,
+  };
+  state.messages.push(message);
+  chargeNewEntry(state, message);
+  rowChanged(state, message);
+}
+
+/**
+ * Tell the user, in the transcript, that Pi could not save part of the
+ * conversation: a session-file write threw, so Pi dropped that entry from the
+ * session it will resume (`watchSessionFileWrites`). Once per session, on a row
+ * of its own, in the shared wording; never Pi's error, which names the path.
+ */
+export function appendLostWriteNotice(state: SessionState): void {
+  if (state.lostWriteNoticed) return;
+  state.lostWriteNoticed = true;
+  closeTextParts(state);
+  state.currentAssistantMessageId = undefined;
+  const messageId = randomBytes(12).toString("hex");
+  const createdAt = new Date().toISOString();
+  const part: BridgeStatusPart = {
+    type: "status",
+    content: NATIVE_AGENT_LOST_WRITE_ADVISORY,
+    severity: "warning",
+    sourcePartId: `${messageId}:0`,
+    sourceMessageId: messageId,
+    createdAt,
+  };
+  // Empty `content`, as on every bridge: the status line is the whole row, and
+  // nothing reading the turn's last assistant text takes it for an answer.
+  const message: BridgeMessage = {
+    id: messageId,
+    role: "assistant",
+    content: "",
     parts: [part],
     createdAt,
   };

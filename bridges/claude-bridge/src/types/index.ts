@@ -152,9 +152,12 @@ export const SYSTEM_SUBTYPE_DISPOSITIONS: Record<SdkSystemSubtype, SystemSubtype
   files_persisted: "notice",
   elicitation_complete: "notice",
   // Disk full or quota used up as the CLI exits: results already received
-  // stand, but a resume may miss transcript lines. The health panel is where a
-  // host-level storage fault belongs; the SDK documents it as safe to ignore.
-  session_writes_lost: "notice",
+  // stand, but a resume may miss transcript lines. A loss naming this
+  // session's transcript adds the shared lost-write advisory to the transcript,
+  // because the user who resumes reads the transcript, not the health panel;
+  // the notice stays as the host-level storage record, and is all a
+  // `global_config`-only loss gets.
+  session_writes_lost: "handled+notice",
 };
 
 /** `system` subtypes the CLI emits on the SDK stream that the public union does not name. */
@@ -752,6 +755,12 @@ export interface SessionState {
    * these back so the pair does not vanish.
    */
   localTranscript?: NormalizedMessage[];
+  /**
+   * When the CLI reported that this session's transcript lost lines
+   * (`session_writes_lost`); set once, kept in the session preferences, and
+   * the source of the lost-write advisory row (`session-manager-lost-writes.ts`).
+   */
+  writesLostAt?: string;
   /**
    * The durable request-id journal existed but could not be trusted.
    *

@@ -13,6 +13,7 @@ import {
   getPromptDispatchRecord,
   recordPromptDispatch,
 } from "./session-manager-lifecycle.js";
+import { applyLostWriteAdvisory } from "./session-manager-lost-writes.js";
 import { attachmentTag, readPersistedSessionMessagesOnce } from "./session-manager-persistence.js";
 import {
   createPromptStreamState,
@@ -288,6 +289,8 @@ export function installPromptTranscript(
     session.messages = read.messages;
     session.taskRegistry = read.taskRegistry;
     session.backgroundTasks = read.backgroundTasks;
+    // The rollout cannot hold the report that it lost lines.
+    applyLostWriteAdvisory(session);
     resetTranscriptEpoch(session);
   }
   return false;

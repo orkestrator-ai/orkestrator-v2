@@ -748,7 +748,10 @@ proof, `verify:claude:mcp-live` against both the SDK's CLI and the managed
 binary, `verify:claude:plugin-mcp-live`, `verify:claude:first-turn-live`,
 `verify:accounts:resend-live`, the vendored build, the typecheck and the full
 bridge suite. The union changes were a new `system` subtype,
-`session_writes_lost` (a health notice), and two `SDKStartupFailureReason`
+`session_writes_lost` (a health notice, and since task 14 of
+[1031](../todo/agent-engines/1031-provider-upgrade-2026-11-06.md) also the
+shared lost-write advisory in the transcript when `transcript_session_ids`
+names the session), and two `SDKStartupFailureReason`
 members, `initialize_not_first` and `config_file_invalid`, now mapped in
 `claudeStartupFailureMessage`. A startup failure now also carries the CLI's own
 `errors` text after the guidance (`withStartupFailureDetail`), because
@@ -1899,9 +1902,30 @@ instance, version and working directory, every flag and `x.ai/*` name the
 bridge uses is still present, and `--disable-web-search` is still the only
 switch for search and fetch. `PromptResponse._meta` also carries a
 `cancelTrigger` beside `cancellationCategory` (binary strings; unverified
-signed in). Session writeback to code.grok.com (`GROK_STORAGE_MODE`,
-`features.writeback`) is documented in 1.0.77; whether remote settings turn it
-on for an ACP child is unverified (0007, Grok candidates).
+signed in).
+
+**Session writeback.** 1.0.77 can sync session history to code.grok.com
+("writeback"). Checked signed out on 2026-11-06 with throwaway `HOME` and
+`GROK_HOME`: `--storage-mode` is a hidden global option ("Session storage
+mode: local or writeback"; any string parses, and `agent --storage-mode` is
+an argv error), and the bundled config reference names `GROK_STORAGE_MODE`
+beside it under the requirements-only `features.writeback` pin. `agent stdio`
+reads the variable, not the flag: with `GROK_STORAGE_MODE=writeback` it logs
+"Writeback is disabled: requires auth with grok.com" at startup, with
+`--storage-mode writeback` it logs nothing. `local` behaves exactly as unset:
+`session/new` logs "Creating new session in JSONL" and writes
+`$GROK_HOME/sessions/<encoded-cwd>/<id>/` before refusing for authentication,
+the layout `session/load` reads. Every Grok child therefore gets
+`GROK_STORAGE_MODE=local` (`POLICY_ENV` in `acp-provider-config.ts`), and
+with it set `--always-approve agent stdio` and `--disable-web-search agent
+--no-leader stdio` still stay up (exit 124 under the `sleep 10 | timeout 6`
+probe; a bogus flag exits 2). Not verified, because it needs a signed-in
+account: the default for a signed-in child, and whether `local` outranks
+remote settings, which can switch writeback on ("storage mode upgraded from
+remote settings"; the remote field is `writeback_enabled`). Only a
+`requirements.toml` `features.writeback = false` is documented to override
+the flag, the variable and remote settings alike. On a bump, re-run the
+`strings` and `--debug-file` checks above for those messages.
 
 ### How to upgrade Grok
 

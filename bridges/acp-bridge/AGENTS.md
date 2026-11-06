@@ -82,7 +82,9 @@ the record would be dropped).
   inventory without it answers 422 `command-unavailable` before journaling.
 - **Every Grok child runs with `GROK_WORKTREE_INHERITS_MAIN_APPROVALS=false`**
   (`POLICY_ENV`), so a TUI "always allow" in the user's main checkout cannot
-  skip the permission request the bridge answers from the policy.
+  skip the permission request the bridge answers from the policy, **and with
+  `GROK_STORAGE_MODE=local`**, so a session is not synced to code.grok.com.
+  `agent stdio` reads the variable, not the hidden `--storage-mode` flag.
 
 ## Grok extensions
 

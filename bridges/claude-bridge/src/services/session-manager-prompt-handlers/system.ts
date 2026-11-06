@@ -5,6 +5,7 @@ import type {
   SDKMemoryRecallMessage,
   SDKMessage,
   SDKPermissionDeniedMessage,
+  SDKSessionWritesLostMessage,
   SDKStatusMessage,
   SDKThinkingTokensMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -15,6 +16,7 @@ import { discardCommandChangeWindow } from "../command-changes.js";
 import { eventEmitter } from "../event-emitter.js";
 import { debugLog } from "../logger.js";
 import { appendLocalCommandResult, recordCommandsChanged } from "../session-manager-commands.js";
+import { recordClaudeSessionWritesLost } from "../session-manager-lost-writes.js";
 import {
   boundedNoticeText,
   memoryRecallPart,
@@ -55,6 +57,9 @@ const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = 
   model_refusal_fallback: "warning",
   model_refusal_no_fallback: "error",
   mirror_error: "error",
+  // A host storage fault: the transcript carries the advisory, the panel the
+  // record of it.
+  session_writes_lost: "warning",
 };
 
 /**
@@ -312,6 +317,18 @@ function handleMemoryRecall(turn: TurnState, message: SDKMessage): void {
   }
 }
 
+/**
+ * `session_writes_lost`: the CLI could not save transcript lines or
+ * `~/.claude.json`. Sent as the process exits, so usually after the turn.
+ */
+function handleSessionWritesLost(turn: TurnState, message: SDKMessage): void {
+  recordClaudeSessionWritesLost(
+    turn.session,
+    turn.sessionId,
+    message as SDKSessionWritesLostMessage,
+  );
+}
+
 const SYSTEM_SUBTYPE_HANDLERS: Record<string, SystemSubtypeHandler> = {
   commands_changed: handleCommandsChanged,
   local_command_output: handleLocalCommandOutput,
@@ -326,6 +343,7 @@ const SYSTEM_SUBTYPE_HANDLERS: Record<string, SystemSubtypeHandler> = {
   informational: handleInformational,
   permission_denied: handlePermissionDenied,
   memory_recall: handleMemoryRecall,
+  session_writes_lost: handleSessionWritesLost,
 };
 
 /** `system`, other than `init`: tasks, status, notices and the subtypes the disposition table keeps. */

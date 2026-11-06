@@ -334,6 +334,11 @@ export interface SessionState {
   sessionFile?: string;
   /** Empty file whose context-loss warning has already been published. */
   resumeFallbackFile?: string;
+  /**
+   * A write to Pi's session file failed and the advisory saying so is in the
+   * transcript (`appendLostWriteNotice`); once per session, persisted.
+   */
+  lostWriteNoticed?: boolean;
   /** Pi's own session id, reported by the SDK once a session exists. */
   piSessionId?: string;
   status: SessionStatus;
@@ -600,6 +605,8 @@ export interface PersistedSession {
   sessionFile?: string;
   /** Empty file whose context-loss warning has already been published. */
   resumeFallbackFile?: string;
+  /** The lost-write advisory has been published for this session. */
+  lostWriteNoticed?: true;
   piSessionId?: string;
   status: SessionStatus;
   error?: string;

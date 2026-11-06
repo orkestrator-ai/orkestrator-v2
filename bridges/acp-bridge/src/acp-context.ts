@@ -1426,6 +1426,9 @@ export function parseExternalSessionToken(value: string): string | null {
     return null;
   }
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+  // A 32-byte digest leaves two spare bits in its last character, so four
+  // spellings decode to the same bytes. Accept only the one we issued.
+  if (supplied.toString("base64url") !== signature) return null;
   let decoded: Buffer;
   try {
     decoded = Buffer.from(encoded, "base64url");

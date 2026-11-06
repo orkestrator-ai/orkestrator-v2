@@ -186,9 +186,12 @@ test("display setup permits startup when preflight succeeds", () => {
   }
 });
 
-test("headless config selects only the supported journey", async () => {
+test("headless config selects only the supported specs", async () => {
   const { default: config } = await import("./playwright.electron-headless.config");
-  expect(config.testMatch).toEqual(["design-canvas-electron.spec.ts"]);
+  expect(config.testMatch).toEqual([
+    "design-canvas-electron.spec.ts",
+    "web-annotations-electron.spec.ts",
+  ]);
 });
 
 test("global setup keeps a mixed Electron suite guarded despite the opt-in", () => {
@@ -208,6 +211,12 @@ test("global setup keeps a mixed Electron suite guarded despite the opt-in", () 
     }
     displaySetup(config(["design-canvas-electron.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["design-canvas-electron.spec.ts", "web-annotations-electron.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["web-annotations-electron.spec.ts", "electron-main.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
+    displaySetup(config([]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
   } finally {
     problem.mockRestore();
   }

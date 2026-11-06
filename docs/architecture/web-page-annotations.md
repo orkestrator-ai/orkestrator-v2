@@ -658,8 +658,9 @@ What has actually been exercised on a real stack (details and dates in
 
 | Area | Exercised | Not exercised |
 | --- | --- | --- |
-| Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux before #969 | Windows; a physical Retina display; OS-level focus on a shared desktop |
-| Pins and Show on page | Reorder, hot reload, duplication, offscreen, closed and open modal, late-font shift (blocking and script-loaded), expired sign-in redirect (macOS) | Linux after #969 |
+| Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux headless (Electron 45, 2026-11-06, every local case of the Electron spec) | Windows; a physical Retina display; OS-level focus on a shared desktop; a Linux Wayland or X11 window |
+| Pins and Show on page | Reorder, hot reload, duplication, offscreen, closed and open modal, late-font shift (blocking and script-loaded), expired sign-in redirect (macOS; Linux headless) | — |
+| Development source hints | Fixture HTML and a real Vite 8 dev server with the documented emitter, captured from the desktop in a local worktree and in a container (Linux, 2026-11-06); fixture HTML in a container (macOS desktop); the container path check through the gateway (Linux) | webpack, Next.js and other Babel setups (unqualified) |
 | Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | Pixel differences (not implemented) |
 | Live implement | Claude, Codex, Cursor, Grok, OpenCode, Pi (local worktree); Claude in a Docker container | Other providers in a container |
 | Live Discuss | All six; read-only on Claude and on Codex/Cursor/Grok sessions in Plan | — |

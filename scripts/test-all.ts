@@ -890,6 +890,8 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/browser-test.test.ts",
   "./e2e/agent-testing/artifact-sanitizing-reporter.test.ts",
   "./e2e/agent-testing/electron-display-setup.test.ts",
+  "./e2e/agent-testing/web-annotations-native-captures.test.ts",
+  "./e2e/agent-testing/electron-startup-dialogs.test.ts",
   "./e2e/agent-testing/fake-anthropic-model.test.ts",
   "./e2e/agent-testing/container-fake-claude-api.test.ts",
   "./e2e/agent-testing/container-fake-claude-install.test.ts",

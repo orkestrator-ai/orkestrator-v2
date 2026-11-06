@@ -414,3 +414,33 @@ click rather than `goto` or `reload`. None of these failed in runs 3 to 7.
   `local-gateway-transport-electron.spec.ts` and the rest of that run's
   failures) were not changed; extending the helper to them is
   [to-do 7062](../../../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md).
+
+## 2026-11-06: the annotation Electron spec on beelink (to-do 0044 tasks 5 and 8)
+
+Branch `web-annotation-qualification-a80b5e3582bd-r1` from `main` at
+`c1724ab74`; Electron 45.0.0, Playwright 1.64.0, headless
+(`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, display variables removed), one
+worker, load average 20–80 with other pipelines' containers starting and
+stopping.
+
+- In the host network namespace, `web-annotations-electron.spec.ts` failed in
+  its `beforeAll` three times out of three: the first window's title stayed
+  `Orkestrator AI` (60 s) with 60 to 120 `net::ERR_NETWORK_CHANGED` lines in
+  its Electron diagnostics. Two of those runs selected only the container
+  cases.
+- Inside a loopback-only namespace, nested so Electron runs as the invoking
+  uid (`unshare -rn sh -c "ip link set lo up && exec unshare --user
+  --map-user=$(id -u) --map-group=$(id -g) …"`), the whole spec passed: 14
+  passed and 1 skipped (175 s) before that branch's new cases, then 16 passed
+  and 2 skipped (105 s) with them. The two skips are the container opt-ins,
+  which cannot use the namespace because container ports are published in the
+  host's. The command is in
+  [agent-testing.md](../../../development/agent-testing.md#electron-specs-and-their-display).
+- The spec's launcher then adopted `waitForRendererStart` (to-do
+  [7062](../../../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)
+  task 1). In the host namespace both container cases passed (50 s), each
+  after one startup reload for `ERR_NETWORK_CHANGED`. The whole spec there
+  still failed once after a recovered startup: 72 `ERR_NETWORK_CHANGED` lines
+  and 6 failed module imports when the Kanban view loaded, so the Home
+  preview case's `visiblePreview` stayed `true`. Startup recovery does not
+  cover later lazy loads.

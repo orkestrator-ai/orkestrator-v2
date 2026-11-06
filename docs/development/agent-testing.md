@@ -99,9 +99,9 @@ isolated browser run on Linux: it reads `/proc` for the profile's Electron tree 
 display variables, the headless switches on the launcher's child) and loads the app.
 
 Electron specs launch their own Electron rather than the profile's, so the
-profile's headless setting does not apply to them. The design canvas and service
-preview Electron specs support `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`
-on Linux; the packaged-app specs are always headless on Linux. See
+profile's headless setting does not apply to them. The design canvas, service
+preview and web annotation Electron specs support
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux; the packaged-app specs are always headless on Linux. See
 [Electron specs and their display](#electron-specs-and-their-display) and
 [Packaged-app Electron spec](#packaged-app-electron-spec).
 
@@ -990,14 +990,51 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
-`design-canvas-electron.spec.ts` is the one spec in that config that can run
-without a display. It reads `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux
-and launches its Electron with the same switches and no display variables:
+`design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
+with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`electron-launch-switches.ts`; the preflight admits a run with no display only
+when it is limited to those). Each reads
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
+with the same switches and no display variables:
 
 ```bash
-ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 bunx playwright test \
-  --config e2e/agent-testing/playwright.electron-headless.config.ts
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  web-annotations-electron.spec.ts --workers=1
 ```
+
+On a host where other work creates and removes Docker networks, the
+Vite-served renderer of these specs loses its modules to
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+The local cases of the annotation spec pass inside a loopback-only network
+namespace, nested so Electron runs under your own uid rather than as namespace
+root:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  unshare -rn sh -c "ip link set lo up && exec unshare --user --map-user=$(id -u) \
+  --map-group=$(id -g) mise run test:logged -- --name annotations-electron -- \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  web-annotations-electron.spec.ts --workers=1"
+```
+
+The double quotes matter: `$(id -u)` must expand in your shell, before the
+outer `unshare` maps you to root.
+
+Its container cases (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) cannot use
+the namespace, because container ports are published in the host's. Run them
+in the host namespace: the spec's launcher reloads a startup that lost its
+modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, to-do
+[7062](../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)),
+which is enough for those two cases but not for the whole spec, whose later
+lazy loads can still be aborted. When automatic Docker pools are exhausted,
+put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the
+isolated Docker runner does.
+The spec's `desktop captures of the gateway spec's targets match the recording it
+replays` case checks `web-annotations-native-captures.json`, the desktop
+captures the gateway spec replays. After an intended change to what a capture
+records, rerun it with `ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES=1` and
+review the file's diff.
 
 Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)

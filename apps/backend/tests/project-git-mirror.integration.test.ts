@@ -651,7 +651,7 @@ describe("seeding from the host checkout", () => {
       "clone",
       "-q",
       "--no-tags",
-      "--reference",
+      "--reference-if-able",
       mirrorPath(),
       "--dissociate",
       `file://${remote}`,

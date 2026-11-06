@@ -14,8 +14,7 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
-| 2 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+| 1 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
 
 ## Parallel running
 
@@ -30,13 +29,11 @@ This index only changes when a branch merges, so it can't show what is running n
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180` and `0190` | No lane | None | None |
-| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 2 of 2 | None | None |
 | E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 1 | E1 (Baseline run) | None |
 
 Why these are grouped:
 
 - **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
-- **E25:** `0500` depends on `0490`.
 - **E10:** Waiting on the baseline. `0190` links to `0160`.
 
 ### Files built on their own
@@ -57,7 +54,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-107 done, 6 partly done, 7 open, 3 no action.
+109 done, 5 partly done, 6 open, 3 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -80,7 +77,7 @@ When one of these becomes ready, it joins the lane shown.
 | TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`); see 0160. |
 | TX-2 | Done | Reads other than `sync-v1` pass a limit to `legacy` through `interactiveSnapshot`, and dropped refreshes read a 32-row tail (`refreshProjectionState` in `apps/backend/src/core/native-agent-transcript-projection.ts`); see 0150. |
 | TX-3 | Done | The legacy commit compares `digestWithMessages("legacy-commit", …)` through the row memo (`commitProjection`, `apps/backend/src/core/native-agent-transcript-projection.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
-| TX-4 | Done | Reads are keyed (`apps/backend/src/core/storage-native.ts`, `apps/backend/src/core/storage-prompt-queue-store.ts`, #1548 `12289fc56`), and every mutation holding a key's lease now reads one row (`readNativeAgentSessionUnderLease`); the prompt queue half of a steer is [5100](../../todo/cross-cutting/5100-prompt-queue-row-writes.md). |
+| TX-4 | Done | Reads are keyed (`apps/backend/src/core/storage-native.ts`, `apps/backend/src/core/storage-prompt-queue-store.ts`, #1548 `12289fc56`), and every mutation holding a key's lease now reads one row (`readNativeAgentSessionUnderLease`); the prompt queue half of a steer is 5100. |
 | TX-5 | Open | State reads have no condition (`apps/backend/src/core/http-bridge-progressive.ts:217`) and the hash covers the composer (`apps/backend/src/core/native-agent-transcript-projection.ts:3418-3420`); see 0180. |
 | TX-6 | Open | A bridge answers `unchanged` or a whole snapshot only (`apps/backend/src/core/http-bridge-transcript-v2.ts:197`); see 0190. |
 | TX-7 | Done | Exact head-row recovery starts at most once a second per view, at once for a quiet view, with a deadline a moving token cannot push back (`PROGRESSIVE_HYDRATION_SETTLE_MS`, `scheduleIncompleteProgressiveHydration`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). How often a trimmed head streams is [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md) task 3. |
@@ -104,11 +101,11 @@ When one of these becomes ready, it joins the lane shown.
 | BR-7 | Done | `runningItemParts` keeps running parts by accumulator version and `content` is sent only when it changed (`bridges/codex-bridge/src/messages/render-turn.ts`, `bridges/codex-bridge/src/app-server-runtime-rows.ts`); see 1202 task 6. |
 | BR-8 | Done | `getToolWithCreatedAt` stamps the tracker entry once (`bridges/claude-bridge/src/services/session-manager-messages.ts:118`, `:994`, #1693 `9a878575d`). |
 | BR-9 | Done | `emitRow` returns whether it published, and the caller returns early otherwise (`bridges/claude-bridge/src/services/session-manager-prompt-stream.ts:431`, `:553`, #1693 `9a878575d`). |
-| BR-10 | Done | `session-list-cache.ts` keeps the list while no file changes, and a timeout answers 504 (`bridges/pi-bridge/src/agent-session.ts`); see 1202 task 6. The resume dialog shows a generic failure rather than the 504's reason, and the timeout's size is unmeasured: [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md). |
+| BR-10 | Done | `session-list-cache.ts` keeps the list while no file changes, and a timeout answers 504 (`bridges/pi-bridge/src/agent-session.ts`); see 1202 task 6. The resume dialog shows a generic failure rather than the 504's reason, and the timeout's size is unmeasured: 5480. |
 | BR-11 | Done | `readSessionIndex` caches the parsed index and reads only appended bytes (`bridges/codex-bridge/src/history/session-index-cache.ts`, `bridges/codex-bridge/src/history/rollout.ts:92`, #1683 `38ac30844`). |
 | BR-12 | Done | `JsonlLineFramer` searches only the new chunk (`bridges/acp-bridge/src/acp-jsonl-framer.ts`), and `acp-jsonl-framer.test.ts` covers the close at the real 4 MiB limit for terminated and unterminated lines; see 1202 task 6. Real frame sizes are still unread: [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) task 4. |
 | BR-13 | Done | `SerialQueue` drains an array per key with count and byte bounds, and overflow replaces the child (`bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`); see 1202 task 6. A real high-water mark is still to be read: [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md). |
-| BR-14 | Done | `encodeStateWithinBudget` encodes each record once (`bridges/pi-bridge/src/persistence.ts`); see 1202 task 6. A test that the durability barrier rejects state that cannot fit is [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 4. |
+| BR-14 | Done | `encodeStateWithinBudget` encodes each record once (`bridges/pi-bridge/src/persistence.ts`); see 1202 task 6. A test that the durability barrier rejects state that cannot fit is 5480 task 4. |
 | BR-15 | Done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), and both bridges now use one replay ring, `EventRing` (`packages/protocol/src/node/event-ring.ts`); Claude collapses superseded frames and reuses each frame's byte count (`bridges/claude-bridge/src/routes/events.ts`). See the closing check of E-0360 below. |
 | BR-16 | Done | The replay, its gates and what only it used are removed, and the harness and fake agent use `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
 | WEB-1 | Done | A background round is one request plus discovery when due, 3 requests per round to 1.04 (`useNativeAgentSession.ts`); the finding's note that Claude and Codex idle views never back off no longer held (`turn.quietObservation`, `native-session-read-policy.ts`); see [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
@@ -126,7 +123,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-13 | Done | `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `unchanged` with no contents, `commands-registry-terminal.ts`, `file-subtree-loads.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). Expanded-folder counts in real use: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-14 | Done | `setProjection` and `setProgressiveCache` copy each Map on its first write (`copyOnWrite`, `nativeAgentProjectionStore.ts`; #1754, `bfac1f577`); ceilings and untouched Maps pinned in `nativeAgentProjectionStore.test.ts`; see [Closing check of E12](#closing-check-of-e12-renderer-store). |
 | WEB-15 | Done | Memoised `readTranscriptTail`, `AgentNativeTab.controller.tsx:1152` (9c06cb7aa). |
-| WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is [5580](../../todo/cross-cutting/5580-agent-native-tab-environment-subscription.md). |
+| WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is 5580. |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
 | WEB-18 | Done | Every named poll runs through `startCoordinatedPoll` (`lib/coordinated-poll.ts`), which reads nothing while the window is hidden (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). A real Electron window: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-19 | Done | While a part streams, `MessageMarkdown` renders each completed segment once through `IncrementalMarkdownCache.render` (`incremental-parse.ts`) and reuses its elements, #1754 `bfac1f577`; Chromium Profiler numbers in the closing check of E22 below and in 1202 task 3. |
@@ -178,8 +175,8 @@ When one of these becomes ready, it joins the lane shown.
 | DK-10 | Open | Waits on a maintainer decision, now [todo 6780](../../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md). Pins unchanged on 2026-11-05 (`docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`); both binaries still byte-identical; the container bridge never runs the SDK's copy. See the closing note for 0693 below. |
 | DK-11 | Done | One `apt-get update`, `docker/Dockerfile:82`; `util-linux` in that layer, `:111` (fd679c0e2). |
 | DK-12 | Done | `move_clone_into_workspace`, `docker/workspace-setup.sh:406`, `:500` (2525fc05c). |
-| DK-13 | Open | Direct clone only, `docker/workspace-setup.sh:385-397`; see 0500. |
-| DK-14 | Partly done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the per-environment staging copy remains, see 0490. |
+| DK-13 | Done | Per-project bare mirror bound read-only, `git clone --no-tags --reference-if-able <mirror> --dissociate`, `clone_from_git_mirror` in `docker/workspace-setup.sh:435` (26ff5925b, seeded from the host checkout by 0e8958f57); restricted containers that cannot reach the remote get no mount (`restrictedContainerReachesGitRemote`, E25). The mirror's credential is [6741](../../todo/containers-and-environments/6741-git-mirror-access.md); see the closing check of E25 below. |
+| DK-14 | Done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the staging copy reflinks on Linux where the filesystem can, `FileCloner` in `portable-inputs.ts` (E25). macOS and other filesystems still copy, [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md); see the closing check of E25 below. |
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
 | DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` stays unconditional on fixture measurements, with 32/80 KiB default/maximum-page fixture budgets in `public-api-attention.test.ts` (not universal bounds); a real follower's page size is left in [5560](../../todo/cli-and-slash-commands/5560-attention-follow-page-size.md). |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
@@ -450,7 +447,7 @@ These five files were marked Finished or Done, checked back against the code ite
 
 | File | Batch | Outcome | Left over |
 | --- | --- | --- | --- |
-| `0130-e21-pi-bridge.md` | E21 | Every task done. Not confirmed: the timeout's reason reaching the user (the resume dialog shows "Failed to load sessions"), both "Needs verification" items, and a test for the barrier constraint. | [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) |
+| `0130-e21-pi-bridge.md` | E21 | Every task done. Not confirmed: the timeout's reason reaching the user (the resume dialog shows "Failed to load sessions"), both "Needs verification" items, and a test for the barrier constraint. | 5480 |
 | `0140-br-13-serial-queue-bound.md` | E-0140 | Task done; the restart path's recovery is proven by `app-server-runtime-lifecycle.test.ts`. Not confirmed: a real high-water mark for the bound's value. | [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md) |
 | `0250-br-7-codex-running-tool-cards.md` | E-0250 | Both tasks done; no reader outside the bridge consumes full `message.patched` frames. | None |
 | `0520-web-9-startup-bundle.md` | E-0520 | All five tasks done; guarded by `startup-closure.test.ts`. | None |
@@ -716,3 +713,57 @@ Store writes were 0 idle and 160 per window streaming (both tabs) in every varia
 | Task | Outcome | Left over |
 | --- | --- | --- |
 | 1. Retire joined paging, or add the interim map | The finding holds: a joined page records `history.joined-v1-page` or a cause id (`native-agent-transcript-projection.ts:4090`), runs a whole `sync-v1` `refreshProjection` (`:4091`) and SHA-256-hashes message ids in a `findIndex` (`:4116`). The support window has not passed: the floor is still v2.21.0, and v2.36.0 (2026-11-03), the first Stable release with 0232 tasks 1 to 3, enters the window on 2027-01-02; the `/messages` fallback row and direct recovery for the remaining no-cursor cases are also open. So joined paging stays, and the report's recommended option was taken: no interim map. No counter data was read (the split counters first shipped Stable on 2026-11-03, and no production instance was touched). | [0232](../../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md) task 4: the removal, plus the decision on the interim map, what counter use would justify it, and how to read the counters |
+
+## Closing check of E25 (Container start)
+
+Built and checked back on 2026-11-05 on branch `container-start-report-120411378c4f-r1`, based on `main` at `cbe0f9a5b` and rebased onto `585cf97d8`, item by item against the batch file `0490-e25-container-start.md` before it was deleted (its last version is in the parent of the commit that deletes it). The line numbers the file gave were from `a2bba9d8`; everything below was re-read against the branch. Part `0500` turned out to be built already by #1759 (`26ff5925b`) and #1804 (`0e8958f57`), after the file was analysed and before this batch; the file still listed it as open.
+
+| Part | Finding | Outcome |
+| --- | --- | --- |
+| `0490` | DK-14: agent-home inputs are copied in full per environment and again on every start | Done. Task 1 (stamps) was already done; task 2 is built, reflink where the filesystem can and copy otherwise; task 3 is not needed, on the numbers below. What is left is [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md). |
+| `0500` | DK-13: each environment clones from the remote again | Done (#1759, #1804). This batch withholds the mount from restricted containers that could not reach the remote. How the mirror is fetched for a private repository is decided but not built: [6741](../../todo/containers-and-environments/6741-git-mirror-access.md). |
+
+**Measurements.** Beelink, Linux 7.1.8, btrfs on dm-crypt for the data directory and `/home`, tmpfs `/tmp`, Bun 1.4.4, rootful Docker 29.9.2 with `overlayfs`, image `orkestrator-v2:dev-c7e9a71b6680` (`staged-inputs=5`, `git-mirror=1`). Other builds were running: the load average was 47–58 for the first staging run and 3–19 for the rest, so compare variants within a run, not across runs. Fixture homes only, since this batch was not to touch real agent homes, and this host's data directory had no staged revisions to read counts from. Staging is `apps/backend/scripts/portable-input-staging-costs.ts` (median of 5 rounds after a warm-up round; `btrfs filesystem du` after a sync for the new disk). "Before" is `stagePortableInputs` from `main`; "copy" is this branch with `cloneFiles: false`, the same code path as before.
+
+| Fixture (Claude, Codex and shared skills) | Staged | Filesystem | Before | After, copy | After, clone | New disk before | New disk after |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `small`: 10 skills per root, 50 plugin files of 16 KiB per provider | 162 files, 1.7 MiB | btrfs | 21–25 ms | 27 ms | 27 ms | 1.6 MiB | 0 MiB |
+| `medium`: 200 skills per root, 2,000 plugin files of 16 KiB per provider | 5,202 files, 65 MiB | btrfs | 725–734 ms | 684 ms | 654 ms | 62.5 MiB | 0 MiB |
+| `plugins`: 20 skills per root, 600 plugin files of 256 KiB per provider | 1,322 files, 300 MiB | btrfs | 544–558 ms | 549 ms | 162 ms | 300 MiB | 0 MiB |
+| `medium` | 5,202 files, 65 MiB | tmpfs | 1,752–1,783 ms (loaded) | 987 ms | 966 ms | n/a | n/a |
+| `plugins` | 1,322 files, 300 MiB | tmpfs | 1,546–1,647 ms (loaded) | 761 ms | 758 ms | n/a | n/a |
+
+On tmpfs nothing clones (`ENOTSUP`), so both variants copy. Small skill files are inlined or compressed by btrfs, which is why `small` shows little new disk either way. Credential-guarded skills (Claude's and the shared root's) are still read, so the 4,402 of 5,202 `medium` files that cloned are the 4,000 plugin files, Codex's 400 skill files and two plain files.
+
+Container starts, from a throwaway script (`output/efficiency/e25-container-starts.ts`, not committed): stage, `docker create --network none -e NETWORK_MODE=full` with `stagedInputMountArguments`, then `docker start` until `waitForContainerBoot`, three starts per container, two containers per cell. The script removed its containers by ID; it created no network, image or volume.
+
+| Fixture | Staging | Stage | First start | Restarts | Inputs (unchanged/copied) |
+| --- | --- | --- | --- | --- | --- |
+| `medium` | Copy | 1,366–1,466 ms | 5,430–5,468 ms | 508–570 ms | 0/7 first, then 7/0 |
+| `medium` | Clone | 1,030–1,256 ms | 5,661–5,707 ms | 515–569 ms | 0/7 first, then 7/0 |
+| `plugins` | Copy | 763–791 ms | 1,174–1,277 ms | 568–618 ms | 0/7 first, then 7/0 |
+| `plugins` | Clone | 213–320 ms | 1,701–1,747 ms | 568–635 ms | 0/7 first, then 7/0 |
+
+Creation plus first start comes out even (about 2.0 s for `plugins`, 6.7–6.8 s for `medium`): a fresh clone has no cached pages, so the first start reads from disk what a just-written copy still had in the page cache. The saving that holds is disk, a whole revision per environment and per kept revision. 6740 task 2 records this.
+
+The detailed outcome is retained here so it survives squash merges:
+
+| Part | Item | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0490 | Task 1: skip the start copy with a stamp | Already done | `import_agent_input` in `docker/entrypoint.sh:830` (`staged-inputs=5`, 1202 task 15). Confirmed in real containers above: every restart reported 7 inputs unchanged and 0 copied. |
+| 0490 | Task 1 decision: a content digest compared with the stamp and the home | Already done, as taken on 2026-11-04 | Same code; tests `apps/backend/tests/portable-inputs-stamps.test.ts` (passed on this branch). |
+| 0490 | Task 2: shared host cache for staging | Done, recommended option | `FileCloner` (`apps/backend/src/core/portable-inputs.ts:620`), called from `copyRegularFile` (`:709`) for a file with no filter and no guard, cloning `/proc/self/fd/<fd>` of the descriptor already opened `O_NOFOLLOW` and checked, with `COPYFILE_EXCL | COPYFILE_FICLONE_FORCE`. Tests in `apps/backend/tests/portable-inputs-clone.test.ts`: "clones only files staged byte for byte, from the checked descriptor", "a clone and a copy stage the same files with the same accounting", "a filesystem that cannot clone falls back to a copy, asked once", "a file that grew past the limit before its clone is not staged", "a staged file stays independent of its source in both directions". The existing staging suites passed on tmpfs and again with `TMPDIR` on btrfs, where real reflinks ran. |
+| 0490 | Task 2 decision: reflink, not hard links | Done | A reflink is a new inode with copy-on-write blocks, so isolation is unchanged: the independence test writes to the revision and to the source and neither sees the other, and checks the inodes differ. No content-addressed cache was added, so there is no new store to bound or remove. |
+| 0490 | Task 2 cost: no saving without reflinks | Accepted | tmpfs, ext4, another filesystem than the source, and every platform but Linux copy as before. macOS is [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 1. |
+| 0490 | Task 3: bounded parallel copy | Not needed | After task 1 a restart copies nothing (above). After task 2 the host staging that task 3 was about takes 162 ms for 300 MiB and 654 ms for 5,202 files on a quiet host, once per environment creation, beside a clone of 1.4–7 s (1202 task 15) and a first start of 1.2–5.7 s. What remains is per-file work, which a pool could only shave, and a pool would have to reserve budget before each copy to keep `aggregate-budget` outcomes exact. The first start's cost for many files is in the entrypoint, not the host copy: [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 3. |
+| 0490 | Constraint: container storage rules, staged-input isolation | Holds | Nothing is removed outside the existing staging and prune paths; revisions stay private (`0700`/`0600`, checked by the clone tests) and are bound only as staged subtrees. |
+| 0490 | Constraint: byte and count bounds for a new cache | Holds | No cache was added. The clone's size is checked against `fileBytes`, and budgets are charged with the same sizes as the copy ("the same accounting" test compares summaries and manifests). |
+| 0490 | Needs verification: input sizes on real hosts | Moved to a to-do | Fixture homes only, for the reason above. [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 4. |
+| 0490 | Needs verification: whether the image relies on the copy recreating a removed file | Already answered | The file itself recorded that the stamp restores one. |
+| 0500 | Task 1: per-project mirror | Already done (#1759, #1804) | `apps/backend/src/core/project-git-mirror.ts`; `clone_from_git_mirror` in `docker/workspace-setup.sh:435`. |
+| 0500 | Decision: read-only bare mirror with `--reference-if-able --dissociate` | Done (E25) | Bound `:ro` (`gitMirrorContainerArguments`, `project-git-mirror.ts:226`), `git clone --no-tags --reference-if-able "$mirror" --dissociate` at `workspace-setup.sh:449`. #1759 had used `--reference`; E25 switched it to the decided flag. A mirror removed between the script's check and the clone now leaves a full clone from the remote, which the script detects by checking the mirror again and reports as `vanished`, so the backend logs `git-mirror.clone-fallback` instead of `clone-used` (`docs/architecture/container-lifecycle.md`, "Project Git mirror"). Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, "a mirror removed between the check and the clone still leaves a whole clone" and "the mirror clone uses --reference-if-able with --dissociate". |
+| 0500 | Cost: a lifecycle to create, refresh, bound and clean up | Already done | Built and refreshed in the background (`refreshProjectGitMirror`, `:325`), bounded at 2 GiB with a free-disk floor (`GIT_MIRROR_MAX_BYTES`, `:71`), removed with its project (`removeProjectGitMirror`, `:805`) and by the orphan sweep (`sweepOrphanedProjectGitMirrors`, `:831`); nothing else removes one. `apps/backend/tests/project-git-mirror.integration.test.ts` passed on this branch. |
+| 0500 | Constraint: a mirror must not widen what a restricted container can read | Done for the network | A restricted container gets the mount only when its firewall would reach the remote itself: GitHub on TCP 443, or an allowlist entry for the clone's host and port (`restrictedContainerReachesGitRemote`, `project-git-mirror.ts:285`, called before the mount at `commands-containers.ts:352`). Tests: `apps/backend/src/core/project-git-mirror-reach.test.ts`, and in `apps/backend/tests/project-git-mirror-create.test.ts` "a restricted container that cannot reach the remote does not read it through the mirror" and its two counterparts. |
+| 0500 | Needs verification: how a host-side mirror fetches a private repository | Decided, not built | The mirror is fetched with the backend's credential, so a container given no GitHub credential (the default) can read a private repository's branches through it. Recommended fix: a mirror per kind of access, fetched with exactly what its readers hold, from an isolated Git configuration. [6741](../../todo/containers-and-environments/6741-git-mirror-access.md). |
+| 0500 | Needs verification: lazy round trips of blobless clones | Already answered | Yes, measured in 1202 task 15 (`git log -p -200`: 43 s against 0.1 s), which is why a mirror clone has no `--filter`. |
+| Both | Docker on this machine | Held | No prune, restart, firewall or network change. The only Docker resources made were the measurement containers (`--network none`, label `e25-measure`), each removed by ID; the image declares no volumes. |

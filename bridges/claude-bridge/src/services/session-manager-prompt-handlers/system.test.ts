@@ -50,6 +50,37 @@ describe("system message handling", () => {
     expect(session.health?.drift()?.unknownKinds).toEqual(["system:invented_later"]);
   });
 
+  test.each([
+    ["session_title_changed", { title: "Fix the login form" }],
+    ["vcs_state_changed", { kind: "push", branch: "feature/x", cwd: "/workspace" }],
+    ["per_turn_effort_changed", { per_turn_effort_active: false }],
+    ["permission_check_status", { tool_use_id: "toolu_1", status: "checking" }],
+    ["peer_message_hold", { state: "held", lane: "socket" }],
+  ])("the CLI-internal %s subtype is ignored, not counted as drift", async (subtype, fields) => {
+    const { session, turn } = settledTurn();
+    await handleSystemMessage(turn, {
+      type: "system",
+      subtype,
+      ...fields,
+    } as unknown as SDKMessage);
+    expect(session.health?.drift()).toBeUndefined();
+    expect(session.health?.snapshot()?.notices ?? []).toEqual([]);
+    expect(session.messages).toEqual([]);
+    expect(turn.inheritedContinuation).toBe(false);
+  });
+
+  test("an instruction size warning is kept as a notice, not counted as drift", async () => {
+    const { session, turn } = settledTurn();
+    await handleSystemMessage(turn, {
+      type: "system",
+      subtype: "instruction_size_warning",
+    } as unknown as SDKMessage);
+    expect(session.health?.drift()).toBeUndefined();
+    expect(session.health?.snapshot()?.notices.map((notice) => notice.method)).toEqual([
+      "system/instruction_size_warning",
+    ]);
+  });
+
   test("an API retry opens a pending row and settles the one before it", async () => {
     const { session, turn } = settledTurn();
     const retry = (attempt: number) =>

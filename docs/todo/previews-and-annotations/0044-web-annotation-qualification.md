@@ -1,10 +1,10 @@
 # Web annotation qualification
 
-Checked against `main` at `ba7cc8d4` (2026-10-25).
-
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`.
+
+Checked against `main` at `ba7cc8d4` (2026-10-25).
 
 ### Tasks
 
@@ -27,6 +27,16 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 7. **Gateway synthetic-capture parity**: the second "Needs verification" item.
    Status: partly done (real PNG staged since 2026-10-25; target and evidence
    fields still synthetic).
+8. **Source-hint capture off macOS and on a real dev server**: the Electron and
+   gateway source-hint cases on Linux, a real Vite dev-pipeline capture, and
+   disposition of other Babel integrations. Windows remains unqualified and
+   outside the current platform scope (0042 D18). Moved from to-do 0950
+   (deleted 2026-11-06).
+   Status: open.
+9. **Electron OS-focus assertions on a frontmost host**: the gated `nativeFocus`,
+   `getFocusedWebContents()` and `isFocused()` polls run and pass when Electron
+   is really frontmost. Moved from to-do 1170 (deleted 2026-11-06).
+   Status: blocked (on a frontmost host, as task 4).
 
 Code items 1 to 6, the keychain item and the create-cost item (moved to
 [0124](0124-web-annotation-commit-cost.md)) are done.
@@ -225,6 +235,92 @@ the protocol validator is the common contract both paths pass through.
   - **Rely on the shared validator and close the item.**
     - Pros: no work.
     - Cons: validation checks shape, not that values match a real capture.
+
+### 8. Source-hint capture off macOS and on a real dev server
+
+**Problem.** The source-hint emitter is documented, the review shows "Source
+candidates from the page", and the Electron and gateway specs capture and
+review hints. All of it has run on macOS against fixture HTML only.
+
+**Context.** Moved from to-do 0950 (deleted 2026-11-06). The emitter is
+documented in
+[`source-hint-emitter.md`](../../development/source-hint-emitter.md), checked by
+`apps/desktop/tests/source-hint-emitter-doc.test.ts` and
+`source-hint-emitter-vite.integration.test.ts`. The specs are
+`e2e/agent-testing/web-annotations-electron.spec.ts`
+(`captureAndReviewSourceHints`, with a container opt-in) and
+`web-annotations-gateway.spec.ts`. Retired 0950 also owed Windows and other
+Babel build integrations. Windows has not run: the maintainer's 2026-11-04
+scope decision in [0042 D18](0042-service-preview-rollout.md#assumptions-and-decisions)
+limits current support to macOS and Linux. A future Windows support change must
+reopen local/container capture and gateway qualification; this is a scope
+deferral, not a Windows pass.
+
+**Investigation.** Steps:
+
+1. On a Linux desktop host with Docker, run
+   `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1 bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts --grep 'source hint' --workers=1`
+   and check for `[verified, not verified]` in both the local and the container
+   case.
+2. Run the gateway case (`web-annotations-gateway.spec.ts --grep 'Docker fixture checks source hints'`)
+   on that host.
+3. Capture a page served by a real Vite 8 dev server that uses the documented
+   emitter, through Electron. Record the source candidates and stored verified
+   flags in local and container environments. The existing integration test of
+   Vite 8/plugin-react 6 and Vite 7/plugin-react 5 does not replace a desktop
+   capture through the development pipeline.
+4. Explicitly disposition other Babel build integrations such as webpack and
+   Next.js: either qualify the emitter and production exclusion in an isolated
+   project, including a desktop capture, or document that the integration is
+   unsupported/unqualified. Keep this step open until that disposition is
+   recorded; do not infer support from the two documented Vite configurations.
+
+**Decisions.**
+
+- **Run it with task 5?**
+  - **Yes, on task 5's Linux host (recommended).**
+    - Pros: the same Electron and Docker setup.
+    - Cons: the real dev-server capture is a manual step.
+  - **Alone.**
+    - Pros: smaller run.
+    - Cons: a second Linux desktop session.
+
+### 9. Electron OS-focus assertions on a frontmost host
+
+**Problem.** On a host where Electron cannot become the active app (a locked
+macOS console, another build activating apps), the Electron specs' OS-focus
+polls fail alone. They are now gated on an annotation that records whether the
+window was focused, so on such a host they are skipped, not run.
+
+**Context.** Moved from to-do 1170 (deleted 2026-11-06). The composer no longer
+takes focus from an open dialog, alert or menu (`isFocusHeldElsewhere` in
+`apps/web/src/lib/background-focus.ts`); startup notices return focus through
+`useDialogFocusReturn` (`apps/web/src/lib/dialog-focus.ts`).
+`e2e/agent-testing/webcontents-focus.ts` records view focus, and
+`workspace-realm-electron.spec.ts` has the forced-race step. Task 4 waits on
+the same condition.
+
+**Investigation.** Steps:
+
+1. On a host where `app.focus({ steal: true })` makes Electron frontmost
+   (arktech-mini with its console unlocked and no other build activating apps,
+   or Linux under Xvfb), run `mise run test:agent:electron`.
+2. Check that the `native-focus` and `window-focused` annotations show the
+   window focused, so the gated polls run: the realm's `nativeFocus` and
+   `getFocusedWebContents()` polls (including the preview's return after the
+   shortcuts dialog) and the annotation keyboard test's `isFocused()`.
+3. Record the results, and decide whether an Xvfb CI job is worth adding.
+
+**Decisions.**
+
+- **Which host?**
+  - **Linux under Xvfb (recommended).**
+    - Pros: no person needed to unlock a console; the same run could become a
+      CI job.
+    - Cons: Xvfb focus is not macOS focus.
+  - **arktech-mini with its console unlocked.**
+    - Pros: the platform where the gap was found.
+    - Cons: needs a person and a quiet host.
 
 Web-page annotations shipped in #845 (`964d71f4`, 2026-09-25). They have
 unit, contract and component tests, plus real-stack specs. Milestones A–C
@@ -1122,6 +1218,12 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   assumed SLA.
 
 ## Assumptions and decisions
+
+### Task 8: complete 0950's verification disposition (2026-11-06)
+
+Keep Linux and real dev-pipeline captures open and require an explicit outcome
+for other Babel integrations. Preserve Windows as unrun under 0042 D18 rather
+than claiming qualification or expanding the maintainer-approved scope.
 
 Made on 2026-10-25 without the user, to be validated.
 

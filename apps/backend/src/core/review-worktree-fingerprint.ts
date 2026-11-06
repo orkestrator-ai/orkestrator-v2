@@ -3,7 +3,7 @@
  * their source instead of being copied through the backend command transport.
  * The script captures the state twice and refuses an unstable observation.
  *
- * Content hashing is opt-in (`fingerprint` as the first script argument).
+ * Content hashing is opt-in (a `fingerprint` script argument).
  * Callers that only need HEAD and the uncommitted path set — the build
  * pipeline's validation guard compares path sets, not bytes — must not pay for
  * a full `git diff` plus every untracked file being read twice.
@@ -13,6 +13,18 @@
  * cannot import because it has to stay self-contained for the container. Under
  * Bun a pipe reader can miss the end of a stream, and a local worktree runs this
  * under the managed Bun (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
+ *
+ * A `budget-ms=<n>` argument bounds the whole probe. Past it the script kills
+ * every Git it started and reports `timeout`. The caller sets it below its
+ * own command timeout, because that timeout kills only this script's process
+ * group: Git runs in groups of its own, so a Git still running when the script
+ * is killed would be orphaned and keep walking the worktree. On a stalled disk
+ * every retry used to leave one more behind.
+ *
+ * Every Git runs with fsmonitor off and `--no-optional-locks`, like the diff
+ * scanner: a probe must not take `index.lock` while an agent or an install is
+ * working in the checkout, and must not run a hook the worktree's own config
+ * names.
  *
  * Every failure leaves through one of REVIEW_WORKTREE_PROBE_REASON_CODES.
  * The script never writes a repository path, a filename, or Git's own message
@@ -32,7 +44,11 @@ const MAX_STATUS_BYTES = 16 * 1024 * 1024;
 const MAX_DIFF_BYTES = 256 * 1024 * 1024;
 const MAX_UNTRACKED_BYTES = 256 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
-const WANT_FINGERPRINT = process.argv[1] === "fingerprint";
+const SCRIPT_ARGS = process.argv.slice(1);
+const WANT_FINGERPRINT = SCRIPT_ARGS.includes("fingerprint");
+const BUDGET_MS = Number(
+  (SCRIPT_ARGS.find((arg) => arg.startsWith("budget-ms=")) ?? "budget-ms=0").slice(10),
+);
 
 function coded(code) {
   const error = new Error(code);
@@ -40,12 +56,10 @@ function coded(code) {
   return error;
 }
 
-// Set once a status read timed out: a hung fsmonitor daemon blocks every later
-// read too, so the rest of this probe skips it.
-let gitPrefix = [];
-// Internal only; a status timeout is retried, never reported.
-const STATUS_TIMEOUT = "status-timeout";
-const STATUS_TIMEOUT_MS = 10000;
+const GIT_PREFIX = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
+
+// Every Git still running, so the deadline can stop all of them.
+const runningGits = new Set();
 
 // Output is noticed by looking, because a file has no back-pressure.
 const OUTPUT_CHECK_MS = 100;
@@ -119,7 +133,7 @@ function git(args, options = {}) {
     // A hook can outlive Git. Own a new process group so timeout cleanup includes
     // hooks and their descendants.
     const grouped = process.platform !== "win32";
-    const child = spawn("git", [...gitPrefix, ...args], {
+    const child = spawn("git", [...GIT_PREFIX, ...args], {
       detached: grouped, stdio: ["ignore", stdoutFd, stderrFd],
     });
     // A lost exit must not hold this process open once the probe has answered.
@@ -129,11 +143,13 @@ function git(args, options = {}) {
       child.once("exit", resolve);
       child.once("close", resolve);
     });
+    const running = { stop: () => signalTree("SIGKILL") };
+    runningGits.add(running);
     const limit = options.captureLimit ?? options.hashLimit ?? 0;
     let settled = false;
     let exitWatch;
     const stopTimers = () => {
-      clearTimeout(timer);
+      runningGits.delete(running);
       clearInterval(outputCheck);
       clearTimeout(exitWatch);
     };
@@ -143,17 +159,11 @@ function git(args, options = {}) {
         else child.kill(signal);
       } catch {}
     };
-    const fail = async (code, signal = "SIGKILL") => {
+    const fail = async (code) => {
       if (settled) return;
       settled = true;
       stopTimers();
-      if (grouped) signalTree(signal);
-      if (grouped && signal === "SIGTERM") {
-        // Give Git time to remove index.lock, then kill even if Git already
-        // exited: a hook may ignore SIGTERM and still be running.
-        await new Promise(resolve => setTimeout(resolve, 250));
-        signalTree("SIGKILL");
-      }
+      if (grouped) signalTree("SIGKILL");
       if (!grouped && child.pid) {
         // Windows has no POSIX process groups. taskkill targets only the tree
         // rooted at this child; bound the helper as well.
@@ -216,10 +226,6 @@ function git(args, options = {}) {
         releaseCapture();
       }
     };
-    // SIGTERM lets git remove an index.lock it took before the daemon stalled.
-    const timer = options.timeoutMs
-      ? setTimeout(() => fail(STATUS_TIMEOUT, "SIGTERM"), options.timeoutMs)
-      : undefined;
     const outputCheck = setInterval(checkOutput, OUTPUT_CHECK_MS);
     child.on("error", () => fail("git-missing"));
     child.once("exit", onExit);
@@ -303,15 +309,10 @@ async function capture() {
     ["rev-parse", "--verify", "HEAD^{commit}"],
     { captureLimit: 1024 },
   )).toString("utf8").trim();
-  const statusArgs = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
   const status = await git(
-    statusArgs,
-    { captureLimit: MAX_STATUS_BYTES, timeoutMs: gitPrefix.length ? 0 : STATUS_TIMEOUT_MS },
-  ).catch((error) => {
-    if (!error || error.probeCode !== STATUS_TIMEOUT) throw error;
-    gitPrefix = ["-c", "core.fsmonitor=false"];
-    return git(statusArgs, { captureLimit: MAX_STATUS_BYTES });
-  });
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    { captureLimit: MAX_STATUS_BYTES },
+  );
   if (!WANT_FINGERPRINT) return { head, status, fingerprint: null };
   const hash = createHash("sha256");
   hash.update("head\0");
@@ -359,8 +360,17 @@ async function main() {
 
 const CODES = [
   "git-missing", "git-failed", "too-large",
-  "unstable", "malformed-status", "read-failed",
+  "unstable", "malformed-status", "read-failed", "timeout",
 ];
+
+if (Number.isFinite(BUDGET_MS) && BUDGET_MS > 0) {
+  // Unref'd: a probe that answers in time exits without waiting for it.
+  setTimeout(() => {
+    for (const running of runningGits) running.stop();
+    process.stderr.write("review-worktree-probe:timeout\n");
+    process.exit(1);
+  }, BUDGET_MS).unref();
+}
 
 main().catch((error) => {
   const code = error && CODES.includes(error.probeCode) ? error.probeCode : "unknown";
@@ -381,6 +391,7 @@ export const REVIEW_WORKTREE_PROBE_REASON_CODES = [
   "unstable",
   "malformed-status",
   "read-failed",
+  "timeout",
   "unknown",
 ] as const;
 
@@ -442,4 +453,25 @@ export function parseReviewWorktreeFingerprint(raw: string): ReviewWorktreeFinge
     status: Buffer.from(record.status, "base64").toString("utf8"),
     ...(record.fingerprint === undefined ? {} : { fingerprint: record.fingerprint as string }),
   };
+}
+
+/** The backend's command timeout for a path-only probe. */
+export const REVIEW_WORKTREE_PROBE_TIMEOUT_MS = 30_000;
+/** The backend's command timeout for a probe that hashes content. */
+export const REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS = 120_000;
+/**
+ * How much earlier than the command timeout the script stops itself: room to
+ * start the interpreter (or `docker exec`) and for its exit to reach the backend.
+ */
+const PROBE_SELF_STOP_MARGIN_MS = 5_000;
+
+/** Script arguments for a probe the backend runs under `timeoutMs`. */
+export function reviewWorktreeProbeArgs(fingerprint: boolean, timeoutMs: number): string[] {
+  const budget = Math.max(1_000, timeoutMs - PROBE_SELF_STOP_MARGIN_MS);
+  return [
+    "-e",
+    REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
+    ...(fingerprint ? ["fingerprint"] : []),
+    `budget-ms=${budget}`,
+  ];
 }

@@ -23,7 +23,8 @@ open.
 
 1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones. Status: open (unblocked).
 2. **Container picker lag under host load** (flake 0710): a container tab's catalogue lags the backend's when the host is heavily loaded. Status: open (tracked as a flake, not as an item here).
-3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: done 2026-11-01 (staged as `entries`; shared and linked skills follow up in [2170](../containers-and-environments/2170-shared-and-linked-skills-in-containers.md)).
+3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: done 2026-11-01 (staged as `entries`; shared and linked skills follow up in 2170, deleted 2026-11-06; its live check is task 4).
+4. **Shared and linked skills in a live container**: `~/.agents/skills` and linked Claude skills reach a container as real directories, and Grok and Cursor list them there. Moved from to-do 2170 (deleted 2026-11-06). Status: open.
 
 ### 1. Mixed versions against real v2.21.0 builds
 
@@ -130,7 +131,43 @@ open.
   An image built before this change copies neither directory until the
   environment is rebuilt. Linked skills (`~/.claude/skills/<name>` linking to
   `~/.agents/skills`) and the shared `~/.agents/skills` root are still
-  missing in containers: [2170](../containers-and-environments/2170-shared-and-linked-skills-in-containers.md).
+  missing in containers: 2170.
+
+### 4. Shared and linked skills in a live container
+
+**Problem.** Task 3 handed shared (`~/.agents/skills`) and linked skills to a
+separate to-do, which built them: the backend stages them into a container as
+real directories, and links that point outside an allowed root are skipped.
+Unit tests prove it; no live container has shown them in a catalogue.
+
+**Context.** Moved from to-do 2170 (deleted 2026-11-06). The staging is in
+`apps/backend/src/core/portable-inputs.ts` (`withSharedSkillsInput`,
+`linkedSkillRoots`), and the container copies `/agents-skills` in
+`docker/entrypoint.sh`; tests are in
+`apps/backend/tests/portable-inputs-shared-skills.test.ts`. The behaviour is in
+[`container-lifecycle.md`](../../architecture/container-lifecycle.md).
+
+**Investigation.** Steps:
+
+1. Build the development image from the tree (`staged-inputs=4`) and boot a
+   container on a throwaway profile whose fixture home has
+   `~/.agents/skills/<x>` and a linked skill under `~/.claude/skills`.
+2. Check that `~/.agents/skills/<x>` and the linked skill arrive inside the
+   container as real directories.
+3. Check that the pinned Grok and Cursor list `~/.agents/skills` from the
+   container HOME; so far this comes only from reading `agent-skills.ts`.
+4. Check that a link pointing outside an allowed root is still skipped and
+   counted as `symlink`.
+
+**Decisions.**
+
+- **Which providers to look at?**
+  - **Claude, Grok and Cursor in one container (recommended).**
+    - Pros: the three catalogues that read these directories, in one boot.
+    - Cons: needs Grok and Cursor logins in the profile.
+  - **Claude only.**
+    - Pros: one credential.
+    - Cons: leaves the never-probed Grok and Cursor reads unproved.
 
 Every slash-command executor was first qualified from installed SDK
 declarations and source, then exercised through each integration's real
@@ -1017,7 +1054,7 @@ Decisions 11 to 14 were made on 2026-11-01 for task 3.
       credentials outside bundles and configure them explicitly for the environment.
 13. **Linked skills.** Options: follow links whose target is a skill; skip
     links as every other staged directory does. Chosen: skip, and file
-    [2170](../containers-and-environments/2170-shared-and-linked-skills-in-containers.md).
+    2170.
     Why: following links below a home entry is the rule staging exists to
     keep, and widening it needs its own design. Con: skills installed as
     links (`npx skills`) are still host-only.

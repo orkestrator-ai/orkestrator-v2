@@ -153,12 +153,58 @@ export const SYSTEM_SUBTYPE_DISPOSITIONS: Record<SdkSystemSubtype, SystemSubtype
   elicitation_complete: "notice",
 };
 
-/** The disposition for a runtime subtype, or `undefined` when the SDK is newer than this table. */
+/** `system` subtypes the CLI emits on the SDK stream that the public union does not name. */
+export type InternalSystemSubtype =
+  | "session_title_changed"
+  | "vcs_state_changed"
+  | "per_turn_effort_changed"
+  | "permission_check_status"
+  | "peer_message_hold"
+  | "instruction_size_warning";
+
+/**
+ * The `system` counterpart of {@link isKnownInternalSdkMessageType}: subtypes
+ * that are `@internal` in the CLI's own schemas, so
+ * {@link SYSTEM_SUBTYPE_DISPOSITIONS} cannot key on them. Each one here has
+ * been read in the CLI source (2.1.314) and given a fate; any other subtype
+ * outside the union is still counted as drift.
+ *
+ * A subtype an SDK release promotes into the public union types as `never`
+ * here, so the bump fails the typecheck until its entry moves to
+ * {@link SYSTEM_SUBTYPE_DISPOSITIONS}, which would otherwise shadow it.
+ */
+export const INTERNAL_SYSTEM_SUBTYPE_DISPOSITIONS: {
+  [K in InternalSystemSubtype]: K extends SdkSystemSubtype ? never : SystemSubtypeDisposition;
+} = {
+  // The CLI's own name for the session. Orkestrator generates session titles
+  // in the backend, so the CLI's suggestion has nowhere to go.
+  session_title_changed: "ignored",
+  // A push, merge or rebase the agent's own commands made, with the branch and
+  // cwd. Orkestrator reads the worktree's git state itself; recorded, every
+  // push would add a notice.
+  vcs_state_changed: "ignored",
+  // A per-turn effort override lapsing. The bridge sets effort on each turn
+  // and reports it from its own session state.
+  per_turn_effort_changed: "ignored",
+  // "checking" / "done" around a slow permission check, per tool call.
+  permission_check_status: "ignored",
+  // Hold state of a cross-session peer message, which this bridge never sends.
+  peer_message_hold: "ignored",
+  // Instruction files (CLAUDE.md and friends) over the CLI's size limit: the
+  // model is not seeing all of them, which the user can act on.
+  instruction_size_warning: "notice",
+};
+
+/** The disposition for a runtime subtype, or `undefined` when the SDK is newer than these tables. */
 export function systemSubtypeDisposition(subtype: unknown): SystemSubtypeDisposition | undefined {
-  if (typeof subtype !== "string" || !Object.hasOwn(SYSTEM_SUBTYPE_DISPOSITIONS, subtype)) {
-    return undefined;
+  if (typeof subtype !== "string") return undefined;
+  if (Object.hasOwn(SYSTEM_SUBTYPE_DISPOSITIONS, subtype)) {
+    return SYSTEM_SUBTYPE_DISPOSITIONS[subtype as SdkSystemSubtype];
   }
-  return SYSTEM_SUBTYPE_DISPOSITIONS[subtype as SdkSystemSubtype];
+  if (Object.hasOwn(INTERNAL_SYSTEM_SUBTYPE_DISPOSITIONS, subtype)) {
+    return INTERNAL_SYSTEM_SUBTYPE_DISPOSITIONS[subtype as InternalSystemSubtype];
+  }
+  return undefined;
 }
 
 /** Base SDK message with common fields */

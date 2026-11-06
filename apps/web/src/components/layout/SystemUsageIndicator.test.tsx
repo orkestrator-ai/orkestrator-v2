@@ -744,13 +744,13 @@ describe("SystemUsageIndicator", () => {
       render(<SystemUsageIndicator />);
       openPanel();
       await waitFor(() => expect(screen.getByText(FAILURE)).toBeTruthy());
-      expect(screen.queryByText("Loading processes…")).toBeNull();
+      expect(screen.queryByText("Loading processes…") === null).toBe(true);
       expect(document.body.textContent).not.toContain("ECONNREFUSED");
 
       readProcesses = async () => processSnapshot();
       await advance(READ_RETRY_MAX_MS);
       await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
-      expect(screen.queryByText(FAILURE)).toBeNull();
+      expect(screen.queryByText(FAILURE) === null).toBe(true);
     });
 
     test("a read that never returns says loading, then fails, and a retry in flight keeps the message", async () => {
@@ -774,7 +774,7 @@ describe("SystemUsageIndicator", () => {
       await advance(READ_RETRY_MAX_MS * 2);
       expect(calls).toBe(1);
       expect(screen.getByText(FAILURE)).toBeTruthy();
-      expect(screen.queryByText("Loading processes…")).toBeNull();
+      expect(screen.queryByText("Loading processes…") === null).toBe(true);
 
       await act(async () => {
         release(processSnapshot());
@@ -805,7 +805,7 @@ describe("SystemUsageIndicator", () => {
       };
       await advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
       expect(screen.getByText("node")).toBeTruthy();
-      expect(screen.queryByText(FAILURE)).toBeNull();
+      expect(screen.queryByText(FAILURE) === null).toBe(true);
 
       readProcesses = async () =>
         processSnapshot({
@@ -813,7 +813,7 @@ describe("SystemUsageIndicator", () => {
         });
       await advance(READ_RETRY_MAX_MS);
       await waitFor(() => expect(screen.getAllByText("55%").length).toBeGreaterThan(0));
-      expect(screen.queryByText(FAILURE)).toBeNull();
+      expect(screen.queryByText(FAILURE) === null).toBe(true);
     });
   });
 

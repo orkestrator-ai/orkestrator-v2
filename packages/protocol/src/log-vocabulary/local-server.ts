@@ -28,6 +28,12 @@ export const LOCAL_SERVER_LOG_AREAS = defineLogAreas({
           requested: "boolean",
         },
       },
+      "bridge.orphans-reaped": {
+        description:
+          "Processes a bridge left in its process group after exiting on its own (its agent CLI, mid-turn) were stopped. `warn` when they left; `error` when one survived SIGKILL.",
+        essential: true,
+        fields: { key: "label", pid: "number", result: "label" },
+      },
       "reaper.tmux-list-failed": "Orphaned claude-tmux sessions could not be listed.",
       "reaper.tmux-kill-failed": "An orphaned tmux session could not be killed.",
       "reaper.tmux-reaped": "Orphaned claude-tmux sessions of a deleted environment were killed.",

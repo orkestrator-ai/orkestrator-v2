@@ -119,21 +119,21 @@ Rechecked 2026-11-03 against `main` at `b8862313`: the test file had reached 4,3
 **Context.** The README allows correcting existing items and recording decisions against them.
 
 **Investigation.**
-- D11 and decision 5 say Multi Review and build pipelines stay coordinator-only. Since `32317ae6` (#1268), Multi Review and PR actions are public actions (`review.launch/list/get/open/address/cancel`, `pr.create/resolve`, `packages/protocol/src/public-api.ts:419-478`) with operator tools, and `docs/architecture/control-mcp.md:79` lists the Multi Review tools in the `full` profile. Build pipelines are still coordinator-only.
+- D11 and decision 5 say Multi Review and Build Pipelines stay coordinator-only. Since `32317ae6` (#1268), Multi Review and PR actions are public actions (`review.launch/list/get/open/address/cancel`, `pr.create/resolve`, `packages/protocol/src/public-api.ts`) with operator tools, and `docs/architecture/control-mcp.md` lists the Multi Review tools in the `full` profile. Build Pipelines also have operator public actions: `build.launch` requires `environments.lifecycle`, `build.list/get` require `sessions.read`, and `build.cancel` requires `sessions.control` (`packages/protocol/src/public-api-inputs-build.ts`).
 - The profile table (`full` = 82 tools, 76,374 bytes) predates #1268, so the `full` count and size are now higher; they were not re-measured here. The voice profile's budget still holds (task 1).
-- The `mise run test` row says 14 OpenCode conformance cases fail because `conformance-execution-policy.test.ts` expects 1.19.0; at HEAD that test pins `opencode: "1.19.4"` (`apps/backend/src/core/conformance-execution-policy.test.ts:10`), so it is fixed.
+- The `mise run test` row says 14 OpenCode conformance cases fail because `conformance-execution-policy.test.ts` expects 1.19.0. The test now asserts `PINNED_TOOLCHAIN_VERSIONS.opencode` from the shared toolchain manifest instead of maintaining a separate hardcoded version; `policyQualificationCli` also resolves its default binary from that manifest-pinned directory, so the stale expectation is fixed.
 
 **Decisions.**
 
 - **How to correct them?**
-  - **Annotate in place: mark D11 as superseded for Multi Review by #1268, add a dated note under the size table that `full` grew, and mark the OpenCode note fixed (recommended).**
+  - **Annotate in place: mark D11 as superseded for Multi Review and PR actions by #1268 and for Build Pipeline public actions, add a dated note under the size table that `full` grew, and mark the OpenCode note fixed (recommended).**
     - Pros: keeps the history while making the current state clear; cheap.
     - Cons: the size table still shows old figures until someone re-measures.
   - **Re-measure `full` and replace the table.**
     - Pros: accurate numbers.
     - Cons: the figure moves with every new public action and is not a gate (only voice is budgeted), so it would go stale again.
 
-**Outcome (2026-11-06).** Done as recommended, with one addition: the same harness gave current figures cheaply, so the dated note under the size table records them rather than only saying that `full` grew (D26). The OpenCode statement turned out to be fixed differently than this section says: the test no longer pins any OpenCode version.
+**Outcome (2026-11-06).** Done as recommended, with one addition: the same harness gave current figures cheaply, so the dated note under the size table records them rather than only saying that `full` grew (D26). The operator Build Pipeline actions and their required capabilities are documented. The OpenCode test enforces the shared toolchain version pin instead of maintaining a separate hardcoded version.
 
 The goal is to let an external agent, in particular a realtime voice agent,
 do everything the public CLI can do through Control MCP, without loading
@@ -303,7 +303,7 @@ actions. Measured again on `main` at `c1724ab7` with the same harness:
 | Authority isolation | Done | `public-api-authority.test.ts`, `control-mcp-voice.test.ts` |
 | Portability of every profile | Done | `mcp-tool-schema-portability.test.ts` (full, voice, read-only, custom, coordinator) |
 | Coordinator regression | Done | `control-mcp-server.test.ts`: the coordinator tests pass as they were; nine former operator tests now run under a coordinator credential (the path that keeps those implementations) and two that covered removed operator-only branches moved to `control-mcp-operator-tools.test.ts` |
-| `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0. Fixed since (2026-11-06 note, D26): the test now runs whichever OpenCode CLI `policyQualificationCli` resolves (`tests/conformance/execution-policy/vendor-cli.ts`) and pins no version |
+| `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0. Fixed since (2026-11-06 note, D26): the test asserts the shared `PINNED_TOOLCHAIN_VERSIONS.opencode` pin; `policyQualificationCli` resolves its default CLI from that manifest-pinned directory (`tests/conformance/execution-policy/vendor-cli.ts`) |
 | `mise run test` (non-iOS), 2026-10-25 branch | Fails only on unrelated cases | three failures, each passed alone: registered flakes 0785 (OpenCode research server) and 0791 (Codex command catalogue), and new flake 0935 (environment-move Cursor read failure, five-second deadline; owner 37/37 alone) |
 | Live: the script over MCP with a real agent; real MCP clients on `full` | Done (no speaking model) | Live evidence |
 | Live: the approval step with a real command approval | Done 2026-10-25 | Live evidence, "Real command approval" |
@@ -490,9 +490,11 @@ Settled on 2026-10-16.
 
 Settled on 2026-10-24 (details under Assumptions and decisions):
 
-5. **Multi Review and build pipelines** stay coordinator-only (D11).
-   Superseded for Multi Review and pull requests by #1268 (2026-11-06 note,
-   D26); build pipelines are still coordinator-only.
+5. **Multi Review and Build Pipelines** were kept coordinator-only (D11).
+   Superseded for Multi Review and pull requests by #1268, and for Build
+   Pipelines by `build.launch/list/get/cancel` (2026-11-06 note, D26).
+   Operator Build Pipeline launch requires `environments.lifecycle`, list/get
+   require `sessions.read`, and cancel requires `sessions.control`.
 6. **Hosted voice platforms** use a local relay only; the remote (Tailscale)
    gateway is not opened to MCP (D12).
 7. **`delegate`** into a coordinator turn is deferred (D13).
@@ -653,12 +655,17 @@ the choice, why, and its pros and cons.
   and the operator already has the app's Build and Multi Review buttons.
 - Pros: no half-qualified operator path. Cons: a voice or coding agent cannot
   start them through MCP; a new todo file can add them when someone needs it.
-- Superseded for Multi Review and pull requests (2026-11-06 note, D26):
+- Superseded for Multi Review, pull requests and Build Pipelines (2026-11-06
+  note, D26):
   since `32317ae6` (#1268) `review.launch/list/get/open/address/cancel` and
   `pr.create/resolve` are public actions (`packages/protocol/src/public-api.ts`)
   with operator tools, and the `full` profile lists the Multi Review tools
-  (`docs/architecture/control-mcp.md`, the profile table). Build pipelines
-  are still coordinator-only, as chosen here.
+  (`docs/architecture/control-mcp.md`, the profile table). Operators can also
+  launch, list, inspect and cancel Build Pipelines through the public actions
+  `build.launch/list/get/cancel`, exposed as `build_launch/list/get/cancel`
+  direct tools when the credential allows them. Launch requires
+  `environments.lifecycle`, list/get require `sessions.read`, and cancel
+  requires `sessions.control` (`packages/protocol/src/public-api-inputs-build.ts`).
 
 **D12. Open question 6: hosted voice platforms.**
 - Options: (a) local relay only; (b) expose Control MCP through the remote
@@ -907,14 +914,18 @@ the choice, why, and its pros and cons.
 - Chosen: the recommended option, annotate in place, with the figures
   re-measured because the harness made it cheap.
   - D11 and decision 5: marked superseded for Multi Review and pull
-    requests by #1268; build pipelines still coordinator-only.
+    requests by #1268, and for Build Pipelines by `build.launch/list/get/cancel`.
+    Their operator capabilities are `environments.lifecycle` for launch,
+    `sessions.read` for list/get, and `sessions.control` for cancel.
   - The profile table: a dated note under it with the current figures
     (`voice` 7,757 bytes, `read-only` 47,827, `full` 153 tools and 209,198
     bytes), measured with `controlMcpHarness` from
     `control-mcp-test-support.ts` on `main` at `c1724ab7`.
   - The `mise run test` row: marked fixed. The investigation above said the
-    test pinned `opencode: "1.19.4"`; it now pins nothing and runs the CLI
-    `policyQualificationCli` resolves.
+    test pinned `opencode: "1.19.4"`; it now asserts the shared
+    `PINNED_TOOLCHAIN_VERSIONS.opencode` pin rather than a separate hardcoded
+    version. `policyQualificationCli` resolves its default CLI from that
+    manifest-pinned directory.
 - Pros: history kept, current state visible. Cons: the `read-only` and
   `full` figures will go stale again; only `voice` is a gate.
 

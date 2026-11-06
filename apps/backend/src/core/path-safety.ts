@@ -710,11 +710,20 @@ export async function removeConfinedDirectory(
   rootPath: string,
   relativePath: string,
   expectedIdentity?: { dev: number; ino: number },
+  options: {
+    /**
+     * Kills the helper. The promise still settles only once the helper has
+     * exited, so a caller that sees the rejection knows nothing is removing.
+     */
+    signal?: AbortSignal;
+  } = {},
 ): Promise<void> {
   const target = validateRelativeFilePath(relativePath, "directory path");
   const canonicalRoot = await fs.realpath(rootPath);
   const rootStats = await fs.lstat(canonicalRoot);
   if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return;
+  const { signal } = options;
+  if (signal?.aborted) throw new Error("Confined directory cleanup stopped");
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -729,12 +738,18 @@ export async function removeConfinedDirectory(
       ],
       { cwd: canonicalRoot, stdio: ["ignore", "ignore", "ignore"] },
     );
-    child.once("error", reject);
-    child.once("exit", (code) =>
-      code === 0
-        ? resolve()
-        : reject(new Error(`Confined directory cleanup failed (exit ${code})`)),
-    );
+    const stop = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", stop, { once: true });
+    child.once("error", (error) => {
+      signal?.removeEventListener("abort", stop);
+      reject(error);
+    });
+    child.once("exit", (code) => {
+      signal?.removeEventListener("abort", stop);
+      if (code === 0) resolve();
+      else if (signal?.aborted) reject(new Error("Confined directory cleanup stopped"));
+      else reject(new Error(`Confined directory cleanup failed (exit ${code})`));
+    });
   });
 }
 

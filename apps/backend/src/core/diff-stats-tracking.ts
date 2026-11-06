@@ -328,6 +328,21 @@ export class DiffStatsTracking {
     }
   }
 
+  /**
+   * A user's explicit refresh of one environment's changes, from any surface
+   * (the sidebar, the Files panel, the change projection): a container is
+   * asked for its remote as well, unless a fetch started or ended in the last
+   * 15 s, and then the environment scans at once. The invalidation comes
+   * first so that scan finds the fetch due. Before this, the change
+   * projection's refresh only scanned, so the Changes tab's Refresh never
+   * fetched a container's base (todo 0048, task 19).
+   */
+  refreshExplicitly(environmentId: string): void {
+    const containerId = this.service.trackedContainerId(environmentId);
+    if (containerId) this.containerGitFetchPolicy.invalidate({ containerId }, "explicit");
+    this.service.refresh(environmentId);
+  }
+
   /** Discards any reconciliation still loading storage, so it cannot apply a stale snapshot. */
   invalidatePendingSync(): void {
     this.syncGeneration += 1;

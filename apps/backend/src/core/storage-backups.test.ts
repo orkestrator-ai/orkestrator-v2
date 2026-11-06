@@ -670,7 +670,7 @@ test("the real supervisor forces failure after killing a worker whose exit is lo
     require: () => ({ spawn: () => worker }),
     process: {
       execPath: "bun",
-      argv: ["supervisor", "source", "target", "100", "helper"],
+      argv: ["supervisor", "100", "helper", "source", "target"],
       stdin,
       exit: (code: number) => exits.push(code),
     },

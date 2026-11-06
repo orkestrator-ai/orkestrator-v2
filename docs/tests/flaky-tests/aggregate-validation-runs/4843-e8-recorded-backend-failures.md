@@ -82,3 +82,29 @@ used four isolated workers. Evidence is
 The complete unchanged owner passed in 22.2 s, exit 0:
 `mise run test:logged -- --name merge-backend-credential-alone -- bun test --cwd apps/backend ./tests/commands-container-exec.test.ts --parallel=1 --only-failures`.
 No assertion, timeout, skip or implementation changed.
+
+## Environment-deletion follow-ups — 2026-11-06
+
+At `b32cfe416` the complete owner failed alone:
+`mise run test:logged -- --name recorded-listeners-alone -- bun test --cwd
+apps/backend ./src/core/preview-listener-ownership.test.ts --parallel=1
+--only-failures` (21 pass, two fail, 15.5 s). `attributes a real 127.0.0.1
+listener and refuses another environment` expected `none` for a free port and
+`same-port listeners on loopback and a different interface keep distinct
+owners` expected `this-environment`; both received `unchecked`. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MsRuJO/recorded-listeners-alone.log.gz`.
+`unchecked` is what the checker returns when its `lsof` (2 s `timeoutMs`)
+fails or times out.
+
+At `3bc01ae0b`, on 18 CPUs at load 36.9–41.4, the same owner passed alone
+three times in a row (9.2 s, 5.8 s, 6.7 s) with
+`mise run test:logged -- --name listeners-alone-N -- bun test --cwd apps/backend
+./src/core/preview-listener-ownership.test.ts --parallel=1`, and again in a
+nine-owner run with the deletion and readiness owners (36.7 s).
+
+The branch does not change `preview-listener-ownership.ts` or its test. It does
+change `command-capture.ts`, which runs `lsof`, but only for callers that pass
+`waitForTermination`; the checker does not, and its timeout and lost-exit
+handling are the same as before (the lost-exit watcher now also records an exit
+after a timeout, which `settleOnExit` ignores because `timedOut` is set). No
+assertion, timeout, skip or implementation changed.

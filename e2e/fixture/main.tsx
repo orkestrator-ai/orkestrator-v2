@@ -206,6 +206,9 @@ const SetupRecoveryFixture = lazy(async () => ({
   default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
 }));
 
+const FloatingNoticesFixture = lazy(async () => ({
+  default: (await import("./FloatingNoticesFixture")).FloatingNoticesFixture,
+}));
 const AutoMergeErrorFixture = lazy(async () => ({
   default: (await import("./AutoMergeErrorFixture")).AutoMergeErrorFixture,
 }));
@@ -2020,6 +2023,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <SidebarActivityProbeFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/floating-notices") {
+    return (
+      <Suspense fallback={null}>
+        <FloatingNoticesFixture />
       </Suspense>
     );
   }

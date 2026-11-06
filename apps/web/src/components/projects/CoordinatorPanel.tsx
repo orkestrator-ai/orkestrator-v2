@@ -41,6 +41,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  FLOATING_NOTICE_ACTION,
+  FloatingNoticeAnchor,
+  FloatingNoticeLayer,
+} from "@/components/ui/floating-notice";
 import * as backend from "@/lib/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
@@ -451,163 +456,177 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           onPause={() => setPaused(true)}
         />
 
-        {actionAlert ? (
-          <CoordinatorActionAlert
-            message={actionAlert}
-            onDismiss={() => {
-              setError(null);
-              clearLoadError();
-            }}
-          />
-        ) : null}
-        {/* Only from a backend that predates per-conversation startup errors,
-        or a record one stored (version-compatibility.md). */}
-        {snapshot.workspace.lifecycleState === "error" ? (
-          <CoordinatorBanner
-            tone="error"
-            action={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={conversationBusy}
-                onClick={() =>
-                  void runAction("conversation", load, {
-                    failureMessage: "Could not open Coordinator",
-                  })
-                }
-              >
-                <RotateCcw className="size-3.5" />
-                Retry
-              </Button>
-            }
-          >
-            <span className="font-medium">Coordinator startup failed.</span>{" "}
-            <span className="text-red-200/80">
-              {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
-            </span>
-          </CoordinatorBanner>
-        ) : null}
-        {paused ? (
-          <CoordinatorBanner
-            tone="info"
-            icon={<Pause className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            action={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={conversationBusy}
-                onClick={() => setPaused(false)}
-              >
-                <Play className="size-3.5" />
-                Resume
-              </Button>
-            }
-          >
-            Coordination is paused. Mail and new turns wait until you resume; conversations stay
-            readable.
-          </CoordinatorBanner>
-        ) : null}
-
-        {/* The prompts banner owns the app-wide subscriptions; it sits beside
-        the conversations, so a write it alone reads does not render them. */}
-        <CoordinatorWorkerPrompts snapshot={snapshot} />
-
-        <div className="relative min-h-0 min-w-0 flex-1">
-          {layout ? (
-            <CoordinatorPaneTree
-              layout={layout}
-              onLayoutChange={changeLayout}
-              onFocusPane={(paneId) =>
-                changeLayout((current) => focusCoordinatorPane(current, paneId))
-              }
-              conversationLabel={(id) => conversationById.get(id)?.title ?? "Conversation"}
-              renderTab={(id, pane, paneFocused) => {
-                const item = conversationById.get(id);
-                if (!item) return null;
-                const requestMainClose = (changeAgent: boolean) =>
-                  setPendingMainClose({
-                    id: item.id,
-                    title: item.title,
-                    paneId: pane.id,
-                    changeAgent,
-                  });
-                return (
-                  <CoordinatorConversationTab
-                    key={id}
-                    conversation={item}
-                    pane={pane}
-                    layout={layout}
-                    paneFocused={paneFocused}
-                    markMain={conversations.length > 1}
-                    conversationBusy={conversationBusy}
-                    onSelect={() => {
-                      updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
-                      selectConversation(id);
-                    }}
-                    onClose={() =>
-                      item.role === "main" ? requestMainClose(false) : closeConversation(item.id)
-                    }
-                    onChangeAgent={() => requestMainClose(true)}
-                    onLayoutChange={changeLayout}
-                  />
-                );
-              }}
-              renderStripActions={(pane) => (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="ml-1 shrink-0"
-                  disabled={conversationBusy}
-                  onClick={(event) => {
-                    // The new conversation joins the focused group, so focus
-                    // this one without selecting the tab it is about to replace.
-                    event.stopPropagation();
-                    updateLayout((current) => focusCoordinatorPane(current, pane.id));
-                    createConversation();
-                  }}
-                  title={hasMain ? COORDINATOR_SIDE_AGENT_EXPLANATION : newConversationLabel}
-                >
-                  <Plus className="size-3.5" />
-                  {/* The strip scrolls, so on a phone the action is its icon. */}
-                  <span className="max-sm:sr-only">{newConversationLabel}</span>
-                </Button>
-              )}
-              renderContent={(pane, paneFocused) => {
-                const conversationId = pane.activeConversationId;
-                return (
-                  <CoordinatorConversationPane
-                    conversation={conversationId ? conversationById.get(conversationId) : undefined}
-                    paneFocused={paneFocused}
-                    projectId={projectId}
-                    snapshot={snapshot}
-                    availablePlatforms={availablePlatforms}
-                    platformNotes={platformNotes}
-                    platformBadges={platformBadges}
-                    launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
-                    startConversation={startConversation}
-                    confirmUpstreamMerge={confirmUpstreamMerge}
-                    conversationBusy={conversationBusy}
-                    newConversationLabel={newConversationLabel}
-                    onCreateConversation={() => createConversation()}
-                    onRetry={() => void load()}
-                    onRetryConversation={retryConversation}
-                    onCloseConversation={(id) => {
-                      const item = conversationById.get(id);
-                      if (item?.role === "main") {
-                        setPendingMainClose({
-                          id,
-                          title: item.title,
-                          paneId: pane.id,
-                          changeAgent: false,
-                        });
-                      } else closeConversation(id);
-                    }}
-                  />
-                );
+        {/* Panel-wide notices use a collapsible stack; conversations own their stacks. */}
+        <FloatingNoticeLayer anchor={false}>
+          {actionAlert ? (
+            <CoordinatorActionAlert
+              message={actionAlert}
+              onDismiss={() => {
+                setError(null);
+                clearLoadError();
               }}
             />
           ) : null}
-        </div>
+          {/* Only from a backend that predates per-conversation startup errors,
+        or a record one stored (version-compatibility.md). */}
+          {snapshot.workspace.lifecycleState === "error" ? (
+            <CoordinatorBanner
+              tone="error"
+              label="Startup failed"
+              summary="Coordinator startup failed."
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className={FLOATING_NOTICE_ACTION}
+                  disabled={conversationBusy}
+                  onClick={() =>
+                    void runAction("conversation", load, {
+                      failureMessage: "Could not open Coordinator",
+                    })
+                  }
+                >
+                  <RotateCcw className="size-3" />
+                  Retry
+                </Button>
+              }
+            >
+              <span className="font-medium">Coordinator startup failed.</span>{" "}
+              <span className="text-muted-foreground">
+                {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
+              </span>
+            </CoordinatorBanner>
+          ) : null}
+          {paused ? (
+            <CoordinatorBanner
+              tone="info"
+              label="Paused"
+              summary="Coordination is paused."
+              icon={Pause}
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className={FLOATING_NOTICE_ACTION}
+                  disabled={conversationBusy}
+                  onClick={() => setPaused(false)}
+                >
+                  <Play className="size-3" />
+                  Resume
+                </Button>
+              }
+            >
+              Coordination is paused. Mail and new turns wait until you resume; conversations stay
+              readable.
+            </CoordinatorBanner>
+          ) : null}
+
+          {/* The prompts banner owns the app-wide subscriptions; it sits beside
+        the conversations, so a write it alone reads does not render them. */}
+          <CoordinatorWorkerPrompts snapshot={snapshot} />
+
+          <div className="relative min-h-0 min-w-0 flex-1">
+            {/* The area has no shared transcript gutter when conversations split. */}
+            <FloatingNoticeAnchor className="top-12 right-3" />
+            {layout ? (
+              <CoordinatorPaneTree
+                layout={layout}
+                onLayoutChange={changeLayout}
+                onFocusPane={(paneId) =>
+                  changeLayout((current) => focusCoordinatorPane(current, paneId))
+                }
+                conversationLabel={(id) => conversationById.get(id)?.title ?? "Conversation"}
+                renderTab={(id, pane, paneFocused) => {
+                  const item = conversationById.get(id);
+                  if (!item) return null;
+                  const requestMainClose = (changeAgent: boolean) =>
+                    setPendingMainClose({
+                      id: item.id,
+                      title: item.title,
+                      paneId: pane.id,
+                      changeAgent,
+                    });
+                  return (
+                    <CoordinatorConversationTab
+                      key={id}
+                      conversation={item}
+                      pane={pane}
+                      layout={layout}
+                      paneFocused={paneFocused}
+                      markMain={conversations.length > 1}
+                      conversationBusy={conversationBusy}
+                      onSelect={() => {
+                        updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
+                        selectConversation(id);
+                      }}
+                      onClose={() =>
+                        item.role === "main" ? requestMainClose(false) : closeConversation(item.id)
+                      }
+                      onChangeAgent={() => requestMainClose(true)}
+                      onLayoutChange={changeLayout}
+                    />
+                  );
+                }}
+                renderStripActions={(pane) => (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="ml-1 shrink-0"
+                    disabled={conversationBusy}
+                    onClick={(event) => {
+                      // The new conversation joins the focused group, so focus
+                      // this one without selecting the tab it is about to replace.
+                      event.stopPropagation();
+                      updateLayout((current) => focusCoordinatorPane(current, pane.id));
+                      createConversation();
+                    }}
+                    title={hasMain ? COORDINATOR_SIDE_AGENT_EXPLANATION : newConversationLabel}
+                  >
+                    <Plus className="size-3.5" />
+                    {/* The strip scrolls, so on a phone the action is its icon. */}
+                    <span className="max-sm:sr-only">{newConversationLabel}</span>
+                  </Button>
+                )}
+                renderContent={(pane, paneFocused) => {
+                  const conversationId = pane.activeConversationId;
+                  return (
+                    <CoordinatorConversationPane
+                      conversation={
+                        conversationId ? conversationById.get(conversationId) : undefined
+                      }
+                      paneFocused={paneFocused}
+                      projectId={projectId}
+                      snapshot={snapshot}
+                      availablePlatforms={availablePlatforms}
+                      platformNotes={platformNotes}
+                      platformBadges={platformBadges}
+                      launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
+                      startConversation={startConversation}
+                      confirmUpstreamMerge={confirmUpstreamMerge}
+                      conversationBusy={conversationBusy}
+                      newConversationLabel={newConversationLabel}
+                      onCreateConversation={() => createConversation()}
+                      onRetry={() => void load()}
+                      onRetryConversation={retryConversation}
+                      onCloseConversation={(id) => {
+                        const item = conversationById.get(id);
+                        if (item?.role === "main") {
+                          setPendingMainClose({
+                            id,
+                            title: item.title,
+                            paneId: pane.id,
+                            changeAgent: false,
+                          });
+                        } else closeConversation(id);
+                      }}
+                    />
+                  );
+                }}
+              />
+            ) : null}
+          </div>
+        </FloatingNoticeLayer>
+
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
           The coordinator hands code changes, builds and fixes to build pipelines and prompt
           environments.

@@ -1561,9 +1561,20 @@ section of the panel kept that choice as `collapsedWorkBuckets` in the persisted
 `uiStore`; the store now drops the field when it loads, and the next write
 leaves it out.
 
-`HumanPromptBanner` above the conversation shows the prompts of this
-coordinator's workers (`CoordinatorWorkerPrompts`), with an **Open** that goes
-to the waiting tab. Local workers are read from this backend. Workers on another node, while a
+Conversation-specific mail, startup failures, provider notices and the agent's
+own waiting prompts use an independent `FloatingNoticeLayer` anchored inside
+that conversation pane. Each pane measures its own transcript gutter; a hidden
+mobile pane therefore also hides its notices and their live regions. Panel-wide
+notices (pause, action errors, workflow capacity and worker prompts) use the area
+stack, which is collapsible and makes no assumption about a shared transcript
+column across splits. Stacks and cards scroll within the measured pane height,
+and pills stay within the pane width. Collapsed status and alert notices retain
+live summaries; opening a card returns announcements to its full content.
+
+`HumanPromptBanner`, floating at the top right of the conversation area with the
+coordinator's other notices (`CoordinatorWorkerPrompts`), shows the prompts of
+this coordinator's workers, with an **Open** that goes to the waiting tab. Local
+workers are read from this backend. Workers on another node, while a
 request to them is open, are read with `list_human_prompts` through that node's
 link (`useRemoteHumanPrompts`), on the node's `human-prompt` hint, on its resync,
 whenever its summaries refresh, and on resync and safety checks.

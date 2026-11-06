@@ -50,7 +50,8 @@ mock.module("react-virtuoso", () => ({
   },
 }));
 
-import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
+// The module memoizes Virtuoso at import time, so install its mock first.
+const { VirtualizedMessageList } = await import("@/components/chat/VirtualizedMessageList");
 
 interface TestMessage {
   id: string;

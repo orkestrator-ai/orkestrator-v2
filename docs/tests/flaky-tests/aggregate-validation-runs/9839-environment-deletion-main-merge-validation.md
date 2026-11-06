@@ -130,3 +130,22 @@ also returned `timed-out`. Evidence:
 These cases exercise the existing boot-wait path, not the changed deletion drain.
 A combined three-owner run had passed earlier (24.9 s); that does not erase
 the isolated failure or establish its cause. Neither assertion was changed.
+
+## Follow-up rework rerun at `3bc01ae0b` — 2026-11-06
+
+On 18 CPUs at load 36.9–41.4, the complete readiness owner passed alone three
+times in a row (10.5 s, 10.4 s, 7.9 s):
+`mise run test:logged -- --name readiness-alone-N -- bun test --cwd apps/backend
+./tests/container-readiness.test.ts --parallel=1`. It passed again in a
+nine-owner run with the listener, baseline, revert and deletion owners
+(`related-owners-combined`, 36.7 s, exit 0), which shows no hang in those
+owners at this commit. The earlier `recorded-related-owners` no-output watchdog
+(`orkestrator-test-run.ovaWog`) kept only the runner header, so which file was
+running when it fired is unknown.
+
+The failing cases time a boot-wait probe, which calls `runCommand` without
+`waitForTermination`. That path's timeout (SIGTERM, then SIGKILL and rejection
+after the 100 ms grace) is unchanged by the branch; only the drain run by a
+deletion opts into waiting for termination. The isolated failure at
+`b32cfe416` came at a similar load, so this records intermittence, not a cause.
+No assertion, timeout or skip changed.

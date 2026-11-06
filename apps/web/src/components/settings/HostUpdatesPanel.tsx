@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, Loader2, RefreshCw, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, Loader2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   CANCELLABLE_HOST_UPDATE_JOB_STATES,
@@ -34,6 +34,7 @@ import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
 import { HostDependencySettings, type OutdatedEnvironment } from "./HostDependencySettings";
+import { summarizeUpdateError, updateErrorDetails } from "./host-update-errors";
 import { SettingsSectionHeader } from "./SettingsPageLayout";
 
 function errorText(error: unknown): string {
@@ -107,8 +108,64 @@ export function describeHostUpdateJob(job: HostUpdateJob, secondsLeft: number | 
     case "cancelled":
       return "The update was cancelled.";
     case "failed":
-      return `The update failed: ${job.error ?? "unknown error"}`;
+      return `The update failed: ${job.error ? summarizeUpdateError(job.error) : "unknown error"}`;
   }
+}
+
+/** A one-line summary of an updater error, with the full message on request. */
+function UpdateError({ prefix, error }: { prefix: string; error: string }) {
+  const [open, setOpen] = useState(false);
+  const summary = summarizeUpdateError(error);
+  const details = updateErrorDetails(error);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(details);
+      toast.success("Error copied to clipboard");
+    } catch {
+      toast.error("Failed to copy to clipboard");
+    }
+  };
+  return (
+    <span className="block">
+      <span className="text-destructive">
+        {prefix}
+        {summary}
+      </span>
+      {details !== summary && (
+        <>
+          <button
+            type="button"
+            className="ml-2 inline-flex items-center gap-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {open ? (
+              <ChevronDown className="h-3 w-3" aria-hidden="true" />
+            ) : (
+              <ChevronRight className="h-3 w-3" aria-hidden="true" />
+            )}
+            {open ? "Hide details" : "Details"}
+          </button>
+          {open && (
+            <span className="relative mt-2 block">
+              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md [overflow-wrap:anywhere] bg-muted p-3 pr-10 font-mono text-xs text-foreground">
+                {details}
+              </pre>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1 h-7 w-7"
+                aria-label="Copy error"
+                onClick={() => void copy()}
+              >
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+              </Button>
+            </span>
+          )}
+        </>
+      )}
+    </span>
+  );
 }
 
 function JobStatus({ job, onCancel }: { job: HostUpdateJob; onCancel: () => void }) {
@@ -116,17 +173,23 @@ function JobStatus({ job, onCancel }: { job: HostUpdateJob; onCancel: () => void
   const active = isActiveHostUpdateJob(job);
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <p
-        role="status"
-        className={
-          job.state === "failed" ? "text-sm text-destructive" : "text-sm text-muted-foreground"
-        }
-      >
-        {active && (
-          <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-        )}
-        {describeHostUpdateJob(job, secondsLeft)}
-      </p>
+      {job.state === "failed" && job.error ? (
+        <div role="status" className="min-w-0 flex-1 text-sm">
+          <UpdateError prefix="The update failed: " error={job.error} />
+        </div>
+      ) : (
+        <p
+          role="status"
+          className={
+            job.state === "failed" ? "text-sm text-destructive" : "text-sm text-muted-foreground"
+          }
+        >
+          {active && (
+            <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          )}
+          {describeHostUpdateJob(job, secondsLeft)}
+        </p>
+      )}
       {CANCELLABLE_HOST_UPDATE_JOB_STATES.has(job.state) && (
         <Button variant="outline" size="sm" onClick={onCancel}>
           <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -299,9 +362,9 @@ export function HostUpdatesPanel({
             </>
           )}
           <dt className="text-muted-foreground">Newest release</dt>
-          <dd>
+          <dd className="min-w-0">
             {updater.checkError ? (
-              <span className="text-destructive">Check failed: {updater.checkError}</span>
+              <UpdateError prefix="Check failed: " error={updater.checkError} />
             ) : updater.latestVersion ? (
               <>
                 <span className="font-mono">{updater.latestVersion}</span>

@@ -10,6 +10,11 @@ import type {
 } from "@orkestrator/protocol/host-maintenance";
 
 import * as backend from "@/lib/backend";
+import {
+  mockToastSuccess,
+  mockToastError,
+  resetSonnerMocks,
+} from "../../../../../tests/mocks/sonner";
 import { connectedHostClient } from "@/test/host-maintenance-client";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { HostUpdatesPanel, describeRestartImpact } from "./HostUpdatesPanel";
@@ -128,6 +133,42 @@ test("a failed check is shown and Check for updates sends a request", async () =
   await waitFor(() => expect(check).toHaveBeenCalledTimes(1));
 });
 
+test("a long check error shows a summary and reveals the full message on request", async () => {
+  const checkError =
+    "Cannot find latest-mac.yml in the latest release artifacts " +
+    "(https://github.com/orkestrator-ai/orkestrator-v2/releases/download/v2.36.6-beta/latest-mac.yml): " +
+    "HttpError: 404 \\nPlease double check that your authentication token is correct.";
+  spyOn(backend, "getHostMaintenance").mockResolvedValue(
+    snapshot({
+      updater: { ...snapshot().updater, latestVersion: null, updateAvailable: null, checkError },
+    }),
+  );
+  render(<UpdatesSettings />);
+  expect(
+    await screen.findByText(
+      "Check failed: v2.36.6-beta has no macOS update files yet; it may still be publishing.",
+    ),
+  ).toBeTruthy();
+  expectDomAbsent(screen.queryByText(/Please double check/), "full error before expanding");
+  const toggle = screen.getByRole("button", { name: "Details" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(toggle);
+  expect(screen.getByText(/Please double check/).textContent).toContain("HttpError: 404 \n");
+  fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
+  expectDomAbsent(screen.queryByText(/Please double check/), "full error after collapsing");
+});
+
+test("a failed update shows a summary of its error", async () => {
+  spyOn(backend, "getHostMaintenance").mockResolvedValue(
+    snapshot({
+      job: job({ state: "failed", error: "Error: net::ERR_CONNECTION_RESET\n    at x" }),
+    }),
+  );
+  render(<UpdatesSettings />);
+  expect(await screen.findByText("The update failed: Could not reach GitHub.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+});
+
 test("the confirmation shows what a restart interrupts and can wait until idle", async () => {
   spyOn(backend, "getHostMaintenance").mockResolvedValue(snapshot());
   spyOn(backend, "getHostRestartImpact").mockResolvedValue({
@@ -232,3 +273,32 @@ test("hides the channel for a backend that does not report one", async () => {
   expect(await screen.findByText("2.21.1")).toBeTruthy();
   expectDomAbsent(screen.queryByRole("combobox", { name: "Update channel" }), "channel picker");
 });
+
+test.each([false, true])(
+  "Copy error restores full details (clipboard rejects: %s)",
+  async (rejects) => {
+    resetSonnerMocks();
+    const writeText = spyOn(navigator.clipboard, "writeText");
+    if (rejects) writeText.mockRejectedValue(new Error("Clipboard denied"));
+    else writeText.mockResolvedValue(undefined);
+    const checkError = "Error: net::ERR_CONNECTION_RESET\\nFull diagnostic details";
+    spyOn(backend, "getHostMaintenance").mockResolvedValue(
+      snapshot({
+        updater: { ...snapshot().updater, checkError },
+      }),
+    );
+    render(<UpdatesSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy error" }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        "Error: net::ERR_CONNECTION_RESET\nFull diagnostic details",
+      ),
+    );
+    await waitFor(() =>
+      expect(rejects ? mockToastError : mockToastSuccess).toHaveBeenCalledWith(
+        rejects ? "Failed to copy to clipboard" : "Error copied to clipboard",
+      ),
+    );
+  },
+);

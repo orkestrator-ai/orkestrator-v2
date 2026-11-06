@@ -345,20 +345,15 @@ export async function createDockerContainer(
           containerAllowedDomains(environment, config, networkPolicy),
           networkPolicy,
         )));
-  if (
-    !mirrorRemoteReachable &&
-    isGitRemoteUrl(project.gitUrl) &&
-    (imageCapabilitySet["git-mirror"] ?? 0) >= 1
-  ) {
+  const mirrorEligible = !identity.reusesWorkspace && (imageCapabilitySet["git-mirror"] ?? 0) >= 1;
+  if (mirrorEligible && !mirrorRemoteReachable && isGitRemoteUrl(project.gitUrl)) {
     dockerLog.info("git-mirror.mount-withheld", {
       projectId: project.id,
       reason: "remote-unreachable",
     });
   }
   const gitMirrorArguments =
-    !identity.reusesWorkspace &&
-    (imageCapabilitySet["git-mirror"] ?? 0) >= 1 &&
-    mirrorRemoteReachable
+    mirrorEligible && mirrorRemoteReachable
       ? await gitMirrorContainerArguments(context.storage.getDataDir(), project)
       : [];
   // Where the firewall runs: in an egress gateway that owns the namespace

@@ -353,6 +353,7 @@ interface ContainerNetworkFacts {
   policyVersion: NetworkPolicyVersion;
   liveUpdates: boolean;
   running: boolean;
+  hasGitMirror: boolean;
 }
 
 async function containerNetworkFacts(
@@ -365,17 +366,18 @@ async function containerNetworkFacts(
       [
         "inspect",
         "-f",
-        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}`,
+        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}\t{{range .Mounts}}{{if eq .Destination "/orkestrator-git-mirror"}}mirror{{end}}{{end}}`,
         containerId,
       ],
       { timeoutMs: 10_000 },
     );
-    const [policy = "", imageId = "", running = ""] = stdout.trim().split("\t");
+    const [policy = "", imageId = "", running = "", mirror = ""] = stdout.trim().split("\t");
     const capabilities = await imageCapabilities(imageId || undefined, context).catch(() => null);
     return {
       policyVersion: policy === "3" ? 3 : policy === "2" ? 2 : 1,
       liveUpdates: (capabilities?.["network-refresh"] ?? 0) >= 1,
       running: running === "true",
+      hasGitMirror: mirror === "mirror",
     };
   } catch {
     return null;
@@ -444,7 +446,15 @@ export async function environmentNetworkPolicy(
   } catch {
     result.effective = null;
   }
-  result.domains = domainsState(result.configured, result.effective, facts.liveUpdates);
+  // A shared mirror bind cannot be revoked by the firewall. Keep the old
+  // policy visibly in force until a rebuild removes the mount. Conservatively
+  // require that rebuild for every allowlist revision, including global edits;
+  // the shared project mirror must remain intact for other environments.
+  result.domains = domainsState(
+    result.configured,
+    result.effective,
+    facts.liveUpdates && !facts.hasGitMirror,
+  );
   return result;
 }
 

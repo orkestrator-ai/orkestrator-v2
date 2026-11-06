@@ -208,6 +208,39 @@ describe("portable input staging by reflink", () => {
     },
   );
 
+  test.skipIf(!linux)(
+    "an existing clone destination surfaces EEXIST without overwriting it",
+    async () => {
+      const { dataDir, roots } = await fixture();
+      let attempts = 0;
+      const staged = await stagePortableInputs(
+        dataDir,
+        "exists",
+        new Set(["claude"] as const),
+        roots,
+        new Date(),
+        INPUT_LIMITS,
+        {
+          copyFile: (async (source: string, destination: string) => {
+            attempts += 1;
+            if (destination.endsWith("/CLAUDE.md")) {
+              await fs.writeFile(destination, "existing destination");
+            }
+            await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+          }) as NonNullable<StagingOptions["copyFile"]>,
+        },
+      );
+      // EEXIST surfaces to the provider's unreadable-file handling. It must
+      // neither delete/overwrite the destination nor disable later clones.
+      expect(staged.providers[0]!.skipped["unreadable"]).toBe(1);
+      expect(staged.clonedFiles).toBe(3);
+      expect(attempts).toBe(4);
+      expect(
+        await fs.readFile(path.join(staged.directory, "claude-config/CLAUDE.md"), "utf8"),
+      ).toBe("existing destination");
+    },
+  );
+
   test("a staged file stays independent of its source in both directions", async () => {
     const { dataDir, roots, home } = await fixture();
     const canClone = linux && (await reflinks(dataDir));

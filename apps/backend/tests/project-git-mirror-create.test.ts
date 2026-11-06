@@ -4,6 +4,7 @@
  * closed lifecycle tracker keeps the background refresh off the network.
  */
 import { afterEach, expect, test } from "bun:test";
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -90,6 +91,7 @@ case "$1" in
   context) printf 'unix:///var/run/docker.sock\\n' ;;
   info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","ServerVersion":"29.7.2","SecurityOptions":[]}\\n' ;;
   create) printf 'created-container\\n' ;;
+  network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
   cp) cat '${tarball}' ;;
 esac
 exit 0
@@ -175,4 +177,37 @@ test("a restricted container whose allowlist names the remote's host gets the mi
   });
 
   expect(create).toContain("-e ORKESTRATOR_GIT_MIRROR=/orkestrator-git-mirror/mirror.git");
+});
+
+// Before policy 3, an allowlisted address is open on every TCP port.
+test.each([1, 2, 3])("mirror mount respects policy %i port semantics", async (policy) => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1, "network-policy": policy },
+    gitUrl: "https://git.example.com:8443/acme/repo.git",
+    allowedDomains: ["git.example.com"],
+  });
+  expect(create.includes("ORKESTRATOR_GIT_MIRROR=")).toBe(policy < 3);
+});
+
+test("withheld logging only describes a runtime eligible to clone", async () => {
+  const events: string[] = [];
+  configureLogger({
+    level: "info",
+    sink: ({ record }) => {
+      if (record) events.push(record.event);
+    },
+  });
+  try {
+    const options = {
+      capabilities: { "git-mirror": 1 },
+      gitUrl: "https://git.example.com/repo.git",
+      allowedDomains: ["other.example"],
+    };
+    await createCommand({ ...options, identity: { reusesWorkspace: true } });
+    expect(events).not.toContain("git-mirror.mount-withheld");
+    await createCommand(options);
+    expect(events.filter((event) => event === "git-mirror.mount-withheld")).toHaveLength(1);
+  } finally {
+    resetLogger();
+  }
 });

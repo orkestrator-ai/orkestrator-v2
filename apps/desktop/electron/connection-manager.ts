@@ -1038,7 +1038,7 @@ export class ConnectionManager {
     urlValue: string,
     scope = DEFAULT_CONNECTION_SCOPE,
   ): string | null {
-    const connectionId = this.boundConnectionId(scope);
+    const connectionId = this.getBoundConnectionId(scope);
     if (!connectionId || connectionId === LOCAL_CONNECTION_ID) return null;
     const activeRemote = this.remoteConnections.get(connectionId);
     if (!activeRemote || activeRemote.client.isSuspended) return null;
@@ -1720,13 +1720,13 @@ export class ConnectionManager {
   }
 
   private connectionIdForScope(scope: string): string {
-    const connectionId = this.boundConnectionId(scope);
+    const connectionId = this.getBoundConnectionId(scope);
     if (connectionId !== null) return connectionId;
     throw new Error("The requesting window is no longer available.");
   }
 
   /** The scope's connection, or null once a released scope no longer has one. */
-  private boundConnectionId(scope: string): string | null {
+  getBoundConnectionId(scope: string): string | null {
     const connectionId = this.bindings.get(scope);
     if (connectionId) return connectionId;
     return scope === DEFAULT_CONNECTION_SCOPE ? this.catalogue.activeConnectionId : null;

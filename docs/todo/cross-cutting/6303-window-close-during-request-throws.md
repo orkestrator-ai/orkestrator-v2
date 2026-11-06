@@ -64,9 +64,12 @@ Two things are not established:
 Chose the recommended option, `getRendererRequestAuthorization` returning
 `null` for a released scope, and also the second one: both callbacks of
 `installRemoteGatewayRequestAuth` now always call back, sending a request with
-no credential when the lookup throws. The first removes the known throw for all
-four callers; the second keeps any other throw from leaving a request
-unanswered. The trade-offs are in to-do 0042, decision D22.
+no credential when the lookup throws. The first removes the known throw in
+that lookup for all four callers; the window hook's local gateway fallback
+also needs the nonthrowing bound-scope lookup, added during review on
+2026-11-06 with composed authorization and origin callback coverage. The
+second keeps any other throw from leaving a request unanswered and now emits
+a debug event naming the hook phase, without request or exception content. The trade-offs are in to-do 0042, decision D22.
 
 The caller is now confirmed. Flake 0622's multi-backend Electron test hit the
 same exception when its second window closed under CPU contention (5 of 10

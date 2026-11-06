@@ -2110,13 +2110,15 @@ Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
   keep the scope bound until the window's requests drain. Chose (a) and (b),
   as [6303](../cross-cutting/6303-window-close-during-request-throws.md)
   recommended (a). Pros: (a) covers every caller of the lookup (the window
-  hook, the preview views' hook, realms and `window-workspace-target.ts`, all
-  of which already treat `null` as "no credential"), and no credential is the
+  hook, the preview views' hook, realms and `window-workspace-target.ts`).
+  The window hook's local gateway fallback also uses a nonthrowing bound-scope
+  lookup (review correction, 2026-11-06). No credential is the
   safe answer for a request with no window; (b) keeps any other throw from
   leaving a request unanswered and main with an uncaught exception, and fails
   closed (credentials stripped, response headers untouched). Cons: (b) hides
-  a future bug in a lookup behind a request without a credential, with no
-  log line; the other `connectionIdForScope` callers still throw, which they
+  a future bug in a lookup behind a request without a credential; debug
+  diagnostics now identify the failing hook phase without error or request
+  content (review correction, 2026-11-06). The other `connectionIdForScope` callers still throw, which they
   should, because they act for a window. (c) has no signal from Electron that
   a session's requests have drained, so a close could wait indefinitely.
 - **D23. Whether 0622 can close.** Options: (a) resolve it now; (b) keep it

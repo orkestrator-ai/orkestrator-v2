@@ -1,3 +1,4 @@
+import { createWindowRequestAuthorization } from "../electron/window-request-authorization";
 import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import type { StoredDesktopConnections } from "@orkestrator/protocol/connections";
 import type { BackendHttpClient } from "../electron/backend-process";
@@ -753,6 +754,10 @@ describe("Electron connection manager", () => {
     await manager.initialize();
     const url = "https://desk.example/__orkestrator/invoke";
     await manager.bind("closing-window", "local");
+    const localAuthorization = mock(() => "Bearer local-test");
+    const auth = createWindowRequestAuthorization(manager, "closing-window", localAuthorization);
+    expect(auth.authorization(url)).toBe("Bearer local-test");
+    expect(auth.requestOrigin(url)).toBe("https://desk.example");
     const list = await manager.connect(
       { address: "https://desk.example", token },
       "closing-window",
@@ -760,8 +765,23 @@ describe("Electron connection manager", () => {
     await manager.bind("surviving-window", list.activeConnectionId);
     expect(manager.getRendererRequestAuthorization(url, "closing-window")).toBe(`Bearer ${token}`);
 
+    expect(auth.authorization(url)).toBe(`Bearer ${token}`);
+    expect(auth.requestOrigin(url)).toBeNull();
+    await manager.bind("local-window", "local");
+    const localAuth = createWindowRequestAuthorization(manager, "local-window", localAuthorization);
+    expect(localAuth.authorization(url)).toBe("Bearer local-test");
+    const relayAuth = createWindowRequestAuthorization(manager, "local-window", null);
+    expect(relayAuth.authorization(url)).toBeNull();
+    expect(relayAuth.requestOrigin(url)).toBeNull();
+    manager.release("local-window");
+    localAuthorization.mockClear();
+    expect(localAuth.authorization(url)).toBeNull();
+    expect(localAuth.requestOrigin(url)).toBeNull();
     // Its session still finishes requests after the window's `closed` released the scope.
     manager.release("closing-window");
+    expect(auth.authorization(url)).toBeNull();
+    expect(auth.requestOrigin(url)).toBeNull();
+    expect(localAuthorization).not.toHaveBeenCalled();
     expect(manager.getRendererRequestAuthorization(url, "closing-window")).toBeNull();
     expect(manager.getRendererRequestAuthorization(url, "surviving-window")).toBe(
       `Bearer ${token}`,

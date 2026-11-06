@@ -1,3 +1,4 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import type {
   OnBeforeSendHeadersListenerDetails,
   OnHeadersReceivedListenerDetails,
@@ -5,6 +6,8 @@ import type {
   WebRequest,
 } from "electron";
 import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
+
+const log = createLogger("gateway");
 
 const BROWSER_PREVIEW_PREFIX = "/__orkestrator/browser/loopback/";
 
@@ -180,6 +183,8 @@ export function installRemoteGatewayRequestAuth(
     try {
       requestHeaders = gatewayRequestHeaders(details, getAuthorization, options);
     } catch {
+      // Do not log the exception: option callbacks may put URLs or credentials in it.
+      log.debug("request-auth.fallback", { phase: "request" });
       requestHeaders = withoutAmbientGatewayCredentials(details.requestHeaders);
     }
     callback({ requestHeaders });
@@ -189,6 +194,7 @@ export function installRemoteGatewayRequestAuth(
     try {
       responseHeaders = gatewayResponseHeaders(details, getAuthorization, options);
     } catch {
+      log.debug("request-auth.fallback", { phase: "response" });
       responseHeaders = details.responseHeaders;
     }
     callback({ responseHeaders });

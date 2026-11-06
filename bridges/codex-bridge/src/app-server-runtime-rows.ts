@@ -373,15 +373,6 @@ export interface PublishAssistantRowsOptions {
 }
 
 /**
- * Re-renders the rows of the active turn that may have moved and publishes a
- * sparse update for each.
- *
- * A tick costs the rows that actually need a render — the live row, plus any
- * frozen row whose items moved or whose sub-agents are due a probe — not every
- * row of the turn, so a turn of thousands of responses streams as cheaply as
- * one of a few.
- */
-/**
  * Arms one follow-up publish while a sub-agent card of the active turn can
  * still move.
  *
@@ -429,6 +420,15 @@ export function cancelSubagentProbe(state: ThreadRuntimeState): void {
   state.subagentProbeTimer = undefined;
 }
 
+/**
+ * Re-renders the rows of the active turn that may have moved and publishes a
+ * sparse update for each.
+ *
+ * A tick costs the rows that actually need a render — the live row, plus any
+ * frozen row whose items moved or whose sub-agents are due a probe — not every
+ * row of the turn, so a turn of thousands of responses streams as cheaply as
+ * one of a few.
+ */
 export async function publishAssistantRows(
   context: ThreadContext,
   state: ThreadRuntimeState,

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import {
   buildRecoveredContextPrompt,
   type HistoricalAssistantSegmentState,
+  type ThreadRuntimeState,
   MAX_HELD_ASSISTANT_ROWS,
   MAX_TRACKED_ASSISTANT_ROWS,
 } from "./app-server-runtime-base.js";
@@ -463,6 +464,76 @@ describe("sub-agent probes while the parent is quiet", () => {
     } finally {
       setTranscriptPathCacheLimitsForTesting();
     }
+  });
+
+  async function turnWithPendingChild(subagentProbeIntervalMs = 60_000) {
+    const h = await harness({}, { subagentProbeIntervalMs });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    notifyItem(h, "item/completed", {
+      id: "spawn-1",
+      type: "collabAgentToolCall",
+      tool: "spawnAgent",
+      receiverThreadIds: ["child-1"],
+      agentsStates: {},
+      status: "completed",
+    });
+    await h.drain();
+    expect((await childCard(h, sessionId))?.toolState).toBe("pending");
+    expect(probeTimer(h)).toBeDefined();
+    return { h, sessionId };
+  }
+
+  test("repeated publishes keep the existing probe timer", async () => {
+    const { h } = await turnWithPendingChild();
+    const timer = probeTimer(h);
+    for (let step = 1; step <= 3; step++) {
+      response(h, step);
+      await h.drain();
+      expect(probeTimer(h)).toBe(timer);
+    }
+  });
+
+  test("settling every child cancels the timer while the parent keeps running", async () => {
+    const { h, sessionId } = await turnWithPendingChild(20);
+    // Freeze the spawn row so cancellation must also account for historical cards.
+    response(h, 1);
+    notifyItem(h, "item/completed", {
+      id: "wait-1",
+      type: "collabAgentToolCall",
+      tool: "wait",
+      receiverThreadIds: ["child-1"],
+      agentsStates: { "child-1": { status: "completed" } },
+      status: "completed",
+    });
+    await h.drain();
+    await waitUntil(
+      async () => (await childCard(h, sessionId))?.toolState === "success",
+      "the child did not settle while the parent was running",
+    );
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "running" });
+    expect(probeTimer(h)).toBeUndefined();
+  });
+
+  test("releasing a thread cancels its armed probe timer", async () => {
+    const { h } = await turnWithPendingChild();
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, ThreadRuntimeState>;
+      releaseThreadRuntimeState: (threadId: string) => void;
+    };
+    const state = runtime.threadState.get("thread-1")!;
+    const timer = state.subagentProbeTimer!;
+    const clear = spyOn(globalThis, "clearTimeout");
+    try {
+      runtime.releaseThreadRuntimeState("thread-1");
+      expect(clear.mock.calls.some(([cleared]) => cleared === timer)).toBe(true);
+    } finally {
+      clear.mockRestore();
+    }
+    // Keep the original state reference: deleting the map entry alone would
+    // conceal a leaked live timer.
+    expect(state.subagentProbeTimer).toBeUndefined();
+    expect(runtime.threadState.has("thread-1")).toBe(false);
   });
 
   test("a turn with no sub-agents arms no probe", async () => {

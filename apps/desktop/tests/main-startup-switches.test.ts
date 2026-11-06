@@ -120,3 +120,39 @@ describe("main process startup switches", () => {
     });
   }
 });
+
+// These are composition-root guards: testing the individual factories cannot
+// catch main accidentally giving one the unwrapped Electron constructor.
+describe("main hidden-window wiring", () => {
+  const source = readFileSync(new URL("main.ts", electronDir), "utf8");
+
+  test("every window factory receives the wrapped constructor", () => {
+    const constructors = Array.from(
+      source.matchAll(/\bBrowserWindowCtor:\s*(\w+)/g),
+      (match) => match[1],
+    );
+    // Main, dialog host, toolchain progress, platform chooser and startup failure.
+    expect(constructors.length).toBeGreaterThanOrEqual(5);
+    expect(constructors.every((constructor) => constructor === "WindowCtor")).toBe(true);
+    expect(source).not.toMatch(/new\s+BrowserWindow\s*\(/);
+    expect(source).toContain(
+      "const WindowCtor = hiddenWindows ? hiddenWindowConstructor(BrowserWindow) : BrowserWindow;",
+    );
+  });
+
+  test("the main window disables DevTools when hidden", () => {
+    const mainOptions = source.match(/await createMainWindow\(\{([\s\S]*?)beforeLoad:/)?.[1];
+    expect(mainOptions).toBeDefined();
+    expect(mainOptions).toMatch(/BrowserWindowCtor: WindowCtor/);
+    expect(mainOptions).toMatch(/openDevTools: !hiddenWindows/);
+  });
+
+  test("native dialogs receive the same hidden-mode gate", () => {
+    const dialogOptions = source.match(
+      /createNativeDialogs<BrowserWindow>\(\{([\s\S]*?)\n\}\);/,
+    )?.[1];
+    expect(dialogOptions).toBeDefined();
+    expect(dialogOptions).toMatch(/\bhiddenWindows,/);
+    expect(dialogOptions).toMatch(/BrowserWindowCtor: WindowCtor/);
+  });
+});

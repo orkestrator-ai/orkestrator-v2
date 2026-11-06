@@ -417,6 +417,7 @@ const requestDialogAttention = createDialogAttention({
   Notification,
 });
 const nativeDialogs = createNativeDialogs<BrowserWindow>({
+  hiddenWindows,
   dialog,
   platform: process.platform,
   currentWindow: currentDialogWindow,

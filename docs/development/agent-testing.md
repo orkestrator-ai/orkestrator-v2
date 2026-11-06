@@ -539,7 +539,10 @@ launcher prints when this mode is on and why.
   window it constructs is hidden (`hidden-windows.ts`), and the development
   DevTools window stays closed. The keychain is already mocked for every
   agent-test profile on macOS. Only an agent-test profile honours the variable,
-  and the launcher sets or clears it itself.
+  and the launcher sets or clears it itself. Native message and error dialogs
+  are answered as cancelled without opening UI or a host window. The
+  `desktop.dialog` `hidden-cancelled` event records the source and response,
+  never dialog text; uncaught exceptions still log their error.
 - **Windows** has neither, so the flags change nothing there.
 
 The first of these that applies decides:
@@ -569,6 +572,40 @@ Do not use a headless profile for native-window, menu or clipboard QA:
 `capturePage` hangs in this mode on Linux, and on macOS the menu bar and the
 window are never shown. On Linux the switch has to be on Electron's command
 line, so the launcher adds it; Electron's main script cannot apply it.
+
+### Live macOS hidden-profile qualification
+
+Unit tests inject `darwin`; they do not establish macOS focus, Dock or sheet
+behavior. Run this on a Mac with a disposable `dev:test --fixture` profile,
+using the lifecycle, login and cleanup instructions above. Keep qualification
+open until all of the following have observed evidence:
+
+1. Launch from an unattended shell with no headless flag. Before launch, focus
+   another application. Observe startup through readiness: focus stays there,
+   no Dock icon flashes, and no chooser, progress, main or DevTools window
+   appears. Discover `browserUrl` using `dev:status --json`; verify `ready`
+   and all supervised processes live.
+2. Repeat with a fresh profile whose isolated toolchain requires bootstrap
+   (do not alter the installed toolchain). Observe both platform selection and
+   progress windows through bootstrap completion, with the same focus and
+   visibility checks. Record which bootstrap states actually ran.
+3. Run `mise run test:agent:browser` through `test:logged` with
+   `ORKESTRATOR_AGENT_TEST_PROFILE` set to that profile. This establishes
+   browser readiness and reload behavior while Electron remains hidden.
+4. In an instrumented disposable Electron test run, emit a synthetic main
+   process `uncaughtException`, request a renderer message box, and request a
+   remote-restart dialog. Test before a main window exists and with a hidden
+   parent. Verify no native UI, host window or focus change, the cancel
+   response, and a `hidden-cancelled` event for each source. Do not inject
+   exceptions into production or log dialog contents.
+5. Stop/reset the profile, then launch a fresh fixture with `--no-headless`
+   from the same unattended shell. Verify the ordinary window and Dock icon
+   appear. Stop/reset it afterwards.
+
+Record the commit, macOS/Electron versions, profile, exact commands, results
+and cleanup. A Linux pass or a mocked activation-policy call cannot close this
+qualification. Current task tracking is in
+[2181, task 4](../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
 
 None of this reaches the [Electron specs](#electron-specs-and-their-display),
 which launch their own Electron.

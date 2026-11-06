@@ -99,7 +99,7 @@ for agent-test.
 - **How should a macOS profile stay off the desktop?**
   - **Hidden windows plus the `accessory` activation policy, from the existing `--headless` decision (recommended; implemented).**
     - Pros: no new flag; the same inputs decide on both platforms; the renderer still runs, so the profile behaves as on Linux.
-    - Cons: windows exist, only unseen; a native dialog with no window to attach to could still appear (agent-test already suppresses the startup-failure and toolchain-retry dialogs).
+    - Cons: windows exist, only unseen; hidden-mode native dialogs must be cancelled because macOS sheets surface even hidden parents. The shared dialog router now enforces this before parent lookup or host creation.
   - **Offscreen rendering (`webPreferences.offscreen`).**
     - Pros: no native window at all.
     - Cons: changes how the renderer paints and how `WebContentsView` previews attach; far more surface than the runs need.
@@ -108,6 +108,20 @@ for agent-test.
     - Cons: the reported problem stays.
 
 ## Assumptions and decisions
+
+### Task 4: cancel native dialogs while hidden (2026-11-06 review repair)
+
+Chose cancellation at the shared native-dialog router before parent lookup,
+host creation or attention requests. This preserves the off-desktop promise
+for exceptions, renderer boxes and remote restart prompts. Logs name the
+source and cancel response without dialog text. The alternative, allowing
+sheets for error visibility, would surface hidden parents and defeat task 4;
+cancellation means unattended errors must be diagnosed from logs. Unit tests
+cover cancellation and main's constructor, dialog-gate and DevTools wiring.
+Live macOS qualification remains open on this Linux host; the full procedure
+now lives in `docs/development/agent-testing.md`, including unattended and
+toolchain-bootstrap launches, browser smoke, native-dialog triggers and the
+`--no-headless` opt-out. No live macOS evidence is claimed by this repair.
 
 ### Task 4: macOS hides windows instead of opening one (2026-11-06)
 

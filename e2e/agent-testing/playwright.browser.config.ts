@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "browser-gateway.spec.ts",
+    "environment-delete-retry.spec.ts",
     "headless-profile.spec.ts",
     "pull-request-pane.spec.ts",
     "backend-owned-state.spec.ts",

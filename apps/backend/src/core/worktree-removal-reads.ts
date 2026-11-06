@@ -5,6 +5,7 @@ import type { WorktreeLookup } from "./worktree-adhoc-reads.js";
 export class WorktreeRemovalReads {
   private readonly keys = new PhysicalKeyResolver();
   private readonly removing = new Set<string>();
+  private readonly completed = new Set<string>();
   private readonly pending = new Map<string, Set<Promise<unknown>>>();
 
   key(lookup: WorktreeLookup): string {
@@ -13,6 +14,18 @@ export class WorktreeRemovalReads {
 
   assertReadable(lookup: WorktreeLookup): void {
     if (this.removing.has(this.key(lookup))) throw new Error("The worktree is being removed");
+  }
+
+  /** Only authoritative tracking of a replacement may retire a completed fence. */
+  track(lookup: WorktreeLookup): void {
+    const key = this.key(lookup);
+    if (this.completed.delete(key)) this.removing.delete(key);
+    this.assertReadable(lookup);
+  }
+
+  complete(lookup: WorktreeLookup): void {
+    const key = this.key(lookup);
+    if (this.removing.has(key)) this.completed.add(key);
   }
 
   run<T>(lookup: WorktreeLookup, read: () => Promise<T>): Promise<T> {
@@ -39,6 +52,7 @@ export class WorktreeRemovalReads {
 
   async close(lookup: WorktreeLookup): Promise<void> {
     const key = this.key(lookup);
+    this.completed.delete(key);
     this.removing.add(key);
     await Promise.allSettled(Array.from(this.pending.get(key) ?? []));
   }

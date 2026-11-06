@@ -550,7 +550,7 @@ export class DiffStatsService {
    * target invalidates the cached counts: they described a different comparison.
    */
   track(target: DiffStatsTarget): void {
-    this.removalReads.assertReadable(target);
+    this.removalReads.track(target);
     const existing = this.entries.get(target.environmentId);
     if (existing) {
       const retargeted = !isSameTarget(existing.target, target);
@@ -691,6 +691,11 @@ export class DiffStatsService {
       if (this.removalReads.key(entry.target) === key) this.pause(entry.target.environmentId);
     }
     await drained;
+  }
+
+  /** Cleanup, including its durable ledger, has finished; a replacement may register. */
+  completeRemoval(lookup: WorktreeLookup): void {
+    this.removalReads.complete(lookup);
   }
 
   /** Every environment the service holds state for, paused or not. */

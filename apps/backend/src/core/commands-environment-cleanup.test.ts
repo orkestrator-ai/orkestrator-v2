@@ -82,6 +82,8 @@ async function withDeleteCommand<T>(
   try {
     return await run(invokeDelete, storage, context);
   } finally {
+    context.runtime.shutdown();
+    await context.runtime.diffStats.settled();
     await fs.chmod(worktreeDir, 0o700).catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });
   }
@@ -147,13 +149,100 @@ describe("delete_environment host cleanup", () => {
           environment({ branch: "feature", worktreePath, createdFromCommit: base }),
         );
       },
-      async (invokeDelete, storage) => {
+      async (invokeDelete, storage, context) => {
         await invokeDelete();
         expect(await exists(worktreePath)).toBe(false);
         await expect(
           runCommand("git", ["-C", projectPath, "show-ref", "--verify", "refs/heads/feature"]),
         ).rejects.toThrow();
         expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
+        const service = context.runtime.diffStats.service;
+        await expect(service.readTree({ lookup: { worktreePath } })).rejects.toThrow(
+          "being removed",
+        );
+        expect(await exists(worktreePath)).toBe(false);
+        // The same project and branch allocate exactly the retired physical path.
+        await runCommand("git", [
+          "-C",
+          projectPath,
+          "worktree",
+          "add",
+          "-b",
+          "feature",
+          worktreePath,
+          "main",
+        ]);
+        await storage.addEnvironment(
+          environment({ id: "replacement", branch: "feature", worktreePath }),
+        );
+        await createCommandRegistry().get("start_environment")!(
+          { environmentId: "replacement" },
+          context,
+        );
+        expect((await storage.getEnvironment("replacement"))?.status).toBe("running");
+        await storage.addEnvironment(
+          environment({ id: "later", projectHome: true, worktreePath: projectPath }),
+        );
+        await context.runtime.diffStats.sync(context);
+        expect(service.isTracked("replacement")).toBe(true);
+        await service.readFileList({
+          lookup: { worktreePath },
+          comparisonRef: "HEAD",
+          includeUncommitted: true,
+        });
+        await service.readTree({ lookup: { worktreePath } });
+        // A later environment still reconciles; replacement tracking did not abort sync.
+        expect(service.isTracked("later")).toBe(true);
+      },
+    );
+  });
+
+  test("deleting and re-ensuring a home leaves the retained checkout and its other owner readable", async () => {
+    let checkout = "";
+    await withDeleteCommand(
+      async (storage) => {
+        checkout = path.join(storage.getDataDir(), "checkout");
+        await runCommand("git", ["init", "-b", "main", checkout]);
+        await runCommand("git", ["-C", checkout, "config", "user.name", "Test"]);
+        await runCommand("git", ["-C", checkout, "config", "user.email", "test@example.invalid"]);
+        await fs.writeFile(path.join(checkout, "readme"), "fixture");
+        await runCommand("git", ["-C", checkout, "add", "."]);
+        await runCommand("git", ["-C", checkout, "commit", "-m", "fixture"]);
+        await storage.addProject({
+          id: "p1",
+          name: "Project",
+          gitUrl: "https://example.invalid/p1.git",
+          localPath: checkout,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        });
+        await storage.addEnvironment(environment({ projectHome: true, worktreePath: checkout }));
+        await storage.addEnvironment(
+          environment({ id: "other-owner", projectHome: true, worktreePath: checkout }),
+        );
+      },
+      async (invokeDelete, storage, context) => {
+        const tracking = context.runtime.diffStats;
+        await tracking.sync(context);
+        await invokeDelete();
+        expect(await exists(checkout)).toBe(true);
+        await tracking.service.readTree({ lookup: { worktreePath: checkout } });
+        await tracking.service.readFileList({
+          lookup: { worktreePath: checkout },
+          comparisonRef: "HEAD",
+          includeUncommitted: true,
+        });
+        expect(tracking.service.isTracked("other-owner")).toBe(true);
+        // Remove only the second record, so ensure creates a fresh home at the retained root.
+        await storage.removeEnvironment("other-owner");
+        const home = (await createCommandRegistry().get("ensure_project_home_environment")!(
+          { projectId: "p1" },
+          context,
+        )) as Environment;
+        expect(home.worktreePath).toBe(checkout);
+        expect(tracking.service.isTracked(home.id)).toBe(true);
+        await tracking.sync(context);
+        await tracking.service.readTree({ lookup: { worktreePath: checkout } });
       },
     );
   });
@@ -489,12 +578,30 @@ describe("delete_environment host cleanup", () => {
         expect(await exists(worktreePath)).toBe(true);
         const ledger = environmentCleanupLedger(storage.getDataDir());
         expect(await ledger.get("e1")).toMatchObject({ pending: ["worktree"] });
+        const service = context.runtime.diffStats.service;
+        const target = {
+          environmentId: "replacement",
+          kind: "local" as const,
+          worktreePath,
+          comparisonRef: "HEAD",
+        };
+        expect(() => service.track(target)).toThrow("being removed");
+        await expect(service.readTree({ lookup: { worktreePath } })).rejects.toThrow(
+          "being removed",
+        );
 
         await fs.chmod(workspaces, 0o700);
         const later = new Date(Date.now() + 60 * 60_000);
         await reconcileEnvironmentCleanup(context, { now: () => later });
         expect(await exists(worktreePath)).toBe(false);
         expect(await ledger.get("e1")).toBeNull();
+        await expect(service.readTree({ lookup: { worktreePath } })).rejects.toThrow(
+          "being removed",
+        );
+        await fs.mkdir(worktreePath);
+        await runCommand("git", ["init", worktreePath]);
+        service.track(target);
+        await service.readTree({ lookup: { worktreePath } });
       },
     );
   });

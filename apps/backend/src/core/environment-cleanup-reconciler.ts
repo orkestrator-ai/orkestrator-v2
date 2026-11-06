@@ -160,6 +160,9 @@ export async function reconcileEnvironmentCleanup(
       });
     }
     const remaining = await ledger.get(entry.environmentId);
+    if (!remaining && entry.worktreePath) {
+      context.runtime.diffStats.service.completeRemoval({ worktreePath: entry.worktreePath });
+    }
     if (remaining && !isEnvironmentCleanupExhausted(remaining)) {
       const due = retryDueAt(remaining);
       nextDueAt = nextDueAt === null ? due : Math.min(nextDueAt, due);

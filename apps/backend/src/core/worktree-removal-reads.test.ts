@@ -50,3 +50,17 @@ test("a failed reader settles removal without an unhandled rejection", async () 
   await failed;
   expect(() => reads.assertReadable(root)).toThrow("being removed");
 });
+
+test("only tracking a replacement retires a completed fence, and a later removal fences it again", async () => {
+  const reads = new WorktreeRemovalReads();
+  const root = { worktreePath: "/fixture/reused-root" };
+  await reads.close(root);
+  expect(() => reads.track(root)).toThrow("being removed");
+  reads.complete(root);
+  // Completion alone must not admit a late file read that could recreate the tree.
+  expect(() => reads.run(root, async () => undefined)).toThrow("being removed");
+  reads.track({ worktreePath: "/fixture/./reused-root" });
+  await reads.run(root, async () => undefined);
+  await reads.close(root);
+  expect(() => reads.track(root)).toThrow("being removed");
+});

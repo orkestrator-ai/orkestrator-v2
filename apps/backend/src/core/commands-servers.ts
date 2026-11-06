@@ -1677,10 +1677,7 @@ export async function deleteEnvironment(
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
       // Nothing should scan or watch a tree while it is being removed. The
       // tombstone keeps later reconciliations from tracking it again.
-      await context.runtime.diffStats.pauseForRemoval(
-        environmentId,
-        cleanup?.worktreePath ?? environment?.worktreePath,
-      );
+      await context.runtime.diffStats.pauseForRemoval(environmentId, cleanup?.worktreePath);
       if (cleanup?.worktreePath) {
         const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context);
         // A branch still checked out in a surviving worktree cannot be judged or
@@ -1833,6 +1830,14 @@ export async function deleteEnvironment(
       // discarding is right: the worktree they described is gone.
       context.runtime.diffStats.invalidatePendingSync();
       context.runtime.diffStats.service.untrack(environmentId);
+      // Reuse is admitted by a new tracking registration, never by a late read.
+      // Keep failed ledger work fenced until the reconciler finishes it.
+      if (
+        cleanup?.worktreePath &&
+        !(await environmentCleanupLedger(storage.getDataDir()).get(environmentId))
+      ) {
+        context.runtime.diffStats.service.completeRemoval({ worktreePath: cleanup.worktreePath });
+      }
       // The PR belonged to a branch whose environment is gone; polling it would
       // resurrect state for an id no client can display.
       context.runtime.prMonitor.invalidatePendingSync();

@@ -138,6 +138,13 @@ Inside the local-server queue:
    tree while it is removed. The `worktree` step first stops the worktree's
    git fsmonitor daemon, if any
    ([git-scan-caches.md](git-scan-caches.md#stopping-daemons)).
+   A project home has no worktree scheduled for removal: only its own tracking
+   pauses, leaving the retained checkout and other owners readable. A removal
+   fence stays closed after physical removal, including while ledger steps are
+   pending. Once both deletion and its ledger finish, tracking a replacement
+   environment at that path retires the fence. Late file/tree reads alone
+   cannot reopen it or recreate the retired directory. Reconciler completion
+   grants the same replacement admission after failed cleanup is retried.
 10. Delete environment-keyed records (graph runs together with their artifact
     rows), design canvases and web annotations;
     delete the schedules its agents own and pause other owners' schedules

@@ -45,6 +45,7 @@ import {
   projectionTitle,
 } from "@/lib/changes/labels";
 import { writeText } from "@/lib/native/clipboard";
+import { useSidebarActionStore } from "@/stores/sidebarActionStore";
 import { cn } from "@/lib/utils";
 import type { FreshnessNotice } from "@/lib/view-freshness";
 import type { EnvironmentType } from "@/types";
@@ -431,8 +432,8 @@ export interface EnvironmentRowProps {
   selected: boolean;
   /** Secondary line, e.g. the project name in the activity list. */
   subtitle?: string;
-  /** This window's multi-select; another machine's rows take no part in it. */
-  multiSelect?: { active: boolean; checked: boolean; onToggle: () => void };
+  /** The sidebar's multi-select; `id` is this row's id in it (`lib/sidebar-selection.ts`). */
+  multiSelect?: { id: string; active: boolean; checked: boolean; onToggle: () => void };
   /** Click or Enter/Space on the row. */
   onActivate: (modifiers: { shiftKey: boolean; metaKey: boolean }) => void;
   actions: EnvironmentRowActions;
@@ -466,7 +467,10 @@ export function EnvironmentRow({
   agentSummary,
   deleteNotice,
 }: EnvironmentRowProps) {
-  const model = environmentRowModel(facts);
+  const pending = useSidebarActionStore((state) =>
+    state.pending.has(multiSelect?.id ?? facts.environmentId),
+  );
+  const model = environmentRowModel({ ...facts, busy: facts.busy || pending });
   const [deleteOpen, setDeleteOpenState] = useState(false);
   const setDeleteOpen = (open: boolean) => {
     setDeleteOpenState(open);
@@ -494,9 +498,10 @@ export function EnvironmentRow({
   const multiSelectActive = multiSelect?.active === true;
   const menuItems = environmentRowMenuItems(model, actions, () => setDeleteOpen(true));
 
-  const activate = (event: React.MouseEvent | React.KeyboardEvent) =>
-    // metaKey covers Cmd on Mac, ctrlKey covers Ctrl on Windows/Linux.
+  const activate = (event: React.MouseEvent | React.KeyboardEvent) => {
+    if (!model.selectable && (event.shiftKey || event.metaKey || event.ctrlKey)) return;
     onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
+  };
 
   return (
     <>
@@ -516,9 +521,10 @@ export function EnvironmentRow({
               model.dimmed && "opacity-60",
             )}
           >
-            {/* A deleting environment shows its spinner instead of a checkbox:
-                there is nothing useful left to select. */}
-            {multiSelectActive && !facts.deleting && (
+            {/* A delete in flight shows its spinner instead of a checkbox: there
+                is nothing useful left to select. A failed cleanup keeps both,
+                so a bulk delete can retry it. */}
+            {multiSelectActive && model.selectable && (
               <Checkbox
                 checked={multiSelect.checked}
                 onCheckedChange={multiSelect.onToggle}
@@ -527,7 +533,10 @@ export function EnvironmentRow({
             )}
             <div
               role="button"
+              aria-busy={pending || undefined}
               tabIndex={0}
+              // A range runs over the rows as drawn; a delete in flight has nothing to select.
+              data-environment-selection-id={model.selectable ? multiSelect?.id : undefined}
               onClick={activate}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
@@ -559,9 +568,9 @@ export function EnvironmentRow({
             >
               {model.spinner === "deleting" ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
-              ) : multiSelectActive ? null : model.spinner === "transition" ? (
+              ) : model.spinner === "transition" ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-              ) : (
+              ) : multiSelectActive ? null : (
                 <EnvironmentStatusMarker
                   local={model.isLocal}
                   state={model.markerState}

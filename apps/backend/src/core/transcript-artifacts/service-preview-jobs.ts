@@ -513,8 +513,6 @@ export class ArtifactPreviewJobs {
     releases: Array<() => void>,
   ): Promise<Extract<Outcome, { ok: false }>> {
     this.countBlocked(result.blockedRequests);
-    if (result.error.code === "render_timeout")
-      this.ctx.metrics.increment("deadlines", { kind: result.kind });
     let captures: ArtifactCapture[] = [];
     try {
       captures = await this.storeCaptures(environmentId, result.captures, releases);

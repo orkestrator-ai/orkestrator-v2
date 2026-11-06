@@ -201,6 +201,14 @@ tag for another route is not sent upstream. Reloads of a previewed dev server
 then revalidate instead of downloading, rewriting and compressing every
 module again.
 
+A static file with no precompressed sibling is compressed on the fly, up to
+`MAX_STATIC_FALLBACK_SOURCE_BYTES`. Its tags depend only on the source file and
+the coding, so a revalidation is compared with them before anything is
+compressed (`heldStaticFallbackEncoding` in `apps/backend/src/gateway-proxy.ts`).
+A match answers `304` with the variant the client holds and no coded
+`Content-Length`, which only compressing would tell us. `If-None-Match: *` and
+`If-Modified-Since` alone name no variant, so they still compress first.
+
 Streaming gzip contexts are shared by direct and proxied streams and capped at
 `MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
 continues in identity and counts as declined. A browser holds two event
@@ -240,14 +248,20 @@ channel has output next, because by then the socket really is behind.
 Terminal input and resizes wait on one ordering tail per session, owned by the
 gateway rather than the socket, so a plain disconnect still delivers what was
 already accepted and a reconnect cannot overtake it. Revocation is the
-deliberate exception: credential rotation and gateway stop refuse everything
-still queued, including what a disconnected socket left behind, and so do
-browser-session revocation and credential expiry on an open socket. The one
-operation already running in the backend cannot be recalled. Two gaps remain:
-a disconnected socket loses its credential expiry/revocation watchers, and explicit client-grant revocation does not notify even an open
-socket. A revoked grant can continue admitting input and running queued work
-until its original expiry (up to 15 minutes). Both are tracked
-in [4480](../todo/transcripts-and-observation/4480-terminal-operations-after-disconnected-credential-expiry.md).
+deliberate exception: credential rotation, gateway stop, and the expiry or
+revocation of a socket's own browser session or client grant all refuse
+everything still queued, including what a disconnected socket left behind. The
+one operation already running in the backend cannot be recalled.
+
+A socket keeps its expiry timer and revocation subscription until its last
+queued operation settles, so a queue is still refused if its credential lapses
+after the disconnect; each socket kept this way holds an operation, so the
+operation limits bound them. A credential still valid at its deadline (renewed
+or refreshed) is watched on, open socket or not. `ClientGrantService` tells a
+grant's listeners whenever its record goes (one grant, a controller's, all of
+them, or found expired), through the `onGrantRevoked` node hook, so a terminal
+socket or event stream it authorized closes at once rather than at the grant's
+original deadline.
 
 A local desktop window normally takes everything through Electron main: every
 backend event, terminal output included, is parsed in main and relayed to each
@@ -283,7 +297,20 @@ gateway itself instead:
   it was created, so mixed windows are normal: a relay window keeps main's stream
   unfiltered, and a change restarts that stream from its cursor. Opening it again
   announces `terminal-event-stream-connected`, so a relay window reads its exact
-  snapshot.
+  snapshot. Relayed node events are never on that stream: main takes them on a
+  filtered one, for what relay windows and realms listen to
+  ([command-nodes.md](command-nodes.md)).
+
+Measured on macOS with nothing attached over the DevTools protocol (2026-11-06,
+`local-gateway-transport-cpu-electron.spec.ts`), a direct window costs Electron
+main less than a relay window: a 1.29 MB terminal burst shown in two windows
+cost main 4–7 ms against 46–54 ms. The pages parse their own streams instead,
+so the renderers spend more (137–178 ms against 81–85 ms). The `webRequest`
+hook adds no measurable JavaScript time: it runs once per request, and a
+stream's chunks do not pass through it. A page driven over the DevTools
+protocol reverses the result: each load and stream chunk becomes a DevTools
+event that main forwards, which the relay's IPC delivery does not produce
+([agent-testing.md](../development/agent-testing.md#measuring-electron-mains-cpu)).
 
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the
@@ -325,6 +352,19 @@ live runs still to do, are in
 
 `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
 changes a gzip stream; the steps for a real tailnet are in the to-do.
+
+A second cause gives the same empty 502: more new connections than the accept
+queue holds (`kern.ipc.somaxconn`, 128 on macOS) arriving during even a 10 ms
+event-loop stall. The kernel resets the rest, and Serve logs `dial tcp ...
+connect: connection reset by peer`. To name the sender, the gateway counts new
+connections and requests per second (`apps/backend/src/gateway-traffic-summary.ts`).
+When a second holds 100 or more of either, it writes one `[gateway]
+traffic.burst` warning per burst, at most one every 30 s, with the top sources,
+route classes, client families, listeners and invoke command names. The source
+is `X-Forwarded-For`, which Serve sets to the sending device's tailnet address,
+believed only on a loopback connection and only as an IP literal; map it to a
+device with `tailscale status`. Connections the kernel reset never reach the
+gateway, so the counts cover what got through.
 
 ## Loopback client gateway (SSH forwarding target)
 
@@ -383,8 +423,9 @@ the installation identity.
 
 `GET /__orkestrator/hello` is the authenticated handshake on every listener
 (contract: `packages/protocol/src/backend-profile.ts`). It returns the
-installation identity, the generation, the app version, the client API range,
-capabilities, the profile and `endpointRole`. It never includes data paths,
+installation identity, the generation, the app version, the build commit when
+the build has one, the client API range, capabilities, the profile and
+`endpointRole`. It never includes data paths,
 the auth file, the token or the process ID.
 
 ## Vercel-hosted public client

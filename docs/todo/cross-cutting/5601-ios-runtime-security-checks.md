@@ -11,6 +11,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`.
 3. **Check Keychain behaviour on a device**: lock, restart, backup and reinstall. Status: open.
 4. **Check Password AutoFill on the token field**: whether iOS offers to save the gateway token. Status: open.
 5. **Inspect a signed release build**: entitlements and debugging flags of what actually ships. Status: open.
+6. **Check the privacy cover on a device**: whether the cover from 5602 task 2 reaches the system snapshot on hardware. Status: open.
 
 ### 1. Run the suite through Xcode's own scheme
 
@@ -49,12 +50,12 @@ The task-specific simulator was created with `xcrun simctl create` using `com.ap
 
 **Context.** The sign-in is `RemoteWebView.Coordinator.loginCookie`, and the navigation and bridge rules are `navigationDisposition` and `isTrustedBridgeOrigin` in `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`. [Todo 0042](../previews-and-annotations/0042-service-preview-rollout.md) task 3 needs the iOS service-preview handoff on the same hardware.
 
-**Investigation.** Seen with a throwaway probe on the iOS 18.2 simulator on 2026-11-05: a CSP-sandboxed main frame reports an empty origin (the bridge refuses it now that its crash is fixed); subframes are refused; a cross-origin iframe setting `top.location` gets a `SecurityError`, with or without `sandbox`; `window.open` without a gesture never reaches the app. A main-frame `location.href` to another origin with no gesture does reach the navigation policy, which opens it in Safari; only script at the gateway's own origin can do that. A committed test pins, on all three runtimes, that the session cookie keeps `HttpOnly`, `Secure` and `SameSite=Strict` in `WKHTTPCookieStore` under both names and stays out of `document.cookie`. Not seen: the cookie actually being sent on real requests, a real legacy preview opened at the top level, or a real preview iframe. The real `check()` refusing a redirect was seen on the simulator against a local server, over HTTP.
+**Investigation.** Seen with a throwaway probe on the iOS 18.2 simulator on 2026-11-05: a CSP-sandboxed main frame reports an empty origin (the bridge refuses it now that its crash is fixed); subframes are refused; a cross-origin iframe setting `top.location` gets a `SecurityError`, with or without `sandbox`; `window.open` without a gesture never reaches the app. A main-frame `location.href` to another origin with no gesture does reach the navigation policy, which opens it in Safari; only script at the gateway's own origin can do that. A committed test pins, on all three runtimes, that the session cookie keeps `HttpOnly`, `Secure` and `SameSite=Strict` in `WKHTTPCookieStore` under both names and stays out of `document.cookie`. Not seen: the cookie actually being sent on real requests, a real legacy preview opened at the top level, or a real preview iframe. The real `check()` refusing a redirect was seen on the simulator against a local server, over HTTP. The logout from 5602 task 1 was seen only against a fake gateway on loopback, over HTTP: the request carried the cookie and the redirect was not followed. A real gateway revoking the session over TLS was not seen.
 
 **Decisions.**
 
 - **What counts as done?**
-  - **One device run against an isolated `dev:test` profile behind Tailscale Serve: sign in, open a legacy preview at the top level and call the bridge from it, open a service preview, and tap an external link (recommended).**
+  - **One device run against an isolated `dev:test` profile behind Tailscale Serve: sign in, open a legacy preview at the top level and call the bridge from it, open a service preview, tap an external link, and forget the server to confirm its session stops working (recommended).**
     - Pros: covers the whole real path; can share a run with 0042 task 3.
     - Cons: needs an iPhone, a signed development build and a tailnet.
   - **Accept the simulator evidence.**
@@ -67,13 +68,13 @@ The task-specific simulator was created with `xcrun simctl create` using `com.ap
 
 **Context.** `apps/ios/OrkestratorMobile/Security/KeychainCredentialStore.swift:44`. The editor's security note and `apps/ios/README.md` both repeat the promise.
 
-**Investigation.** The accessibility class and the absence of `kSecAttrSynchronizable` were read from the code on 2026-11-05. The item also outlives an uninstall, which is ordinary iOS behaviour and is not mentioned to users.
+**Investigation.** The accessibility class and the absence of `kSecAttrSynchronizable` were read from the code on 2026-11-05. The item also outlives an uninstall, which is ordinary iOS behaviour and is not mentioned to users. 5602 task 3 is built and tested with a failing credential store, using the real `errSecInteractionNotAllowed` error value. A real read while locked has not been seen, nor whether iOS ever starts this model while locked (prewarming, for example). A launch while locked should show the unread-list message, refuse a save, and bring the list back on returning to the app unlocked.
 
 **Decisions.**
 
 - **How to check?**
   - **On a device: launch while locked, restart, restore an encrypted backup to confirm the vault does not return, and reinstall to see what remains (recommended).**
-    - Pros: tests the promises as written; also tests [5602](5602-ios-session-and-privacy-hardening.md) task 3.
+    - Pros: tests the promises as written; also tests 5602 task 3.
     - Cons: needs a spare device, because a restore is destructive.
   - **Rely on Apple's documentation of the accessibility class.**
     - Pros: no hardware.
@@ -115,6 +116,31 @@ The task-specific simulator was created with `xcrun simctl create` using `com.ap
     - Pros: no work.
     - Cons: signing and distribution can change entitlements.
 
+### 6. Check the privacy cover on a device
+
+**Problem.** The cover is there to keep private screens out of the snapshot iOS stores on disk. Whether it gets there in time on hardware is not something a unit test or a simulator can settle.
+
+**Context.** `PrivacyCover` in `apps/ios/OrkestratorMobile/Views/RootView.swift` is applied to the root view and to the connection editor sheet. It shows whenever `scenePhase` is not `.active`.
+
+**Investigation.** Seen on an iOS 26.2 simulator on 2026-11-05, with the real app and real scene transitions, on the connection editor. The app was opened, then Settings was opened to send it to the background, and the snapshot iOS stored in the app's `Library/SplashBoard/Snapshots` was read back. With the cover it was opaque (2,293 bytes as stored, or 9,155 with the mark in a throwaway build), and without it the same image showed the whole editor (105,644 bytes). Returning to the app showed the editor normally. The asset catalog could not be compiled on that Mac, so the mark in the shipped build was not seen. Not seen: a device, a slower device under load, the snapshot's data protection class, or the cover over a loaded remote page. Views WebKit presents itself (a file picker, a link preview) and the keyboard are outside the overlay.
+
+**Decisions.**
+
+- **How to check?**
+  - **On a device: open a remote page with visible content, open a file picker and a link preview in turn, leave the app each time, and look at the app switcher, then return and confirm the page and session are unchanged (recommended).**
+    - Pros: tests what the user actually sees; also covers the cases the overlay cannot reach.
+    - Cons: needs an iPhone and a signed development build, so it can share the run in task 2.
+  - **Accept the simulator evidence.**
+    - Pros: no hardware.
+    - Cons: timing on a device under load, and the views above SwiftUI, stay unobserved.
+- **If WebKit's own views show through?**
+  - **Move the cover to its own window at alert level (recommended).**
+    - Pros: covers everything in the scene, including presented views.
+    - Cons: more code than the overlay, and a window to keep in step with the scene.
+  - **Keep the overlay and accept the gap.**
+    - Pros: no change.
+    - Cons: a file picker or link preview could stay in the snapshot.
+
 ## Assumptions and decisions
 
 ### Task 1: Use the repository's Xcode scheme
@@ -127,7 +153,9 @@ After the passing run, restored the original mapping with `xcrun simctl runtime 
 
 ## Current state
 
-Task 1 is complete: the project's own hosted test scheme passes all 66 tests. The earlier stand-in runs also passed on three simulator runtimes. Nothing has run on a physical device or from a signed release build; tasks 2–5 remain open.
+Task 1 is complete: the project's own hosted test scheme passed all 66 tests. The earlier stand-in runs also passed on three simulator runtimes. Nothing has run on a physical device or from a signed release build; tasks 2–6 remain open.
+
+The iOS 26.5 runtime that task 1 installed was no longer on that Mac on 2026-11-05 (`xcrun simctl runtime list` showed only 17.5, 18.2 and 26.2), so `mise run test:ios` again stops before running any test. 5602 records the overrides its run used instead.
 
 ## Constraints and rationale
 
@@ -137,7 +165,7 @@ Task 1 is complete: the project's own hosted test scheme passes all 66 tests. Th
 ## Related
 
 - [5600-ios-bridge-user-consent.md](5600-ios-bridge-user-consent.md)
-- [5602-ios-session-and-privacy-hardening.md](5602-ios-session-and-privacy-hardening.md)
+- `5602-ios-session-and-privacy-hardening.md` (deleted 2026-11-06)
 - [2960-host-prefixed-gateway-cookie.md](2960-host-prefixed-gateway-cookie.md)
 - [Todo 0042](../previews-and-annotations/0042-service-preview-rollout.md), task 3
 

@@ -170,8 +170,8 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
   // -------------------------------------------------------------------------
   // Admission and user controls
 
-  start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
-    return this.lifecycle.start(input);
+  start(input: StartBuildPipelineInput, coordinatorLaunchId?: string): Promise<BuildPipeline> {
+    return this.lifecycle.start(input, coordinatorLaunchId);
   }
 
   importLegacy(

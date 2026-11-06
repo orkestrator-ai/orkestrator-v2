@@ -300,7 +300,7 @@ describe("CoordinatorPanel tab strip", () => {
     const single = render(<CoordinatorPanel projectId="project-1" />);
     const alone = await screen.findByRole("tab", { name: "Coordinator, Codex" });
     expect(alone.getAttribute("aria-selected")).toBe("true");
-    expect(document.querySelector("[data-coordinator-main-marker]")).toBeNull();
+    expect(document.querySelector("[data-coordinator-main-marker]") === null).toBe(true);
     single.unmount();
 
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
@@ -308,7 +308,7 @@ describe("CoordinatorPanel tab strip", () => {
     const main = await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
     expect(main.querySelector("[data-coordinator-main-marker]")?.textContent).toBe("Main");
     const side = screen.getByRole("tab", { name: "Side 1, Codex" });
-    expect(side.querySelector("[data-coordinator-main-marker]")).toBeNull();
+    expect(side.querySelector("[data-coordinator-main-marker]") === null).toBe(true);
     expect(main.getAttribute("aria-selected")).toBe("true");
     expect(side.getAttribute("aria-selected")).toBe("false");
     expect(screen.getByRole("tablist", { name: "Coordinator conversations" })).toBeTruthy();
@@ -442,14 +442,14 @@ describe("CoordinatorPanel tab strip", () => {
       });
       await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
       await waitFor(() =>
-        expect(screen.queryByRole("tab", { name: "Coordinator, main, Codex" })).toBeNull(),
+        expect(screen.queryByRole("tab", { name: "Coordinator, main, Codex" }) === null).toBe(true),
       );
       expect(collectCoordinatorLeaves(storedLayout().root)).toHaveLength(2);
       if (failure === "create") {
         ensuredSnapshot = closed;
         await act(async () => rejectCreate(new Error("create rejected")));
         await screen.findByText("create rejected");
-        expect(screen.queryByRole("tab", { name: "Coordinator, main, Codex" })).toBeNull();
+        expect(screen.queryByRole("tab", { name: "Coordinator, main, Codex" }) === null).toBe(true);
         expect(screen.getByRole("tab", { name: "Side 1, Codex" })).toBeTruthy();
         return;
       }
@@ -659,7 +659,10 @@ describe("CoordinatorPanel tab strip", () => {
     hangLoads = false;
     render(<CoordinatorPanel projectId="project-1" />);
     const create = await screen.findByRole("button", { name: "New side agent" });
-    expect(create.getAttribute("title")).toBe("New side agent");
+    // Its tooltip says what a side agent is for, not only its name.
+    expect(create.getAttribute("title")).toBe(
+      "Side agents can read the project and talk to the main coordinator, but can't launch workers. Good for a second opinion or a parallel investigation.",
+    );
     expect(create.querySelector("span")?.className).toContain("max-sm:sr-only");
   });
 });

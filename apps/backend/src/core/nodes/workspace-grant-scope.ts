@@ -40,6 +40,10 @@ export const WORKSPACE_ADMINISTRATION_COMMANDS: ReadonlySet<string> = new Set([
   "update_worktree_locations",
   "update_preview_settings",
   "cleanup_logs",
+  "get_database_stats",
+  "plan_diagnostics_bundle",
+  "read_diagnostics_bundle",
+  "record_renderer_errors",
   "graph_capability_ceiling_set",
   // Host updates and dependency maintenance.
   "request_host_update_check",

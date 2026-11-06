@@ -6,6 +6,7 @@ import {
   BACKEND_INSTANCE_DESCRIPTOR_TYPE,
   BACKEND_INSTANCE_MAX_ENDPOINTS,
   parseBackendInstanceDescriptor,
+  linuxProcessIdentity,
   type BackendInstanceDescriptor,
   type BackendInstanceEndpoint,
 } from "@orkestrator/protocol/backend-instance";
@@ -59,6 +60,15 @@ export async function publishInstanceDescriptor(
     version: 1,
     type: BACKEND_INSTANCE_DESCRIPTOR_TYPE,
     ...descriptor,
+    ...(process.platform === "linux"
+      ? {
+          processIdentity:
+            linuxProcessIdentity(
+              await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8"),
+              await fs.readFile("/proc/self/stat", "utf8"),
+            ) ?? undefined,
+        }
+      : {}),
   };
   // Validate what we publish with the same parser clients use.
   parseBackendInstanceDescriptor(value);

@@ -705,8 +705,7 @@ credentials outside extension bundles and supply required secrets explicitly
 through the environment's credential configuration. No secret-file opt-in is
 provided by staging. Older extension trees retain their existing policy.
 A linked entry is skipped, like any link below a home entry, with one
-exception (input spec version 5, todo
-[2170](../todo/containers-and-environments/2170-shared-and-linked-skills-in-containers.md)):
+exception (input spec version 5):
 a top-level entry of a skill root (Claude's, Codex's, Grok's and Pi's `skills`, and
 `~/.agents/skills`) that links to a skill. It is staged as a real directory
 when its resolved target is a directory holding a regular `SKILL.md`, strictly
@@ -761,6 +760,21 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   per directory unit, 20,000 entries and 512 MiB per revision. A skipped entry
   is counted by reason (`symlink`, `too-large`, `aggregate-budget`, …); names
   never leave the backend.
+- Writing: on Linux a file staged byte for byte is reflinked from the
+  descriptor that was checked (`FileCloner`, through `/proc/self/fd`), where
+  the data directory's filesystem can (btrfs, XFS, bcachefs). A reflink shares
+  the source's blocks until either side writes, so the revision stays an
+  independent copy: a write to it never reaches the host file or another
+  environment's revision, unlike a hard link. Its size is checked after the
+  clone, against the same bounds. A login restricted after staging is cloned
+  and then rewritten in place, which copy-on-write keeps local. A filtered or
+  guarded file (Claude's settings and `.claude.json`, the credential-guarded
+  skill and extension trees) is read and written as before, since cloning after
+  the read could stage bytes nobody checked. Anywhere else (another platform,
+  ext4, tmpfs, a source on another filesystem) the run copies, and after one
+  failed clone from a source device it copies the rest from that device. On a 300 MiB plugin fixture on
+  btrfs a revision took 162 ms and no new disk, against about 550 ms and 300 MiB
+  copied ([measurements](../reports/efficiency-logging-database/0000-index.md#closing-check-of-e25-container-start)).
 - Publication: a revision is written as `.<rev>.partial` and renamed into
   place, mode `0700`/`0600`. Binds use `--mount`, which fails on a missing
   source instead of creating a host directory. The container carries
@@ -1170,6 +1184,71 @@ and the Network section says whether a root terminal can change the rules.
   exists (`sweepOrphanEgressGateways`). A recovery copy keeps its stopped
   gateway, so restoring it starts it the normal way.
 
+### Name checks (`egress-filter=1`)
+
+A gateway on network policy 3 from an image that declares `egress-filter=1`
+also checks the name a connection asks for (security finding M12):
+`init-firewall.sh` starts `orkestrator-egress-filter` (a Perl daemon run by
+the base system's `perl-base`) before any lookup, and installs, ahead of
+Docker's own DNS rules:
+
+- a DNAT of every new, unmarked TCP connection to an allowed tuple onto the
+  daemon's port on the namespace's own address. The daemon reads the
+  original destination, opens its own connection there and relays the
+  client's bytes only once its first bytes ask for a name allowed on that
+  port: the TLS ClientHello's server name, or the Host (and an absolute-form
+  target) of a plain HTTP/1.x request. GitHub's own names are allowed on 443
+  and 22 because its ranges are; `github.io` is not. A refused TLS client
+  gets an `access_denied` alert, an HTTP client a 403 naming the gateway.
+  Other protocols are refused on TCP 443 and relayed by address on any other
+  named port; a server that speaks first (SSH, a database banner) is relayed
+  to the client while its first bytes are awaited.
+- a redirect of every unmarked DNS query, to Docker's resolver or straight
+  to any server, to the daemon. It forwards an allowlisted name (exact),
+  GitHub's names and `*.docker.internal` (only when asked through Docker's
+  resolver) and answers anything else REFUSED, with Extended DNS Error 18
+  when the query carried EDNS. A query sent to Docker's resolver goes back
+  to it; one sent off-host goes to Docker's upstreams directly when Docker
+  names them by address, so Docker's own relay from the namespace, which is
+  redirected too, never loops.
+- ACCEPT rules for TCP to the allowed set and for DNS to the resolvers that
+  match only the daemon's `SO_MARK` (`0x6f726b`). The workload cannot set a
+  mark (no `NET_ADMIN`, `NET_RAW` dropped). UDP entries stay address-only.
+
+It fails closed: the boot fails (`state: failed`, no workload start) when the
+daemon does not start, and a daemon that dies leaves redirected connections
+refused and queries unanswered. Its supervisor restarts a dead worker within
+a second, and the refresher restarts a dead supervisor. The boot's own
+checks require a name off the list to be REFUSED and an allowed address to
+refuse a foreign SNI before the report says `applied`.
+`update-firewall.sh --set-domains` stages the proposed names for DNS lookups
+while retaining the current connection permissions during resolution. A failed
+rebuild restores the previous names without closing its streams. After a
+successful rebuild, it publishes the final names and the daemon closes open
+connections whose name left. DNS staging temporarily permits lookup of the
+explicitly proposed names; it never grants their TCP connection permissions.
+The next periodic refresh clears staging left by an interrupted edit.
+
+The gateway records `egress-filter` (`on`, or `off` when the backend created
+it with `ORKESTRATOR_EGRESS_FILTER=off`) once, at its first boot, and the
+report carries `egressFilter` (`enforced`, `off`, `unavailable`), which the
+Network section shows. A start or a read never changes it. A gateway from an
+older image has no record and no field, reads as address-only enforcement,
+and keeps it until it is rebuilt; an in-container firewall and full mode
+never run it. The daemon listens on 31443 and 31453 in the shared namespace,
+so a workload cannot listen there, and a connection to them that was not
+redirected is refused.
+
+What it does not stop: a name hidden inside TLS (an encrypted ClientHello
+whose outer name is allowed, domain fronting), a second request with another
+Host on a kept-alive HTTP connection, an HTTP/2 connection a client reuses
+for another name, UDP entries (QUIC), protocols other than TLS and HTTP on a
+named port, and anything an allowed service accepts, such as a push to an
+attacker's GitHub repository or a call with an attacker's API key. A
+connection to an allowed address now completes its TCP handshake with the
+daemon before the upstream answers, so an unreachable upstream shows as a
+reset rather than a refusal.
+
 The workload's own `NET_ADMIN` and the `init-firewall.sh` sudo grant are
 gone: every image now runs the firewall step from the root entrypoint before
 privileges drop, and an in-container runtime gets `NET_ADMIN` only for that
@@ -1574,7 +1653,7 @@ need it once cloned.
 
 - **The clone.** The setup script checks the mirror cheaply (the directory exists,
   its refs can be read, the tip's tree is present), then runs `git clone --no-tags
-  --reference <mirror> --dissociate <url>`. The remote is contacted for its refs
+  --reference-if-able <mirror> --dissociate <url>`. The remote is contacted for its refs
   and for anything the mirror lacks, so `origin` is still the project's remote and
   a stale mirror costs only the difference. `--dissociate` copies what the clone
   needs and drops the link, so the result is self-contained. `--dissociate` walks
@@ -1585,12 +1664,17 @@ need it once cloned.
   `git/git`) and fetched it back from the remote on demand. A blobless clone also
   pays for history reads one lazy fetch at a time; see
   [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
-- **`--reference`, not `--reference-if-able`.** A mirror removed between the check
-  and the clone then fails and falls back to the blobless clone, rather than
-  downloading the full history without saying so.
+- **`--reference-if-able`, checked again afterwards.** A mirror removed between
+  the check and the clone does not fail the clone: Git clones from the remote
+  alone, with the full history. The script then checks the mirror again and, if
+  it has gone, reports `vanished` instead of `used`, so that download is logged
+  (`git-mirror.clone-fallback`) rather than passing as a mirror clone. A mirror
+  that disappears part-way through `--dissociate` still fails the clone
+  (`clone-failed`) and falls back as below.
 - **Fallback.** Anything else leaves the ordinary clone (blobless, then full) to
   run as it always did, after one line saying why, with one fixed reason word:
-  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`. The line
+  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`
+  (`vanished` keeps the clone it already made and does not fall back). The line
   goes to the setup output, and `prepareContainerWorkspace`'s caller logs it
   (`git-mirror.clone-fallback`, `git-mirror.clone-used`). The first environment of
   a project normally reports `missing`. The last three mark the mirror suspect, so
@@ -1632,6 +1716,23 @@ need it once cloned.
   that reach it, compaction keeps old packs until new ones exist, and a build is a
   rename. Three fetch failures in a row (a lock left by a crash, say) rebuild the
   mirror rather than update it.
+- **Restricted containers.** A restricted container gets the mount only when its
+  firewall would let it reach the remote itself (`restrictedContainerReachesGitRemote`):
+  the host its clone connects to after `convert_ssh_to_https`, on GitHub's
+  always-open TCP 443 or an allowlist entry for that host and port (any port
+  under a network policy before 3). Otherwise it is withheld
+  (`git-mirror.mount-withheld`, reason `remote-unreachable`) and the clone goes to
+  the remote as before, so the mirror never hands it what its firewall would not.
+  A runtime that already mounts the mirror requires a rebuild when an allowlist
+  revision (including inherited global changes) blocks its original clone remote.
+  Other edits apply live on capable images, including unrelated domain removals
+  for GitHub projects. The runtime's `GIT_URL` supplies the original remote; a
+  missing or unrecognised URL conservatively requires rebuilding. When remote
+  access would be revoked, the status and apply routes report `rebuild-required`
+  and retain the previous firewall policy until then: changing the firewall
+  alone cannot revoke a bind mount. Other environments'
+  shared mirror is never removed to revoke one reader. Rebuilt runtimes that
+  reuse their checkout have no mirror mount and can apply later edits live.
 - **Credentials.** A refresh runs on the host through `runRemoteGit` and
   `gitHubGitCredentials`, the path project clones use. The URL and any credential
   are passed per transfer, and no `remote` section exists, so the config holds
@@ -1644,7 +1745,11 @@ need it once cloned.
   allows the foreign owner because everything uses an explicit `--git-dir`. Every
   environment of a project can read every branch of it through the mount, whatever
   credential that environment holds; a branch deleted on the remote leaves at the
-  next refresh, and its objects at a later compaction.
+  next refresh, and its objects at a later compaction. Because the mirror is
+  fetched with the backend's credential, a container given none (the default
+  container GitHub credential) can read a private repository's branches this way;
+  [6741](../todo/containers-and-environments/6741-git-mirror-access.md) holds the
+  fix, a mirror per kind of access fetched with what its readers hold.
 - **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
   source is gone. With `-v` it recreates the source, so a stopped environment
   survives its mirror being removed by any route. If the project parent was
@@ -1738,13 +1843,30 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   image ids are resolved by inspecting the running container. An unreadable image
   manifest refuses fresh startup rather than silently selecting weaker storage;
   retry after Docker can read the image. Healthy existing bridges reuse their token.
+- **A live session's execution policy only narrows.** Every bridge refuses a
+  request that would widen a live conversation's policy with 403
+  `policy-widening-refused` (`packages/protocol/src/execution-policy-narrowing.ts`).
+  A session restored from disk keeps its saved policy under an in-memory
+  `policyPending` marker: the next policy a request sends replaces it, and the
+  marker clears once a request sets one or a prompt starts. When the user widens
+  a policy, the backend replaces the bridge and resumes
+  (`replaceBridgeForWiderPolicy` in `native-agent-service.ts`), and refuses while
+  a turn is running in that environment. `readOnly` stays a per-turn intent;
+  that is safe only because the backend alone holds the bridge token. A separate
+  uid for the bridge was not built: the token is already out of the agent's
+  reach, and what the shared uid still allows is in to-do 4980.
 
 What the agent's uid can still do is in
 [to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):
 kill the bridge and listen on its port, or plant code for the next start through
 its login shell or runtime environment. OpenCode has no bridge and takes the plain
 password, in `opencode-token` in the same directory; a plugin inside the server keeps
-it from the agent ([4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)).
+it from the agent (`buildOpenCodeCredentialPluginSource` in
+`agent-credential-files.ts`). In a container, a server the plugin could not harden
+refuses tools; on a host it only logs, because a host's OpenCode can be any build.
+A host server gets the plugin through `OPENCODE_CONFIG_DIR`
+(`opencode-host-credential.ts`), and a server whose user set that variable runs
+without it (`credential-plugin.skipped`).
 Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
 ## Container worktree signal (`container-worktree-signal=1`)

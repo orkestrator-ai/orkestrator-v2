@@ -366,6 +366,12 @@ export interface Environment {
    * conflicts (`pr-auto-merge.ts`). Absent means off.
    */
   autoMerge?: boolean;
+  /**
+   * Delete this environment once auto-merge has merged its pull request (the
+   * Integrate dialog's "Auto-merge & Cleanup"). Only meaningful while
+   * `autoMerge` is on, and cleared with it.
+   */
+  autoMergeCleanup?: boolean;
   /** PR-specific authorization and freshness fence. */
   autoMergePrUrl?: string | null;
   autoMergeEnabledAt?: string | null;
@@ -373,6 +379,8 @@ export interface Environment {
   autoMergeError?: string | null;
   /** Recoverable Resolve identity, retained across pre-dispatch failures. */
   autoMergeResolveRequestId?: string;
+  autoMergeResolveCompletedAt?: string;
+  autoMergeResolveAttempts?: number;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
@@ -1110,6 +1118,11 @@ export interface RepositoryConfig {
    * application".
    */
   agentSettings?: AgentSettingsTier;
+  /**
+   * The user lets this project's coordinator send work to environments it did
+   * not create. Absent (every older record) means no.
+   */
+  coordinatorOtherEnvironments?: boolean;
 }
 
 export interface AppConfig {
@@ -1262,6 +1275,13 @@ export interface AppConfig {
     debugLogRetentionDays?: number;
     /** "Log detail": levels for every process, running bridges included. Applies live. */
     logDetail?: import("@orkestrator/protocol/log-policy").LogDetail;
+    /**
+     * Backend-owned: when raised "Log detail" reverts to `info` (ISO 8601). Every
+     * config write recomputes it; a value a client sends is ignored.
+     */
+    logDetailExpiresAt?: string;
+    /** Keep raised "Log detail" until it is changed back, instead of for 24 hours. */
+    logDetailKeepRaised?: boolean;
     webClientEnabled?: boolean;
     /** Audible cues for background events that need the user's attention. */
     notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;

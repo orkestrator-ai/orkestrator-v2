@@ -20,11 +20,14 @@ export async function readBridgeResumableSessions(
     options.includeArchived ? "/session/list?includeArchived=1" : "/session/list",
     {},
     fetchImpl,
+    "session-list",
   );
   // The ACP bridge answers 410 with the reason the agent cannot list its own
-  // history. Dropping that body would reduce a specific, actionable message
-  // to a bare status code in front of the user.
-  await assertOkWithErrorDetail(response, `${agent} resumable session list`);
+  // history, and the Pi bridge 504 when its read runs out of time. The resume
+  // dialog shows this message, so a body that says why is the whole of it.
+  await assertOkWithErrorDetail(response, `${agent} resumable session list`, {
+    detailAlone: true,
+  });
   const payload = asRecord(
     await boundedJson(response, `${agent} resumable session list`, {
       remaining: 2 * 1024 * 1024,

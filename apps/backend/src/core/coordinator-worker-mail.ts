@@ -4,8 +4,10 @@ import {
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS,
   coordinatorConversationIdFromRuntimeId,
+  coordinatorConversationRunnable,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  type CoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
 import {
   PROJECT_HOME_MESSAGE_LIMITS,
@@ -13,6 +15,7 @@ import {
   type ProjectHomeMessage,
 } from "@orkestrator/protocol/project-home-message";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { coordinatorDelegationNotOpenedNote } from "./coordinator-workflow-retention.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   attachmentReferences,
@@ -21,6 +24,7 @@ import {
   type MailAttachmentInvoker,
 } from "./coordinator-mail-attachments.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   coordinatorDeliverNowResult,
@@ -55,6 +59,7 @@ type CoordinatorSender = Scope & {
   kind: "coordinator";
   environmentId: string;
   tabId: string;
+  turnOrigin?: "mail";
 };
 interface OutgoingMail {
   requestId: string;
@@ -99,6 +104,7 @@ export async function openWorkerDelegation(
   workerEnvironmentId: string,
   workerTabId: string,
   requestId: string,
+  request?: CoordinatorDelegationRequest,
 ): Promise<boolean> {
   const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: randomUUID(),
@@ -120,6 +126,8 @@ export async function openWorkerDelegation(
     context.runtime.coordinatorRequests.workerTabs,
     association.id,
     workerTabId,
+    undefined,
+    request,
   );
   if (!opened) throw new Error("Coordinator delegation association was not found");
   return opened.delegation?.state === "running";
@@ -206,6 +214,7 @@ async function sendCoordinatorWorkerMail(
           destination.id,
           destinationTabId,
           requestId,
+          { summary: mail.subject || mail.body },
         );
       } catch (error) {
         log.warn("delegation.open-failed", {
@@ -213,7 +222,7 @@ async function sendCoordinatorWorkerMail(
           error: formatLogError(error),
         });
         // The message is already stored; say plainly that no wake will follow.
-        delegationNote = `The message was sent, but no delegation was opened, so you will not be woken when the worker answers: ${error instanceof Error && error.message !== COORDINATOR_REQUEST_ID_REUSED_ERROR ? error.message : "The delegation request ID may already belong to another worker. Do not resend the delivered message under a new ID."}`;
+        delegationNote = coordinatorDelegationNotOpenedNote(error, "sent");
       }
     }
     // Say plainly when the worker cannot read it yet: "pending" alone reads
@@ -417,7 +426,8 @@ export function registerCoordinatorWorkerMailCommands(
       const tab = workspace.conversations.find(
         (item) => item.id === conversation && !item.closedAt,
       );
-      if (!tab) throw new Error("Coordinator conversation is unavailable");
+      if (!tab || !coordinatorConversationRunnable(workspace, tab))
+        throw new Error("Coordinator conversation is unavailable");
       const sender: CoordinatorSender = {
         kind: "coordinator",
         projectId: project,
@@ -425,6 +435,9 @@ export function registerCoordinatorWorkerMailCommands(
         conversationId: conversation,
         environmentId: coordinatorRuntimeId(coordinator, conversation),
         tabId: tab.tabId,
+        // A turn the user did not start: its framing says so. The same line as
+        // the account-switch grant, which only the user's own turn can mint.
+        ...(tab.lastTurnOrigin !== "user" ? { turnOrigin: "mail" as const } : {}),
       };
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = asNonBlankString(toEnvironmentId, "toEnvironmentId");
@@ -489,8 +502,10 @@ export function registerCoordinatorWorkerMailCommands(
         steer,
         own,
       };
-      if (destination.projectHome !== true)
+      if (destination.projectHome !== true) {
+        await assertCoordinatorMayActOnEnvironment(context, sender, destination.id);
         return sendCoordinatorWorkerMail(context, invokerFor(context), sender, destination, mail);
+      }
       const reason =
         typeof projectHomeReason === "string" ? projectHomeReason.trim().replace(/\s+/g, " ") : "";
       if (!reason) throw new Error(PROJECT_HOME_REASON_REQUIRED);
@@ -547,7 +562,7 @@ export function registerCoordinatorWorkerMailCommands(
     );
     if (!workspace || workspace.projectId !== projectId || !tab)
       return { result: "stale", reason: "The coordinator conversation that asked was closed." };
-    if (workspace.lifecycleState !== "ready")
+    if (!coordinatorConversationRunnable(workspace, tab))
       throw new Error("The coordinator is paused or unavailable; nothing was sent.");
     const home = await context.storage.getEnvironment(target.environmentId);
     if (!home || home.projectHome !== true || home.projectId !== projectId)

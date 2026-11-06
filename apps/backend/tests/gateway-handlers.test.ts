@@ -3,6 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 import { installBoundedConsole } from "../src/bounded-console.js";
 import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
+import {
+  encodedValue,
+  markSpliceableResult,
+} from "../src/core/native-agent-projection-encoding.js";
 
 describe("remote gateway", () => {
   test("authenticated metrics expose null diagnostics when the singletons are absent", async () => {
@@ -14,6 +18,61 @@ describe("remote gateway", () => {
     });
     expect(response.status).toBe(200);
     expect(response.json()).toMatchObject({ eventLoop: null, consoleOutput: null });
+  });
+
+  test("authenticated metrics add the database figures without changing other fields", async () => {
+    const database = {
+      generatedAt: "2026-11-05T10:00:00.000Z",
+      main: {
+        fileBytes: 8_192,
+        walBytes: 0,
+        pageBytes: 4_096,
+        pageCount: 2,
+        freelistPages: 1,
+        freelistBytes: 4_096,
+      },
+      ledger: null,
+      backups: { count: 0, bytes: 0, newestAt: null, kinds: {} },
+      retention: null,
+      topTables: { main: null, ledger: null },
+      leaseWaits: { bucketsMs: [1], families: {}, overflowed: 0, transactionsBusy: 0 },
+    };
+    let attached: (() => unknown) | null = null;
+    const { info } = await startGateway({
+      env: {},
+      backend: {
+        invoke: async () => ({}),
+        databaseStats: () => database as never,
+        attachGatewayMetrics: (source: () => unknown) => {
+          attached = source;
+        },
+      },
+    });
+    const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const body = response.json() as Record<string, unknown>;
+    expect(body.database).toEqual(database);
+    // Every earlier field is still there: the change is additive.
+    for (const field of [
+      "replay",
+      "recurringWork",
+      "compatibilityPaths",
+      "eventLoop",
+      "consoleOutput",
+    ]) {
+      expect(body).toHaveProperty(field);
+    }
+    // The bundle reads the same snapshot in-process.
+    expect((attached as unknown as () => Record<string, unknown>)().database).toEqual(database);
+  });
+
+  test("authenticated metrics report no database for a backend without one", async () => {
+    const { info } = await startGateway({ env: {} });
+    const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    expect(response.json()).toMatchObject({ database: null });
   });
 
   test("authenticated metrics include event-loop diagnostics and console write failures", async () => {
@@ -88,6 +147,45 @@ describe("remote gateway", () => {
     expect(failure.json()).toEqual({ error: "Sign in with gh on Build box.", code: "gh-auth" });
     for (code of [undefined, "x".repeat(65), "not a code", { nested: true }])
       expect((await invoke()).json()).toEqual({ error: "Sign in with gh on Build box." });
+  });
+
+  test("splices already-encoded rows into a marked result and serializes others whole", async () => {
+    const row = { id: "m1", role: "assistant", content: 'é "quoted"', parts: [{ type: "text" }] };
+    const fresh = { id: "m2", omitted: undefined, parts: [undefined, 1] };
+    encodedValue(row);
+    const marked = markSpliceableResult({
+      viewVersion: 1,
+      status: "snapshot",
+      skipped: undefined,
+      value: { messages: [row, fresh], revisedMessages: [row] },
+    });
+    // A marked result is still the plain object every other caller receives.
+    expect(Object.keys(marked)).toEqual(["viewVersion", "status", "skipped", "value"]);
+    const results: unknown[] = [marked];
+    const { info } = await startGateway({
+      env: {},
+      backend: { invoke: async () => results.shift() },
+    });
+    const invoke = () =>
+      requestUrl(`${info.url}__orkestrator/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${info.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ command: "get_native_agent_transcript_update", args: {} }),
+      });
+    const spliced = await invoke();
+    expect(spliced.status).toBe(200);
+    expect(spliced.body).toBe(JSON.stringify({ result: marked }));
+
+    // Prove the row came from its memo, not a second serialization: a row
+    // changed behind the memo's back (never done in production) still shows
+    // what was encoded, while an unmarked result is serialized afresh.
+    (row as { content: string }).content = "changed after encoding";
+    const unmarked = { value: { messages: [row] } };
+    results.push(markSpliceableResult({ value: { messages: [row] } }), unmarked);
+    expect(((await invoke()).json() as any).result.value.messages[0].content).toBe('é "quoted"');
+    expect(((await invoke()).json() as any).result.value.messages[0].content).toBe(
+      "changed after encoding",
+    );
   });
 
   test("returns client errors for malformed, non-object, oversized, and incomplete settings bodies", async () => {

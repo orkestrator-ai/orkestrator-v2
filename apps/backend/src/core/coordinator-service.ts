@@ -15,6 +15,7 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import {
   firstEnabledAgentPlatform,
   normalizeAgentPlatforms,
@@ -36,7 +37,18 @@ import {
   type CoordinatorStatusWakeOptions,
 } from "./coordinator-status-wakes.js";
 import { agentMessagingEnabled } from "./coordinator-context-reads.js";
+import {
+  closingDelegationWakeKind,
+  reconcileClosedConversations,
+  reconcileMainMail,
+} from "./coordinator-closed-conversations.js";
+import {
+  currentOpenDelegation,
+  readOpenDelegations,
+  type OpenDelegationLookup,
+} from "./coordinator-open-delegations.js";
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
+import { CoordinatorNodeReleases } from "./coordinator-node-release.js";
 import {
   decideDelegation,
   type DelegationDecision,
@@ -115,6 +127,8 @@ export interface CoordinatorDelegationOptions {
    * iterations, and that idle is the loop's, not the worker's answer.
    */
   workerGoal?: (environmentId: string, tabId: string) => Promise<NativeAgentGoal | undefined>;
+  /** Overrides `NODE_OFFLINE_NOTICE_MS` (`coordinator-node-release.ts`); for tests. */
+  nodeOfflineNoticeMs?: number;
 }
 
 export function sanitizeCoordinatorError(value: unknown): string {
@@ -174,22 +188,6 @@ function nextSideOrdinal(workspace: CoordinatorWorkspace): number {
   return ordinal;
 }
 
-/**
- * Work the main coordinator should own but a different conversation still
- * holds: delegations not yet woken, and workflows not yet reported. Finished
- * history is left where it is, because adopting re-arms its notification.
- */
-function liveWork(association: CoordinatorWorkflowAssociation): boolean {
-  if (association.pending) return false;
-  if (association.kind === "environment") {
-    return Boolean(
-      association.delegation &&
-      (association.delegation.state === "running" || !association.delegation.wokenAt),
-    );
-  }
-  return !association.terminalNotifiedAt;
-}
-
 function retainCoordinatorConversations(
   conversations: CoordinatorConversation[],
 ): CoordinatorConversation[] {
@@ -237,6 +235,18 @@ export class CoordinatorService {
    * only restarts the count.
    */
   private readonly delegationWakeFailures = new Map<string, { attempts: number; since: number }>();
+  /**
+   * Delegations this process closed without announcing, by project. A wake's
+   * final write (`wokenAt`) announces it; a wake that did not get that far is
+   * announced once after its attempt, so the Work panel still sees the close.
+   * Lost on restart, when every client reads afresh anyway.
+   */
+  private readonly unannouncedCloses = new Map<string, string>();
+  /**
+   * Work on nodes that left this registry, and the per-node offline clock
+   * beside the maps above (`coordinator-node-release.ts`).
+   */
+  private readonly nodeReleases: CoordinatorNodeReleases;
 
   constructor(
     private readonly storage: StorageService,
@@ -268,6 +278,19 @@ export class CoordinatorService {
       ...(options.gitHubCli ? { gitHubCli: options.gitHubCli } : {}),
       ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
     });
+    this.nodeReleases = new CoordinatorNodeReleases({
+      storage,
+      mainAddress: async (coordinatorId) => {
+        const owner = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
+        if (!owner) return null;
+        const { workspace, main } = await this.ensureMainConversation(owner.projectId);
+        return { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
+      },
+      nodeName: (nodeId) => this.remote?.nodeName(nodeId) ?? Promise.resolve(nodeId),
+      ...(options.nodeOfflineNoticeMs !== undefined
+        ? { offlineNoticeMs: options.nodeOfflineNoticeMs }
+        : {}),
+    });
     // Mail to "coordinator", or to a conversation that has since closed, finds
     // the current main through here, which starts one if there is none.
     this.storage.setCoordinatorMailResolver?.((projectId) => this.mainMailAddress(projectId));
@@ -277,6 +300,45 @@ export class CoordinatorService {
   setRemoteAccess(remote: CoordinatorRemoteAccess): void {
     this.remote = remote;
     this.statusWakes.setRemoteAccess(remote);
+  }
+
+  /**
+   * Nodes this command node no longer controls (`NodeService`'s
+   * `onNodesReleased`): forgotten, or handed to another command node. Their
+   * open delegations close as `stopped`, their workflows are marked reported,
+   * and each coordinator with work there hears one notice, so nothing waits
+   * on a node that cannot answer here and its records become clearable.
+   */
+  async nodesReleased(
+    nodes: ReadonlyArray<{ nodeId: string; name?: string }>,
+    reason: "forgotten" | "handed-over",
+  ): Promise<void> {
+    for (const node of nodes) {
+      // Never throws: the registry change already happened. The sweep's
+      // registry check releases whatever this could not.
+      const closed = await this.nodeReleases
+        .release(node.nodeId, reason, node.name)
+        .catch((error: unknown) => {
+          log.warn("node-release.failed", { error: formatLogError(error, { stack: false }) });
+          return [];
+        });
+      for (const id of closed) {
+        this.remoteAskedAt.delete(id);
+        this.remoteSeenWorking.delete(id);
+        this.backgroundWorkSince.delete(id);
+      }
+    }
+  }
+
+  /**
+   * The sweep's half of node release: records naming a node the registry no
+   * longer holds (forgotten before release existed, or a release interrupted
+   * by a restart) are released, and any notice still owed is sent.
+   */
+  private async reconcileReleasedNodes(): Promise<void> {
+    const registered = await this.remote?.registeredNodeIds?.();
+    if (registered) await this.nodeReleases.releaseUnregistered(registered);
+    else await this.nodeReleases.deliverNotices();
   }
 
   /**
@@ -327,16 +389,23 @@ export class CoordinatorService {
    * An open main that has never run gets the default agent the same way: with
    * no agent it could neither read this mail nor be woken for it. With no
    * qualified agent it stays unassigned and the mail waits for the user.
+   *
+   * Every path that opens a main comes through here. `opened` is one the user
+   * just opened (`ensure`, `createConversation`): it stays unassigned, and
+   * open side conversations keep their own work.
    */
   async ensureMainConversation(
     projectId: string,
+    options: { opened?: boolean } = {},
   ): Promise<{ workspace: CoordinatorWorkspace; main: CoordinatorConversation }> {
+    const opened = options.opened === true;
     const result = await this.serialize(projectId, async () => {
       const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace was not found");
       const open = coordinatorMainConversation(existing);
       if (open?.agent) return { workspace: existing, main: open };
       if (open) {
+        if (opened) return { workspace: existing, main: open };
         const agent = await this.preferredAgent(projectId).catch(() => undefined);
         if (!agent) return { workspace: existing, main: open };
         const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
@@ -368,7 +437,7 @@ export class CoordinatorService {
         existing.id,
         "main",
         undefined,
-        await this.preferredAgent(projectId).catch(() => undefined),
+        opened ? undefined : await this.preferredAgent(projectId).catch(() => undefined),
       );
       const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
         projectId,
@@ -386,70 +455,27 @@ export class CoordinatorService {
       const main = coordinatorMainConversation(workspace) ?? created;
       return { workspace, main };
     });
-    await this.adoptLiveWork(result.workspace, result.main);
-    await this.reconcileMainMail(result.workspace, result.main);
+    // What every path that opens or uses a main does next: the work other
+    // conversations still owe moves onto it, and so does the mail waiting in
+    // a closed main's inbox. Reads never do this (`snapshot`); the sweep
+    // repeats the closed-conversation half for every coordinator at once.
+    await reconcileMainMail(this.storage, result.workspace, result.main, { closedOnly: opened });
     return { workspace: result.workspace, main: result.main };
   }
 
-  private async reconcileMainMail(
+  /** A failure is logged, not thrown: the sweep repeats the repair. */
+  private async settleNewMain(
+    projectId: string,
     workspace: CoordinatorWorkspace,
-    main: CoordinatorConversation,
-  ): Promise<void> {
-    await this.adoptLiveWork(workspace, main, true);
-    await this.storage.synchronizeAgentMailboxes();
-    // What was waiting in the closed main's inbox — a held report above
-    // all — belongs to the new one.
-    const owed = new Set(
-      [
-        ...(await this.storage.coordinators.listOpenCoordinatorDelegations()),
-        ...(await this.storage.coordinators.listUnwokenCoordinatorDelegations()),
-      ].map((association) => association.id),
-    );
-    await this.storage
-      .moveClosedCoordinatorMail(
-        workspace.id,
-        {
-          environmentId: coordinatorRuntimeId(workspace.id, main.id),
-          tabId: main.tabId,
-        },
-        owed,
-      )
-      .catch((error) => {
-        log.warn("mail.move-failed", { error: formatLogError(error) });
+  ): Promise<CoordinatorWorkspace> {
+    try {
+      return (await this.ensureMainConversation(projectId, { opened: true })).workspace;
+    } catch (error: unknown) {
+      log.warn("mail.reconcile-failed", {
+        coordinatorId: workspace.id,
+        error: formatLogError(error, { stack: false }),
       });
-  }
-
-  /** Move delegations and workflows other conversations still owe onto the main. */
-  private async adoptLiveWork(
-    workspace: CoordinatorWorkspace,
-    main: CoordinatorConversation,
-    closedOnly = false,
-  ): Promise<void> {
-    for (const association of await this.storage.coordinators.listCoordinatorWorkflowAssociations(
-      workspace.projectId,
-    )) {
-      if (
-        association.coordinatorId !== workspace.id ||
-        association.conversationId === main.id ||
-        !liveWork(association) ||
-        (closedOnly &&
-          workspace.conversations.some(
-            (item) => item.id === association.conversationId && !item.closedAt,
-          ))
-      ) {
-        continue;
-      }
-      await this.storage.coordinators
-        .adoptCoordinatorWorkflowAssociation(
-          workspace.projectId,
-          workspace.id,
-          association.id,
-          main.id,
-          { force: true },
-        )
-        .catch((error) => {
-          log.warn("work.move-failed", { error: formatLogError(error) });
-        });
+      return workspace;
     }
   }
 
@@ -545,25 +571,39 @@ export class CoordinatorService {
     });
   }
 
-  async ensure(projectId: string): Promise<CoordinatorSnapshot> {
-    return this.serialize(projectId, async () => {
+  /**
+   * `clearConversationErrors` serves a renderer that predates per-conversation
+   * failures: its panel has no Retry for one, and opening the panel is the only
+   * recovery it knows (version-compatibility.md).
+   */
+  async ensure(
+    projectId: string,
+    options: { clearConversationErrors?: boolean } = {},
+  ): Promise<CoordinatorSnapshot> {
+    const ensured = await this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
       const before = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
-      // A workspace only reaches `error` through a real startup failure now
-      // that an unqualified default no longer produces one: a fresh
-      // conversation has no provider until the user picks one. Retry therefore
-      // means "try that same conversation again", and never silently rewrites
-      // which platform a conversation belongs to.
+      // A workspace only reaches `error` as a record an older backend stored:
+      // startup failures now mark the conversation that failed. Recovering it
+      // never rewrites which platform a conversation belongs to.
       const canRecoverError = before?.lifecycleState === "error";
+      const clearErrors =
+        options.clearConversationErrors === true &&
+        before?.conversations.some((item) => item.startupError) === true;
+      if (clearErrors)
+        compatibilityPathUsage.record("coordinator-ensure.conversation-errors-cleared");
       const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
         projectId,
         (current) => {
           if (current) {
-            if (!canRecoverError || current.id !== before?.id) return current;
+            if ((!canRecoverError && !clearErrors) || current.id !== before?.id) return current;
             return {
               ...current,
-              lifecycleState: "ready",
+              ...(canRecoverError ? { lifecycleState: "ready" as const } : {}),
               lastStartupError: undefined,
+              conversations: clearErrors
+                ? current.conversations.map((item) => ({ ...item, startupError: undefined }))
+                : current.conversations,
               updatedAt: new Date().toISOString(),
             };
           }
@@ -585,8 +625,14 @@ export class CoordinatorService {
         },
       );
       if (!workspace) throw new Error("Coordinator workspace could not be created");
-      return this.snapshot(workspace, projectPath);
+      return { workspace, projectPath, created: !before };
     });
+    // A new coordinator's first main is settled now, not on the next sweep.
+    const workspace =
+      ensured.created && coordinatorMainConversation(ensured.workspace)
+        ? await this.settleNewMain(projectId, ensured.workspace)
+        : ensured.workspace;
+    return this.snapshot(workspace, ensured.projectPath);
   }
 
   async get(projectId: string): Promise<CoordinatorSnapshot | null> {
@@ -595,12 +641,17 @@ export class CoordinatorService {
     return this.snapshot(workspace, await this.canonicalProjectPath(projectId));
   }
 
+  /**
+   * What a coordinator looks like now. A read, and nothing more: no adoption,
+   * mail move or other write, so the panel's view and every agent's
+   * `read_messages` stay cheap. Work and mail closed conversations left behind
+   * move when a main opens (`ensureMainConversation`), when a conversation closes,
+   * and on the sweep (`reconcileWorkerDelegations`).
+   */
   private async snapshot(
     workspace: CoordinatorWorkspace,
     projectPath: string,
   ): Promise<CoordinatorSnapshot> {
-    const main = coordinatorMainConversation(workspace);
-    if (main) await this.reconcileMainMail(workspace, main);
     const availability = coordinatorProviderQualifications(await this.qualificationOptions());
     const mcp = this.controlMcp();
     return {
@@ -612,6 +663,7 @@ export class CoordinatorService {
       workflows: await this.storage.coordinators.listCoordinatorWorkflowAssociations(
         workspace.projectId,
       ),
+      workflowStore: await this.storage.coordinators.getCoordinatorWorkflowStoreState(),
     };
   }
 
@@ -664,10 +716,11 @@ export class CoordinatorService {
     if (!(await this.storage.coordinators.getCoordinatorWorkspace(projectId))) {
       await this.ensure(projectId);
     }
-    return this.serialize(projectId, async () => {
+    const created = await this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
       const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace disappeared");
+      const hadMain = coordinatorMainConversation(existing) !== undefined;
       const unused = new Set<string>();
       for (const id of new Set(options.closeUnused ?? [])) {
         if (await this.unusedConversation(existing, id)) unused.add(id);
@@ -724,8 +777,18 @@ export class CoordinatorService {
         workspace.id,
         new Set(workspace.conversations.map((item) => item.id)),
       );
-      return this.snapshot(workspace, projectPath);
+      return { workspace, projectPath, hadMain };
     });
+    // With no main open this started one, which takes over closed work.
+    let workspace = created.workspace;
+    if (!created.hadMain && coordinatorMainConversation(workspace)) {
+      workspace = await this.settleNewMain(projectId, workspace);
+    } else {
+      // Side conversations need a mailbox immediately too; snapshots no longer
+      // perform this synchronization as a side effect.
+      await this.storage.synchronizeAgentMailboxes();
+    }
+    return this.snapshot(workspace, created.projectPath);
   }
 
   /**
@@ -846,7 +909,14 @@ export class CoordinatorService {
     if (!workspace) throw new Error("Coordinator workspace was not found");
     // The mailbox closes with the conversation, so mail a wake pass places from
     // here on waits to move to the next main rather than being injected here.
-    await this.storage.synchronizeAgentMailboxes().catch((error: unknown) => {
+    // A side conversation's open work moves to the main now, not on the next
+    // sweep; closing the main leaves its work and mail for the next main.
+    const main = coordinatorMainConversation(workspace);
+    await (
+      main
+        ? reconcileMainMail(this.storage, workspace, main)
+        : this.storage.synchronizeAgentMailboxes()
+    ).catch((error: unknown) => {
       log.warn("mail.reconcile-failed", {
         coordinatorId: workspace.id,
         error: formatLogError(error, { stack: false }),
@@ -884,17 +954,27 @@ export class CoordinatorService {
     return this.snapshot(workspace, projectPath);
   }
 
-  async recordStartupError(projectId: string, error: unknown): Promise<void> {
-    await this.storage.coordinators.mutateCoordinatorWorkspace(projectId, (current) =>
-      current
-        ? {
-            ...current,
-            lifecycleState: "error",
-            lastStartupError: sanitizeCoordinatorError(error),
-            updatedAt: new Date().toISOString(),
-          }
-        : null,
-    );
+  /**
+   * Retry after this conversation's bridge failed to start: clear its error so
+   * the pane connects again, which is what starts the bridge. It starts nothing
+   * itself, and a paused coordinator stays paused.
+   */
+  async retryConversation(projectId: string, conversationId: string): Promise<CoordinatorSnapshot> {
+    const projectPath = await this.canonicalProjectPath(projectId);
+    const workspace = await this.mutateSerialized(projectId, (current) => {
+      if (!current) throw new Error("Coordinator workspace was not found");
+      const target = current.conversations.find((item) => item.id === conversationId);
+      if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
+      return {
+        ...current,
+        conversations: current.conversations.map((item) =>
+          item.id === conversationId ? { ...item, startupError: undefined } : item,
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (!workspace) throw new Error("Coordinator workspace was not found");
+    return this.snapshot(workspace, projectPath);
   }
 
   async removeProject(projectId: string): Promise<void> {
@@ -1003,7 +1083,7 @@ export class CoordinatorService {
     // A close that returns null lost the race to another observer of the same
     // edge. Either way the delegation is now closed, and the wake below is
     // idempotent, so there is nothing to do differently.
-    if (decision.action === "close") await this.closeOnDecision(association.id, decision);
+    if (decision.action === "close") await this.closeOnDecision(association, decision);
   }
 
   /** One delegation that could not be settled must not stop the rest of the pass. */
@@ -1129,17 +1209,35 @@ export class CoordinatorService {
     return goal !== undefined && goalIsRunning(goal.status);
   }
 
+  /**
+   * Close a delegation and choose its wake in one write, unannounced: the
+   * wake that follows (`deliverDelegationWakes`, which every caller runs next)
+   * announces once, after its last write.
+   */
   private async closeOnDecision(
-    id: string,
+    association: CoordinatorWorkflowAssociation,
     decision: Extract<DelegationDecision, { action: "close" }>,
   ): Promise<void> {
-    await this.storage.coordinators.closeCoordinatorDelegation(
-      id,
+    const closed = await this.storage.coordinators.closeCoordinatorDelegation(
+      association.id,
       decision.state,
       new Date().toISOString(),
       decision.backgroundWorkTimeoutMs,
+      {
+        wakeKind: (closing, owner) => closingDelegationWakeKind(this.storage, closing, owner),
+        announce: false,
+      },
     );
-    this.backgroundWorkSince.delete(id);
+    if (closed) this.unannouncedCloses.set(closed.id, closed.projectId);
+    this.backgroundWorkSince.delete(association.id);
+  }
+
+  /** Announce, once, a close whose wake did not announce it. */
+  private announceClose(associationId: string): void {
+    const projectId = this.unannouncedCloses.get(associationId);
+    if (projectId === undefined) return;
+    this.unannouncedCloses.delete(associationId);
+    this.storage.coordinators.announceCoordinatorChange(projectId);
   }
 
   /**
@@ -1152,23 +1250,21 @@ export class CoordinatorService {
    * from the environment record and a missed hook is a silent hang.
    */
   async reconcileWorkerDelegations(): Promise<void> {
-    for (const workspace of await this.storage.coordinators.listCoordinatorWorkspaces()) {
-      const main = coordinatorMainConversation(workspace);
-      if (!main) continue;
-      await this.reconcileMainMail(workspace, main)
-        .then(() => {
-          log.recovered("mail.reconcile-failed", workspace.id);
-        })
-        .catch((error: unknown) => {
-          log.throttled("warn", "mail.reconcile-failed", {
-            scope: workspace.id,
-            error,
-            fields: () => ({ coordinatorId: workspace.id, error: formatLogError(error) }),
-          });
-        });
-    }
-    for (const association of await this.storage.coordinators.listOpenCoordinatorDelegations()) {
-      await this.reconcileWorkerDelegation(association)
+    await this.reconcileReleasedNodes().catch((error: unknown) => {
+      log.throttled("warn", "node-release.reconcile-failed", {
+        error,
+        fields: () => ({ error: formatLogError(error, { stack: false }) }),
+      });
+    });
+    await reconcileClosedConversations(this.storage).catch((error: unknown) => {
+      log.throttled("warn", "mail.reconcile-failed", {
+        error,
+        fields: () => ({ error: formatLogError(error) }),
+      });
+    });
+    const open = await readOpenDelegations(this.storage.coordinators);
+    for (const association of open.list) {
+      await this.reconcileWorkerDelegation(association, open.current)
         .then(() => {
           log.recovered("delegation.reconcile-failed", association.id);
         })
@@ -1186,26 +1282,21 @@ export class CoordinatorService {
           fields: () => ({ error: formatLogError(error, { stack: false }) }),
         });
       });
-    const owed = new Set(
-      [
-        ...(await this.storage.coordinators.listOpenCoordinatorDelegations()),
-        ...(await this.storage.coordinators.listUnwokenCoordinatorDelegations()),
-      ].map((association) => association.id),
+    await this.storage.releaseOrphanedDelegationHolds(
+      await this.storage.coordinators.listOwedCoordinatorDelegationIds(),
     );
-    await this.storage.releaseOrphanedDelegationHolds(owed);
   }
 
   private async reconcileWorkerDelegation(
     association: CoordinatorWorkflowAssociation,
+    currentOpen: OpenDelegationLookup,
   ): Promise<void> {
     if (association.nodeId) {
-      await this.reconcileRemoteDelegation(association);
+      await this.reconcileRemoteDelegation(association, currentOpen);
       return;
     }
     await this.storage.withAgentMailWorkerAdmission(association.resourceId, async () => {
-      const current = (await this.storage.coordinators.listOpenCoordinatorDelegations()).find(
-        (item) => item.id === association.id,
-      );
+      const current = await currentOpen(association.id);
       if (!current) return;
       const delegation = current.delegation!;
       const record = await this.storage.getEnvironment(association.resourceId);
@@ -1233,7 +1324,7 @@ export class CoordinatorService {
         undeliveredRequest,
         goalRunning: turn === "idle" && !undeliveredRequest && (await this.goalIsDriving(current)),
       });
-      if (decision.action === "close") await this.closeOnDecision(association.id, decision);
+      if (decision.action === "close") await this.closeOnDecision(current, decision);
     });
   }
 
@@ -1264,6 +1355,7 @@ export class CoordinatorService {
    */
   private async reconcileRemoteDelegation(
     association: CoordinatorWorkflowAssociation,
+    currentOpen: OpenDelegationLookup = currentOpenDelegation(this.storage.coordinators),
   ): Promise<void> {
     const delegation = association.delegation;
     if (!this.remote || !association.nodeId || delegation?.state !== "running") return;
@@ -1271,6 +1363,12 @@ export class CoordinatorService {
     const state = await this.remote
       .workerState(association.nodeId, association.resourceId, delegation.workerTabId)
       .catch(() => "unavailable" as const);
+    // The delegation stays open however long the node is silent; its clock only decides a notice.
+    await this.nodeReleases
+      .noteRead(association.nodeId, state !== "unavailable")
+      .catch((error: unknown) => {
+        log.warn("node-offline.check-failed", { error: formatLogError(error, { stack: false }) });
+      });
     if (state === "unavailable" || this.remoteAskedAt.get(association.id) !== requestGeneration)
       return;
     const askedAt = Math.max(Date.parse(delegation.requestedAt) || 0, requestGeneration?.at ?? 0);
@@ -1301,10 +1399,11 @@ export class CoordinatorService {
       async () => {
         // A follow-up admitted during either remote read needs its own turn.
         if (this.remoteAskedAt.get(association.id) !== requestGeneration) return;
-        const current = (await this.storage.coordinators.listOpenCoordinatorDelegations()).find(
-          (item) => item.id === association.id,
-        );
+        const current = await currentOpen(association.id);
         if (!current) return;
+        // Remote observations belong to the request read before collection.
+        // A persisted follow-up invalidates them even without a local token.
+        if (current.delegation?.requestedAt !== delegation.requestedAt) return;
         const decision = await this.decide(current, gathered, {
           asked,
           backgroundWorkPending: state.backgroundWorkPending === true,
@@ -1312,7 +1411,7 @@ export class CoordinatorService {
         if (decision.action !== "close") return;
         this.remoteSeenWorking.delete(association.id);
         this.remoteAskedAt.delete(association.id);
-        await this.closeOnDecision(association.id, decision);
+        await this.closeOnDecision(current, decision);
       },
     );
   }
@@ -1376,6 +1475,8 @@ export class CoordinatorService {
           });
         });
       }
+      // A wake that stopped short of its announcing write still shows the close.
+      this.announceClose(association.id);
     }
   }
 
@@ -1469,6 +1570,7 @@ export class CoordinatorService {
               id: delegation.workerTabId,
               environmentId: association.resourceId,
               tabId: delegation.workerTabId,
+              ...(association.nodeId ? { nodeId: association.nodeId } : {}),
               label: association.resourceId,
             },
             state: delegation.state,
@@ -1493,6 +1595,7 @@ export class CoordinatorService {
     const latest = await this.storage.coordinators.getCoordinatorWorkspaceById(owner.id);
     if (!latest?.conversations.some((item) => item.id === main.id && !item.closedAt)) return;
     await this.storage.coordinators.markCoordinatorDelegationWakeFailed(association.id);
+    this.unannouncedCloses.delete(association.id);
     this.delegationWakeFailures.delete(association.id);
     log.warn("delegation.wake-retired", { associationId: association.id, attempts, kind });
   }
@@ -1517,6 +1620,7 @@ export class CoordinatorService {
       // honest outcome: there is nobody left to wake, and leaving it
       // unstamped would retry this lookup on every sweep forever.
       await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
+      this.unannouncedCloses.delete(association.id);
       return;
     }
     // The wake goes to the main coordinator. If the user closed it, a new
@@ -1526,6 +1630,9 @@ export class CoordinatorService {
     // Close uses the same project queue. Keep the open-main check, report
     // lookup and durable kind selection together so a close cannot turn a
     // held report into an apparent silent worker between those operations.
+    // The delegation's own close usually chose the kind already, in the same
+    // write (`closeOnDecision`); it is chosen and written here only when no
+    // main was open at that close.
     const wakeKind = await this.serialize(owner.projectId, async () => {
       const latest = await this.storage.coordinators.getCoordinatorWorkspaceById(workspace.id);
       if (!latest?.conversations.some((item) => item.id === conversation.id && !item.closedAt))
@@ -1577,21 +1684,25 @@ export class CoordinatorService {
       // A turn the coordinator stopped (stop_worker_turn) ends like any
       // other, however its delegation closed (the turn end, or a failed or
       // stopped environment); say who stopped it, so a turn end is not read
-      // as the worker finishing.
-      const stoppedByCoordinator = delegation.stopRequestedAt !== undefined;
+      // as the worker finishing. The Work panel's Stop says the user did it.
+      const stopRequested = delegation.stopRequestedAt !== undefined;
+      const stoppedByUser = delegation.stopRequestedBy === "user";
       const outcome =
         delegation.state === "completed"
-          ? stoppedByCoordinator
+          ? stopRequested
             ? "stopped"
             : "finished"
           : delegation.state === "failed"
             ? "failed"
             : "stopped";
-      const stopNote = !stoppedByCoordinator
+      const stoppedWith = stoppedByUser
+        ? "the user stopped its turn from the Work panel"
+        : "you stopped its turn with stop_worker_turn";
+      const stopNote = !stopRequested
         ? `without sending a report.`
         : delegation.state === "completed"
-          ? `because you stopped its turn with stop_worker_turn, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
-          : `after you stopped its turn with stop_worker_turn, before it sent a report.`;
+          ? `because ${stoppedWith}, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
+          : `after ${stoppedWith}, before it sent a report.`;
       // What the worker last said is the closest thing to a report it left.
       // Only a finished turn has a live session worth reading; best effort.
       const excerpt =
@@ -1654,13 +1765,14 @@ export class CoordinatorService {
                 id: delegation.workerTabId,
                 environmentId: association.resourceId,
                 tabId: delegation.workerTabId,
+                ...(association.nodeId ? { nodeId: association.nodeId } : {}),
                 label,
               },
               state: delegation.state,
               tone:
                 delegation.state === "failed"
                   ? "failure"
-                  : stoppedByCoordinator
+                  : stopRequested
                     ? "info"
                     : delegation.state === "completed"
                       ? "success"
@@ -1683,7 +1795,17 @@ export class CoordinatorService {
     const latest = await this.storage.coordinators.getCoordinatorWorkspaceById(workspace.id);
     if (!latest?.conversations.some((item) => item.id === conversation.id && !item.closedAt))
       return;
+    // The second and last write of the wake, and its one announcement: the
+    // close and its wake kind were the first (`closeOnDecision`).
     await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
+    this.unannouncedCloses.delete(association.id);
+    // A presentation cue only; the id is fixed, so a client hears one per wake.
+    this.storage.notifyCoordinatorWake({
+      attentionId: `delegation-wake:${association.id}:${delegation.requestedAt}`,
+      projectId: association.projectId,
+      coordinatorId: association.coordinatorId,
+      occurredAt: new Date().toISOString(),
+    });
   }
 
   /**

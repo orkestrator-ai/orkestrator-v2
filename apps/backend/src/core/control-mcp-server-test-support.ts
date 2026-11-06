@@ -92,6 +92,10 @@ export function useControlMcpServerHarness() {
       if (override) return (await override(args)) as T;
       let result: unknown;
       switch (command) {
+        case "assert_coordinator_environment_scope":
+          // The origin check runs for real in `coordinator-environment-scope.test.ts`.
+          result = { allowed: true };
+          break;
         case "get_projects":
           result = [
             {

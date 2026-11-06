@@ -1,4 +1,5 @@
 import type { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
+import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -7,9 +8,13 @@ import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_WORKSPACE_VERSION,
   isCoordinatorWorkspace,
+  normalizeCoordinatorDelegationRequest,
   normalizeCoordinatorRoles,
   normalizeCoordinatorSessionKeys,
+  type CoordinatorDelegationRequest,
+  type CoordinatorNodeRelease,
   type CoordinatorWorkflowAssociation,
+  type CoordinatorWorkflowStoreState,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import {
@@ -22,8 +27,12 @@ import {
 
 import {
   COORDINATOR_WORKFLOW_CLEANUP_BATCH,
+  COORDINATOR_WORKFLOW_NEAR_LIMIT,
   COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS,
   COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR,
+  coordinatorRequestAlias,
+  coordinatorRequestMatch,
+  coordinatorWorkflowStoreState,
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
   selectCoordinatorWorkflowsToClear,
 } from "./coordinator-workflow-retention.js";
@@ -39,6 +48,12 @@ const log = createLogger("coordinator");
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 /** The payload hash of a request that joined a live pull-request follow. */
 const PULL_REQUEST_FOLLOW_ALIAS = "pull-request-follow";
+/**
+ * How long a computed `workflowStore` state is reused while the store is
+ * unchanged. Resource state in other stores and the replay window move on
+ * without a coordinator write, so an unchanged revision is not enough.
+ */
+const WORKFLOW_STORE_STATE_TTL_MS = 60_000;
 
 /**
  * Every coordinator's staged attachments, under the application data
@@ -50,6 +65,12 @@ export function coordinatorAttachmentsRoot(dataDir: string): string {
 }
 
 export class CoordinatorsRepository {
+  private workflowStoreStateCache: {
+    revision: number;
+    at: number;
+    state: CoordinatorWorkflowStoreState;
+  } | null = null;
+
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
@@ -174,13 +195,50 @@ export class CoordinatorsRepository {
     };
   }
 
+  /**
+   * How close the shared store is to refusing new records, for the panel.
+   * Below {@link COORDINATOR_WORKFLOW_NEAR_LIMIT} records it is `ok` without
+   * further reads: even if every one were in use, a cleanup at the limit would
+   * still free a whole batch. Above it, the records cleanup could clear are
+   * counted with the same rules it applies, and the answer is reused for a
+   * minute while the store is unchanged.
+   */
+  async getCoordinatorWorkflowStoreState(): Promise<CoordinatorWorkflowStoreState> {
+    const store = await this.loadCoordinatorStore();
+    if (store.workflows.length < COORDINATOR_WORKFLOW_NEAR_LIMIT) return "ok";
+    const cached = this.workflowStoreStateCache;
+    const now = Date.now();
+    if (
+      cached &&
+      cached.revision === store.revision &&
+      now - cached.at < WORKFLOW_STORE_STATE_TTL_MS
+    )
+      return cached.state;
+    const environmentIds = new Set(
+      (await this.repos.projects.loadEnvironments()).map((environment) => environment.id),
+    );
+    const clearable = selectCoordinatorWorkflowsToClear({
+      workflows: store.workflows,
+      environmentExists: (environmentId) => environmentIds.has(environmentId),
+      resourceState: (association) => this.workflowResourceState(association),
+      batch: store.workflows.length,
+      now,
+    });
+    const state = coordinatorWorkflowStoreState(store.workflows.length - clearable.size);
+    this.workflowStoreStateCache = { revision: store.revision, at: now, state };
+    return state;
+  }
+
   /** Synchronous reads keep selection and the coordinator write in one event-loop step.
    * Unknown/remote state is never evidence that work stopped.
    */
   private workflowResourceState(
     association: CoordinatorWorkflowAssociation,
   ): "active" | "finished" | "missing" | "unknown" {
-    if (association.nodeId) return "unknown";
+    // Nothing on a released node can be read from here any more.
+    if (association.nodeRelease) return "missing";
+    if (association.nodeId)
+      return association.environmentCreationSettledAt ? "finished" : "unknown";
     if (association.kind === "feature-plan") return this.featurePlanResourceState(association);
     const file =
       association.kind === "multi-review"
@@ -437,6 +495,63 @@ export class CoordinatorsRepository {
     });
   }
 
+  /** Graph provisioning may finish after its launch receipt settled. Preserve
+   * creation before the graph's disposable run history can leave the store. */
+  async recordGraphEnvironmentCreation(run: GraphRun): Promise<void> {
+    if (!run.environmentId || !run.launch?.create || run.launch.requestedBy !== "coordinator")
+      return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "graph-run" ||
+          association.nodeId ||
+          association.projectId !== run.projectId ||
+          association.resourceId !== run.id ||
+          association.createdEnvironmentId === run.environmentId
+        )
+          continue;
+        association.createdEnvironmentId = run.environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /** A reclaimed pipeline admission can settle its receipt before provisioning. */
+  async recordPipelineEnvironmentCreation(
+    pipelineId: string,
+    projectId: string,
+    environmentId: string,
+    coordinatorLaunchId?: string,
+  ): Promise<void> {
+    if (!environmentId || !coordinatorLaunchId) return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "build-pipeline" ||
+          association.id !== coordinatorLaunchId ||
+          association.nodeId ||
+          association.projectId !== projectId ||
+          association.resourceId !== pipelineId ||
+          association.createsEnvironment !== true ||
+          association.createdEnvironmentId
+        )
+          continue;
+        association.createdEnvironmentId = environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
   async saveCoordinatorWorkflowAssociation(
     association: CoordinatorWorkflowAssociation,
   ): Promise<CoordinatorWorkflowAssociation> {
@@ -516,6 +631,7 @@ export class CoordinatorsRepository {
   async completeCoordinatorWorkflowAssociation(
     associationId: string,
     resourceId: string,
+    createdEnvironmentId?: string,
   ): Promise<CoordinatorWorkflowAssociation> {
     if (!resourceId.trim()) throw new Error("Coordinator workflow resource id is required");
     return this.enqueueCoordinatorMutation(async () => {
@@ -571,6 +687,23 @@ export class CoordinatorsRepository {
         return owner;
       }
       association.resourceId = resourceId;
+      // Provisioning may have won the race with this completion. Look up the
+      // committed local pipeline as well as the start call's earlier snapshot.
+      if (
+        !createdEnvironmentId &&
+        association.kind === "build-pipeline" &&
+        !association.nodeId &&
+        association.createsEnvironment === true
+      ) {
+        const pipeline = await this.repos.buildPipelines.getBuildPipeline(resourceId);
+        if (
+          pipeline?.projectId === association.projectId &&
+          (pipeline.snapshot as { coordinatorLaunchId?: unknown } | null)?.coordinatorLaunchId ===
+            association.id
+        )
+          createdEnvironmentId = pipeline.environmentId || undefined;
+      }
+      if (createdEnvironmentId) association.createdEnvironmentId = createdEnvironmentId;
       association.pending = false;
       delete association.claimPid;
       store.revision += 1;
@@ -612,26 +745,10 @@ export class CoordinatorsRepository {
       const existingRequest = store.workflows.find(
         (item) =>
           item.coordinatorId === coordinatorId &&
-          (item.requestId === requestId ||
-            (Array.isArray(item.requestAliases) &&
-              item.requestAliases.some(
-                (alias) =>
-                  alias && typeof alias.requestId === "string" && alias.requestId === requestId,
-              ))),
+          coordinatorRequestMatch(item, requestId) !== undefined,
       );
       if (existingRequest) {
-        const existingHash =
-          existingRequest.requestId === requestId
-            ? existingRequest.payloadHash
-            : Array.isArray(existingRequest.requestAliases)
-              ? existingRequest.requestAliases.find(
-                  (alias) =>
-                    alias &&
-                    typeof alias.requestId === "string" &&
-                    typeof alias.payloadHash === "string" &&
-                    alias.requestId === requestId,
-                )?.payloadHash
-              : undefined;
+        const existingHash = coordinatorRequestMatch(existingRequest, requestId)?.payloadHash;
         if (existingRequest.id !== associationId || existingHash !== payloadHash) {
           throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
@@ -673,8 +790,11 @@ export class CoordinatorsRepository {
     associationId: string,
     workerTabId: string,
     at = new Date().toISOString(),
+    /** What was asked and on what; bounded here, because this store is rewritten whole. */
+    request?: CoordinatorDelegationRequest,
   ): Promise<CoordinatorWorkflowAssociation | null> {
     if (!workerTabId.trim()) throw new Error("Coordinator delegation worker tab id is required");
+    const boundedRequest = normalizeCoordinatorDelegationRequest(request);
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
@@ -716,7 +836,12 @@ export class CoordinatorsRepository {
         if (overlapping) {
           throw new Error("That worker tab already has an outstanding coordinator delegation");
         }
-        association.delegation = { requestedAt: at, workerTabId, state: "running" };
+        association.delegation = {
+          requestedAt: at,
+          workerTabId,
+          state: "running",
+          ...(boundedRequest ? { request: boundedRequest } : {}),
+        };
         store.revision += 1;
         await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
         this.context.changes.announce("coordinator", association.projectId, association.projectId);
@@ -731,6 +856,47 @@ export class CoordinatorsRepository {
   async listOpenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
     return (await this.loadCoordinatorStore()).workflows.filter(
       (association) => association.delegation?.state === "running",
+    );
+  }
+
+  /**
+   * The committed revision of the coordinator store, read without loading it.
+   * Every write moves it, so an unchanged revision means a value read at it is
+   * still current. Null while the store has never been written.
+   */
+  coordinatorStoreRevision(): number | null {
+    return this.context.database.storeRevision(
+      this.context.storeForFile(this.files.coordinatorsFile())!,
+    );
+  }
+
+  /**
+   * The open delegations and the store revision they are at, for a caller that
+   * re-checks one delegation later and only needs to read again once the store
+   * has changed ({@link coordinatorStoreRevision}). The revision is taken
+   * before the read, so a write landing between them reads as a change.
+   */
+  async readOpenCoordinatorDelegations(): Promise<{
+    revision: number | null;
+    open: CoordinatorWorkflowAssociation[];
+  }> {
+    const revision = this.coordinatorStoreRevision();
+    return { revision, open: await this.listOpenCoordinatorDelegations() };
+  }
+
+  /**
+   * Every delegation that still owes its coordinator a wake: open, or closed
+   * and not yet woken. One read for both, as mail moves and orphaned holds
+   * need the two together.
+   */
+  async listOwedCoordinatorDelegationIds(): Promise<Set<string>> {
+    return new Set(
+      (await this.loadCoordinatorStore()).workflows
+        .filter(
+          ({ delegation }) =>
+            delegation !== undefined && (delegation.state === "running" || !delegation.wokenAt),
+        )
+        .map((association) => association.id),
     );
   }
 
@@ -750,6 +916,109 @@ export class CoordinatorsRepository {
   }
 
   /**
+   * This node is no longer controlled from here (`CoordinatorNodeRelease`).
+   * In one write, every record on it is marked released: a running delegation
+   * closes as `stopped` with nothing further owed (one notice per coordinator
+   * replaces the per-worker wakes, `coordinator-node-release.ts`), an
+   * unreported workflow or pull-request follow is marked reported, and a live
+   * worker outcome watch ends. A record with nothing live left is marked
+   * notified at once, since there is nothing to tell. A pending reservation
+   * is left to its launch, which still owns it.
+   *
+   * Returns the records whose notice is owed.
+   */
+  async releaseCoordinatorNodeWorkflows(
+    nodeId: string,
+    reason: CoordinatorNodeRelease["reason"],
+    at = new Date().toISOString(),
+  ): Promise<CoordinatorWorkflowAssociation[]> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const owed: CoordinatorWorkflowAssociation[] = [];
+      const projects = new Set<string>();
+      for (const association of store.workflows) {
+        if (association.nodeId !== nodeId || association.nodeRelease || association.pending)
+          continue;
+        let live = false;
+        if (association.delegation?.state === "running") {
+          association.delegation = {
+            ...association.delegation,
+            state: "stopped",
+            completedAt: at,
+            wokenAt: at,
+          };
+          live = true;
+        }
+        if (association.kind !== "environment" && !association.terminalNotifiedAt) {
+          association.terminalNotifiedAt = at;
+          live = true;
+        }
+        // Ends the outcome watch, or the pipeline worker lookup that would start one.
+        if (
+          (association.kind === "environment" || association.kind === "build-pipeline") &&
+          !association.workerOutcome?.ended
+        ) {
+          association.workerOutcome = {
+            ...association.workerOutcome,
+            ended: { key: "untracked", at, notified: false },
+          };
+        }
+        association.nodeRelease = { at, reason, ...(live ? {} : { notifiedAt: at }) };
+        projects.add(association.projectId);
+        if (live) owed.push(association);
+      }
+      if (projects.size === 0) return [];
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      for (const projectId of projects)
+        this.context.changes.announce("coordinator", projectId, projectId);
+      return owed;
+    });
+  }
+
+  /** Released records whose coordinator has not yet been told (`releaseCoordinatorNodeWorkflows`). */
+  async listCoordinatorNodeReleaseNoticesOwed(): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows.filter(
+      (association) => association.nodeRelease && !association.nodeRelease.notifiedAt,
+    );
+  }
+
+  async markCoordinatorNodeReleaseNotified(
+    associationIds: readonly string[],
+    at = new Date().toISOString(),
+  ): Promise<void> {
+    if (associationIds.length === 0) return;
+    const ids = new Set(associationIds);
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          !ids.has(association.id) ||
+          !association.nodeRelease ||
+          association.nodeRelease.notifiedAt
+        )
+          continue;
+        association.nodeRelease = { ...association.nodeRelease, notifiedAt: at };
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /** Every node an unreleased, settled record names: what the registry check compares. */
+  async listCoordinatorWorkflowNodeIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const association of (await this.loadCoordinatorStore()).workflows) {
+      if (association.nodeId && !association.nodeRelease && !association.pending)
+        ids.add(association.nodeId);
+    }
+    return Array.from(ids);
+  }
+
+  /**
    * Record that a delegation's worker finished.
    *
    * Returns null when the delegation was already closed, so the caller can tell
@@ -761,11 +1030,36 @@ export class CoordinatorsRepository {
     state: "completed" | "failed" | "stopped",
     at = new Date().toISOString(),
     backgroundWorkTimeoutMs?: number,
+    options: {
+      /**
+       * Chooses the wake this close owes, recorded in the same write so the
+       * wake pass need not write it separately. Called under the store lock
+       * with the record and its coordinator as they are being closed, so no
+       * close of that coordinator's main can land between the choice and the
+       * write. Undefined leaves the choice to the wake pass.
+       */
+      wakeKind?: (
+        association: CoordinatorWorkflowAssociation,
+        owner: CoordinatorWorkspace | null,
+      ) => Promise<"report" | "notice" | undefined>;
+      /**
+       * False leaves the change unannounced, for a caller whose wake's final
+       * write announces it (`CoordinatorService`).
+       */
+      announce?: boolean;
+    } = {},
   ): Promise<CoordinatorWorkflowAssociation | null> {
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association?.delegation || association.delegation.state !== "running") return null;
+      const owner =
+        Object.values(store.workspaces).find(
+          (workspace) => workspace.id === association.coordinatorId,
+        ) ?? null;
+      const wakeKind = options.wakeKind
+        ? await options.wakeKind(association, owner).catch(() => undefined)
+        : undefined;
       association.delegation = {
         ...association.delegation,
         state,
@@ -773,18 +1067,27 @@ export class CoordinatorsRepository {
         ...(state === "completed" && backgroundWorkTimeoutMs !== undefined
           ? { backgroundWorkTimeoutMs }
           : {}),
+        ...(wakeKind ? { wakeKind } : {}),
       };
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
-      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      if (options.announce !== false) {
+        this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      }
       return association;
     });
+  }
+
+  /** Announce a coordinator change whose write was not announced (`announce: false`). */
+  announceCoordinatorChange(projectId: string): void {
+    this.context.changes.announce("coordinator", projectId, projectId);
   }
 
   /**
    * Persist what kind of wake this delegation owns before performing the
    * separate mail-store write. A retry can then distinguish an already-released
-   * report from a genuinely silent worker.
+   * report from a genuinely silent worker. Not announced: the kind is the
+   * backend's bookkeeping, and the wake's final write announces the wake.
    */
   async prepareCoordinatorDelegationWake(
     associationId: string,
@@ -798,7 +1101,6 @@ export class CoordinatorsRepository {
       association.delegation = { ...association.delegation, wakeKind };
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
-      this.context.changes.announce("coordinator", association.projectId, association.projectId);
       return association;
     });
   }
@@ -959,7 +1261,7 @@ export class CoordinatorsRepository {
           item.coordinatorId === input.coordinatorId &&
           (item.requestId === input.requestId ||
             (item.kind === "pull-request" &&
-              item.requestAliases?.some((alias) => alias.requestId === input.requestId))),
+              coordinatorRequestAlias(item, input.requestId) !== undefined)),
       );
       if (same) {
         if (
@@ -1237,6 +1539,7 @@ export type CoordinatorsStorage = Pick<
   | "getCoordinatorWorkspaceById"
   | "listCoordinatorWorkspaces"
   | "listCoordinatorWorkflowAssociations"
+  | "listAllCoordinatorWorkflowAssociations"
   | "getCoordinatorReconciliationState"
   | "mutateCoordinatorWorkspaceWithComposeDrafts"
   | "mutateCoordinatorWorkspace"
@@ -1248,7 +1551,16 @@ export type CoordinatorsStorage = Pick<
   | "openCoordinatorDelegation"
   | "listOpenCoordinatorDelegations"
   | "listUnwokenCoordinatorDelegations"
+  | "coordinatorStoreRevision"
+  | "readOpenCoordinatorDelegations"
+  | "listOwedCoordinatorDelegationIds"
   | "closeCoordinatorDelegation"
+  | "announceCoordinatorChange"
+  | "releaseCoordinatorNodeWorkflows"
+  | "listCoordinatorNodeReleaseNoticesOwed"
+  | "markCoordinatorNodeReleaseNotified"
+  | "listCoordinatorWorkflowNodeIds"
+  | "getCoordinatorWorkflowStoreState"
   | "prepareCoordinatorDelegationWake"
   | "markCoordinatorDelegationWoken"
   | "markCoordinatorDelegationWakeFailed"

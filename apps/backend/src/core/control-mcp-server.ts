@@ -7,6 +7,7 @@ import type {
   ControlMcpCredentialPolicy,
   ControlMcpCredentialSummary,
 } from "@orkestrator/protocol/control-mcp";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { ConfirmTokens } from "./control-mcp-confirm.js";
 import {
   ControlMcpCredentialStore,
@@ -507,6 +508,11 @@ export class ControlMcpServer {
     if (workspace.lifecycleState !== "ready") {
       return { ok: false, status: 409, error: "Coordinator is paused or unavailable" };
     }
+    // This conversation's own bridge failed to start. Only its credential is
+    // refused; the main and every other conversation keep theirs.
+    if (typeof conversation.startupError === "string" && conversation.startupError) {
+      return { ok: false, status: 409, error: "This coordinator conversation could not start" };
+    }
     const invoke: ControlMcpInvoker = async <T>(
       command: string,
       args: Record<string, unknown> = {},
@@ -516,7 +522,10 @@ export class ControlMcpServer {
         throw new Error("Coordinator credential cannot access another project");
       }
       if (typeof args.environmentId === "string") {
-        const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+        const ownRuntime = coordinatorRuntimeId(
+          coordinatorScope.coordinatorId,
+          coordinatorScope.conversationId,
+        );
         if (args.environmentId !== ownRuntime) {
           const target =
             typeof args.nodeId === "string"
@@ -543,6 +552,9 @@ export class ControlMcpServer {
       }
       const denied = new Set([
         "update_config",
+        // The project's settings are the user's, the origin check's above all.
+        "update_repository_config",
+        "patch_repository_settings",
         "remove_project",
         "merge_environment_pr",
         // Arming auto-merge is merge authority by another name.

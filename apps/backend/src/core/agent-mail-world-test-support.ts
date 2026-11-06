@@ -40,6 +40,8 @@ type Address = MailActor | typeof COORDINATOR_MAIL_ADDRESS | { environmentId: st
 const BASE_COMMIT = "a".repeat(40);
 
 export type MailWorldOptions = {
+  /** Off keeps the project's default, the origin check refusing what it did not create. */
+  coordinatorOtherEnvironments?: boolean;
   /** Status-wake collaborators for the coordinator service, kept across restarts. */
   statusWakes?: CoordinatorStatusWakeOptions;
   delegations?: CoordinatorDelegationOptions;
@@ -189,6 +191,10 @@ export class MailWorld {
     const project = await storage.addProject(
       createProject("https://example.invalid/mail-world.git", checkout),
     );
+    // These worlds exercise mail, not who may be mailed; the origin check has its own tests.
+    if (options.coordinatorOtherEnvironments !== false) {
+      await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
+    }
     let world: MailWorld | undefined;
     const { coordinator, mail } = MailWorld.services(() => world!, storage, options);
     const ensured = await coordinator.ensure(project.id);

@@ -92,6 +92,8 @@ export type CommandContext = {
   humanPrompts?: import("./human-prompt-registry.js").HumanPromptRegistry;
   /** This machine's rolling CPU and RAM averages, read through `get_machine_load`. */
   machineLoad?: import("./machine-load.js").MachineLoadSampler;
+  /** Health, database and metrics figures for the Debug settings and the bundle. */
+  diagnostics?: import("./backend-diagnostics.js").BackendDiagnostics;
   /** Command-node registry and leaf attachments (docs/architecture/command-nodes.md). */
   nodes?: import("./nodes/index.js").NodeService;
   /** Portal read model, routing and workspaces (command node); client grants (leaf). */

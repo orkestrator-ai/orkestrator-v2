@@ -1,13 +1,15 @@
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   coordinatorRuntimeId,
   type CoordinatorSnapshot,
   type ProjectGitStatus,
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
@@ -45,6 +47,10 @@ import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSe
 import * as paneTree from "./CoordinatorPaneTree";
 import { createSessionKey } from "@/lib/utils";
 
+import { portalStore } from "@/lib/portal/portal-store";
+import * as nodeEvents from "@/lib/federation/node-events";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
 let useRealAgentTab = false;
@@ -61,7 +67,6 @@ const resume = mock(async (): Promise<CoordinatorSnapshot> => {
 const createConversation = mock(async (): Promise<CoordinatorSnapshot> => {
   throw new Error("create failed");
 });
-const hideWork = mock(async (): Promise<CoordinatorSnapshot> => snapshot);
 const closeConversation = mock(async (): Promise<CoordinatorSnapshot> => {
   throw new Error("close failed");
 });
@@ -267,6 +272,10 @@ async function refreshCoordinator(assignedSnapshot: CoordinatorSnapshot, revisio
   await screen.findByRole("tab", { name: `Refreshed ${revision}, Claude Code` });
 }
 
+let workerPromptsForTest: HumanPromptEntry[] = [];
+const listHumanPrompts = mock(async (_ids: readonly string[]) => ({
+  prompts: workerPromptsForTest,
+}));
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -287,7 +296,7 @@ mock.module("@/lib/backend", () => ({
   selectCoordinatorConversation: select,
   createCoordinatorConversation: createConversation,
   closeCoordinatorConversation: closeConversation,
-  hideCoordinatorWork: hideWork,
+  listHumanPrompts,
   assignCoordinatorConversationAgent: assignAgent,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: async (
@@ -317,6 +326,7 @@ const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
     data-initial-prompt={String(props.initialPrompt ?? "")}
     data-initial-model={String(props.initialAgentModel ?? "")}
     data-platform-notes={JSON.stringify(props.platformNotes ?? {})}
+    data-platform-badges={JSON.stringify(props.platformBadges ?? {})}
   >
     {props.onAssignPlatform ? (
       <button
@@ -521,6 +531,8 @@ describe("CoordinatorPanel", () => {
               },
               messages: ["first", "second"].map((id) => ({
                 id,
+                from: { kind: "user" },
+                createdAt: "2026-11-05T12:00:00.000Z",
                 placement: "stored",
                 placementReason: "recipient-cannot-inject",
               })),
@@ -725,11 +737,22 @@ describe("CoordinatorPanel", () => {
     const agent = await screen.findByTestId("native-agent");
     const notes = JSON.parse(agent.getAttribute("data-platform-notes") ?? "{}");
     expect(notes.pi).toBe("Pi has no MCP client.");
-    // A weaker tier says so explicitly; an enforced one does not need the
-    // disclaimer and must not carry it.
-    expect(notes.cursor).toContain("cannot verify this boundary independently");
+    // The reason is passed as written: the tier pill says whether the boundary
+    // is verified, so the note does not repeat it.
+    expect(notes.cursor).toBe("Cursor applies the restriction.");
+    expect(JSON.stringify(notes)).not.toContain("cannot verify");
     expect(notes.codex).toBeUndefined();
     expect(notes.grok).toBeUndefined();
+    // Every available platform's tier is named, and an unavailable one has none.
+    const badges = JSON.parse(agent.getAttribute("data-platform-badges") ?? "{}");
+    expect(badges.codex).toMatchObject({ label: "Read-only · Enforced", tone: "positive" });
+    expect(badges.pi).toMatchObject({ label: "Read-only · Enforced", tone: "positive" });
+    expect(badges.cursor).toMatchObject({
+      label: "Read-only · Provider-configured",
+      tone: "caution",
+    });
+    expect(badges.cursor.description).toContain("no way for Orkestrator to verify");
+    expect(badges.grok).toBeUndefined();
   });
 
   test("refreshes the messaging notice after config changes without remounting", async () => {
@@ -737,7 +760,7 @@ describe("CoordinatorPanel", () => {
     ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: /^Pause$/ });
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByText(notice) === null).toBe(true);
     for (const enabled of [false, true]) {
       const reads = getCoordinatorView.mock.calls.length;
       act(() => {
@@ -755,14 +778,14 @@ describe("CoordinatorPanel", () => {
     ensuredSnapshot = { ...snapshot, agentMessaging: undefined };
     const { unmount } = render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: /^Pause$/ });
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByText(notice) === null).toBe(true);
     unmount();
     cleanup();
 
     ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
     const second = render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: /^Pause$/ });
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByText(notice) === null).toBe(true);
     second.unmount();
     cleanup();
 
@@ -770,7 +793,7 @@ describe("CoordinatorPanel", () => {
     render(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(notice)).toBeTruthy();
     // It stands alongside the Control MCP warning rather than replacing it.
-    expect(screen.queryByText(/Orchestration controls are unavailable/)).toBeNull();
+    expect(screen.queryByText(/Orchestration controls are unavailable/) === null).toBe(true);
     cleanup();
 
     ensuredSnapshot = {
@@ -938,7 +961,7 @@ describe("CoordinatorPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
       await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
       expect(syncGit).not.toHaveBeenCalled();
-      expect(screen.queryByText(/commits? behind/)).toBeNull();
+      expect(screen.queryByText(/commits? behind/) === null).toBe(true);
       expect(mergeDialog() === null).toBe(true);
     });
 
@@ -1918,151 +1941,204 @@ describe("CoordinatorPanel", () => {
     expectNoContextNotice();
   });
 
-  test("Clear applies its snapshot and removes a failed attempt's error on retry", async () => {
-    const now = new Date().toISOString();
-    const finished = {
-      id: "finished-follow",
-      coordinatorId: snapshot.workspace.id,
-      projectId: "project-1",
-      kind: "pull-request" as const,
-      resourceId: "gone",
-      requestId: "finished",
-      createdAt: now,
-      terminalNotifiedAt: now,
-      statusNotice: { key: "merged:abc", notifiedAt: now },
-      pullRequest: { source: "create-pr" as const, prUrl: "https://github.com/o/r/pull/420" },
-    };
-    ensuredSnapshot = { ...snapshot, workflows: [finished] };
-    hideWork.mockClear();
-    hideWork.mockImplementationOnce(async () => {
-      throw new Error("Clear failed once");
-    });
-    hideWork.mockImplementationOnce(async () => ({
-      ...ensuredSnapshot,
-      workflows: [{ ...finished, workHiddenAt: now }],
-    }));
-    render(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "Show work: 0 running, 0 need you" }));
-    fireEvent.click(screen.getByRole("button", { name: /Clear 1 finished/ }));
-    await screen.findByText("Clear failed once");
-    fireEvent.click(screen.getByRole("button", { name: /Clear 1 finished/ }));
-    await waitFor(() => {
-      expect(screen.queryByText("Clear failed once") === null).toBe(true);
-      expect(screen.queryByText("PR #420") === null).toBe(true);
-    });
-    expect(hideWork).toHaveBeenLastCalledWith("project-1", ["finished-follow"]);
-  });
-
-  test("lists the work of every conversation in the Work panel, with no waiting chip", async () => {
-    const secondConversation = {
-      ...snapshot.workspace.conversations[0]!,
-      id: "conversation-2",
-      tabId: "coordinator-tab-2",
-      logicalSessionKey: "coordinator-coordinator-1:conversation-2",
-      title: "Second",
-    };
-    const delegation = (id: string, conversationId: string, resourceId: string) => ({
-      id,
-      coordinatorId: "coordinator-1",
-      projectId: "project-1",
-      conversationId,
-      kind: "environment" as const,
-      resourceId,
-      requestId: id,
-      createdAt: new Date().toISOString(),
-      delegation: {
-        requestedAt: new Date().toISOString(),
-        workerTabId: `${id}-tab`,
-        state: "running" as const,
-      },
-    });
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [...snapshot.workspace.conversations, secondConversation],
-        selectedConversationId: "conversation-1",
-      },
-      workflows: [
-        delegation("first", "conversation-1", "worker-for-first"),
-        delegation("second", "conversation-2", "worker-for-second"),
-        // Another coordinator's worker is not this panel's.
-        { ...delegation("other", "conversation-1", "worker-for-other"), coordinatorId: "other" },
-      ],
-    };
-
-    render(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByTestId("native-agent");
-    expect(screen.queryByText(/Waiting on/) === null).toBe(true);
-    expect(document.querySelector("[data-awaiting-workers]") === null).toBe(true);
-    // The test window is narrow, so the panel starts as its strip.
-    const strip = screen.getByRole("button", { name: "Show work: 2 running, 0 need you" });
-    fireEvent.click(strip);
-    const panel = screen.getByRole("complementary", { name: "Work" });
-    expect(panel.getAttribute("data-open-delegations")).toBe("2");
-    expect(within(panel).getByText("Worker worker-for-first")).toBeTruthy();
-    expect(within(panel).getByText("Worker worker-for-second")).toBeTruthy();
-    expect(within(panel).queryByText("Worker worker-for-other") === null).toBe(true);
-  });
-
-  test("moves a worker to Needs you when its waiting episode is announced, without a coordinator turn", async () => {
-    const delegation = (id: string, resourceId: string) => ({
-      id,
+  describe("the workers' prompts banner", () => {
+    const running = {
+      id: "running",
       coordinatorId: "coordinator-1",
       projectId: "project-1",
       conversationId: "conversation-1",
       kind: "environment" as const,
-      resourceId,
-      requestId: id,
+      resourceId: "worker-env",
+      requestId: "running",
       createdAt: new Date().toISOString(),
       delegation: {
         requestedAt: new Date().toISOString(),
-        workerTabId: "startup-agent",
+        workerTabId: "worker-tab",
         state: "running" as const,
+        request: { summary: "Fix the parser", agent: "claude" as const },
       },
-    });
-    const quiet = delegation("quiet", "worker-quiet");
-    const blocked = delegation("blocked", "worker-blocked");
-    ensuredSnapshot = { ...snapshot, workflows: [quiet, blocked] };
-
-    render(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "Show work: 2 running, 0 need you" }));
-    const panel = screen.getByRole("complementary", { name: "Work" });
-    const row = (resourceId: string) =>
-      panel.querySelector(`[data-work-key="worker::${resourceId}"]`);
-    expect(row("worker-blocked")?.getAttribute("data-work-bucket")).toBe("running");
-
-    ensuredSnapshot = {
-      ...snapshot,
-      workflows: [
-        quiet,
-        {
-          ...blocked,
-          delegation: { ...blocked.delegation, waiting: { since: new Date().toISOString() } },
-        },
-      ],
     };
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "coordinator",
-        id: "project-1",
-        projectId: "project-1",
-        revision: 2,
-      });
+    const worker = { id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment;
+    const previousEnvironments = useEnvironmentStore.getState().environments;
+
+    beforeEach(() => {
+      workerPromptsForTest = [];
+      listHumanPrompts.mockClear();
+      useEnvironmentStore.setState({ environments: [worker] });
+      ensuredSnapshot = { ...snapshot, workflows: [running] };
     });
-    await waitFor(() =>
-      expect(row("worker-blocked")?.getAttribute("data-work-bucket")).toBe("needs-you"),
+    afterEach(() => {
+      workerPromptsForTest = [];
+      useEnvironmentStore.setState({ environments: previousEnvironments });
+    });
+
+    test.each([
+      ["local", 1400],
+      ["local", 390],
+      ["realm", 1400],
+      ["realm", 390],
+    ] as const)(
+      "populated %s coordinator DOM at %ipx keeps prompts and controls without Work UI",
+      async (route, width) => {
+        const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } })
+          .happyDOM;
+        const previousURL = window.location.href;
+        const previousWidth = window.innerWidth;
+        try {
+          happyDOM.setURL(
+            route === "realm"
+              ? "http://localhost/?realm=workspace&workspace=fixture"
+              : "http://localhost/",
+          );
+          Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+          ensuredSnapshot = {
+            ...snapshot,
+            workflowStore: "near-limit",
+            workflows: [
+              running,
+              ...(["build-pipeline", "multi-review", "graph-run"] as const).map((kind) => ({
+                ...running,
+                id: kind,
+                kind,
+                resourceId: kind,
+              })),
+            ],
+          };
+          workerPromptsForTest = [
+            {
+              id: "waiting",
+              environmentId: worker.id,
+              tabId: "worker-tab",
+              source: "agent-tool",
+              since: new Date().toISOString(),
+              prompt: { kind: "secret", wantsEnter: false, text: "Password:", key: "secret" },
+            },
+          ];
+          render(<CoordinatorPanel projectId="project-1" />);
+          await screen.findByTestId("native-agent");
+          await screen.findByRole("button", { name: "Open api-fix" });
+          expect(screen.getByRole("button", { name: /^Pause$/ })).toBeTruthy();
+          expect(screen.getByText("Coordinator work records are nearly full.")).toBeTruthy();
+          expect(screen.queryByRole("complementary", { name: /^Work$/ }) === null).toBe(true);
+          expect(screen.queryByRole("button", { name: /^(Show|Hide) work$/i }) === null).toBe(true);
+          expect(document.querySelector("[data-coordinator-work]") === null).toBe(true);
+          expect(screen.queryByText(/next wake/i) === null).toBe(true);
+          fireEvent.click(screen.getByRole("button", { name: "Open api-fix" }));
+          await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(worker.id));
+        } finally {
+          cleanup();
+          happyDOM.setURL(previousURL);
+          Object.defineProperty(window, "innerWidth", { configurable: true, value: previousWidth });
+        }
+      },
     );
-    expect(row("worker-blocked")?.textContent).toContain("Worker · waiting for you");
-    expect(row("worker-quiet")?.getAttribute("data-work-bucket")).toBe("running");
-    expect(within(panel).getByText("1 running, 1 needs you")).toBeTruthy();
-    // Needs you is listed before running work.
-    const order = Array.from(panel.querySelectorAll("[data-work-key]")).map((item) =>
-      item.getAttribute("data-work-key"),
-    );
-    expect(order).toEqual(["worker::worker-blocked", "worker::worker-quiet"]);
+
+    test("fetches only this coordinator's materialized local workers, deduplicating environments", async () => {
+      ensuredSnapshot = {
+        ...snapshot,
+        workflows: [
+          running,
+          { ...running, id: "duplicate" },
+          { ...running, id: "build", kind: "build-pipeline", resourceId: "build-env" },
+          { ...running, id: "review", kind: "multi-review", resourceId: "review-env" },
+          { ...running, id: "pending", resourceId: "pending-env", pending: true },
+          { ...running, id: "foreign", resourceId: "foreign-env", coordinatorId: "other" },
+          { ...running, id: "remote", resourceId: "remote-env", nodeId: "bk_leaf" },
+        ],
+      };
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      await waitFor(() => expect(listHumanPrompts).toHaveBeenCalled());
+      expect(
+        listHumanPrompts.mock.calls.every(([ids]) => ids.length === 1 && ids[0] === worker.id),
+      ).toBe(true);
+    });
+
+    test("remote prompt Open targets its node, project, environment and tab and disconnect removes it", async () => {
+      const priorPortal = portalStore.getState();
+      const priorRemote = useRemoteWorkspaceStore.getState();
+      const node = {
+        nodeId: "bk_leaf",
+        available: true,
+        loadedAt: 1,
+        view: { displayName: "Build box" },
+        environments: [
+          {
+            ref: { backendId: "bk_leaf", environmentId: "worker-env" },
+            projectId: "leaf-project",
+            name: "remote-api",
+            status: "running",
+          },
+        ],
+      };
+      const invoke = spyOn(portalStore, "invokeOnNode").mockResolvedValue({
+        prompts: [
+          {
+            id: "remote-prompt",
+            environmentId: "worker-env",
+            tabId: "worker-tab",
+            source: "agent-tool",
+            since: new Date().toISOString(),
+            prompt: {
+              kind: "secret",
+              wantsEnter: false,
+              text: "Remote password:",
+              key: "remote-secret",
+            },
+          },
+        ],
+      });
+      const subscribe = spyOn(nodeEvents, "subscribeNodeEvents").mockReturnValue(() => {});
+      portalStore.store.setState({ selfId: "bk_cmd" as never, nodes: [node] as never });
+      ensuredSnapshot = { ...snapshot, workflows: [{ ...running, nodeId: "bk_leaf" }] };
+      try {
+        render(<CoordinatorPanel projectId="project-1" />);
+        const open = await screen.findByRole("button", { name: "Open remote-api on Build box" });
+        expect(invoke).toHaveBeenCalledWith("bk_leaf", "list_human_prompts", {
+          environmentIds: ["worker-env"],
+        });
+        fireEvent.click(open);
+        expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+          nodeId: "bk_leaf",
+          projectId: "leaf-project",
+          environmentId: "worker-env",
+        });
+        expect(
+          useRemoteWorkspaceStore.getState().requests["bk_leaf"]?.request.workTarget,
+        ).toMatchObject({
+          environmentId: "worker-env",
+          tabId: "worker-tab",
+        });
+        act(() => portalStore.store.setState({ nodes: [{ ...node, available: false }] as never }));
+        await waitFor(() => expect(screen.queryByText(/Remote password:/) === null).toBe(true));
+        expect(
+          screen.queryByRole("button", { name: "Open remote-api on Build box" }) === null,
+        ).toBe(true);
+      } finally {
+        cleanup();
+        invoke.mockRestore();
+        subscribe.mockRestore();
+        portalStore.store.setState(priorPortal, true);
+        useRemoteWorkspaceStore.setState(priorRemote, true);
+      }
+    });
+
+    test("the prompt banner's Open goes to the waiting worker's tab", async () => {
+      workerPromptsForTest = [
+        {
+          id: "tool-1",
+          environmentId: "worker-env",
+          tabId: "worker-tab",
+          source: "agent-tool",
+          since: new Date().toISOString(),
+          prompt: { kind: "secret", wantsEnter: false, text: "Password:", key: "secret" },
+        },
+      ];
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(await screen.findByRole("button", { name: "Open api-fix" }));
+      await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env"));
+    });
   });
 
   test("shows a side agent split into its own tab group beside the main coordinator", async () => {

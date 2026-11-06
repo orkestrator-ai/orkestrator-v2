@@ -4467,6 +4467,40 @@ describe("NativeAgentService", () => {
             { owner: "coordinator", previousState: undefined, state: "working" },
             { owner: "coordinator", previousState: "working", state: "idle" },
           ]);
+          // A conversation that failed to start is not swept either, and the
+          // workspace it belongs to stays up.
+          await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+            ...workspace!,
+            conversations: workspace!.conversations.map((conversation) => ({
+              ...conversation,
+              startupError: "bridge failed",
+            })),
+          }));
+          await service.reconcileAgentActivity();
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("unknown");
+          await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+            ...workspace!,
+            conversations: workspace!.conversations.map((conversation) => ({
+              ...conversation,
+              startupError: undefined,
+            })),
+          }));
+          activityState = "idle";
+          await service.reconcileAgentActivity();
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("idle");
+
           await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
             ...workspace!,
             lifecycleState: "paused",

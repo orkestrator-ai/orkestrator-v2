@@ -196,8 +196,12 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
   SDK's own unions, so an SDK bump that adds a message type or `system`
   subtype fails the typecheck until someone decides whether it is handled,
-  kept as a health notice, or ignored as inventory. Content blocks the parser
-  has no branch for are counted as `block:<type>` drift.
+  kept as a health notice, or ignored as inventory. `system` subtypes the CLI
+  emits but the SDK's union does not name (`session_title_changed`,
+  `vcs_state_changed`, …) get their fate in
+  `INTERNAL_SYSTEM_SUBTYPE_DISPOSITIONS`; any other unnamed subtype is
+  counted as `system:<subtype>` drift. Content blocks the parser has no
+  branch for are counted as `block:<type>` drift.
 - **The native tab never sees SSE.** The backend polls `GET /session/:id` and
   the transcript routes; `session.updated` frames only reach the legacy web
   client. Turn-scoped state the tab must show (activity, thinking estimate,
@@ -278,6 +282,14 @@ invariants keep it honest:
   also needs an explicit `required` sandbox decision: repository and ambient
   configuration can launch helpers even for `git diff` or `git status`, so
   hook-only turns use reading tools or delegate Git to a worker.
+- **A coordinator reads its own runtime and not the rest of the data
+  directory.** `read-only-path-boundary.ts` holds the rule for both layers: the
+  sandbox's `denyRead`/`allowRead` for commands, and the hook for `Read`, `Grep`
+  and `Glob`, which the CLI runs outside the sandbox. Something a coordinator must
+  newly read from the data directory goes in `coordinatorReadBoundary`'s
+  allowance, and a secret must never be placed where that allowance reaches.
+  `conformance-coordinator-read-boundary-live.test.ts` proves it on the pinned CLI
+  with a scripted model and a fixture directory.
 - **Git runs against the checkout and nothing else.** Options before the
   subcommand are an allowlist (`GIT_GLOBAL_OPTIONS`, exact match), because
   `--git-dir`, `--work-tree`, `-c` and `-C` choose which repository's config

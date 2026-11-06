@@ -24,6 +24,8 @@ export interface LocalEnvironmentRowInputs {
   deleting: boolean;
   /** An attempt started in this window, before the backend updates its snapshot. */
   deletingStartedAt?: string;
+  /** `isLocalDeletionRetryable`: a failed merge cleanup nothing here is retrying. */
+  deletionRetryable: boolean;
   /** `useEnvironmentDisplayActivity`: runtime activity, `working` during a build. */
   activity: AgentActivity;
   running: boolean;
@@ -55,6 +57,7 @@ export function localEnvironmentRowFacts(
     deletingSince: deleting
       ? (inputs.deletingStartedAt ?? environment.lifecycleOperationStartedAt ?? null)
       : null,
+    deletionRetryable: inputs.deletionRetryable,
     buildPipeline: inputs.buildPipeline,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,
@@ -105,6 +108,7 @@ export function nodeEnvironmentRowFacts(
       environment.deleting && !environment.deleteFailure
         ? (environment.deletingSince ?? null)
         : null,
+    deletionRetryable: environment.deletionRetryable === true,
     buildPipeline: environment.buildPipeline === true,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,

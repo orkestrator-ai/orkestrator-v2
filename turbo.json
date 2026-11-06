@@ -12,6 +12,7 @@
     "@orkestrator/backend#build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docker/artifact-preview-worker/**"],
+      "env": ["ORKESTRATOR_BUILD_COMMIT"],
       "outputs": ["dist/**"]
     },
     "typecheck": {

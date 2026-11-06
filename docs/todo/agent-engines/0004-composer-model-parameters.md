@@ -10,11 +10,12 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Codex summary suppression residue**: item 1 said the `parameter:summary` suppression entry was gone while `main` still had it. Status: done (2026-10-28, [0727](0727-codex-summary-parameter-still-suppressed.md): descriptor and entry removed, item 1 corrected).
+1. **Codex summary suppression residue**: item 1 said the `parameter:summary` suppression entry was gone while `main` still had it. Status: done (2026-10-28, 0727: descriptor and entry removed, item 1 corrected).
 2. **Unoffered held-model preflight**: the optional open half of item 6. Status: deferred (until Codex's 400 proves confusing).
 3. **Cursor extra-axis live qualification**: change a Cursor axis, send, reload, confirm the value returns. Status: open.
 4. **Codex dispatch-model and config-merge live check**: items 5 and 6 plus the Plan-mode merge fix on a real Codex login. Status: open.
 5. **Done items 2 to 5 and the retired qualification line**: decide how to keep the record. Status: done.
+6. **Codex tab shows no reasoning-summary control**: a real Codex tab offers no "Reasoning summary" or other `parameter:*` control. Moved from to-do 0727 (deleted 2026-11-06). Status: open.
 
 ### 1. Codex summary suppression residue
 
@@ -22,7 +23,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The branch work landed as #1260 (`1e76744d`). Its commit message says it removed the summary entry, and it did remove the bridge plumbing.
 
-**Resolution (2026-10-28).** Done in [0727](0727-codex-summary-parameter-still-suppressed.md): the backend's Codex catalogue no longer emits the `summary` descriptor that kept the entry needed, the entry is gone, both tests are flipped, and item 1 below now matches the code. The investigation below describes `main` at `863b5782`.
+**Resolution (2026-10-28).** Done in 0727: the backend's Codex catalogue no longer emits the `summary` descriptor that kept the entry needed, the entry is gone, both tests are flipped, and item 1 below now matches the code. The investigation below describes `main` at `863b5782`.
 
 **Investigation.** The bridge half is done: no `personality` or summary parameter remains in `bridges/codex-bridge/src/app-server-runtime-lifecycle.ts` or `engine/app-server-engine.ts`, and `maxBudgetUsd` is gone from the Claude bridge. But `packages/protocol/src/native-agent.ts:976` still reads `codex: Object.freeze(["parameter:summary"])`, unchanged at every commit from `1e76744d` to HEAD, although the doc comment above it (:960-965) was rewritten to drop the Codex sentence. The tests still expect suppression: `apps/backend/src/core/native-agent-service-projection.test.ts:3120-3122` (Codex's expected controls omit `parameter:summary`) and `apps/web/src/components/native-agent/AgentNativeTab.test.tsx:6244` and :6290 ("hides unsupported Codex summary in a %s tab"). The renderer test the file names does not exist. Behaviour is harmless (nothing produces the control), but the record is wrong.
 
@@ -115,6 +116,41 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: clearer file today.
     - Cons: two edits to the same material.
 
+### 6. Codex tab shows no reasoning-summary control
+
+**Problem.** The backend's Codex catalogue no longer offers the reasoning
+`summary` the bridge ignored. A stored Codex `summary` value is dropped on the
+next control update and never forwarded. No one has looked at a real Codex tab
+since.
+
+**Context.** Moved from to-do 0727 (deleted 2026-11-06), whose code items are
+done. `SUPPRESSED_COMPOSER_PARAMETERS` has no `codex` entry
+(`packages/protocol/src/native-agent.ts`), and `summary` is retired for Codex
+only (`apps/backend/src/core/native-agent-retired-parameters.ts`). The renderer
+test "suppresses no Codex parameter control in a %s tab" is in
+`apps/web/src/components/native-agent/AgentNativeTab.test.tsx`.
+
+**Investigation.** Steps:
+
+1. Open a `dev:test` profile with a signed-in Codex, or a seeded Codex
+   catalogue cache.
+2. Open a Codex tab and go through each catalogue model in the composer.
+3. Check that there is no "Reasoning summary" control and no other
+   `parameter:*` control.
+4. Optional: load a session record from an older build that holds
+   `parameterValues.summary`. Send a turn, change a control, and check that
+   the value is gone from the record.
+
+**Decisions.**
+
+- **Run it alone or with task 4?**
+  - **With task 4's real Codex login (recommended).**
+    - Pros: the same profile and login; one extra look.
+    - Cons: waits for task 4.
+  - **On its own with a seeded catalogue cache.**
+    - Pros: needs no login.
+    - Cons: a cache may not match what a real login is offered today.
+
 Every model axis that only some providers have renders through the generic
 `parameters` descriptors, with its value held in backend session state, and no
 axis needs its own UI. Reasoning and speed, which every provider has, stay
@@ -122,7 +158,8 @@ first-class `AgentModel` fields by recorded decision (item 2). Every
 forwarded-but-unsourced value is resolved: Codex summary and personality, the
 Claude `permissionMode` parameter and `maxBudgetUsd` are gone, and a per-turn
 model on a Codex dispatch is now applied. What is left is a live Cursor
-qualification run and one optional preflight case.
+qualification run, a Codex live check, a look at a real Codex tab (task 6)
+and one optional preflight case.
 
 ## Current state
 
@@ -172,7 +209,7 @@ qualification run and one optional preflight case.
    `parameter:summary` suppression entry in its first commit and restored it in
    its second, because the backend's Codex catalogue (`normalizedCodexModels`)
    still emitted the `summary` descriptor; the squash message and this item
-   described the first commit. [0727](0727-codex-summary-parameter-still-suppressed.md)
+   described the first commit. 0727
    finished the removal: Codex catalogue rows carry no `parameters`, Codex has
    no suppression entry, and a stored Codex `summary` value is retired (dropped
    on the next control update, never forwarded). Evidence: Codex's generated
@@ -453,7 +490,7 @@ qualification run and one optional preflight case.
   setting changes need a warm Claude runtime between turns).
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)
   (execution policy and approvals).
-- [0727-codex-summary-parameter-still-suppressed.md](0727-codex-summary-parameter-still-suppressed.md):
+- `0727-codex-summary-parameter-still-suppressed.md` (deleted 2026-11-06):
   the Codex summary descriptor and suppression entry #1260 left on `main`,
   split from task 1 and removed there (2026-10-28).
 

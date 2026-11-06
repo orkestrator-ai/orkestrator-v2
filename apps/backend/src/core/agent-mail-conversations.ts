@@ -94,7 +94,7 @@ function actorParticipant(actor: MailActor): AgentMailParticipant {
       return {
         key,
         kind: "workflow",
-        displayName: "Orkestrator workflow",
+        displayName: actor.source === "self-reminder" ? "Reminder you set" : "Orkestrator workflow",
         agent: null,
         projectId: actor.projectId,
         canReceive: false,

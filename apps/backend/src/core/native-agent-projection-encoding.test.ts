@@ -1,13 +1,19 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import {
   digestWithMessages,
   encodedArrayBytes,
   encodedBytesWithMessages,
   encodedValue,
+  isSpliceableResult,
+  markSpliceableResult,
   reuseUnchangedMessages,
   sameEncoding,
+  spliceEncodedJson,
   tailDeletions,
+  updateHashWithFingerprints,
+  valueFingerprint,
 } from "./native-agent-projection-encoding.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
@@ -62,6 +68,151 @@ describe("projected value encodings", () => {
     );
     // Framing is approximated to a few bytes; the message array is exact.
     expect(Math.abs(encodedBytesWithMessages(base) - bytesOf(base))).toBeLessThanOrEqual(2);
+  });
+});
+
+/** Characters fed to SHA-256 while `run` executes. */
+function hashedCharacters(run: () => void): number {
+  const update = spyOn(Object.getPrototypeOf(createHash("sha256")), "update");
+  try {
+    run();
+    return update.mock.calls.reduce(
+      (total, [data]) => total + (typeof data === "string" ? data.length : 0),
+      0,
+    );
+  } finally {
+    update.mockRestore();
+  }
+}
+
+describe("row fingerprints", () => {
+  test("a row's fingerprint is hashed once and keeps its value", () => {
+    const row = { id: "a", content: "x".repeat(10_000) };
+    const expected = createHash("sha256").update(JSON.stringify(row)).digest("hex").slice(0, 24);
+    expect(hashedCharacters(() => expect(valueFingerprint(row)).toBe(expected))).toBe(
+      JSON.stringify(row).length,
+    );
+    expect(hashedCharacters(() => expect(valueFingerprint(row)).toBe(expected))).toBe(0);
+    expect(valueFingerprint({ ...row })).toBe(expected);
+    expect(valueFingerprint("s")).toBe(valueFingerprint("s"));
+  });
+
+  test("a token over fingerprints hashes a changed row once, not the window", () => {
+    const rows = Array.from({ length: 50 }, (_, index) => ({
+      id: `m${index}`,
+      content: "y".repeat(2_000),
+    }));
+    const digest = (values: readonly unknown[]) =>
+      updateHashWithFingerprints(createHash("sha256"), values).digest("base64url");
+    const before = digest(rows);
+    const next = [...rows.slice(0, -1), { ...rows.at(-1)!, content: "moved" }];
+    let after = "";
+    const hashed = hashedCharacters(() => {
+      after = digest(next);
+    });
+    expect(after).not.toBe(before);
+    // The moved row's JSON, plus a short fixed string per row.
+    expect(hashed).toBeLessThan(JSON.stringify(next.at(-1)).length + 30 * next.length);
+    expect(digest(rows.map((row) => ({ ...row })))).toBe(before);
+    expect(digest(rows.slice(1))).not.toBe(before);
+    expect(digest([...rows.slice(1), rows[0]])).not.toBe(before);
+  });
+
+  test("a digest with messages hashes a changed row once, not the window", () => {
+    const rows = Array.from({ length: 50 }, (_, index) => ({
+      id: `m${index}`,
+      content: "z".repeat(2_000),
+    }));
+    const projection = { title: "t", messages: rows };
+    const before = digestWithMessages("legacy-commit", projection);
+    const moved = { ...projection, messages: [...rows.slice(0, -1), { id: "m49", content: "z" }] };
+    let after = "";
+    const hashed = hashedCharacters(() => {
+      after = digestWithMessages("legacy-commit", moved);
+    });
+    expect(after).not.toBe(before);
+    // The moved row's JSON and the other fields, plus a short string per row.
+    expect(hashed).toBeLessThan(JSON.stringify(moved.messages.at(-1)).length + 30 * 51 + 64);
+    expect(digestWithMessages("legacy-commit", { ...projection, messages: [...rows] })).toBe(
+      before,
+    );
+    expect(
+      digestWithMessages("legacy-commit", { ...projection, messages: rows.slice(1) }),
+    ).not.toBe(before);
+  });
+});
+
+describe("encoded measures", () => {
+  test("revised rows are measured through the memo and never undercounted", () => {
+    let serializations = 0;
+    const revised = {
+      id: "r",
+      toJSON() {
+        serializations += 1;
+        return { id: "r", content: "é".repeat(100) };
+      },
+    };
+    const views = [
+      { messages: [{ id: "a" }], revisedMessages: [revised], title: "t" },
+      { messages: [], revisedMessages: [revised] },
+      { messages: [{ id: "a" }], revisedMessages: [] },
+      { messages: [{ id: "a" }] },
+    ];
+    for (const view of views) {
+      const bytes = encodedBytesWithMessages(view);
+      expect(bytes).toBeGreaterThanOrEqual(bytesOf(view));
+      expect(bytes - bytesOf(view)).toBeLessThanOrEqual(2);
+    }
+    // The first measure encoded the revised row into the memo; later ones
+    // reuse it rather than serializing `revisedMessages` again.
+    serializations = 0;
+    encodedBytesWithMessages(views[0]!);
+    encodedBytesWithMessages(views[1]!);
+    expect(serializations).toBe(0);
+  });
+});
+
+describe("spliced responses", () => {
+  test("match JSON.stringify for every shape a result can hold", () => {
+    class Point {
+      constructor(
+        readonly x: number,
+        readonly y: number,
+      ) {}
+    }
+    const row = { id: "m", content: 'é "q" \n', parts: [{ type: "text", omitted: undefined }] };
+    encodedValue(row);
+    const deep = { a: { b: { c: { d: { e: { f: { g: { h: { i: { j: [row] } } } } } } } } } };
+    const values: unknown[] = [
+      { status: "snapshot", token: "t", value: { messages: [row, { id: "x" }], skip: undefined } },
+      [row, undefined, () => 1, Symbol("s"), null, 1.5, "s", true],
+      { date: new Date(0), point: new Point(1, 2), nested: [[row]], fn: () => 1 },
+      deep,
+      // oxlint-disable-next-line no-sparse-arrays -- a hole serializes as null
+      [1, , 3],
+      { __proto__: null, plain: "null prototype" },
+      { toJSON: () => ({ replaced: true }) },
+      "text",
+      7,
+      null,
+    ];
+    for (const value of values) expect(spliceEncodedJson(value)).toBe(JSON.stringify(value));
+    expect(spliceEncodedJson(undefined)).toBeUndefined();
+  });
+
+  test("copy an encoded row from its memo, and leave the result a plain object", () => {
+    const row = { id: "m", content: "original" };
+    encodedValue(row);
+    // Never done in production: shows the row is not serialized again.
+    row.content = "changed";
+    expect(spliceEncodedJson({ messages: [row] })).toBe(
+      '{"messages":[{"id":"m","content":"original"}]}',
+    );
+    const result = { status: "delta", delta: { messageUpserts: [row] } };
+    expect(markSpliceableResult(result)).toBe(result);
+    expect(isSpliceableResult(result)).toBe(true);
+    expect(isSpliceableResult({ ...result })).toBe(false);
+    expect(Object.keys(result)).toEqual(["status", "delta"]);
   });
 });
 

@@ -16,6 +16,15 @@ export const COORDINATOR_RUNTIME_PREFIX = "coordinator:" as const;
  * launcher must not turn a missing sandbox into an unsandboxed coordinator.
  */
 export const COORDINATOR_COMMAND_SANDBOX_ENV = "ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX";
+
+/**
+ * The backend's data directory, which holds the operator credentials, every
+ * account's login and the database. A coordinator bridge denies its turns reads
+ * below it, except for the conversation's own runtime and the few directories
+ * it is meant to read (`coordinatorReadBoundary` in the Claude bridge). Only
+ * the launcher's coordinator branch sets it, like the other process authority.
+ */
+export const COORDINATOR_PROTECTED_DATA_DIR_ENV = "ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR";
 export type CoordinatorCommandSandbox = "required" | "unavailable";
 
 export function coordinatorCommandSandboxFromEnv(
@@ -127,6 +136,13 @@ export interface CoordinatorConversation {
   bridgePort?: number;
   bridgePid?: number;
   /**
+   * Why this conversation's bridge last failed to start, already sanitized for
+   * display. While set, this conversation has no runtime: no credential, no
+   * mail, no bridge start. Every other conversation carries on. Cleared by a
+   * successful start or an explicit retry. An older backend ignores the field.
+   */
+  startupError?: string;
+  /**
    * `main` is the project's one coordinator: every worker reports to it and it
    * owns all delegation. A `side` agent (Side 1, Side 2…) can read the project
    * and exchange mail with the main coordinator only. Absent on records written
@@ -140,6 +156,16 @@ export interface CoordinatorConversation {
 export type CoordinatorConversationRole = "main" | "side";
 
 export type CoordinatorTurnOrigin = "user" | "mail";
+
+/**
+ * The per-project setting's name, as Project Settings shows it. The refusal
+ * below repeats it, so what a coordinator tells the user is what they will find.
+ */
+export const COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL =
+  "Let the coordinator use environments it did not create";
+
+/** Why a coordinator was refused an environment it did not create, in words it can pass on. */
+export const COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL = `Not done: this coordinator did not create that environment, so it may not send it work. Do not retry. Use an environment this coordinator launched, or start a new one. If the user wants this coordinator to work in environments it did not create, tell them to turn on "${COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL}" in this project's settings, under Coordinator.`;
 
 /**
  * The address any agent in a project can mail to reach its coordinator.
@@ -311,6 +337,68 @@ export interface CoordinatorDelegation {
    * bounded hold for background work is skipped.
    */
   stopRequestedAt?: string;
+  /** The user stopped it from the Work panel, so the notice does not credit the coordinator. */
+  stopRequestedBy?: "user";
+  /** What was asked and on what, for the Work panel. Absent on older records. */
+  request?: CoordinatorDelegationRequest;
+}
+
+/**
+ * What the Work panel shows about one request: a one-line summary of the ask and
+ * the selection it ran with. The coordinator store is rewritten whole and holds
+ * up to `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS` records, so every field is short
+ * and bounded by {@link normalizeCoordinatorDelegationRequest}. Never read back
+ * as the prompt: it is a display line, cut at the bound.
+ */
+export interface CoordinatorDelegationRequest {
+  summary?: string;
+  agent?: AgentPlatform;
+  /** Null when no tier pins a model and the agent picks its own. */
+  model?: string | null;
+  reasoning?: string | null;
+  /** `requested` when the coordinator overrode the saved default. */
+  source?: "requested" | "default";
+}
+
+export const COORDINATOR_DELEGATION_SUMMARY_MAX = 140;
+const COORDINATOR_DELEGATION_SELECTION_MAX = 120;
+
+function boundedSelection(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text && text.length <= COORDINATOR_DELEGATION_SELECTION_MAX ? text : undefined;
+}
+
+/** One line of at most {@link COORDINATOR_DELEGATION_SUMMARY_MAX} characters, or nothing. */
+export function coordinatorDelegationSummaryLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim().replace(/\s+/g, " ");
+  if (!text) return undefined;
+  if (text.length <= COORDINATOR_DELEGATION_SUMMARY_MAX) return text;
+  // Never leave half of a surrogate pair at the cut.
+  const cut = text.slice(0, COORDINATOR_DELEGATION_SUMMARY_MAX - 1).replace(/[\ud800-\udbff]$/, "");
+  return `${cut}…`;
+}
+
+/** A request with every field checked and bounded, or undefined when nothing is left. */
+export function normalizeCoordinatorDelegationRequest(
+  value: unknown,
+): CoordinatorDelegationRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const summary = coordinatorDelegationSummaryLine(source.summary);
+  const model = boundedSelection(source.model);
+  const reasoning = boundedSelection(source.reasoning);
+  const request: CoordinatorDelegationRequest = {
+    ...(summary ? { summary } : {}),
+    ...(isAgentPlatform(source.agent) ? { agent: source.agent } : {}),
+    ...(model ? { model } : source.model === null ? { model: null } : {}),
+    ...(reasoning ? { reasoning } : source.reasoning === null ? { reasoning: null } : {}),
+    ...(source.source === "requested" || source.source === "default"
+      ? { source: source.source }
+      : {}),
+  };
+  return Object.keys(request).length > 0 ? request : undefined;
 }
 
 /** What coordinator-started work asks of the user, for the panel and for the agent. */
@@ -477,6 +565,15 @@ export interface CoordinatorWorkflowAssociation {
   claimPid?: number;
   baseBranch?: string;
   baseCommit?: string;
+  /** Environment actually created by this workflow, never an existing target.
+   * Kept while that environment exists, independently of workflow history. */
+  createdEnvironmentId?: string;
+  /** This build launch requested a new environment. It is not authority until
+   * provisioning publishes its ID; used to repair a reclaimed admission. */
+  createsEnvironment?: boolean;
+  /** Remote lookup proved no created environment (terminal/missing/foreign admission).
+   * Stops repair polling and permits retention after the replay window. */
+  environmentCreationSettledAt?: string;
   dependsOnResourceId?: string;
   createdAt: string;
   lastNotifiedRevision?: number;
@@ -500,6 +597,22 @@ export interface CoordinatorWorkflowAssociation {
    * a row that is no longer finished is listed again.
    */
   workHiddenAt?: string;
+  /**
+   * The record's node is no longer controlled from here: the user forgot it,
+   * handed it to another command node, or it was missing from this machine's
+   * registry when the record was found (`unregistered`, for nodes removed
+   * before this field existed). Its delegation was closed and its workflow
+   * marked reported, so retention treats its resources as gone. `notifiedAt`
+   * says the coordinator was told. Older backends ignore it and keep the
+   * record, as they did before.
+   */
+  nodeRelease?: CoordinatorNodeRelease;
+}
+
+export interface CoordinatorNodeRelease {
+  at: string;
+  reason: "forgotten" | "handed-over" | "unregistered";
+  notifiedAt?: string;
 }
 
 /**
@@ -790,6 +903,11 @@ export interface CoordinatorWorkspace {
   repositoryContextEvents?: CoordinatorRepositoryContextEvent[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Written only by backends before `CoordinatorConversation.startupError`,
+   * which also set `lifecycleState: "error"`. Read for such a backend, and for
+   * a record it stored (version-compatibility.md).
+   */
   lastStartupError?: string;
   bridgePort?: number;
   bridgePid?: number;
@@ -813,7 +931,19 @@ export interface CoordinatorSnapshot {
   /** Absent from a backend older than this field, which says nothing about the setting. */
   agentMessaging?: { enabled: boolean };
   workflows: CoordinatorWorkflowAssociation[];
+  /**
+   * How close the shared workflow store is to refusing new records
+   * (`coordinator-workflow-retention.ts`). Absent from a backend older than
+   * this field, which says nothing about the store.
+   */
+  workflowStore?: CoordinatorWorkflowStoreState;
 }
+
+/**
+ * `near-limit`: fewer than one cleanup batch of records is left before the
+ * store refuses; `full`: every record is still in use, so new work is refused.
+ */
+export type CoordinatorWorkflowStoreState = "ok" | "near-limit" | "full";
 
 export interface ProjectGitError {
   operation: "status" | "fetch" | "sync" | "switch";
@@ -880,6 +1010,18 @@ export interface ProjectGitSwitchConfirmation {
 export interface ProjectGitSwitchOptions {
   confirmationToken?: string;
   includeNestedRepositories?: boolean;
+}
+
+/**
+ * Whether this conversation may run: hold a credential, receive mail, start a
+ * bridge. Every "is this coordinator up?" question goes through this, because
+ * `lifecycleState` alone no longer answers it for one conversation.
+ */
+export function coordinatorConversationRunnable(
+  workspace: Pick<CoordinatorWorkspace, "lifecycleState">,
+  conversation: Pick<CoordinatorConversation, "startupError">,
+): boolean {
+  return workspace.lifecycleState === "ready" && !conversation.startupError;
 }
 
 export function coordinatorRuntimeId(coordinatorId: string, conversationId?: string): string {
@@ -960,6 +1102,7 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
           item.lastTurnOrigin === "user" ||
           item.lastTurnOrigin === "mail") &&
         (item.lastTurnStartedAt === undefined || typeof item.lastTurnStartedAt === "string") &&
+        (item.startupError === undefined || typeof item.startupError === "string") &&
         (item.sideOrdinal === undefined ||
           (Number.isSafeInteger(item.sideOrdinal) && (item.sideOrdinal as number) > 0))
       );

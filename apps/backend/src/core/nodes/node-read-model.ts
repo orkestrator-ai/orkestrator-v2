@@ -1,6 +1,7 @@
 import {
   BACKEND_PROFILE_CHANGED_EVENT,
   parseBackendProfile,
+  parseBuildCommit,
   type BackendProfile,
 } from "@orkestrator/protocol/backend-profile";
 import type { NodeListResult, NodeView } from "@orkestrator/protocol/command-nodes";
@@ -37,8 +38,9 @@ import { NodeEventStream, type NodeEventTransport } from "./node-event-stream.js
  * - Reads are fenced by the link epoch: a late answer from an older
  *   connection never applies.
  * - An unavailable node keeps its last-known summaries, labelled stale;
- *   last-known state survives a command-node restart. Its version does not:
- *   that is read from the live link, so it is never reported stale.
+ *   last-known state survives a command-node restart. Its version and build
+ *   commit do not: those are read from the live link, so they are never
+ *   reported stale.
  * - Summary reads are bounded and never fetch transcripts or content.
  * - Events keep summaries current; a re-read of every connected node every
  *   {@link SUMMARY_RECONCILE_MS} bounds how long any missed change (an event
@@ -51,7 +53,7 @@ export interface ReadModelLink {
   readonly connected: boolean;
   readonly view: { epoch: number };
   /** The hello of the active route, when connected. */
-  readonly hello?: { appVersion?: string } | null;
+  readonly hello?: { appVersion?: string; buildCommit?: string } | null;
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   transport(): NodeEventTransport | null;
 }
@@ -116,6 +118,12 @@ interface NodeState {
 function connectedVersion(link: ReadModelLink | null): string | null {
   if (!link?.connected) return null;
   return boundedText(link.hello?.appVersion, MAX_NODE_VERSION_LENGTH) || null;
+}
+
+/** The commit a node's current connection announced; a dropped link or an older node has none. */
+function connectedBuildCommit(link: ReadModelLink | null): string | null {
+  if (!link?.connected) return null;
+  return parseBuildCommit(link.hello?.buildCommit);
 }
 
 /** What clients see of one node's summaries, to skip announcing an unchanged re-read. */
@@ -233,11 +241,13 @@ export class NodeReadModel {
       if (wanted && !wanted.has(view.nodeId)) continue;
       const state = this.states.get(view.nodeId);
       const available = view.connection.state === "connected";
+      const link = available ? this.options.nodes.link(view.nodeId) : null;
       nodes.push({
         nodeId: view.nodeId,
         view,
         available,
-        version: available ? connectedVersion(this.options.nodes.link(view.nodeId)) : null,
+        version: connectedVersion(link),
+        buildCommit: connectedBuildCommit(link),
         freshness: state
           ? available
             ? state.freshness

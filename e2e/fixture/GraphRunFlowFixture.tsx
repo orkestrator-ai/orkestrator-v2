@@ -38,6 +38,7 @@ function transcriptReference(count: number) {
 /**
  * Real run view and renderer; only snapshot transport is replaced.
  * `?longTranscript` gives the running node a transcript that overflows its inspector.
+ * `?waiting` leaves the run waiting for an answer from the person.
  */
 export function GraphRunFlowFixture() {
   const [isActive, setIsActive] = useState(true);
@@ -45,13 +46,15 @@ export function GraphRunFlowFixture() {
     new URLSearchParams(window.location.search).has("longTranscript"),
   );
   const transcriptLength = useRef(40);
+  const [waiting] = useState(() => new URLSearchParams(window.location.search).has("waiting"));
   const [initialRun] = useState(() =>
     runOf("multi-review", {
+      ...(waiting ? { status: "waiting" as const } : {}),
       activations: [
         act(
           { nodeId: "plan" },
           {
-            state: "running",
+            state: waiting ? "awaiting-human" : "running",
             ...(longTranscript
               ? { session: agentSession({ transcript: transcriptReference(40) }) }
               : {}),

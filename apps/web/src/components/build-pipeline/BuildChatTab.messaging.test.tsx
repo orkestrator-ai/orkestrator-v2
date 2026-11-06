@@ -79,6 +79,7 @@ describe("BuildChatTab transcript wiring", () => {
         {...props}
       />,
     );
+    selectNode("Verify");
   }
 
   test("keys each row on its message id so a re-render does not remount it", () => {
@@ -276,6 +277,7 @@ describe("BuildChatTab per-step harnesses", () => {
         }}
       />,
     );
+    selectNode("Review");
   }
 
   function partTypes(): string[] {
@@ -578,6 +580,7 @@ describe("BuildChatTab stage following", () => {
     // holding it would leave the transcript permanently blank.
     renderWith({
       ...pipeline,
+      phase: "verifying",
       sessions: [pipeline.sessions[1]!],
       currentSessionIndex: 0,
       backendRevision: 30,
@@ -1020,7 +1023,7 @@ describe("BuildChatTab agent messaging", () => {
         .getState()
         .replacePipeline({ ...waiting, sessions: running.sessions, backendRevision: 51 }),
     );
-    expect(screen.queryByText(/Message queued:/)).toBeNull();
+    expect(screen.queryByText(/Message queued:/) === null).toBe(true);
   });
 
   test("reports a queue of more than one message as a queue", () => {
@@ -1312,7 +1315,7 @@ describe("BuildChatTab graph", () => {
       verificationFeedback: "Every criterion holds.",
     });
 
-    expect(selectedTitle()).toBe("Verify");
+    selectNode("Verify");
     expect(within(inspector()).getByText("Verdict: passed")).toBeTruthy();
   });
 
@@ -1452,7 +1455,9 @@ describe("BuildChatTab graph", () => {
     selectNode("Notes");
 
     expect(createTab).not.toHaveBeenCalled();
-    expect(within(inspector()).queryByRole("button", { name: "Open notes in a tab" })).toBeNull();
+    expect(
+      within(inspector()).queryByRole("button", { name: "Open notes in a tab" }) === null,
+    ).toBe(true);
   });
 
   test("opens a session from the node's context menu", async () => {
@@ -1508,6 +1513,7 @@ describe("BuildChatTab graph", () => {
 
   test("collapses the graph and remembers it for the pipeline", () => {
     const view = renderPipelineTab(reviewed);
+    selectNode("Verify");
     const toggle = screen.getByRole("button", { name: "Pipeline" });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 

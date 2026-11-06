@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   applyNativeAgentMessagePatch,
   buildNativeAgentMessagePatch,
   isNativeAgentMessagePatch,
+  NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION,
+  nativeAgentPartsDigest,
   type NativeAgentMessagePatch,
 } from "./native-agent-transcript-patch.js";
 import {
@@ -104,8 +106,143 @@ function evolve(message: Message, next: () => number): Message {
   };
 }
 
+/** The digest as patch version 2 shipped it; the value must never change. */
+function shippedPartsDigest(parts: readonly unknown[]): string {
+  const serialized = JSON.stringify(parts);
+  let first = 2_166_136_261;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < serialized.length; index += 1) {
+    const code = serialized.charCodeAt(index);
+    first = Math.imul(first ^ code, 16_777_619);
+    second = Math.imul(second ^ code, 0x85ebca6b);
+  }
+  return `${(first >>> 0).toString(36)}:${(second >>> 0).toString(36)}`;
+}
+
+/** A memoizing encoder like the backend's, counting what it serializes. */
+function memoEncoder(): { encode: (value: unknown) => string; serialized: unknown[] } {
+  const memo = new WeakMap<object, string>();
+  const serialized: unknown[] = [];
+  return {
+    serialized,
+    encode: (value) => {
+      if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+      let json = memo.get(value);
+      if (json === undefined) {
+        serialized.push(value);
+        json = JSON.stringify(value);
+        memo.set(value, json);
+      }
+      return json;
+    },
+  };
+}
+
+describe("parts digest", () => {
+  test("is byte-identical to the shipped digest, with or without a memoizing encode", () => {
+    const lists: unknown[][] = [
+      [],
+      [{ type: "text", content: 'é 中 😀 \ud83d \n "' }],
+      [null, 1, "s", true, undefined, () => 1, [1, [2]], { nested: { a: undefined } }],
+    ];
+    for (let seed = 1; seed <= 20; seed += 1) {
+      const next = random(seed);
+      let message: Message = { id: "m", role: "assistant", content: "", parts: [], createdAt: "" };
+      for (let step = 0; step < 30; step += 1) {
+        message = evolve(message, next);
+        lists.push(message.parts);
+      }
+    }
+    // Unchanged digest, so no new patch version is needed.
+    expect(NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION).toBe(2);
+    const { encode } = memoEncoder();
+    for (const parts of lists) {
+      const shipped = shippedPartsDigest(parts);
+      expect(nativeAgentPartsDigest(parts)).toBe(shipped);
+      expect(nativeAgentPartsDigest(parts, encode)).toBe(shipped);
+      // Twice: the second pass reads every part from the memo.
+      expect(nativeAgentPartsDigest(parts, encode)).toBe(shipped);
+    }
+  });
+
+  test("a memoizing builder serializes each part once and never the whole list", () => {
+    const previous: Message = {
+      id: "m",
+      role: "assistant",
+      content: "a",
+      createdAt: "",
+      parts: Array.from({ length: 20 }, (_, index) => ({
+        type: "tool-invocation",
+        toolUseId: `call-${index}`,
+        content: `body ${index}`,
+        toolState: "success",
+      })),
+    };
+    const following: Message = {
+      ...previous,
+      content: "ab",
+      parts: [
+        ...previous.parts.slice(0, -1),
+        { ...previous.parts.at(-1)!, content: "body 19 and more" },
+      ],
+    };
+    const { encode, serialized } = memoEncoder();
+    const stringify = spyOn(JSON, "stringify");
+    let patch: NativeAgentMessagePatch | undefined;
+    try {
+      patch = buildNativeAgentMessagePatch(previous, following, encode);
+      const lists = stringify.mock.calls.filter(
+        ([value]) => value === previous.parts || value === following.parts,
+      );
+      expect(lists).toHaveLength(0);
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(patch?.basePartsDigest).toBe(shippedPartsDigest(previous.parts));
+    expect(new Set(serialized).size).toBe(serialized.length);
+    expect(patch?.parts.at(-1)).toEqual({ keep: 19, length: 7, append: " and more" });
+    expect(applyNativeAgentMessagePatch(previous, patch!)).toEqual(following);
+  });
+
+  test("an append is recognised exactly when the rest of the part encodes the same", () => {
+    const base = (part: Record<string, unknown>) => ({
+      id: "m",
+      role: "assistant",
+      content: "",
+      createdAt: "",
+      parts: [part],
+    });
+    const append = (before: Record<string, unknown>, after: Record<string, unknown>) =>
+      buildNativeAgentMessagePatch(base(before), base(after))?.parts[0];
+    const long = "x".repeat(200);
+    // Fields JSON omits do not count; field order and values do.
+    expect(
+      append(
+        { type: "text", content: long, hidden: undefined },
+        { type: "text", content: `${long}!` },
+      ),
+    ).toEqual({ keep: 0, length: 200, append: "!" });
+    expect(
+      append({ type: "text", content: long, a: 1 }, { type: "text", a: 1, content: `${long}!` }),
+    ).toEqual({ keep: 0, length: 200, append: "!" });
+    expect(
+      append(
+        { type: "text", a: 1, b: 2, content: long },
+        { type: "text", b: 2, a: 1, content: `${long}!` },
+      ),
+    ).not.toHaveProperty("append");
+    expect(
+      append(
+        { type: "text", content: long, a: { b: 1 } },
+        { type: "text", content: `${long}!`, a: { b: 2 } },
+      ),
+    ).not.toHaveProperty("append");
+  });
+});
+
 describe("message patches", () => {
   test("applying a built patch reproduces the next message exactly", () => {
+    const memo = memoEncoder();
     for (let seed = 1; seed <= 40; seed += 1) {
       const next = random(seed);
       let message: Message = {
@@ -119,6 +256,8 @@ describe("message patches", () => {
         const following = evolve(message, next);
         const patch = buildNativeAgentMessagePatch(message, following);
         expect(patch).toBeDefined();
+        // The backend's memoizing encode builds the very same patch.
+        expect(buildNativeAgentMessagePatch(message, following, memo.encode)).toEqual(patch);
         expect(isNativeAgentMessagePatch(JSON.parse(JSON.stringify(patch)))).toBe(true);
         const applied = applyNativeAgentMessagePatch(message, JSON.parse(JSON.stringify(patch)));
         expect(applied).toEqual(following);

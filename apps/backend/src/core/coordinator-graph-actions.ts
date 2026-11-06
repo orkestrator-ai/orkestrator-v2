@@ -21,6 +21,7 @@ import {
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
 import { graphLaunchRunId, GraphLaunchError } from "./graph-run-launch.js";
+import { assertCoordinatorMayControlWorkflow } from "./coordinator-environment-scope.js";
 
 /**
  * The coordinator's graph commands (item 214, D6): list saved templates, read
@@ -270,6 +271,7 @@ export function registerCoordinatorGraphActions(register: CommandRegistrar): voi
       await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
         receipt.association.id,
         launched.runId,
+        parsed.environment.kind === "existing" ? undefined : launched.environmentId,
       );
       return { launch: launched, associationId: receipt.association.id };
     })().finally(() => {
@@ -287,6 +289,11 @@ export function registerCoordinatorGraphActions(register: CommandRegistrar): voi
   register("cancel_coordinator_graph_run", async ({ scope, runId }, context) => {
     const caller = await coordinatorCaller(scope, context);
     const run = await projectRun(context, caller, runId);
+    await assertCoordinatorMayControlWorkflow(context, caller, {
+      kind: "graph-run",
+      resourceId: run.id,
+      environmentId: run.environmentId,
+    });
     if (isGraphRunTerminal(run.status) || run.status === "cancelling") {
       return { ...coordinatorGraphRunView(run), cancelled: false };
     }

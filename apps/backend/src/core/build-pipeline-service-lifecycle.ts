@@ -432,7 +432,10 @@ export class BuildPipelineLifecycle {
     return ticket?.sections?.delivery?.policy ?? input.deliveryPolicy;
   }
 
-  async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
+  async start(
+    input: StartBuildPipelineInput,
+    coordinatorLaunchId?: string,
+  ): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
     }
@@ -455,6 +458,7 @@ export class BuildPipelineLifecycle {
     const reviewPreparation = normalizeReviewPreparation(input.reviewPreparation);
     const pipeline: BuildPipeline = {
       id: randomUUID(),
+      ...(coordinatorLaunchId ? { coordinatorLaunchId } : {}),
       taskId: input.taskId,
       projectId: input.projectId,
       environmentId: existingEnvironmentId,

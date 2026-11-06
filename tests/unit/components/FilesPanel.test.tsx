@@ -713,7 +713,9 @@ describe("Files panel components", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Delete file" }).at(-1)!);
-    await waitFor(() => expect(deleteFileMock).toHaveBeenCalledWith([change.path]));
+    await waitFor(() =>
+      expect(deleteFileMock).toHaveBeenCalledWith([change.path], { target: "file" }),
+    );
     expect(screen.getByRole("heading", { name: "Delete file?" })).toBeTruthy();
 
     mockEnvironmentId = "env-other";
@@ -758,7 +760,9 @@ describe("Files panel components", () => {
     expect(screen.getByRole("heading", { name: "Delete files?" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete files" }));
     await waitFor(() =>
-      expect(deleteFileMock).toHaveBeenCalledWith(["src/App.tsx", "src/main.ts"]),
+      expect(deleteFileMock).toHaveBeenCalledWith(["src/App.tsx", "src/main.ts"], {
+        target: "file",
+      }),
     );
     await waitFor(() =>
       expect(screen.queryByRole("heading", { name: "Delete files?" }) === null).toBe(true),
@@ -803,12 +807,16 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete files" }));
 
     await waitFor(() =>
-      expect(deleteFileMock).toHaveBeenCalledWith(["src/App.tsx", "src/main.ts"]),
+      expect(deleteFileMock).toHaveBeenCalledWith(["src/App.tsx", "src/main.ts"], {
+        target: "file",
+      }),
     );
     expect(screen.getByRole("heading", { name: "Delete file?" })).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Delete file" }).at(-1)!);
-    await waitFor(() => expect(deleteFileMock).toHaveBeenLastCalledWith(["src/main.ts"]));
+    await waitFor(() =>
+      expect(deleteFileMock).toHaveBeenLastCalledWith(["src/main.ts"], { target: "file" }),
+    );
   });
 
   test("FilesPanel does not queue destructive actions without an environment", () => {

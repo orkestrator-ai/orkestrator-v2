@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline";
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { checkBackendRoute } from "./backend-hello.js";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -7,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/node/application-logging";
+import { forEachBoundedLine } from "@orkestrator/protocol/node/bounded-line-splitter";
 import { isLogPolicyChangedRecord } from "@orkestrator/protocol/node/log-policy";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
@@ -26,6 +26,11 @@ import {
   readSseStream,
 } from "@orkestrator/protocol/gateway-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
+import {
+  RelayedEventStream,
+  type RelayedEventConnection,
+  type RelayedEventConnectionHandlers,
+} from "@orkestrator/protocol/relayed-event-stream";
 import { TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS } from "@orkestrator/protocol/terminal-input-batcher";
 import { TerminalInputSequencer } from "@orkestrator/protocol/terminal-input-sequencer";
 import {
@@ -427,6 +432,38 @@ export type BackendListenOptions = {
   streamNow?: () => number;
 };
 
+/**
+ * Gives up on an attempt nothing answers, and on a stream the gateway has stopped
+ * talking on: a link that drops with no answer never errors the stream by itself.
+ */
+function watchStreamAttempt(signal: AbortSignal, options: BackendListenOptions) {
+  const now = options.streamNow ?? Date.now;
+  const silenceLimitMs = options.streamSilenceLimitMs ?? GATEWAY_STREAM_SILENCE_LIMIT_MS;
+  const connectTimeoutMs = options.streamConnectTimeoutMs ?? GATEWAY_STREAM_CONNECT_TIMEOUT_MS;
+  const attempt = new AbortController();
+  const abortAttempt = () => attempt.abort();
+  signal.addEventListener("abort", abortAttempt, { once: true });
+  let deadline = now() + connectTimeoutMs;
+  const watchdog = setInterval(
+    () => {
+      if (now() >= deadline) attempt.abort();
+    },
+    Math.min(silenceLimitMs, connectTimeoutMs) / 4,
+  );
+  watchdog.unref?.();
+  return {
+    signal: attempt.signal,
+    /** The gateway said something, or answered the attempt. */
+    heard() {
+      deadline = now() + silenceLimitMs;
+    },
+    stop() {
+      clearInterval(watchdog);
+      signal.removeEventListener("abort", abortAttempt);
+    },
+  };
+}
+
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
   private listener: {
@@ -435,6 +472,12 @@ export class BackendHttpClient {
   } | null = null;
   /** Kept across a route retarget to the same backend generation so replay resumes. */
   private eventStream = new GatewayEventStreamState();
+  /**
+   * The per-node relayed events a window on this client listens to, on one
+   * stream with its own cursor. Empty, it holds no connection.
+   */
+  private relayedEvents: RelayedEventStream;
+  private readonly relayedEventNames = new Set<string>();
   private readonly eventReconnectDelayMs: number;
   /**
    * Shared ordering contract for terminal input. After an ambiguous loss only
@@ -454,6 +497,7 @@ export class BackendHttpClient {
   suspend(): void {
     this.suspended = true;
     this.abortEvents?.abort();
+    this.relayedEvents.dropConnection();
   }
 
   private endpoint(endpoint: string): URL {
@@ -477,6 +521,7 @@ export class BackendHttpClient {
     }
     this.eventReconnectDelayMs = options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS;
     this.relayTerminalOutput = options.relayTerminalOutput ?? true;
+    this.relayedEvents = this.createRelayedEventStream();
     this.terminalInput = new TerminalInputSequencer({
       batchDelayMs: 0,
       sendTimeoutMs: terminalSendTimeoutMs,
@@ -529,8 +574,38 @@ export class BackendHttpClient {
     this.suspended = false;
     this.baseUrl = baseUrl;
     this.token = token;
-    if (!options.preserveCursor) this.eventStream = new GatewayEventStreamState();
+    if (!options.preserveCursor) {
+      this.eventStream = new GatewayEventStreamState();
+      this.relayedEvents.forgetCursor();
+    }
     if (this.listener) this.listen(this.listener.onEvent, this.listener.options);
+    this.relayedEvents.dropConnection();
+    this.relayedEvents.retryWaiting();
+  }
+
+  /**
+   * Which per-node relayed events this client's filtered stream carries: the ones
+   * a window on it listens to. A change reopens that stream from its cursor; the
+   * main stream is left alone.
+   */
+  setRelayedEvents(events: readonly string[]): void {
+    // A late window update must not restart streams after backend exit or shutdown.
+    if (!this.listener) return;
+    const wanted = new Set(events);
+    for (const event of Array.from(this.relayedEventNames)) {
+      if (wanted.has(event)) continue;
+      this.relayedEventNames.delete(event);
+      this.relayedEvents.remove(event);
+    }
+    for (const event of wanted) {
+      this.relayedEventNames.add(event);
+      this.relayedEvents.add(event);
+    }
+  }
+
+  /** Settles once the stream carrying this per-node relayed event is open. */
+  relayedEventReady(event: string): Promise<void> {
+    return this.relayedEvents.ready(event);
   }
 
   invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -664,6 +739,63 @@ export class BackendHttpClient {
     this.abortEvents?.abort();
     this.abortEvents = null;
     this.listener = null;
+    this.relayedEvents.dispose();
+    this.relayedEvents = this.createRelayedEventStream();
+    this.relayedEventNames.clear();
+  }
+
+  private createRelayedEventStream(): RelayedEventStream {
+    return new RelayedEventStream({
+      open: (events, since, handlers) => this.openRelayedConnection(events, since, handlers),
+      deliver: (event, payload) => this.listener?.onEvent(event, payload),
+      backoff: new ReconnectBackoff({
+        initialDelayMs: this.eventReconnectDelayMs,
+        maxDelayMs: Math.max(this.eventReconnectDelayMs, EVENT_RECONNECT_MAX_DELAY_MS),
+        healthyAfterMs: EVENT_STREAM_HEALTHY_AFTER_MS,
+      }),
+    });
+  }
+
+  private openRelayedConnection(
+    events: readonly string[],
+    since: string | null,
+    handlers: RelayedEventConnectionHandlers,
+  ): RelayedEventConnection {
+    // Parked until `retarget` reopens it: nothing may reach an unverified route.
+    if (this.suspended) return { close: () => undefined };
+    const controller = new AbortController();
+    const watch = watchStreamAttempt(controller.signal, this.listener?.options ?? {});
+    void (async () => {
+      try {
+        const url = this.endpoint("/__orkestrator/events");
+        url.searchParams.set("includeEvents", events.join(","));
+        if (since) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, since);
+        const response = await fetch(url, {
+          headers: { authorization: `Bearer ${this.token}` },
+          signal: watch.signal,
+        });
+        if (!response.ok || !response.body)
+          throw new Error(`Backend event stream returned HTTP ${response.status}`);
+        watch.heard();
+        handlers.onOpen();
+        await readSseStream(
+          response.body,
+          watch.signal,
+          (frame) => {
+            if (frame.data) handlers.onMessage(frame.data, frame.id);
+          },
+          undefined,
+          watch.heard,
+        );
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        clientLog.warn("event-stream.disconnected", { error: formatLogError(error) });
+      } finally {
+        watch.stop();
+      }
+      if (!controller.signal.aborted) handlers.onError();
+    })();
+    return { close: () => controller.abort() };
   }
 
   /**
@@ -687,38 +819,25 @@ export class BackendHttpClient {
       },
       { now },
     );
-    const silenceLimitMs = options.streamSilenceLimitMs ?? GATEWAY_STREAM_SILENCE_LIMIT_MS;
-    const connectTimeoutMs = options.streamConnectTimeoutMs ?? GATEWAY_STREAM_CONNECT_TIMEOUT_MS;
     while (!signal.aborted) {
-      // A link that drops with no answer never errors the stream: give up on it
-      // once the gateway's keepalives stop, and on an attempt nothing answers.
-      const attempt = new AbortController();
-      const abortAttempt = () => attempt.abort();
-      signal.addEventListener("abort", abortAttempt, { once: true });
-      let deadline = now() + connectTimeoutMs;
-      const watchdog = setInterval(
-        () => {
-          if (now() >= deadline) attempt.abort();
-        },
-        Math.min(silenceLimitMs, connectTimeoutMs) / 4,
-      );
-      watchdog.unref?.();
+      const watch = watchStreamAttempt(signal, options);
       let credentialRejected = false;
       try {
         const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
-        // Main forwards to windows it does not track watches for, so it takes
-        // every relayed event on this one stream.
+        // Relayed events come on their own filtered stream, for what windows
+        // listen to. A backend from before per-node names ignores this and sends
+        // them here under the old name, which windows always listen for.
         url.searchParams.set(
           GATEWAY_RELAYED_EVENTS_PARAM,
-          "legacy" satisfies GatewayRelayedEventsMode,
+          "per-node" satisfies GatewayRelayedEventsMode,
         );
         if (!this.relayTerminalOutput) {
           url.searchParams.set("excludeEvents", TERMINAL_OUTPUT_EVENT_PREFIX);
         }
         const response = await fetch(url, {
           headers: { authorization: `Bearer ${this.token}` },
-          signal: attempt.signal,
+          signal: watch.signal,
         });
         credentialRejected = response.status === 401;
         if (!response.ok || !response.body)
@@ -727,7 +846,7 @@ export class BackendHttpClient {
           await response.body.cancel().catch(() => undefined);
           return;
         }
-        deadline = now() + silenceLimitMs;
+        watch.heard();
         backoff.connected();
         options.onStreamState?.("open");
         // Terminal output is excluded from authoritative replay. Even a quiet
@@ -735,7 +854,7 @@ export class BackendHttpClient {
         onEvent(TERMINAL_EVENT_STREAM_CONNECTED_EVENT, undefined);
         await readSseStream(
           response.body,
-          attempt.signal,
+          watch.signal,
           (frame) => {
             if (!frame.data) return;
             const message = stream.accept(frame.data, frame.id);
@@ -747,16 +866,13 @@ export class BackendHttpClient {
             }
           },
           undefined,
-          () => {
-            deadline = now() + silenceLimitMs;
-          },
+          watch.heard,
         );
       } catch (error) {
         if (signal.aborted) return;
         clientLog.warn("event-stream.disconnected", { error: formatLogError(error) });
       } finally {
-        clearInterval(watchdog);
-        signal.removeEventListener("abort", abortAttempt);
+        watch.stop();
       }
       if (signal.aborted) return;
       // A refused credential proves the backend is reachable. Keep reads enabled
@@ -985,9 +1101,10 @@ export class BackendProcess {
     // even after childFailure clears the process state on exit.
     this.childClosed = new Promise((resolve) => child.once("close", () => resolve()));
     // Line-oriented: production logging tees `console`, so a chunk boundary
-    // must not become a log-entry boundary or split a single record.
+    // must not become a log-entry boundary or split a single record. Bounded:
+    // a backend line with no newline cannot grow this process's memory.
     if (child.stderr) {
-      createInterface({ input: child.stderr }).on("line", (line) => {
+      forEachBoundedLine(child.stderr, (line) => {
         relayBackendLine("stderr", line, options.onLogPolicyChanged);
       });
     }
@@ -1036,13 +1153,12 @@ export class BackendProcess {
           reject(new Error("Backend service stdout is unavailable"));
           return;
         }
-        const lines = createInterface({ input: child.stdout });
         const finish = (message: ReadyMessage) => {
           clearTimeout(timeout);
           rejectStartup = null;
           resolve(message);
         };
-        lines.on("line", (line) => {
+        forEachBoundedLine(child.stdout, (line) => {
           const message = parseReadyMessage(line);
           if (message) finish(message);
           else relayBackendLine("stdout", line, options.onLogPolicyChanged);

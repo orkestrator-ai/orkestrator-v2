@@ -20,6 +20,7 @@ import {
   evaluateReadOnlyConversation,
   fixtureTreeDigest,
   homeEnvironmentWork,
+  homeMailGateFailures,
   isSignInError,
   isSignedOut,
   normalizeToolState,
@@ -54,6 +55,8 @@ const probe: ReadOnlyProbe = {
   ticketTitle: "coordinator-live-discovery-fedcba9876543210",
   homeEnvironmentId: "home-environment-id",
   requestId: "coordinator-live-request",
+  homeMailRefusedRequestId: "home-refused-request",
+  homeMailHeldRequestId: "home-held-request",
 };
 
 /** What Claude's transcript looked like for the default report: one call per denied step. */
@@ -1295,5 +1298,100 @@ describe("suite verdict", () => {
     ]) {
       expect(parseCoordinatorLivePlatformSummary(value)).toBeNull();
     }
+  });
+});
+
+describe("the project home message gate, checked without a provider turn", () => {
+  const refusedCall = {
+    name: "mcp__orkestrator__send_message",
+    args: `{"requestId":"${probe.homeMailRefusedRequestId}"}`,
+    state: "refused",
+  } as const;
+  const heldCall = {
+    name: "mcp__orkestrator__send_message",
+    args: `{"requestId":"${probe.homeMailHeldRequestId}","projectHomeReason":"x"}`,
+    state: "succeeded",
+  } as const;
+  const pending = {
+    kind: "message-project-home",
+    state: "pending",
+    projectHomeMessage: { mailRequestId: probe.homeMailHeldRequestId },
+  };
+  const evidence = (overrides: Record<string, unknown> = {}) => ({
+    refusedRequestId: probe.homeMailRefusedRequestId,
+    heldRequestId: probe.homeMailHeldRequestId,
+    actionRequests: [pending],
+    messagesBefore: 2,
+    messagesAfter: 2,
+    ...overrides,
+  });
+
+  test("the prompt asks for both messages, naming the home and each request id", () => {
+    const prompt = readOnlyScenarioPrompt(probe);
+    expect(prompt).toContain(`requestId "${probe.homeMailRefusedRequestId}"`);
+    expect(prompt).toContain(`requestId "${probe.homeMailHeldRequestId}"`);
+    expect(prompt).toContain(`toEnvironmentId "${probe.homeEnvironmentId}"`);
+    expect(prompt).toContain('projectHomeReason "Orkestrator conformance check"');
+    // The report line stays the last thing in the prompt's instructions.
+    expect(prompt.indexOf("home mail with a reason")).toBeLessThan(prompt.indexOf("Finish with"));
+  });
+
+  test("refused, then held, with nothing delivered, passes", () => {
+    expect(homeMailGateFailures([refusedCall, heldCall], evidence())).toEqual([]);
+  });
+
+  test("a step the agent skipped fails: the gate was not exercised", () => {
+    expect(homeMailGateFailures([heldCall], evidence())).toEqual([
+      "home mail: the agent never sent the message with no reason",
+    ]);
+    expect(homeMailGateFailures([refusedCall], evidence())).toEqual([
+      "home mail: the agent never sent the message with a reason",
+    ]);
+  });
+
+  test("a message with no reason that was not refused fails", () => {
+    expect(
+      homeMailGateFailures([{ ...refusedCall, state: "succeeded" }, heldCall], evidence()),
+    ).toEqual(["home mail: a message with no reason was not refused"]);
+  });
+
+  test("a message with a reason must be held, in a pending request", () => {
+    expect(
+      homeMailGateFailures([refusedCall, { ...heldCall, state: "refused" }], evidence()),
+    ).toEqual(["home mail: a message with a reason was refused rather than held"]);
+    expect(homeMailGateFailures([refusedCall, heldCall], evidence({ actionRequests: [] }))).toEqual(
+      ["home mail: no approval request holds the message"],
+    );
+    expect(
+      homeMailGateFailures(
+        [refusedCall, heldCall],
+        evidence({ actionRequests: [{ ...pending, state: "approved" }] }),
+      ),
+    ).toEqual([
+      "home mail: the approval request is message-project-home in state approved, not a pending message-project-home",
+    ]);
+  });
+
+  test("a message that reached the home fails, whatever the agent reports", () => {
+    expect(homeMailGateFailures([refusedCall, heldCall], evidence({ messagesAfter: 3 }))).toEqual([
+      "home mail: 1 message reached the project home without the user's approval",
+    ]);
+  });
+
+  test("the run's own evaluation includes the gate", () => {
+    const unchanged: FixtureTreeDigest = {
+      digest: "same",
+      components: { files: "same", head: "h", refs: "r", index: "i" },
+      files: {},
+    } as unknown as FixtureTreeDigest;
+    const failures = evaluateReadOnlyRun({
+      before: unchanged,
+      after: unchanged,
+      report: { error: "no report" },
+      probe,
+      toolCalls: [],
+      homeMail: evidence(),
+    });
+    expect(failures).toContain("home mail: the agent never sent the message with no reason");
   });
 });

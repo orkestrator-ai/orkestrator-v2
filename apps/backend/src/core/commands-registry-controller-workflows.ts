@@ -270,7 +270,12 @@ export function registerControllerWorkflowCommands(
       );
     }
     // The pipeline's admission key makes a retried start return the first one.
-    return context.buildPipelines.start({ ...(input as StartBuildPipelineInput), source });
+    return context.buildPipelines.start(
+      { ...(input as StartBuildPipelineInput), source },
+      typeof args.coordinatorLaunchId === "string" && args.coordinatorLaunchId.trim()
+        ? args.coordinatorLaunchId
+        : undefined,
+    );
   });
 
   /** The Multi Review button, under an ID the caller reserved for this request. */

@@ -101,6 +101,13 @@ export interface NodeEnvironmentSummary {
   deleteFailure?: string;
   /** When the running delete started, so a slow one can say how long it has taken. */
   deletingSince?: string;
+  /**
+   * `deleting` is left over from a merge cleanup that failed, and a new delete
+   * retries it, so the row stays selectable for a bulk delete. Absent
+   * otherwise, and from nodes that predate it, whose row then stays out of a
+   * selection as before. The error's text stays on its machine.
+   */
+  deletionRetryable?: true;
   isProjectHome: boolean;
   /**
    * An existing build pipeline record names this environment, so
@@ -168,6 +175,12 @@ export interface NodeSummary {
    * last-known value. Absent from a command node that predates it.
    */
   version?: string | null;
+  /**
+   * The commit in that same hello, under the same rule. Also `null` for a
+   * connected node whose hello has none. Absent from a command node that
+   * predates it.
+   */
+  buildCommit?: string | null;
   freshness: SummaryFreshness;
   /** When the summaries were last read from the node (command-node clock, ms). */
   loadedAt: number | null;
@@ -362,6 +375,9 @@ export function toNodeEnvironmentSummary(
     typeof raw.lifecycleOperationStartedAt === "string" &&
     raw.lifecycleOperationStartedAt
       ? { deletingSince: raw.lifecycleOperationStartedAt.slice(0, MAX_TIMESTAMP) }
+      : {}),
+    ...(typeof raw.cleanupAfterMergeError === "string" && raw.cleanupAfterMergeError.length > 0
+      ? { deletionRetryable: true as const }
       : {}),
     isProjectHome: raw.projectHome === true,
     ...(raw.buildPipeline === true ? { buildPipeline: true as const } : {}),

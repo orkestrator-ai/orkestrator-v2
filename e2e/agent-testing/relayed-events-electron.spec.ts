@@ -1,0 +1,365 @@
+import { fetchModulesOutsideChromium } from "./browser-test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
+import { _electron as electron } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
+import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import { relayedNodeEventName } from "@orkestrator/protocol/node-events";
+import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
+import { startLeaf } from "./electron-leaf-backend";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
+import { dismissStartupDialogs } from "./electron-startup-dialogs";
+
+/**
+ * The desktop's relay of another node's events through the real main process,
+ * preload and IPC (docs/architecture/command-nodes.md): a window and a realm's
+ * portal say which per-node events they listen to, and main opens one filtered
+ * stream for those. The leaf is a second backend on loopback.
+ */
+
+type Project = { id: string; name: string };
+type Frame = { nodeId?: string; kind?: string; event?: string };
+type RendererGlobals = typeof globalThis & {
+  __relayed?: Frame[];
+  orkestrator: {
+    invoke<R>(command: string, args?: Record<string, unknown>): Promise<R>;
+    listen(event: string, callback: (payload: Frame) => void): () => void;
+    eventStreamReady(event: string): Promise<void>;
+    connections: {
+      connect(input: { address: string; token: string }): Promise<unknown>;
+      use(connectionId: string): Promise<unknown>;
+    };
+  };
+};
+type MainGlobals = typeof globalThis & {
+  __relayedStreams?: string[];
+  __activeRelayedStreams?: Array<{ origin: string; filter: string; aborted: boolean }>;
+};
+
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+const packageRoot = path.join(repositoryRoot, "apps", "desktop");
+const webRoot = path.join(repositoryRoot, "apps", "web");
+const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
+
+async function waitForUrl(url: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        fetch(url)
+          .then((response) => response.ok)
+          .catch(() => false),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+}
+
+test.beforeAll(() => {
+  const build = spawnSync("bun", ["scripts/electron-bundle.ts"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+  });
+  expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+});
+
+test("main takes a node's relayed events only for the window and realm listening", async () => {
+  test.setTimeout(300_000);
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-relayed-"));
+  let vite: ChildProcess | null = null;
+  let app: ElectronApplication | null = null;
+  let leafChild: ChildProcess | null = null;
+  const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
+  const profile = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: "electron-relayed-events",
+    flavor: "agent-test",
+    rendererPort,
+    gatewayPort,
+    roots: {
+      developmentRoot: path.join(temporaryRoot, "dev"),
+      productionDataDir: path.join(temporaryRoot, "production"),
+      homeDir: temporaryRoot,
+    },
+  });
+  const profilePath = await initializeProfile(profile);
+  const projectPath = await prepareFixtureRepository(
+    profile,
+    path.join(repositoryRoot, "test-fixtures", "agent-project"),
+  );
+  const rendererUrl = `http://127.0.0.1:${rendererPort}`;
+  try {
+    const leaf = await startLeaf(temporaryRoot);
+    leafChild = leaf.child;
+    vite = spawn("bun", ["run", "dev"], {
+      cwd: webRoot,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        VITE_DEV_HOST: "127.0.0.1",
+        VITE_DEV_PORT: String(rendererPort),
+        VITE_ORKESTRATOR_PROFILE: profile.id,
+      },
+    });
+    ownProcessGroup(vite);
+    recordProcessOutput("vite", vite);
+    await waitForUrl(rendererUrl);
+    const headless = headlessElectronRequested();
+    app = await electron.launch({
+      executablePath: electronExecutable,
+      args: [
+        ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
+        path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
+      ],
+      cwd: repositoryRoot,
+      env: {
+        ...(headless ? withoutDisplay(process.env) : process.env),
+        HOME: temporaryRoot,
+        ELECTRON_DEV: "1",
+        VITE_DEV_SERVER_URL: rendererUrl,
+        ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
+      },
+    });
+    recordElectronDiagnostics(app);
+    const electronApp = app;
+    dismissStartupDialogs(electronApp);
+    await fetchModulesOutsideChromium(electronApp.context());
+    const window = await electronApp.firstWindow();
+    // Wait for main's initial loadURL before replacing the possibly partial document.
+    await window.waitForURL((url) => url.protocol === "http:");
+    await window.reload();
+    window.setDefaultTimeout(20_000);
+    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
+      window.evaluate(
+        ({ command, args }) => (globalThis as RendererGlobals).orkestrator.invoke<T>(command, args),
+        { command, args },
+      );
+
+    // Every filtered stream main opens from here on, and the filter it asked for.
+    await electronApp.evaluate(() => {
+      const main = globalThis as MainGlobals;
+      main.__relayedStreams = [];
+      main.__activeRelayedStreams = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = ((input, init) => {
+        const url = new URL(String(input));
+        const filter = url.searchParams.get("includeEvents");
+        if (url.pathname === "/__orkestrator/events" && filter) {
+          main.__relayedStreams?.push(filter);
+          const stream = { origin: url.origin, filter, aborted: false };
+          main.__activeRelayedStreams?.push(stream);
+          init?.signal?.addEventListener("abort", () => {
+            stream.aborted = true;
+          });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+    });
+    const relayedStreams = () =>
+      electronApp.evaluate(() => (globalThis as MainGlobals).__relayedStreams ?? []);
+
+    await invoke<Project>("add_project", {
+      gitUrl: path.join(profile.fixtureDir, "origin.git"),
+      localPath: projectPath,
+    });
+    await invoke("add_node", {
+      routes: [{ id: "loopback", kind: "https", enabled: true, origin: leaf.origin }],
+      token: leaf.token,
+    });
+    await expect
+      .poll(
+        async () =>
+          (
+            await invoke<{ nodes: Array<{ environments: unknown[] }> }>("get_node_summaries")
+          ).nodes.some((node) => node.environments.length > 0),
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    const leafEvent = relayedNodeEventName(leaf.nodeId as never);
+    const lease = await invoke<{ perNodeEvents?: true }>("watch_node_events", {
+      nodeId: leaf.nodeId,
+      prefixes: ["resource-changed"],
+      watchId: "relayed-electron-qa",
+    });
+    expect(lease.perNodeEvents).toBe(true);
+
+    /** What a renderer's view does: listen, then wait for the stream that carries it. */
+    const listenInWindow = (page: Page) =>
+      page.evaluate((name) => {
+        const renderer = globalThis as RendererGlobals;
+        renderer.__relayed = [];
+        renderer.orkestrator.listen(name, (frame) => void renderer.__relayed?.push(frame));
+        return renderer.orkestrator.eventStreamReady(name);
+      }, leafEvent);
+    const framesIn = (page: Page) =>
+      page.evaluate(() => (globalThis as RendererGlobals).__relayed ?? []);
+    let changes = 0;
+    const changeLeaf = () =>
+      leaf.invoke("create_environment", {
+        projectId: leaf.project.id,
+        name: `leaf-change-${(changes += 1)}`,
+        environmentType: "local",
+      });
+    const hasEventFrame = (frames: Frame[]) =>
+      frames.some((frame) => frame.nodeId === leaf.nodeId && frame.kind === "event");
+
+    // The window asks, and main's filter names that node and no other.
+    await listenInWindow(window);
+    await expect.poll(relayedStreams, { timeout: 30_000 }).toContainEqual(leafEvent);
+    await changeLeaf();
+    await expect
+      .poll(async () => hasEventFrame(await framesIn(window)), { timeout: 30_000 })
+      .toBe(true);
+
+    // A reload starts empty and asks again, in that order over the real IPC pipe.
+    const streamsBeforeReload = (await relayedStreams()).length;
+    await window.reload();
+    await expect(
+      window
+        .locator(`[data-testid="federated-environment-row"][data-machine="${leaf.nodeId}"]`)
+        .first(),
+    ).toBeVisible({ timeout: 60_000 });
+    await listenInWindow(window);
+    await expect
+      .poll(async () => (await relayedStreams()).length, { timeout: 30_000 })
+      .toBeGreaterThan(streamsBeforeReload);
+    await expect
+      .poll(
+        async () => {
+          await invoke("watch_node_events", {
+            nodeId: leaf.nodeId,
+            prefixes: ["resource-changed"],
+            watchId: "relayed-electron-qa",
+          });
+          await changeLeaf();
+          return hasEventFrame(await framesIn(window));
+        },
+        { timeout: 30_000, intervals: [1_000] },
+      )
+      .toBe(true);
+
+    // Through a realm's portal, on the same one stream.
+    await window.getByRole("button", { name: "Open leaf-app on Leaf", exact: true }).click();
+    const realmPortal = (script: string) =>
+      electronApp.evaluate(async ({ webContents }, source) => {
+        const realm = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().includes("realm=workspace"));
+        return realm ? ((await realm.executeJavaScript(source)) as unknown) : null;
+      }, script);
+    await expect
+      .poll(() => realmPortal("Boolean(window.orkestratorPortal)"), { timeout: 60_000 })
+      .toBe(true);
+    await realmPortal(`(() => {
+      window.__portalFrames = [];
+      window.orkestratorPortal.listen(${JSON.stringify(leafEvent)}, (frame) => window.__portalFrames.push(frame));
+      return window.orkestratorPortal.eventStreamReady(${JSON.stringify(leafEvent)});
+    })()`);
+    await changeLeaf();
+    await expect
+      .poll(
+        async () => hasEventFrame(((await realmPortal("window.__portalFrames")) ?? []) as Frame[]),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
+    // Give only the portal a second name, so closing it must narrow main's
+    // stream even while the parent keeps its original subscription.
+    const portalOnlyEvent = relayedNodeEventName("bk_portal_only" as never);
+    await realmPortal(`(() => {
+      window.orkestratorPortal.listen(${JSON.stringify(portalOnlyEvent)}, () => {});
+      return window.orkestratorPortal.eventStreamReady(${JSON.stringify(portalOnlyEvent)});
+    })()`);
+    const activeFilters = () =>
+      electronApp.evaluate(
+        () =>
+          (globalThis as MainGlobals).__activeRelayedStreams?.filter((stream) => !stream.aborted) ??
+          [],
+      );
+    await expect
+      .poll(async () =>
+        (await activeFilters()).some((stream) =>
+          stream.filter.split(",").includes(portalOnlyEvent),
+        ),
+      )
+      .toBe(true);
+    await electronApp.evaluate(({ webContents }) => {
+      webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().includes("realm=workspace"))!
+        .close();
+    });
+    // Runs WorkspaceViews.dispose -> main.unregisterRealm, rather than calling
+    // the window bookkeeping directly as the unit harness does.
+    await expect
+      .poll(async () =>
+        (await activeFilters()).some((stream) =>
+          stream.filter.split(",").includes(portalOnlyEvent),
+        ),
+      )
+      .toBe(false);
+    await changeLeaf();
+    await expect.poll(async () => hasEventFrame(await framesIn(window))).toBe(true);
+
+    // Drive main's real connection callbacks with a live subscribed window.
+    // The listens follow the window to the new client and back to Local.
+    await window.evaluate(
+      ({ address, token }) =>
+        (globalThis as RendererGlobals).orkestrator.connections.connect({ address, token }),
+      { address: leaf.origin, token: leaf.token },
+    );
+    await expect
+      .poll(async () =>
+        (await activeFilters()).some(
+          (stream) => stream.origin === leaf.origin && stream.filter === leafEvent,
+        ),
+      )
+      .toBe(true);
+    await window.evaluate(() =>
+      (globalThis as RendererGlobals).orkestrator.connections.use("local"),
+    );
+    await expect
+      .poll(async () => (await activeFilters()).some((stream) => stream.origin === leaf.origin))
+      .toBe(false);
+    await listenInWindow(window);
+    await changeLeaf();
+    await expect
+      .poll(async () => hasEventFrame(await framesIn(window)), { timeout: 30_000 })
+      .toBe(true);
+
+    // Every filter main ever asked for was for what a renderer listens to, and
+    // no relayed frame reached this desktop under the old name.
+    for (const filter of await relayedStreams()) {
+      for (const name of filter.split(",")) expect([leafEvent, portalOnlyEvent]).toContain(name);
+    }
+    const usage = await invoke<{ paths: Record<string, unknown> }>("get_compatibility_path_usage");
+    expect(usage.paths["relayed-node-event.legacy-stream"]).toBeUndefined();
+    expect(usage.paths["relayed-node-event.legacy-desktop-stream"]).toBeUndefined();
+  } finally {
+    await closeElectronWithin(app).catch(() => undefined);
+    if (vite) await stopProcessGroup(vite).catch(() => undefined);
+    if (leafChild && leafChild.exitCode === null) {
+      const exited = new Promise<void>((resolve) => leafChild!.once("exit", () => resolve()));
+      leafChild.kill("SIGTERM");
+      const timer = setTimeout(() => leafChild?.kill("SIGKILL"), 10_000);
+      await exited;
+      clearTimeout(timer);
+    }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});

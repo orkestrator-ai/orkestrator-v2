@@ -8,7 +8,7 @@
  * paths call {@link CompatibilityPathUsage.record}, which only bumps memory.
  * Once a sink is attached (the backend attaches its database at startup), the
  * pending counts are merged into the `compatibility-path-usage` store at most
- * once a minute, on every read, and at shutdown, so the totals and the first
+ * once a minute, on every durable read, and at shutdown, so the totals and the first
  * and last time each path was taken survive restarts and upgrades. The
  * database sink lives in `compatibility-path-usage-store.ts`, so the paths that
  * record here never import storage.
@@ -19,6 +19,8 @@
  * each path's owner and removal condition.
  */
 export const COMPATIBILITY_PATH_IDS = [
+  /** A leaf cannot attest a coordinator build admission before launch. */
+  "coordinator-build.origin-upgrade-required",
   /** A container bridge's token was read from its `node`-readable `/tmp` file. */
   "bridge-credential.token-file",
   /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
@@ -74,6 +76,11 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "coordinator-notices.older-leaf",
   /**
+   * A renderer that predates per-conversation startup errors opened the panel,
+   * which is how it recovers: `ensure_project_coordinator` cleared them.
+   */
+  "coordinator-ensure.conversation-errors-cleared",
+  /**
    * A coordinator's mail with images was refused: the node does not advertise
    * `node-mail-attachments`.
    */
@@ -112,6 +119,11 @@ export const COMPATIBILITY_PATH_IDS = [
    * old shared name: a renderer or desktop from before per-node names.
    */
   "relayed-node-event.legacy-stream",
+  /**
+   * A stream that asked for the old shared name got a relayed event under it: a
+   * desktop's main process from before it took per-node relayed events.
+   */
+  "relayed-node-event.legacy-desktop-stream",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];
@@ -199,6 +211,8 @@ export class CompatibilityPathUsage {
   private sink: CompatibilityPathUsageSink | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private persisted: CompatibilityPathUsageSnapshot = { version: 1, paths: {} };
+  /** Whether {@link persisted} has been read from the attached sink. */
+  private loaded = false;
 
   constructor(
     private readonly now: () => Date = () => new Date(),
@@ -226,7 +240,7 @@ export class CompatibilityPathUsage {
   attach(sink: CompatibilityPathUsageSink): void {
     if (this.sink && this.sink !== sink) this.detach(this.sink);
     this.sink = sink;
-    if (this.pending.size > 0) this.scheduleFlush();
+    this.scheduleFlush();
   }
 
   /** Flushes into `sink`, then stops persisting and closes it, if it is still attached. */
@@ -236,6 +250,7 @@ export class CompatibilityPathUsage {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.sink = null;
+    this.loaded = false;
     this.persisted = { version: 1, paths: {} };
     sink.close?.();
   }
@@ -254,11 +269,13 @@ export class CompatibilityPathUsage {
     try {
       const snapshot = this.sink.merge(pending);
       this.persisted = normalizeCompatibilityPathUsage(snapshot);
+      this.loaded = true;
+      this.scheduleFlush();
       return snapshot;
     } catch {
       // Keep the counts and retry even when no further traffic arrives.
       this.pending = pending;
-      if (pending.size > 0) this.scheduleFlush();
+      this.scheduleFlush();
       return mergeCompatibilityPathUsage(normalizeCompatibilityPathUsage(this.persisted), pending);
     }
   }
@@ -266,6 +283,21 @@ export class CompatibilityPathUsage {
   /** Persisted totals plus anything not yet flushed. */
   snapshot(): CompatibilityPathUsageSnapshot {
     return this.flush();
+  }
+
+  /**
+   * The last totals read or written plus what is pending, from memory: a poll
+   * costs no I/O and persistence stays with the once-a-minute flush. The first
+   * call reads the sink once, so a fresh process starts from the stored totals.
+   * Another backend's counts arrive within the periodic flush interval;
+   * for the durable truth call {@link snapshot}.
+   */
+  peek(): CompatibilityPathUsageSnapshot {
+    if (this.sink && !this.loaded) return this.flush();
+    return mergeCompatibilityPathUsage(
+      normalizeCompatibilityPathUsage(this.persisted),
+      this.pending,
+    );
   }
 
   private scheduleFlush(): void {

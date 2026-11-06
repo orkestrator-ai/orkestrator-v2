@@ -27,6 +27,66 @@ describe("Orkestrator control MCP server", () => {
     expect(names).not.toContain("send_message");
   });
 
+  test("a coordinator reads and acknowledges only its own conversation's mailbox", async () => {
+    const credential = coordinatorCredential(["discovery", "mail"]);
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+          { id: "conversation-2", tabId: "other-tab", mailboxIncarnationId: "incarnation-2" },
+        ],
+      },
+    }));
+    overrides.set("get_agent_mail_mailbox", () => ({ messages: [], total: 0 }));
+    overrides.set("get_agent_mail_message", () => ({ id: "message-1", body: "hello" }));
+    overrides.set("ack_agent_mail", () => ({ id: "message-1", body: "hello" }));
+    const own = {
+      environmentId: "coordinator:coordinator-1:conversation-1",
+      tabId: "coordinator-tab",
+    };
+    const other = { environmentId: "coordinator:coordinator-1:conversation-2", tabId: "other-tab" };
+    const call = (name: string, args: Record<string, unknown>) =>
+      rpc(credential.url, credential.token, "tools/call", { name, arguments: args });
+    const reached = () =>
+      invocations.filter(({ command }) =>
+        ["get_agent_mail_mailbox", "get_agent_mail_message", "ack_agent_mail"].includes(command),
+      ).length;
+
+    const refusals: Array<[string, Record<string, unknown>, string]> = [
+      ["read_messages", other, "Coordinator credential may only read its own mailbox"],
+      ["read_messages", { ...own, tabId: "other-tab" }, "may only read its own mailbox"],
+      ["get_message", { ...other, messageId: "message-1" }, "may only read its own mailbox"],
+      [
+        "ack_message",
+        { ...other, messageId: "message-1" },
+        "Coordinator credential may only acknowledge its own mailbox",
+      ],
+      [
+        "ack_message",
+        { ...own, environmentId: "env-1", messageId: "message-1" },
+        "may only acknowledge its own mailbox",
+      ],
+    ];
+    for (const [name, args, text] of refusals) {
+      const refused = await call(name, args);
+      expect(refused.body.result?.isError).toBe(true);
+      expect(JSON.stringify(refused.body.result)).toContain(text);
+    }
+    expect(reached()).toBe(0);
+
+    for (const [name, args] of [
+      ["read_messages", own],
+      ["get_message", { ...own, messageId: "message-1" }],
+      ["ack_message", { ...own, messageId: "message-1" }],
+    ] as const) {
+      const allowed = await call(name, args);
+      expect(allowed.body.result?.isError).not.toBe(true);
+    }
+    expect(reached()).toBe(3);
+  });
+
   test("coordinator delegation tools promise a wake and refuse a poll loop", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {
@@ -400,6 +460,48 @@ describe("Orkestrator control MCP server", () => {
     expect(routine.body.result?.structuredContent).not.toHaveProperty("deliverNow");
   });
 
+  test("coordinator send_message whose delegation did not open warns that no wake will come, and is still sent", async () => {
+    const note =
+      "The message was sent, but no delegation was opened, so you will not be woken when the worker answers. Why: the coordinator workflow store is full.";
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("send_coordinator_agent_mail", (args) => ({
+      id: "message-1",
+      requestId: args.requestId,
+      placement: "pending-inject",
+      coordinatorDelegationOpened: false,
+      delegationNote: note,
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["mail"],
+    });
+    const sent = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: { requestId: "store-full-1", toEnvironmentId: "env-1", body: "Go." },
+    });
+    expect(sent.body.result?.isError).not.toBe(true);
+    expect(sent.body.result?.structuredContent).toMatchObject({
+      warning: note,
+      message: { id: "message-1", placement: "pending-inject" },
+    });
+    expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("delegationNote");
+    // No wake was promised, so nothing tells the coordinator to wait for one.
+    expect(sent.body.result?.structuredContent).not.toHaveProperty("wake");
+    expect(sent.body.result?.structuredContent).not.toHaveProperty("delivery");
+  });
+
   test("coordinator send_message to the project home forwards the reason and reports a held message or a warning", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {
@@ -475,6 +577,53 @@ describe("Orkestrator control MCP server", () => {
       message: { id: "message-1" },
     });
     expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("projectHomeWarning");
+  });
+
+  test("remote send_message lifts delegation failure into a successful warning", async () => {
+    const credential = coordinatorCredential(["mail", "discovery"]);
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_cmd",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_node_summaries", () => ({
+      selfId: "bk_cmd",
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          view: { displayName: "Leaf" },
+          projects: [
+            {
+              ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+              repositoryHint: "example.invalid/secret/repo",
+            },
+          ],
+          environments: [],
+        },
+      ],
+    }));
+    overrides.set("send_coordinator_node_mail", () => ({
+      id: "remote-message",
+      placement: "pending-inject",
+      coordinatorDelegationOpened: false,
+      delegationNote: "Sent, but no delegation opened.",
+    }));
+    const sent = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "remote-warning",
+        nodeId: "bk_leaf",
+        toEnvironmentId: "leaf-env",
+        body: "Go.",
+      },
+    });
+    expect(sent.body.result?.isError).not.toBe(true);
+    expect(sent.body.result?.structuredContent).toMatchObject({
+      warning: "Sent, but no delegation opened.",
+      message: { id: "remote-message" },
+    });
+    expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("delegationNote");
   });
 
   // A leaf without `node-mail-steer` answers with no outcome of its own.

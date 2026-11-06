@@ -1,6 +1,7 @@
 /**
  * ST-5: diff pages find rows by binary search with the old linear find's
- * results, and the whitespace-ignore view renders each file once.
+ * results, and the whitespace-ignore view renders each file once. 4760: that
+ * view renders the page in one call, so the page's batch budget applies.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -168,7 +169,12 @@ const IDENTITY = {
   afterSnapshotId: "after",
 } as unknown as DiffIdentity;
 
-function service(store: ObjectStore, trees: Record<string, string>, rows: FileRow[]) {
+function service(
+  store: ObjectStore,
+  trees: Record<string, string>,
+  rows: FileRow[],
+  batchBytes = 1024 * 1024,
+) {
   const ledger = {
     diffIdentity: () => IDENTITY,
     pinMeasurement: () => () => undefined,
@@ -186,7 +192,7 @@ function service(store: ObjectStore, trees: Record<string, string>, rows: FileRo
     projections: {} as never,
     registry: {} as never,
     environmentTarget: async () => null,
-    batchBytes: 1024 * 1024,
+    batchBytes,
   });
 }
 
@@ -301,7 +307,11 @@ describe("a diff page over a large manifest", () => {
   });
 });
 
-/** The whitespace view as it was: a full render, then a second diff over it. */
+/**
+ * The whitespace view as it was: a full render, then a second diff over it,
+ * each file with a fresh budget. Within the page budget the one-call view
+ * still matches it; past the budget it does not (see the batch-limit test).
+ */
 async function oldWhitespaceView(
   store: ObjectStore,
   files: SnapshotFileChange[],
@@ -331,7 +341,7 @@ async function oldWhitespaceView(
 }
 
 describe("the whitespace-ignore view", () => {
-  test("reads each file's blobs once and matches the old double render", async () => {
+  test("reads each file's blobs once and, within the budget, matches the old double render", async () => {
     const store = openStore();
     const sides: Array<[string, string, string]> = [
       ["whitespace-only.ts", "a\nb\n", "a  \n\tb\n"],
@@ -419,6 +429,52 @@ describe("the whitespace-ignore view", () => {
     expect(page.files).toEqual(expected);
     const whitespaceOnly = page.files.find((file) => file.pathId.endsWith("whitespace-only.ts"));
     expect(whitespaceOnly?.hunks).toEqual([]);
+  });
+
+  test("shares the page's batch budget across files, as the normal view does", async () => {
+    const store = openStore();
+    const filler = "kept line\n".repeat(10);
+    const sides = Array.from({ length: 6 }, (_, index): [string, string, string] => [
+      `budget/${index}.ts`,
+      `old ${index}\n${filler}`,
+      `new ${index}  \n${filler}`,
+    ]);
+    const { before, after, trees, rows } = await largeComparison(store, sides);
+    const perFile = sides[0]![1].length + sides[0]![2].length;
+    // Two files fit; the third starts with the budget spent.
+    const batchBytes = perFile * 2;
+    const page = async (whitespace?: "ignore-for-view") => {
+      const result = await service(store, trees, rows, batchBytes).getDiff({
+        diffIdentityId: IDENTITY.id,
+        ...(whitespace ? { display: { whitespace } } : {}),
+      });
+      if (result.kind !== "body") throw new Error(result.kind);
+      return result.files;
+    };
+    const ignoring = await page("ignore-for-view");
+    const normal = await page();
+
+    const limited = (files: ChangeDiffFileBody[]) =>
+      files.map((file) => file.reasonKey === "changes.body.batch-limit");
+    expect(limited(ignoring)).toEqual([false, false, true, true, true, true]);
+    expect(limited(ignoring)).toEqual(limited(normal));
+    for (const file of ignoring.slice(2))
+      expect(file).toMatchObject({ bodyAvailability: "available", hunks: [], truncated: true });
+    for (const file of ignoring.slice(0, 2)) expect(file.hunks.length).toBeGreaterThan(0);
+    expect(ignoring).toEqual(
+      await renderSnapshotBodies(
+        store,
+        rows.map((row) => fileChange(row, before, after)),
+        { maxBatchBytes: batchBytes, ignoreWhitespace: true },
+      ),
+    );
+    // The per-file render this replaced gave every file a fresh budget.
+    const old = await oldWhitespaceView(
+      store,
+      rows.map((row) => fileChange(row, before, after)),
+      { maxBatchBytes: batchBytes },
+    );
+    expect(limited(old).some(Boolean)).toBe(false);
   });
 
   test("a limit reached by the whitespace diff is named on the file", async () => {

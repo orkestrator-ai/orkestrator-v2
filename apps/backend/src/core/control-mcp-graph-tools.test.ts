@@ -135,6 +135,7 @@ beforeEach(async () => {
   storage = new StorageService(path.join(root, "data"));
   await storage.init();
   const project = await storage.addProject(createProject("graphs", checkout));
+  await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
   coordinator = new CoordinatorService(storage, () => ({
     enabled: true,
     running: true,
@@ -222,6 +223,8 @@ beforeEach(async () => {
         return (await coordinator.get(String(args.projectId))) as T;
       case "get_environment":
         return (await storage.getEnvironment(String(args.environmentId))) as T;
+      case "assert_coordinator_environment_scope":
+        return { allowed: true } as never;
       case "get_config":
         return (await storage.loadConfig()) as T;
       default:

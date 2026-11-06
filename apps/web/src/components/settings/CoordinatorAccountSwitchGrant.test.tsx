@@ -1,6 +1,6 @@
 import { createStore } from "zustand/vanilla";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   CoordinatorAccountSwitchGrantState,
   CoordinatorAccountSwitchRecord,
@@ -151,15 +151,27 @@ describe("coordinator account-switch permission in Settings", () => {
     show();
     const box = await tick();
     expect(box.getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByText(/ask you before switching the active Claude account/)).toBeTruthy();
-    expect(screen.getByText(/at most 3 switches per machine in 60 minutes/)).toBeTruthy();
+    const hint = screen.getByRole("button", { name: "About coordinator account switching" });
+    fireEvent.click(hint);
+    const tip = await screen.findByRole("tooltip");
+    expect(
+      within(tip).getByText(/ask you before switching the active Claude account/),
+    ).toBeTruthy();
+    expect(within(tip).getByText(/at most 3 switches per machine in 60 minutes/)).toBeTruthy();
+    fireEvent.click(hint);
 
     fireEvent.click(box);
     await waitFor(() => expect((box as HTMLElement).getAttribute("aria-checked")).toBe("true"));
     expect(
       calls.find((call) => call.command === "set_coordinator_account_switch_grant")?.args,
     ).toEqual({ platform: "claude", enabled: true });
-    expect(screen.getByText(/switch the active Claude account at once/)).toBeTruthy();
+    fireEvent.click(hint);
+    expect(
+      within(await screen.findByRole("tooltip")).getByText(
+        /switch the active Claude account at once/,
+      ),
+    ).toBeTruthy();
+    fireEvent.click(hint);
 
     fireEvent.click(box);
     await waitFor(() => expect((box as HTMLElement).getAttribute("aria-checked")).toBe("false"));
@@ -242,7 +254,7 @@ describe("coordinator account-switch permission in Settings", () => {
     state = { ...state, grants: { claude: false, codex: false }, recentSwitches: [] };
     nodeSubscribers.get("bk_leaf")!.onResync();
     await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("false"));
-    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(screen.queryByRole("listitem") === null).toBe(true);
     view.unmount();
     expect(nodeStops).toEqual(["bk_leaf"]);
   });

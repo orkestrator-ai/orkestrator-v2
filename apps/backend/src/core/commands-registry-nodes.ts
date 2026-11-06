@@ -251,6 +251,8 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         "subject",
         "body",
         "steer",
+        // The coordinator's turn was not started by the user (`node-mail-turn-origin`).
+        "turnOrigin",
         "nodeParent",
         // The leaf's project, for mail to its coordinator ("coordinator").
         "projectId",

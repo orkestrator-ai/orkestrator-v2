@@ -1,10 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 import {
   parseReviewWorktreeFingerprint,
+  reviewWorktreeProbeArgs,
   reviewWorktreeProbeReasonCode,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
 } from "./review-worktree-fingerprint.js";
@@ -193,6 +194,18 @@ test("rejects malformed fingerprint envelopes", () => {
   }
 });
 
+test("the probe's own budget ends before the backend's command timeout", () => {
+  expect(reviewWorktreeProbeArgs(false, 30_000)).toEqual([
+    "-e",
+    REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
+    "budget-ms=25000",
+  ]);
+  expect(reviewWorktreeProbeArgs(true, 120_000).slice(2)).toEqual([
+    "fingerprint",
+    "budget-ms=115000",
+  ]);
+});
+
 test("accepts an envelope with no fingerprint", () => {
   expect(
     parseReviewWorktreeFingerprint(JSON.stringify({ head: "1".repeat(40), status: "" })),
@@ -201,78 +214,280 @@ test("accepts an envelope with no fingerprint", () => {
 
 for (const interpreter of INTERPRETERS) {
   test.skipIf(process.platform === "win32")(
-    `timeout reaps a blocking fsmonitor hook and descendants before fallback (${interpreter})`,
+    `never runs the worktree's fsmonitor hook or takes optional locks (${interpreter})`,
     async () => {
       const root = await fixture();
-      const hook = path.join(root, ".git", "blocking-hook.cjs");
-      const pids = path.join(root, ".git", "hook-pids");
-      await fs.writeFile(
-        hook,
-        `#!/usr/bin/env node
-const fs = require("node:fs");
-const { spawn } = require("node:child_process");
-process.on("SIGTERM", () => {});
-fs.appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
-if (process.argv[2] !== "descendant") {
-  spawn(process.execPath, [__filename, "descendant"], { stdio: "inherit" });
-}
-// Safety bound if the regression fails; the test must never leak forever.
-setTimeout(() => process.exit(0), 8000);
-`,
-        { mode: 0o755 },
-      );
+      const marker = path.join(root, ".git", "hook-ran");
+      const hook = path.join(root, ".git", "fsmonitor-hook.sh");
+      await fs.writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
       await runCommand("git", ["config", "core.fsmonitor", hook], { cwd: root });
-      const bin = path.join(root, ".git", "bin");
-      await fs.mkdir(bin);
       const log = path.join(root, ".git", "git-calls");
-      const realGit = (await runCommand("which", ["git"])).stdout.trim();
-      await fs.writeFile(
-        path.join(bin, "git"),
-        `#!/bin/sh
-printf '%s\\n' "$*" >> '${log}'
-exec '${realGit}' "$@"
-`,
-        { mode: 0o755 },
-      );
+      const bin = await fakeGitBin(root, `printf '%s\\n' "$*" >> '${log}'\nexec "$REAL_GIT" "$@"`);
       await fs.writeFile(path.join(root, "tracked.txt"), "dirty\n");
-      const started = Date.now();
       const result = await runCommand(
         interpreter,
-        [
-          "-e",
-          REVIEW_WORKTREE_FINGERPRINT_SCRIPT.replace(
-            "const STATUS_TIMEOUT_MS = 10000;",
-            "const STATUS_TIMEOUT_MS = 1500;",
-          ),
-          "fingerprint",
-        ],
+        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "fingerprint"],
         {
           cwd: root,
-          timeoutMs: 6000,
-          env: { PATH: `${bin}:${process.env.PATH}`, GIT_OPTIONAL_LOCKS: "0" },
+          timeoutMs: 30_000,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
         },
       );
-      expect(Date.now() - started).toBeLessThan(6000);
-      expect(result.stderr).toBe("");
       expect(parseReviewWorktreeFingerprint(result.stdout).status).toContain("tracked.txt");
       const calls = (await fs.readFile(log, "utf8")).trim().split("\n");
-      const blockedStatus = calls.findIndex((args) => args.startsWith("status "));
-      expect(blockedStatus).toBeGreaterThanOrEqual(0);
-      expect(calls.slice(blockedStatus + 1).length).toBeGreaterThanOrEqual(4);
+      expect(calls.some((args) => args.includes(" status "))).toBe(true);
+      for (const args of calls) {
+        expect(args.startsWith("--no-optional-locks -c core.fsmonitor=false ")).toBe(true);
+      }
       expect(
-        calls.slice(blockedStatus + 1).every((args) => args.startsWith("-c core.fsmonitor=false ")),
-      ).toBe(true);
-      const hookPids = (await fs.readFile(pids, "utf8")).trim().split("\n");
-      expect(hookPids).toHaveLength(2);
-      for (const pid of hookPids) {
-        // A zombie has exited and holds no pipes; init may not have reaped it yet.
-        const state = await runCommand("ps", ["-p", pid, "-o", "stat="]).then(
-          (result) => result.stdout.trim(),
-          () => "",
-        );
-        expect(state === "" || state.startsWith("Z")).toBe(true);
+        await fs.stat(marker).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    `stops a blocked git and its descendant at its budget (${interpreter})`,
+    async () => {
+      const root = await fixture();
+      const pidFile = path.join(root, ".git", "status-pid");
+      // Keep the fake Git alive as the group leader, with a separate long-lived
+      // child. Killing just Git must fail this regression test. Both processes
+      // are bounded even if cleanup regresses.
+      const bin = await fakeGitBin(
+        root,
+        `case " $* " in *" status "*) sleep 30 & child=$!; printf '%s\\n' "$$" "$child" > '${pidFile}'; wait "$child"; exit;; esac\nexec "$REAL_GIT" "$@"`,
+      );
+      const started = Date.now();
+      const error = await runCommand(
+        interpreter,
+        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "budget-ms=1500"],
+        {
+          cwd: root,
+          timeoutMs: 10_000,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        },
+      ).then(
+        () => null,
+        (failure: unknown) => failure,
+      );
+      expect(Date.now() - started).toBeLessThan(8_000);
+      expect(error).toBeInstanceOf(CommandFailedError);
+      expect((error as CommandFailedError).timedOut).toBe(false);
+      expect(reviewWorktreeProbeReasonCode(String((error as CommandFailedError).stderr))).toBe(
+        "timeout",
+      );
+      const pids = (await fs.readFile(pidFile, "utf8")).trim().split("\n");
+      expect(pids).toHaveLength(2);
+      expect(new Set(pids).size).toBe(2);
+      for (const pid of pids) {
+        expect(pid).toMatch(/^[1-9][0-9]*$/);
+        // A zombie has exited; init may not have reaped it yet. Give a child
+        // scheduled after its parent a bounded interval to observe SIGKILL.
+        const deadline = Date.now() + 1_000;
+        let state: string;
+        do {
+          state = await runCommand("ps", ["-p", pid, "-o", "stat="], {
+            timeoutMs: 1_000,
+          }).then(
+            (result) => result.stdout.trim(),
+            (failure: unknown) => {
+              if (
+                failure instanceof CommandFailedError &&
+                failure.exitCode === 1 &&
+                !failure.timedOut &&
+                failure.stderr.trim() === ""
+              )
+                return "";
+              throw failure;
+            },
+          );
+          if (state === "" || state.startsWith("Z")) break;
+          await Bun.sleep(20);
+        } while (Date.now() < deadline);
+        expect({ pid, stopped: state === "" || state.startsWith("Z") }).toEqual({
+          pid,
+          stopped: true,
+        });
       }
     },
     15_000,
   );
+}
+
+/**
+ * Prepended to the script to reproduce what Bun does when it loses a child's
+ * completion: the child runs and exits for real, and nothing reports it.
+ * `macosStatus` also stands in for macOS, where the zombie's status is readable.
+ */
+function lostExitShim(macosStatus: boolean): string {
+  return String.raw`
+{
+  const childProcess = require("node:child_process");
+  const realSpawn = childProcess.spawn;
+  const statuses = new Map();
+  childProcess.spawn = (...args) => {
+    const child = realSpawn(...args);
+    const once = child.once;
+    once.call(child, "exit", (code) => statuses.set(child.pid, code));
+    const withoutCompletion = (original) => function (event, listener) {
+      return event === "exit" || event === "close" ? child : original.call(child, event, listener);
+    };
+    child.once = withoutCompletion(once);
+    child.on = withoutCompletion(child.on);
+    return child;
+  };
+  if (${macosStatus}) {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    childProcess.spawnSync = (file, args) => {
+      const code = statuses.get(Number(args.at(-1)));
+      return {
+        status: 0,
+        stdout: code === undefined ? "S  0" : "Z  " + (code << 8).toString(16),
+      };
+    };
+  }
+}
+`;
+}
+
+/** The script with its limits or delays swapped for ones a test can reach. */
+function scriptWith(...replacements: Array<[string, string]>): string {
+  return replacements.reduce((script, [from, to]) => {
+    expect(script).toContain(from);
+    return script.replace(from, to);
+  }, REVIEW_WORKTREE_FINGERPRINT_SCRIPT);
+}
+
+async function fakeGitBin(root: string, body: string): Promise<string> {
+  const realGit = (await runCommand("which", ["git"])).stdout.trim();
+  const bin = path.join(root, ".git", "fake-bin");
+  await fs.mkdir(bin);
+  await fs.writeFile(path.join(bin, "git"), `#!/bin/sh\nREAL_GIT='${realGit}'\n${body}\n`, {
+    mode: 0o755,
+  });
+  return bin;
+}
+
+for (const interpreter of INTERPRETERS) {
+  describe.skipIf(process.platform === "win32")(`git capture (${interpreter})`, () => {
+    function run(root: string, script: string, bin?: string, timeoutMs = 30_000) {
+      return runCommand(interpreter, ["-e", script, "fingerprint"], {
+        cwd: root,
+        timeoutMs,
+        ...(bin ? { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } } : {}),
+      });
+    }
+
+    test("a diff past its limit reports too-large", async () => {
+      const root = await fixture();
+      await fs.writeFile(path.join(root, "tracked.txt"), `${"x".repeat(4096)}\n`);
+      await expect(
+        run(
+          root,
+          scriptWith(["const MAX_DIFF_BYTES = 256 * 1024 * 1024;", "const MAX_DIFF_BYTES = 64;"]),
+        ),
+      ).rejects.toThrow("review-worktree-probe:too-large");
+    });
+
+    test("status past its limit reports too-large", async () => {
+      const root = await fixture();
+      await fs.writeFile(path.join(root, `${"u".repeat(200)}.txt`), "added\n");
+      await expect(
+        run(
+          root,
+          scriptWith([
+            "const MAX_STATUS_BYTES = 16 * 1024 * 1024;",
+            "const MAX_STATUS_BYTES = 64;",
+          ]),
+        ),
+      ).rejects.toThrow("review-worktree-probe:too-large");
+    });
+
+    test("a limit passed while git is still running stops it without waiting", async () => {
+      const root = await fixture();
+      const bin = await fakeGitBin(
+        root,
+        `case " $* " in *" diff "*) head -c 4096 /dev/zero; exec sleep 30 ;; *) exec "$REAL_GIT" "$@" ;; esac`,
+      );
+      const started = Date.now();
+      await expect(
+        run(
+          root,
+          scriptWith(["const MAX_DIFF_BYTES = 256 * 1024 * 1024;", "const MAX_DIFF_BYTES = 64;"]),
+          bin,
+        ),
+      ).rejects.toThrow("review-worktree-probe:too-large");
+      expect(Date.now() - started).toBeLessThan(15_000);
+    });
+
+    test("stderr past its limit reports git-failed", async () => {
+      const root = await fixture();
+      const bin = await fakeGitBin(root, `head -c 70000 /dev/zero >&2; exec "$REAL_GIT" "$@"`);
+      await expect(run(root, REVIEW_WORKTREE_FINGERPRINT_SCRIPT, bin)).rejects.toThrow(
+        "review-worktree-probe:git-failed",
+      );
+    });
+
+    // With pipes, this helper keeps the read open and the probe waits on it.
+    test("a helper outliving git and holding its output does not delay the answer", async () => {
+      const root = await fixture();
+      const baseline = await capture(root, { interpreter });
+      const bin = await fakeGitBin(root, `sleep 12 &\nexec "$REAL_GIT" "$@"`);
+      const started = Date.now();
+      const { stdout } = await run(root, REVIEW_WORKTREE_FINGERPRINT_SCRIPT, bin);
+      expect(parseReviewWorktreeFingerprint(stdout)).toEqual(baseline);
+      expect(Date.now() - started).toBeLessThan(10_000);
+    }, 20_000);
+
+    test("hashes a large diff the same as a small read would", async () => {
+      const root = await fixture();
+      const large = `${"line of tracked text\n".repeat(20_000)}`;
+      await fs.writeFile(path.join(root, "tracked.txt"), large);
+      const first = await capture(root, { interpreter });
+      const second = await capture(root, { interpreter });
+      expect(first.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+      expect(second).toEqual(first);
+    });
+
+    test("recovers a lost exit from the zombie's status, with the full answer", async () => {
+      const root = await fixture();
+      await fs.writeFile(path.join(root, "tracked.txt"), "changed\n");
+      const baseline = await capture(root, { interpreter });
+      const script =
+        lostExitShim(true) +
+        scriptWith(["const EXIT_WATCH_MS = 1000;", "const EXIT_WATCH_MS = 20;"]);
+      const { stdout } = await run(root, script);
+      expect(parseReviewWorktreeFingerprint(stdout)).toEqual(baseline);
+    });
+
+    test("a failing git behind a lost exit still reports git-failed", async () => {
+      const root = await fs.mkdtemp(path.join(tmpdir(), "ork-review-nogit-"));
+      roots.push(root);
+      const script =
+        lostExitShim(true) +
+        scriptWith(["const EXIT_WATCH_MS = 1000;", "const EXIT_WATCH_MS = 20;"]);
+      await expect(run(root, script)).rejects.toThrow("review-worktree-probe:git-failed");
+    });
+
+    // Nothing says the child finished, so no answer can be built from its output:
+    // the caller's bound fails the probe rather than it reporting a success.
+    test("a lost exit with no status never reports a success", async () => {
+      const root = await fixture();
+      const error = await run(
+        root,
+        lostExitShim(false) + REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
+        undefined,
+        1_000,
+      ).then(
+        () => undefined,
+        (reason: unknown) => reason as CommandFailedError,
+      );
+      expect(error).toBeInstanceOf(CommandFailedError);
+      expect(error?.timedOut).toBe(true);
+      expect(error?.stdout).toBe("");
+    });
+  });
 }

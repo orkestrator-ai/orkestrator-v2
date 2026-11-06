@@ -74,6 +74,9 @@ const mockGetLocalFileTreeSnapshot = mock<
     knownDigest?: string,
   ) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>
 >(async (worktreePath: string) => snapshot(await mockGetLocalFileTree(worktreePath)));
+const mockGetFileSubtreeSnapshot = mock<typeof realBackend.getFileSubtreeSnapshot>(async () =>
+  snapshot({ children: [], truncated: false }),
+);
 const mockRevertContainerFile = mock<
   (environmentId: string, filePath: string, targetBranch: string) => Promise<string>
 >((_environmentId, filePath) => Promise.resolve(filePath));
@@ -124,6 +127,7 @@ mock.module("@/lib/backend", () => ({
   getGitStatusSnapshot: mockGetGitStatusSnapshot,
   getLocalGitStatusSnapshot: mockGetLocalGitStatusSnapshot,
   getFileTreeSnapshot: mockGetFileTreeSnapshot,
+  getFileSubtreeSnapshot: mockGetFileSubtreeSnapshot,
   getLocalFileTreeSnapshot: mockGetLocalFileTreeSnapshot,
   revertContainerFile: mockRevertContainerFile,
   deleteContainerFile: mockDeleteContainerFile,
@@ -238,6 +242,7 @@ describe("useFilesPanel", () => {
     mockGetGitStatusSnapshot.mockClear();
     mockGetLocalGitStatusSnapshot.mockClear();
     mockGetFileTreeSnapshot.mockClear();
+    mockGetFileSubtreeSnapshot.mockClear();
     mockGetLocalFileTreeSnapshot.mockClear();
     mockRevertContainerFile.mockClear();
     mockDeleteContainerFile.mockClear();
@@ -991,20 +996,29 @@ describe("useFilesPanel", () => {
     const { result } = renderHook(() => useFilesPanel());
     let mutation: Promise<void>;
     act(() => {
-      mutation = result.current.deleteFile("src/App.tsx");
+      mutation = result.current.deleteFile("src", { target: "folder" });
     });
-    await waitFor(() => expect(result.current.fileActionPending).toBe("src/App.tsx"));
+    await waitFor(() => expect(result.current.fileActionPending).toBe("src"));
 
     act(() => {
       useUIStore.setState({ selectedEnvironmentId: "env-b" });
     });
     await waitFor(() => expect(result.current.environmentId).toBe("env-b"));
+    const pendingLoadToken = Symbol("env-b-load");
     act(() => {
-      useFilesPanelStore.setState({ changes: [secondChange], fileTree: secondTree });
+      useFilesPanelStore.setState({
+        changes: [secondChange],
+        fileTree: secondTree,
+        expandedFolders: ["src"],
+        fileSubtrees: { src: { children: secondTree, truncated: false } },
+        fileSubtreeDigests: { src: "env-b-digest" },
+        folderLoadTokens: new Map([["src/loading", pendingLoadToken]]),
+        loadingFolders: ["src/loading"],
+      });
     });
 
     await act(async () => {
-      resolveDelete("src/App.tsx");
+      resolveDelete("src");
       await mutation;
     });
 
@@ -1012,6 +1026,13 @@ describe("useFilesPanel", () => {
     expect(mockGetFileTree).not.toHaveBeenCalled();
     expect(useFilesPanelStore.getState().changes).toEqual([secondChange]);
     expect(useFilesPanelStore.getState().fileTree).toEqual(secondTree);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src"]);
+    expect(useFilesPanelStore.getState().fileSubtrees.src?.children).toEqual(secondTree);
+    expect(useFilesPanelStore.getState().fileSubtreeDigests).toEqual({ src: "env-b-digest" });
+    expect(useFilesPanelStore.getState().folderLoadTokens.get("src/loading")).toBe(
+      pendingLoadToken,
+    );
+    expect(useFilesPanelStore.getState().loadingFolders).toEqual(["src/loading"]);
     expect(result.current.fileActionPending).toBeNull();
   });
 
@@ -1572,6 +1593,67 @@ describe("useFilesPanel", () => {
     expect(mockGetGitStatus).toHaveBeenCalled();
     expect(mockGetFileTree).toHaveBeenCalled();
     expect(mockToastSuccess).toHaveBeenCalledWith("Files moved", { description: "2 files" });
+  });
+
+  test("deletes a folder with folder wording and forgets its expanded branch", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ expandedFolders: ["src", "docs"] });
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.deleteFile(["src"], { target: "folder" });
+    });
+    expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "src");
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Folder deleted", { description: "src" });
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["docs"]);
+
+    // Model an I/O failure after git rm: root and subtree snapshots still
+    // contain a file which has already been removed from the workspace/index.
+    const survivingTree: FileNode[] = [
+      { name: "docs", path: "docs", isDirectory: true, truncated: true },
+    ];
+    const remaining = {
+      children: [{ name: "vendor", path: "docs/vendor", isDirectory: true }],
+      truncated: false,
+    };
+    useFilesPanelStore.setState({
+      fileTree: survivingTree,
+      fileSubtrees: { docs: { children: tree, truncated: false } },
+    });
+    mockGetFileTree.mockResolvedValue(survivingTree);
+    mockGetGitStatus.mockResolvedValue([{ ...change, status: "D" }]);
+    mockGetFileSubtreeSnapshot.mockResolvedValue(snapshot(remaining));
+    mockGetFileTree.mockClear();
+    mockGetGitStatus.mockClear();
+    mockDeleteContainerFile.mockRejectedValueOnce(
+      new Error("docs was not fully deleted: it contains a nested Git repository"),
+    );
+    let failure: unknown;
+    await act(async () => {
+      await result.current.deleteFile(["docs"], { target: "folder" }).catch((error: unknown) => {
+        failure = error;
+      });
+    });
+    expect(failure).toBeInstanceOf(Error);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to delete folder", {
+      description: "docs was not fully deleted: it contains a nested Git repository",
+    });
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockGetGitStatus).toHaveBeenCalled();
+    expect(mockGetFileSubtreeSnapshot).toHaveBeenCalled();
+    expect(useFilesPanelStore.getState().fileTree).toEqual(survivingTree);
+    expect(useFilesPanelStore.getState().fileSubtrees.docs).toEqual(remaining);
+    expect(useFilesPanelStore.getState().changes[0]?.status).toBe("D");
+    // The surviving folder keeps its expansion and failure remains visible.
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["docs"]);
   });
 
   test("rejects a batch move whose sources share a basename before any backend call", async () => {

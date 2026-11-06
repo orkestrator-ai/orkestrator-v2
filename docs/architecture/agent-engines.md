@@ -38,8 +38,7 @@ lists are the reason these engines are built the way they are. In short:
    or `PI_BRIDGE_TOKEN_SHA256`. (OpenCode takes `OPENCODE_SERVER_PASSWORD`, which it
    compares itself. A plugin running inside the server removes the variable and marks
    the server non-dumpable before a tool can run, and the launch gives it to that one
-   process: `buildOpenCodeCredentialPluginSource`, to-do
-   [4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md).)
+   process: `buildOpenCodeCredentialPluginSource`.)
    The agent shares the bridge's uid, so the bridge holds no token for it to read,
    and marks itself non-dumpable so it cannot read one from a request in flight. On
    an image with `bridge-credential=1` the token is in root-only
@@ -596,7 +595,7 @@ Default tiers:
 | `provider-configured` | The SDK is told to deny, with no independent verification | OpenCode; Cursor; Claude when the sandbox cannot start |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
-**Settings → Agent platforms → Coordinator safety level** chooses the weakest
+**Settings → Coordinator → Coordinator safety level** chooses the weakest
 tier this install will offer. It defaults to `provider-configured`, so Grok
 stays opt-in. There is no silent fallback or provider substitution.
 

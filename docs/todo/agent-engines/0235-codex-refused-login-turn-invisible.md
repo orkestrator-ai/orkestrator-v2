@@ -235,7 +235,7 @@ no answer, no error row and no sign-in prompt, after a reload too.
   `codex-refused-login-live.spec.ts`).
 - **Seen in passing.** The failed turn raised the "Agent finished: The agent
   completed its work." toast. Unread reasons have no failure case; see
-  [0940](../cross-cutting/0940-failed-turn-reads-as-completed.md).
+  0940.
 
 ## Outstanding work
 
@@ -399,4 +399,4 @@ in-tab ChatGPT sign-in stays open.
 - [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md)
 - [agent-accounts.md](../../architecture/agent-accounts.md#turn-time-auth-notice)
 - [native-transcripts.md](../../architecture/native-transcripts.md#terminal-rows)
-- [0940-failed-turn-reads-as-completed.md](../cross-cutting/0940-failed-turn-reads-as-completed.md)
+- `0940-failed-turn-reads-as-completed.md` (deleted 2026-11-06)

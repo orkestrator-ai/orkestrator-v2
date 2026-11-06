@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  COORDINATOR_WAKE_ATTENTION_EVENT,
   ENVIRONMENT_ATTENTION_EVENT,
   isEnvironmentAttentionEvent,
   type EnvironmentAttentionEvent,
@@ -91,6 +92,14 @@ describe("environment attention events", () => {
       expect(observed.length).toBe(
         emitted.filter((entry) => entry.event === RESOURCE_CHANGED_EVENT).length,
       );
+      const wake = {
+        attentionId: "delegation-wake:a:t",
+        projectId: "project-1",
+        coordinatorId: "c",
+        occurredAt: new Date().toISOString(),
+      };
+      storage.notifyCoordinatorWake(wake);
+      expect(emitted.at(-1)).toEqual({ event: COORDINATOR_WAKE_ATTENTION_EVENT, payload: wake });
     });
   });
 });

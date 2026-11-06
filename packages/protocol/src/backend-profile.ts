@@ -195,6 +195,13 @@ export const BACKEND_CAPABILITIES = {
    */
   nodeMailSteer: "node-mail-steer",
   /**
+   * `deliver_node_mail` accepts `turnOrigin`, so a coordinator's mail from a
+   * turn the user did not start carries that framing on the leaf. An older
+   * leaf rejects the unknown key, so it is sent only to one advertising this;
+   * mail to an older leaf is framed as it always was.
+   */
+  nodeMailTurnOrigin: "node-mail-turn-origin",
+  /**
    * `deliver_node_mail` accepts `toEnvironmentId: "coordinator"` with the
    * leaf's `projectId`, delivering a command node coordinator's mail to the
    * leaf's main coordinator for that project, and the leaf answers
@@ -202,6 +209,8 @@ export const BACKEND_CAPABILITIES = {
    * as an environment and refuse, so the command node checks this first.
    */
   nodeCoordinatorMail: "node-coordinator-mail",
+  /** Backend admission persists and echoes the coordinator launch receipt. */
+  nodeCoordinatorBuildOrigin: "node-coordinator-build-origin",
   /**
    * The hierarchy of coordinator notices (`@orkestrator/protocol/coordinator-notices`).
    * `collect_node_outbox` and `ack_node_outbox` take `coordinatorNotices`, and the
@@ -238,11 +247,25 @@ export const BACKEND_CAPABILITIES = {
 const MAX_CAPABILITIES = 64;
 const MAX_CAPABILITY_NAME_LENGTH = 64;
 
+/** The form `git rev-parse` gives, the same rule as an image's `sourceRevision`. */
+const BUILD_COMMIT_PATTERN = /^[0-9a-f]{7,40}$/;
+
+/** A build commit, or `null` for anything else. It never refuses what carries it. */
+export function parseBuildCommit(value: unknown): string | null {
+  return typeof value === "string" && BUILD_COMMIT_PATTERN.test(value) ? value : null;
+}
+
 export interface BackendHello {
   schemaVersion: 1;
   installationId: BackendId;
   generation: string;
   appVersion: string;
+  /**
+   * The commit this backend was built from. Absent from a backend that predates
+   * it and from a build with no commit to report: a development or test build,
+   * or one from a modified tree.
+   */
+  buildCommit?: string;
   clientApi: { minVersion: number; maxVersion: number };
   capabilities: Record<string, number>;
   profile: BackendProfile;
@@ -308,6 +331,8 @@ export function parseBackendHello(value: unknown): BackendHello {
     profile: parseBackendProfile(record.profile),
     endpointRole,
   };
+  const buildCommit = parseBuildCommit(record.buildCommit);
+  if (buildCommit) hello.buildCommit = buildCommit;
   if (
     record.nodeMode === "standalone" ||
     record.nodeMode === "command" ||

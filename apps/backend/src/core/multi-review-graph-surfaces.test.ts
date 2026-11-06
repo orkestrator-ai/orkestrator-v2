@@ -66,6 +66,11 @@ async function saveAutomationDefaults(
 describe("coordinator launch on the graph engine", () => {
   test("launch_multi_review starts a graph-engine review with the saved automation defaults", async () => {
     const c = await world();
+    // This graph world supplies an existing environment rather than launching
+    // one through the coordinator; explicitly authorize that positive path.
+    await c.w.fixture.storage.patchRepositorySettings(c.scope.projectId, {
+      coordinatorOtherEnvironments: true,
+    });
     scriptGraphReview(c.w, { findings: false });
     c.w.fakes.held.add("review");
     // Saved auto-fix on; the caller asks for auto-PR only.

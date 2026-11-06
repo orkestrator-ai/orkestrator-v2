@@ -116,6 +116,9 @@ function delegationDeliverable(platform: AgentPlatform): boolean {
   return NATIVE_AGENT_MAIL_CAPABILITIES[platform].canInject;
 }
 
+const COORDINATOR_SAFETY_LEVEL_REASON =
+  "This platform's read-only boundary is weaker than the coordinator safety level allows. Change it in Settings → Coordinator.";
+
 const NO_DELIVERY_CAVEAT =
   "Worker delegation is unavailable because this platform's mailbox cannot receive replies. Inspection and planning work normally.";
 
@@ -160,12 +163,11 @@ export function coordinatorProviderQualification(
     };
   }
   if (TIER_RANK[tier] > TIER_RANK[setting]) {
+    // What the user can change comes first, then the platform's own caveat.
     return {
       tier,
       available: false,
-      reason:
-        reason ??
-        "This platform's read-only boundary is weaker than the coordinator safety level allows.",
+      reason: [COORDINATOR_SAFETY_LEVEL_REASON, reason].filter(Boolean).join(" "),
       delegation,
     };
   }

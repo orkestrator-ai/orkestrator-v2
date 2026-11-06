@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, type mock, spyOn, test } from "bun:test";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { isCoordinatorWakeAttentionEvent } from "@orkestrator/protocol/environment-attention";
 import type { NativeAgentSlashCommand } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
 import { ControlMcpServer } from "./control-mcp-server.js";
+import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import type { ProviderCommandCatalogue, ProviderSendOptions } from "./native-agent-provider.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./public-api/test-provider.js";
@@ -49,6 +51,7 @@ async function world(catalogue: NativeAgentSlashCommand[] = [command("/review")]
   // A coordinator needs a checkout to read; the worker stays env-1.
   const repository = await harness.createRepository("coordinated");
   await harness.storage.updateProject(projectId, { localPath: repository.projectPath });
+  await harness.storage.patchRepositorySettings(projectId, { coordinatorOtherEnvironments: true });
   const coordinators = new CoordinatorService(harness.storage, () => ({
     enabled: true,
     running: true,
@@ -96,6 +99,7 @@ async function world(catalogue: NativeAgentSlashCommand[] = [command("/review")]
     );
   return {
     ...context,
+    storage: harness.storage,
     coordinators,
     scope,
     tabId,
@@ -109,7 +113,114 @@ async function world(catalogue: NativeAgentSlashCommand[] = [command("/review")]
   };
 }
 
+describe("the Work panel's request details", () => {
+  test("a delegation keeps a bounded summary and selection, and one without them still opens", async () => {
+    const w = await world();
+    w.activity("working");
+    await w.run("open_coordinator_delegation", {
+      environmentId: "env-1",
+      tabId: w.tabId,
+      requestId: "asked",
+      request: { summary: `Fix\nthe ${"parser ".repeat(100)}`, agent: "codex", model: "gpt-5" },
+    });
+    const [open] = await w.openDelegations();
+    expect(open?.delegation?.request).toMatchObject({ agent: "codex", model: "gpt-5" });
+    expect(open?.delegation?.request?.summary?.startsWith("Fix the parser")).toBe(true);
+    expect(open?.delegation?.request?.summary?.length).toBeLessThanOrEqual(140);
+    await w.coordinators.settleWorkerDelegations({
+      environmentId: "env-1",
+      tabId: w.tabId,
+      state: "completed",
+    });
+
+    await w.run("open_coordinator_delegation", {
+      environmentId: "env-1",
+      tabId: w.tabId,
+      requestId: "asked-without",
+    });
+    const [plain] = await w.openDelegations();
+    expect(plain?.delegation).not.toHaveProperty("request");
+  });
+
+  test("launch details read the caller's prompt and say whether it overrode the default", () => {
+    const input = {
+      initialPrompt: "Fix the parser",
+      agentSettings: { defaultAgent: "claude" },
+    };
+    expect(launchDelegationRequest(input, { id: "env" })).toEqual({
+      summary: "Fix the parser",
+      agent: "claude",
+      source: "default",
+    });
+    expect(
+      launchDelegationRequest({ ...input, initialAgentModel: "opus" }, { id: "env" }),
+    ).toMatchObject({ model: "opus", source: "requested" });
+    expect(
+      launchDelegationRequest(input, {
+        initialAgentModel: "sonnet",
+        initialReasoningEffort: "low",
+      }),
+    ).toMatchObject({ model: "sonnet", reasoning: "low", source: "default" });
+    expect(launchDelegationRequest({}, null)).toEqual({ source: "default" });
+  });
+});
+
+describe("the wake sound's signal", () => {
+  test("a delivered wake is announced once, with no content", async () => {
+    const w = await world();
+    const events: unknown[] = [];
+    w.storage.addCoordinatorWakeListener((event) => events.push(event));
+    w.activity("working");
+    await w.run("open_coordinator_delegation", {
+      environmentId: "env-1",
+      tabId: w.tabId,
+      requestId: "job-sound",
+      request: { summary: "Secret plan" },
+    });
+    expect(events).toHaveLength(0);
+    w.activity("idle");
+    await w.coordinators.settleWorkerDelegations({
+      environmentId: "env-1",
+      tabId: w.tabId,
+      state: "completed",
+    });
+    await w.coordinators.deliverDelegationWakes();
+    expect(events).toHaveLength(1);
+    expect(isCoordinatorWakeAttentionEvent(events[0])).toBe(true);
+    expect(JSON.stringify(events[0])).not.toContain("Secret plan");
+  });
+});
+
 describe("stop_worker_turn", () => {
+  test("a stop from the Work panel tells the coordinator the user did it", async () => {
+    const w = await world();
+    w.activity("working");
+    await w.run("open_coordinator_delegation", {
+      environmentId: "env-1",
+      tabId: w.tabId,
+      requestId: "job-user-stop",
+    });
+    const stopped = await w.run("stop_coordinator_worker_turn", {
+      input: {
+        requestId: "stop-user",
+        environmentId: "env-1",
+        tabId: w.tabId,
+        stoppedBy: "user",
+      },
+    });
+    expect(stopped).toMatchObject({ stopped: true });
+    await w.coordinators.settleWorkerDelegations({
+      environmentId: "env-1",
+      tabId: w.tabId,
+      state: "completed",
+    });
+    const mail = await w.coordinatorMail();
+    expect(mail).toHaveLength(1);
+    expect(mail[0]!.subject).toContain("stopped");
+    expect(mail[0]!.body).toContain("because the user stopped its turn from the Work panel");
+    expect(mail[0]!.body).not.toContain("you stopped");
+  });
+
   test("a delegation on a turn whose stop is not confirmed yet settles on the turn end", async () => {
     const w = await world();
     w.activity("working");
@@ -327,37 +438,43 @@ describe("worker slash commands", () => {
     expect(JSON.stringify(listed)).not.toContain("executionKind");
   });
 
-  test("a turn-starting command runs as a selection and opens one delegation", async () => {
-    const w = await world([command("/review", { inputPolicy: { arguments: "required" } })]);
-    w.activity("idle");
-    const input = {
-      requestId: "review-1",
-      environmentId: "env-1",
-      tabId: w.tabId,
-      command: "review",
-      arguments: "the open  diff",
-    };
-    const ran = await w.run("run_coordinator_worker_command", { input });
-    expect(ran).toMatchObject({
-      commandId: "claude:/review",
-      command: "/review",
-      startsTurn: true,
-      outcome: "accepted",
-      delegationOpened: true,
-    });
-    expect(w.stub.sends.at(-1)?.prompt).toBe("/review the open  diff");
-    expect(String(w.stub.sends.at(-1)?.requestId)).toStartWith("coordinator-command:");
-    expect(w.sendOptions().at(-1)?.command).toMatchObject({ id: "claude:/review" });
-    expect(await w.openDelegations()).toHaveLength(1);
-    // A retry replays; a second request while the coordinator waits is refused.
-    expect(await w.run("run_coordinator_worker_command", { input })).toMatchObject({
-      replayed: true,
-    });
-    expect(w.stub.sends).toHaveLength(2);
-    await expect(
-      w.run("run_coordinator_worker_command", { input: { ...input, requestId: "review-2" } }),
-    ).rejects.toThrow("outstanding coordinator delegation");
-  });
+  test.each(["review", "/review", "claude:/review"])(
+    "a command (%s) stores its resolved name and opens one delegation",
+    async (selected) => {
+      const w = await world([command("/review", { inputPolicy: { arguments: "required" } })]);
+      w.activity("idle");
+      const input = {
+        requestId: "review-1",
+        environmentId: "env-1",
+        tabId: w.tabId,
+        command: selected,
+        arguments: "the open  diff",
+      };
+      const ran = await w.run("run_coordinator_worker_command", { input });
+      expect(ran).toMatchObject({
+        commandId: "claude:/review",
+        command: "/review",
+        startsTurn: true,
+        outcome: "accepted",
+        delegationOpened: true,
+      });
+      expect(w.stub.sends.at(-1)?.prompt).toBe("/review the open  diff");
+      expect(String(w.stub.sends.at(-1)?.requestId)).toStartWith("coordinator-command:");
+      expect(w.sendOptions().at(-1)?.command).toMatchObject({ id: "claude:/review" });
+      expect(await w.openDelegations()).toHaveLength(1);
+      expect((await w.openDelegations())[0]?.delegation?.request).toMatchObject({
+        summary: "/review",
+      });
+      // A retry replays; a second request while the coordinator waits is refused.
+      expect(await w.run("run_coordinator_worker_command", { input })).toMatchObject({
+        replayed: true,
+      });
+      expect(w.stub.sends).toHaveLength(2);
+      await expect(
+        w.run("run_coordinator_worker_command", { input: { ...input, requestId: "review-2" } }),
+      ).rejects.toThrow("outstanding coordinator delegation");
+    },
+  );
 
   test("a failed delegation open fails the command and a busy retry recovers the same turn", async () => {
     const w = await world([command("/review")]);

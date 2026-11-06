@@ -1291,6 +1291,76 @@ describe("Electron connection manager", () => {
     expect(onEvent).toHaveBeenCalledTimes(callCount);
   });
 
+  test("what windows listen to reaches a machine's client, including one that connects later", async () => {
+    const local = localBackendHarness();
+    const filters: Array<string | null> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      if (isLegacyHelloRequest(input)) return legacyHelloResponse();
+      const url = new URL(String(input));
+      if (url.pathname !== "/__orkestrator/events") {
+        return new Response(JSON.stringify({ ok: true }));
+      }
+      const filter = url.searchParams.get("includeEvents");
+      if (filter) filters.push(filter);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => controller.close(), { once: true });
+        },
+      });
+      return new Response(stream);
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: () => undefined,
+    });
+    await manager.initialize();
+    const list = await manager.connect({ address: "https://desk.example", token });
+    const connectionId = list.activeConnectionId;
+    const event = "relayed-node-event:bk_leaf";
+
+    manager.setRelayedEvents(connectionId, [event]);
+    await manager.relayedEventReady(connectionId, event);
+    expect(filters).toEqual([event]);
+
+    // A machine with no client yet keeps the list for the one it will get.
+    await manager.use("local");
+    await expect(manager.relayedEventReady(connectionId, event)).resolves.toBeUndefined();
+    await manager.use(connectionId);
+    await manager.relayedEventReady(connectionId, event);
+    expect(filters).toEqual([event, event]);
+  });
+
+  test("a local backend without the relayed stream takes the filter as nothing", async () => {
+    const local = localBackendHarness();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: () => undefined,
+    });
+    await manager.initialize();
+    manager.setRelayedEvents("local", ["relayed-node-event:bk_leaf"]);
+    await expect(
+      manager.relayedEventReady("local", "relayed-node-event:bk_leaf"),
+    ).resolves.toBeUndefined();
+  });
+
+  test("the local client gets the same list", async () => {
+    const local = localBackendHarness();
+    const setRelayedEvents = mock((_events: readonly string[]) => undefined);
+    const relayedEventReady = mock(async (_event: string) => undefined);
+    const manager = new ConnectionManager({
+      localBackend: { ...local.backend, setRelayedEvents, relayedEventReady },
+      secureStorage: secureStorage(),
+      onEvent: () => undefined,
+    });
+    await manager.initialize();
+    manager.setRelayedEvents("local", ["relayed-node-event:bk_leaf"]);
+    expect(setRelayedEvents).toHaveBeenCalledWith(["relayed-node-event:bk_leaf"]);
+    await manager.relayedEventReady("local", "relayed-node-event:bk_leaf");
+    expect(relayedEventReady).toHaveBeenCalledWith("relayed-node-event:bk_leaf");
+  });
+
   test("forwards fresh resync and replayed reconnect terminal recovery independently", async () => {
     const local = localBackendHarness();
     const onEvent = mock((_event: string, _payload: unknown) => undefined);

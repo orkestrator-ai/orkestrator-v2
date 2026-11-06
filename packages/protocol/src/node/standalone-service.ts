@@ -14,13 +14,10 @@
  *     restart-requested              the backend exited to be restarted
  *     launcher.js                    the launcher, copied from the release
  */
-import { execFile } from "node:child_process";
 import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { runCommand } from "./command-capture.js";
 
 export const STANDALONE_DIRECTORY = "backend";
 export const STANDALONE_PACKAGE = "orkestrator";
@@ -301,18 +298,17 @@ export function readReleaseManifest(
 export type CommandRunner = (
   file: string,
   args: string[],
-  options: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+  options: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-export const runFile: CommandRunner = async (file, args, options) => {
-  const { stdout, stderr } = await execFileAsync(file, args, {
+export const runFile: CommandRunner = (file, args, options) =>
+  runCommand(file, args, {
     cwd: options.cwd,
-    timeout: options.timeoutMs,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
     env: options.env ?? process.env,
-    maxBuffer: 16 * 1024 * 1024,
+    maxOutputBytes: 16 * 1024 * 1024,
   });
-  return { stdout: String(stdout), stderr: String(stderr) };
-};
 
 function installArguments(registry: string | undefined, ...flags: string[]): string[] {
   return ["install", ...flags, "--no-progress", ...(registry ? ["--registry", registry] : [])];
@@ -352,8 +348,9 @@ async function writeReleaseManifest(directory: string, version: string): Promise
 export async function installRelease(
   layout: StandaloneLayout,
   version: string,
-  options: { bun: string; run?: CommandRunner; registry?: string },
+  options: { bun: string; run?: CommandRunner; registry?: string; signal?: AbortSignal },
 ): Promise<string> {
+  options.signal?.throwIfAborted();
   const target = releaseDirectory(layout, version);
   if (readReleaseManifest(target)?.version === version) return target;
   const run = options.run ?? runFile;
@@ -380,9 +377,11 @@ export async function installRelease(
       {
         cwd: fetching,
         timeoutMs,
+        signal: options.signal,
         env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(fetching, ".cache") },
       },
     );
+    options.signal?.throwIfAborted();
     const fetched = path.join(fetching, "node_modules", STANDALONE_PACKAGE);
     const runtime = path.join(fetched, RELEASE_RUNTIME_PATH);
     if (existsSync(runtime)) {
@@ -405,6 +404,7 @@ export async function installRelease(
         {
           cwd: staging,
           timeoutMs,
+          signal: options.signal,
           env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(staging, ".cache") },
         },
       );
@@ -412,19 +412,24 @@ export async function installRelease(
       await mkdir(path.join(staging, "node_modules"), { recursive: true });
       await rename(fetched, path.join(staging, "node_modules", STANDALONE_PACKAGE));
     } else {
-      // A release older than the published lockfile installs as it always did.
+      // Older releases resolve afresh, but still own their installed tree.
+      // The caller's isolated global store can otherwise leave the published
+      // release pointing outside itself into an install cache that may be removed.
       await writeReleaseManifest(staging, version);
-      await run(options.bun, installArguments(options.registry, "--production"), {
-        cwd: staging,
-        timeoutMs,
-      });
+      await run(
+        options.bun,
+        installArguments(options.registry, "--production", "--linker=hoisted"),
+        { cwd: staging, timeoutMs, signal: options.signal },
+      );
     }
+    options.signal?.throwIfAborted();
     await rm(path.join(staging, ".cache"), { recursive: true, force: true });
     const manifest = readReleaseManifest(staging);
     if (manifest?.version !== version) {
       throw new Error(`Installing ${STANDALONE_PACKAGE}@${version} produced no usable release`);
     }
     await rm(target, { recursive: true, force: true });
+    options.signal?.throwIfAborted();
     await rename(staging, target);
   } finally {
     await rm(staging, { recursive: true, force: true });

@@ -41,6 +41,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  FLOATING_NOTICE_ACTION,
+  FloatingNotice,
+  FloatingNoticeLayer,
+} from "@/components/ui/floating-notice";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import type { FlowNodeModel } from "@/components/flow-graph/FlowGraph";
 import { FlowInspectorHeader, FlowInspectorPanel } from "@/components/flow-graph/FlowInspector";
@@ -479,6 +484,10 @@ function GraphRunView({
   if (!selected) return null;
   const selectedView = views.get(selected.id)!;
   const selectedActions = nodeActions.get(selected.id) ?? [];
+  const waitingText =
+    waiting.length === 1
+      ? `${waiting[0]!.title} is waiting for you.`
+      : `${waiting.length} nodes are waiting for you.`;
 
   return (
     <div ref={setTabRoot} className="relative flex min-h-0 flex-1 flex-col">
@@ -529,127 +538,137 @@ function GraphRunView({
             })}
         </div>
       </header>
-      <OverviewScroll>
-        <div className="@container flex min-h-full flex-col">
-          {run.error ? (
-            <p
-              role="alert"
-              data-testid="graph-run-error"
-              className="border-b border-failure/30 bg-failure/8 px-4 py-2 text-xs text-failure"
-            >
-              {run.error}
-            </p>
-          ) : null}
-          {refreshError ? (
-            <p className="border-b border-border px-4 py-1.5 text-[11px] text-muted-foreground">
-              Showing the last snapshot: {refreshError}
-            </p>
-          ) : null}
-          {waiting.length > 0 ? (
-            <button
-              type="button"
-              data-testid="graph-run-waiting-banner"
-              className="flex w-full shrink-0 items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-4 py-2 text-left text-xs text-amber-200 transition-colors hover:bg-amber-500/12"
-              onClick={() => setPinnedId(waiting[0]!.id)}
-            >
-              <CircleHelp className="size-3.5 shrink-0" />
-              <span className="min-w-0 truncate">
-                {waiting.length === 1
-                  ? `${waiting[0]!.title} is waiting for you.`
-                  : `${waiting.length} nodes are waiting for you.`}
-              </span>
-            </button>
-          ) : null}
-          <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 px-2 text-xs"
-              aria-expanded={!collapsed}
-              aria-controls={graphId}
-              onClick={() => setCollapsed(viewKey, !collapsed)}
-            >
-              {collapsed ? (
-                <ChevronRight className="size-3.5" />
-              ) : (
-                <ChevronDown className="size-3.5" />
-              )}
-              Graph
-            </Button>
-            {collapsed ? (
-              <span className="ml-auto truncate text-[11px] text-muted-foreground">
-                {selected.title} · {selectedView.statusLabel}
-              </span>
+      {/* Clear of the graph toggle row below the header. */}
+      <FloatingNoticeLayer anchorClassName="top-12 right-3">
+        <OverviewScroll>
+          <div className="@container flex min-h-full flex-col">
+            {run.error ? (
+              <p
+                role="alert"
+                data-testid="graph-run-error"
+                className="border-b border-failure/30 bg-failure/8 px-4 py-2 text-xs text-failure"
+              >
+                {run.error}
+              </p>
             ) : null}
-          </div>
-          <div id={graphId} hidden={collapsed} className={cn(collapsed && "hidden")}>
-            {collapsed ? null : (
-              <GraphRunFlowGraph
-                model={model}
-                views={views}
-                selectedId={selected.id}
-                onSelect={setPinnedId}
-                panelId={panelId}
-                viewKey={viewKey}
-                layout={layout}
-                fullscreenContainer={tabRoot}
-                isActive={isActive}
+            {refreshError ? (
+              <p className="border-b border-border px-4 py-1.5 text-[11px] text-muted-foreground">
+                Showing the last snapshot: {refreshError}
+              </p>
+            ) : null}
+            {waiting.length > 0 ? (
+              <FloatingNotice
+                tone="warning"
+                label="Waiting for you"
+                summary={waitingText}
+                icon={CircleHelp}
+                pill={waiting.length === 1 ? "Waiting for you" : `${waiting.length} waiting`}
+                actions={
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className={FLOATING_NOTICE_ACTION}
+                    onClick={() => setPinnedId(waiting[0]!.id)}
+                  >
+                    Show
+                  </Button>
+                }
+              >
+                <p data-testid="graph-run-waiting-banner">{waitingText}</p>
+              </FloatingNotice>
+            ) : null}
+            <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 px-2 text-xs"
+                aria-expanded={!collapsed}
+                aria-controls={graphId}
+                onClick={() => setCollapsed(viewKey, !collapsed)}
+              >
+                {collapsed ? (
+                  <ChevronRight className="size-3.5" />
+                ) : (
+                  <ChevronDown className="size-3.5" />
+                )}
+                Graph
+              </Button>
+              {collapsed ? (
+                <span className="ml-auto truncate text-[11px] text-muted-foreground">
+                  {selected.title} · {selectedView.statusLabel}
+                </span>
+              ) : null}
+            </div>
+            <div id={graphId} hidden={collapsed} className={cn(collapsed && "hidden")}>
+              {collapsed ? null : (
+                <GraphRunFlowGraph
+                  model={model}
+                  views={views}
+                  selectedId={selected.id}
+                  onSelect={setPinnedId}
+                  panelId={panelId}
+                  viewKey={viewKey}
+                  layout={layout}
+                  fullscreenContainer={tabRoot}
+                  isActive={isActive}
+                />
+              )}
+            </div>
+            <FlowInspectorPanel
+              panelId={panelId}
+              selectedId={selected.id}
+              ariaLabel={collapsed ? selected.title : undefined}
+              testId="graph-run-inspector"
+              className="flex min-h-[28rem] min-w-0 flex-1 flex-col px-4 pt-4 sm:px-6"
+            >
+              <FlowInspectorHeader
+                node={selectedView}
+                testIdPrefix="graph-run"
+                actions={selectedActions
+                  .filter((action) => !action.runWide)
+                  .map((action) => {
+                    const Icon = ACTION_ICON[action.key];
+                    return (
+                      <Button
+                        key={action.key}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1.5 text-xs"
+                        disabled={
+                          (pending !== null && action.key !== "open-session") ||
+                          Boolean(action.disabledReason)
+                        }
+                        title={action.disabledReason}
+                        onClick={() => perform(selected, action.key)}
+                      >
+                        <Icon className="size-3.5" />
+                        {action.label}
+                      </Button>
+                    );
+                  })}
               />
-            )}
+              <GraphRunInspector
+                key={selected.id}
+                run={run}
+                node={selected}
+                environmentId={environmentId}
+                containerId={containerId}
+                isActive={isActive}
+                ownsGlobalShortcuts={isActive}
+                onAnswer={answer}
+                onHumanAnswer={answerHuman}
+                onSelectActivation={(attemptId, activationKey) => {
+                  setAttemptExpanded(viewKey, attemptId, true);
+                  setPinnedId(activationKey);
+                }}
+              />
+            </FlowInspectorPanel>
           </div>
-          <FlowInspectorPanel
-            panelId={panelId}
-            selectedId={selected.id}
-            ariaLabel={collapsed ? selected.title : undefined}
-            testId="graph-run-inspector"
-            className="flex min-h-[28rem] min-w-0 flex-1 flex-col px-4 pt-4 sm:px-6"
-          >
-            <FlowInspectorHeader
-              node={selectedView}
-              testIdPrefix="graph-run"
-              actions={selectedActions
-                .filter((action) => !action.runWide)
-                .map((action) => {
-                  const Icon = ACTION_ICON[action.key];
-                  return (
-                    <Button
-                      key={action.key}
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 gap-1.5 text-xs"
-                      disabled={
-                        (pending !== null && action.key !== "open-session") ||
-                        Boolean(action.disabledReason)
-                      }
-                      title={action.disabledReason}
-                      onClick={() => perform(selected, action.key)}
-                    >
-                      <Icon className="size-3.5" />
-                      {action.label}
-                    </Button>
-                  );
-                })}
-            />
-            <GraphRunInspector
-              key={selected.id}
-              run={run}
-              node={selected}
-              environmentId={environmentId}
-              containerId={containerId}
-              isActive={isActive}
-              ownsGlobalShortcuts={isActive}
-              onAnswer={answer}
-              onHumanAnswer={answerHuman}
-              onSelectActivation={(attemptId, activationKey) => {
-                setAttemptExpanded(viewKey, attemptId, true);
-                setPinnedId(activationKey);
-              }}
-            />
-          </FlowInspectorPanel>
-        </div>
-      </OverviewScroll>
+        </OverviewScroll>
+      </FloatingNoticeLayer>
       {codeRewind.dialog}
       <AlertDialog open={confirmCancel} onOpenChange={setConfirmCancel}>
         <AlertDialogContent data-testid="graph-run-cancel-dialog">

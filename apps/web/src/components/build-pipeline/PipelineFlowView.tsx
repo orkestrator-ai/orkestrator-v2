@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -50,6 +51,7 @@ import { modelsForAgent } from "@/lib/agent-launch";
 import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FloatingNotice, FloatingNoticeLayer } from "@/components/ui/floating-notice";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -251,8 +253,8 @@ export function PipelineFlowView({
   const now = useSyncExternalStore(subscribeDisplayClock, displayClock.getSnapshot);
 
   // The running step, else the last step reached; a node the user picked
-  // wins while it exists. Notes is opened by hand: it never runs, so there is
-  // nothing in it to follow.
+  // wins while it exists. Notes counts as reached only once the run completes,
+  // so a finished run lands on it and an unfinished one never does.
   const columnOf = new Map<string, number>();
   model.columns.forEach((column, index) => {
     for (const id of column.nodeIds) columnOf.set(id, index);
@@ -265,7 +267,7 @@ export function PipelineFlowView({
     pendingRetry?.id ??
     defaultFlowSelection(
       model.nodes
-        .filter((node) => !node.session?.superseded && !node.superseded && node.kind !== "notes")
+        .filter((node) => !node.session?.superseded && !node.superseded)
         .map((node) => ({
           id: node.id,
           state: node.placeholder ? "not-started" : node.state,
@@ -278,6 +280,33 @@ export function PipelineFlowView({
     model.nodes.find((node) => node.id === pinnedId) ??
     model.nodes.find((node) => node.id === followed) ??
     model.nodes[0];
+  // This view survives graph collapse. A tab reopen still starts a new arrival.
+  const followsNotes = selected?.kind === "notes" && selected.id !== pinnedId;
+  const [landedViewKey, setLandedViewKey] = useState<string | null>(null);
+  if (landedViewKey !== null && (!followsNotes || landedViewKey !== viewKey)) {
+    setLandedViewKey(null);
+  }
+  const graphContainerRef = useRef<HTMLDivElement>(null);
+  const expandedScrollTop = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (collapsed || expandedScrollTop.current === null) return;
+    const graph = graphContainerRef.current;
+    const scroller = graph?.closest<HTMLElement>('[data-testid="pipeline-flow-scroll"]');
+    if (!graph || !scroller) return;
+    const restore = () => {
+      const top = expandedScrollTop.current;
+      if (top === null || scroller.scrollHeight - scroller.clientHeight < top) return;
+      scroller.scrollTop = top;
+      expandedScrollTop.current = null;
+      observer.disconnect();
+    };
+    // Expansion mounts an unmeasured graph first. Wait for its real height
+    // before restoring an offset the collapsed inspector may have clamped.
+    const observer = new ResizeObserver(restore);
+    observer.observe(graph);
+    restore();
+    return () => observer.disconnect();
+  }, [collapsed]);
   const selectedSessionId = selected?.session?.sdkSessionId ?? null;
   // The shell's info pane reads which stage session is on screen.
   useEffect(() => {
@@ -642,7 +671,14 @@ export function PipelineFlowView({
     type: "button",
     "aria-expanded": !collapsed,
     "aria-controls": graphId,
-    onClick: () => setCollapsed(viewKey, !collapsed),
+    onClick: () => {
+      if (!collapsed) {
+        expandedScrollTop.current =
+          graphContainerRef.current?.closest<HTMLElement>('[data-testid="pipeline-flow-scroll"]')
+            ?.scrollTop ?? null;
+      }
+      setCollapsed(viewKey, !collapsed);
+    },
   } as const;
   const progress = (
     <span
@@ -656,151 +692,164 @@ export function PipelineFlowView({
 
   return (
     <div ref={setTabRoot} className="relative flex min-h-0 flex-1 flex-col">
-      <OverviewScroll>
-        <div className="@container flex min-h-full flex-col">
-          {notices}
-          {pipelineReviewWorktreeChanged(pipeline) ? (
-            <div
-              className="shrink-0 border-b border-divider bg-amber-500/8 px-3 py-2 text-sm text-amber-500"
-              data-testid="pipeline-review-stale"
-            >
-              The worktree changed during the latest review. The review carried on, so its report
-              may not describe the code as it is now.
-            </div>
-          ) : null}
-          {startFailures.failures.length > 0 ? (
-            <div className="shrink-0 border-b border-divider px-3 py-2">
-              <ReviewerStartFailureNotice
-                failures={startFailures.failures.map((node) => ({
-                  name: node.title,
-                  agent: node.agent ?? node.reviewer?.agent ?? "unknown agent",
-                  error: node.error,
-                }))}
-                panelSize={startFailures.panelSize}
-                onShow={() => onPin(startFailures.failures[0]!.id)}
-              />
-            </div>
-          ) : null}
-          {headerSlots ? null : (
-            <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
-              <Button
-                {...graphToggleProps}
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1.5 px-2 text-xs"
+      {/* Below the overview's own header row when it has one, so its controls stay reachable. */}
+      <FloatingNoticeLayer anchorClassName={headerSlots ? "top-3 right-3" : "top-12 right-3"}>
+        <OverviewScroll>
+          <div className="@container flex min-h-full flex-col">
+            {notices}
+            {pipelineReviewWorktreeChanged(pipeline) ? (
+              <FloatingNotice
+                tone="warning"
+                label="Review may be out of date"
+                summary="The worktree changed during the latest review."
+                data-testid="pipeline-review-stale"
               >
-                {collapsed ? (
-                  <ChevronRight className="size-3.5" />
-                ) : (
-                  <ChevronDown className="size-3.5" />
-                )}
-                {passKey ? "Review" : "Pipeline"}
-              </Button>
-              {progress}
-              {collapsed ? (
-                <span className="ml-auto truncate text-[11px] text-muted-foreground">
-                  {selected.title} · {selectedView.statusLabel}
-                </span>
-              ) : null}
-            </div>
-          )}
-          <div id={graphId} hidden={collapsed} className={cn(collapsed && "hidden")}>
-            {collapsed ? null : (
-              <PipelineFlowGraph
-                model={model}
-                views={views}
-                selectedId={selected.id}
-                onSelect={(id) => onPin(id)}
-                panelId={panelId}
-                viewKey={viewKey}
-                layout={layout}
-                fullscreenContainer={tabRoot}
-                isActive={isActive}
-              />
-            )}
-          </div>
-          <FlowInspectorPanel
-            panelId={panelId}
-            selectedId={selected.id}
-            ariaLabel={collapsed ? selected.title : undefined}
-            testId="pipeline-inspector"
-            className="flex min-h-[28rem] min-w-0 flex-1 flex-col px-4 pt-4 sm:px-6"
-          >
-            <FlowInspectorHeader
-              node={selectedView}
-              testIdPrefix="pipeline"
-              actions={selectedActions.map((action) => (
-                <Button
-                  key={action.key}
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 gap-1.5 text-xs"
-                  disabled={action.disabled}
-                  onClick={action.onSelect}
-                >
-                  <action.icon className="size-3.5" />
-                  {action.label}
-                </Button>
-              ))}
-            />
-            <InspectorNotes node={selected} pipeline={pipeline} visibleError={visibleError} />
-            {!showTranscript ? (
-              <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-                <InspectorBody
-                  node={selected}
-                  pipeline={pipeline}
-                  environmentId={environmentId}
-                  now={now}
-                  pullRequest={pullRequest}
-                  shipped={shipped}
-                  validationStop={validationStop}
-                  onShowAttemptStep={showAttemptStep}
+                The worktree changed during the latest review. The review carried on, so its report
+                may not describe the code as it is now.
+              </FloatingNotice>
+            ) : null}
+            {startFailures.failures.length > 0 ? (
+              <div className="shrink-0 border-b border-divider px-3 py-2">
+                <ReviewerStartFailureNotice
+                  failures={startFailures.failures.map((node) => ({
+                    name: node.title,
+                    agent: node.agent ?? node.reviewer?.agent ?? "unknown agent",
+                    error: node.error,
+                  }))}
+                  panelSize={startFailures.panelSize}
+                  onShow={() => onPin(startFailures.failures[0]!.id)}
                 />
               </div>
-            ) : selected.hasValidation && (selected.validationRun ?? pipeline.validationRun) ? (
-              <Tabs
-                value={inspectorTab[selected.id] ?? "transcript"}
-                onValueChange={(value) =>
-                  setInspectorTab((previous) => ({ ...previous, [selected.id]: value }))
-                }
-                className="mb-1 shrink-0"
-              >
-                <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
-                  <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
-                    Transcript
-                  </TabsTrigger>
-                  <TabsTrigger className="h-6 px-2 text-xs" value="tests">
-                    Tests
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="tests" className="max-h-[60vh] overflow-y-auto">
-                  <ReviewValidationStatus
-                    environmentId={environmentId}
-                    run={selected.validationRun ?? pipeline.validationRun!}
-                    now={now}
-                    {...validationStop}
-                  />
-                </TabsContent>
-              </Tabs>
             ) : null}
-            {/* Kept mounted behind the other views, so returning to a stage
+            {headerSlots ? null : (
+              <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
+                <Button
+                  {...graphToggleProps}
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                >
+                  {collapsed ? (
+                    <ChevronRight className="size-3.5" />
+                  ) : (
+                    <ChevronDown className="size-3.5" />
+                  )}
+                  {passKey ? "Review" : "Pipeline"}
+                </Button>
+                {progress}
+                {collapsed ? (
+                  <span className="ml-auto truncate text-[11px] text-muted-foreground">
+                    {selected.title} · {selectedView.statusLabel}
+                  </span>
+                ) : null}
+              </div>
+            )}
+            <div
+              ref={graphContainerRef}
+              id={graphId}
+              hidden={collapsed}
+              className={cn(collapsed && "hidden")}
+            >
+              {collapsed ? null : (
+                <PipelineFlowGraph
+                  model={model}
+                  views={views}
+                  selectedId={selected.id}
+                  onSelect={(id) => onPin(id)}
+                  panelId={panelId}
+                  viewKey={viewKey}
+                  layout={layout}
+                  fullscreenContainer={tabRoot}
+                  isActive={isActive}
+                  landOnSelection={followsNotes && landedViewKey !== viewKey}
+                  onSelectionLanded={() => setLandedViewKey(viewKey)}
+                />
+              )}
+            </div>
+            <FlowInspectorPanel
+              panelId={panelId}
+              selectedId={selected.id}
+              ariaLabel={collapsed ? selected.title : undefined}
+              testId="pipeline-inspector"
+              className="flex min-h-[28rem] min-w-0 flex-1 flex-col px-4 pt-4 sm:px-6"
+            >
+              <FlowInspectorHeader
+                node={selectedView}
+                testIdPrefix="pipeline"
+                actions={selectedActions.map((action) => (
+                  <Button
+                    key={action.key}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 text-xs"
+                    disabled={action.disabled}
+                    onClick={action.onSelect}
+                  >
+                    <action.icon className="size-3.5" />
+                    {action.label}
+                  </Button>
+                ))}
+              />
+              <InspectorNotes node={selected} pipeline={pipeline} visibleError={visibleError} />
+              {!showTranscript ? (
+                <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+                  <InspectorBody
+                    node={selected}
+                    pipeline={pipeline}
+                    environmentId={environmentId}
+                    now={now}
+                    pullRequest={pullRequest}
+                    shipped={shipped}
+                    validationStop={validationStop}
+                    onShowAttemptStep={showAttemptStep}
+                  />
+                </div>
+              ) : selected.hasValidation && (selected.validationRun ?? pipeline.validationRun) ? (
+                <Tabs
+                  value={inspectorTab[selected.id] ?? "transcript"}
+                  onValueChange={(value) =>
+                    setInspectorTab((previous) => ({ ...previous, [selected.id]: value }))
+                  }
+                  className="mb-1 shrink-0"
+                >
+                  <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
+                    <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
+                      Transcript
+                    </TabsTrigger>
+                    <TabsTrigger className="h-6 px-2 text-xs" value="tests">
+                      Tests
+                    </TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="tests" className="max-h-[60vh] overflow-y-auto">
+                    <ReviewValidationStatus
+                      environmentId={environmentId}
+                      run={selected.validationRun ?? pipeline.validationRun!}
+                      now={now}
+                      {...validationStop}
+                    />
+                  </TabsContent>
+                </Tabs>
+              ) : null}
+              {/* Kept mounted behind the other views, so returning to a stage
                 keeps the reader's place in its transcript. */}
-            <PipelineSessionTranscript
-              pipeline={pipeline}
-              session={showTranscript ? selected.session : undefined}
-              visible={
-                showTranscript && !(selected.hasValidation && inspectorTab[selected.id] === "tests")
-              }
-              isActive={isActive}
-              ownsGlobalShortcuts={ownsGlobalShortcuts}
-              environmentId={environmentId}
-              containerId={containerId}
-              composer={composer}
-            />
-          </FlowInspectorPanel>
-        </div>
-      </OverviewScroll>
+              <PipelineSessionTranscript
+                pipeline={pipeline}
+                session={showTranscript ? selected.session : undefined}
+                visible={
+                  showTranscript &&
+                  !(selected.hasValidation && inspectorTab[selected.id] === "tests")
+                }
+                isActive={isActive}
+                ownsGlobalShortcuts={ownsGlobalShortcuts}
+                environmentId={environmentId}
+                containerId={containerId}
+                composer={composer}
+              />
+            </FlowInspectorPanel>
+          </div>
+        </OverviewScroll>
+      </FloatingNoticeLayer>
       {codeRewind.dialog}
       {restartIn.dialog}
       {headerSlots?.progress ? createPortal(progress, headerSlots.progress) : null}

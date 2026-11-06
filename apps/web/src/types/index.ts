@@ -145,6 +145,11 @@ export interface Environment {
    * Resolve when it conflicts. Absent from older backends; means off.
    */
   autoMerge?: boolean;
+  /**
+   * Auto-merge deletes this environment once it has merged the PR. Absent
+   * from older backends; means no cleanup.
+   */
+  autoMergeCleanup?: boolean;
   /** PR-specific authorization and freshness fence. */
   autoMergePrUrl?: string | null;
   autoMergeEnabledAt?: string | null;
@@ -647,6 +652,13 @@ export interface GlobalConfig {
   debugLogRetentionDays?: number;
   /** "Log detail": levels for every process, running bridges included. Applies live. */
   logDetail?: import("@orkestrator/protocol/log-policy").LogDetail;
+  /**
+   * Backend-owned: when raised "Log detail" reverts to `info` (ISO 8601). Every
+   * config write recomputes it; a value a client sends is ignored.
+   */
+  logDetailExpiresAt?: string;
+  /** Keep raised "Log detail" until it is changed back, instead of for 24 hours. */
+  logDetailKeepRaised?: boolean;
   /** Serve the app to authenticated browsers on the host's Tailscale network */
   webClientEnabled?: boolean;
   /** Audible cues for background events that need the user's attention. */
@@ -694,6 +706,11 @@ export interface RepositoryConfig {
   /** Entry port inside the container (e.g. 3000 for a web server).
    * New containers will automatically map this to an available host port. */
   entryPort?: number;
+  /**
+   * The user lets this project's coordinator send work to environments it did
+   * not create. Absent (every older record) means no.
+   */
+  coordinatorOtherEnvironments?: boolean;
 }
 
 /**

@@ -306,6 +306,10 @@ export class GatewayAuth {
     });
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
     const route = classifyGatewayRoute(url.pathname);
+    this.ctx.traffic.noteRequest(
+      request,
+      url.pathname.startsWith(NODE_RELAY_PREFIX) ? "node-relay" : route,
+    );
     const requestMetrics = this.ctx.metrics.beginRequest({
       route,
       listenerKind,
@@ -598,7 +602,9 @@ export class GatewayAuth {
       capabilities[BACKEND_CAPABILITIES.nodeAttachment] = 1;
       capabilities[BACKEND_CAPABILITIES.publicActionRelay] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailSteer] = 1;
+      capabilities[BACKEND_CAPABILITIES.nodeMailTurnOrigin] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeCoordinatorMail] = 1;
+      capabilities[BACKEND_CAPABILITIES.nodeCoordinatorBuildOrigin] = 1;
       capabilities[BACKEND_CAPABILITIES.coordinatorNotices] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailAttachments] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailReturn] = 1;
@@ -615,6 +621,7 @@ export class GatewayAuth {
       endpointRole: listenerKind === "control" ? "control" : "client",
     };
     if (identity.nodeMode) hello.nodeMode = identity.nodeMode;
+    if (identity.buildCommit) hello.buildCommit = identity.buildCommit;
     jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 

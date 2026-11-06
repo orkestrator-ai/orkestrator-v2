@@ -14,13 +14,9 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0090-x1-coordinator-trust-boundary.md](0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
-| 2 | [0100-m12-egress-sni-and-dns.md](0100-m12-egress-sni-and-dns.md) | High | No | M12: SNI enforcement, DNS filtering, default allowlist, user-facing statement | Shared edges, attacker credentials and DNS remain working exfiltration channels from a restricted container. |
-| 3 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
-| 4 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
-| 5 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
-| 6 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
-| 7 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
+| 1 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
+| 2 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
+| 3 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
 
 ## Parallel running
 
@@ -34,11 +30,9 @@ This index only changes when a branch merges, so it can't show what is running n
 
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| X1 | [Coordinator trust boundary](0090-x1-coordinator-trust-boundary.md) | `0090`, `0180`, `0210`; also coordinator `0120` task 1, `0310` | Coordinator backend, 1 of 3 | None | None |
 
 Why these are grouped:
 
-- **X1:** What a coordinator or side agent may reach, and how its mail is framed. `0120` task 2 is a live check and can run separately.
 
 ### Files built on their own
 
@@ -46,10 +40,7 @@ These still follow the lane and conflict rules above.
 
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| S-0100 | [Egress SNI and DNS](0100-m12-egress-sni-and-dns.md) | `0100` | Containers, 1 of 3 | None | None |
-| S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 2 of 3 | None | None |
-| S-0190 | [Provider secrets at rest](0190-l17-provider-secrets-at-rest.md) | `0190` | Storage, 2 of 2 | None | None |
-| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 2 of 2 | None | None |
+| S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 1 of 2 | None | None |
 
 ### Not ready to start
 
@@ -62,14 +53,16 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every finding
 
-33 done, 15 partly done, 5 open, 12 no action.
+40 done, 11 partly done, 2 open, 12 no action.
+
+Batch X1 (Coordinator trust boundary) is closed. It was analysed against `a2bba9d8`, built from `main` at `af2e566e5` and rebased onto `main` at `4f7ca8231`; its task-by-task outcome table ends the report in the parent of the commit that deleted it. What it could not prove or close is in to-do [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md).
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
 | H1 | Partly done | `apps/backend/src/gateway-sessions.ts:73-75`, `apps/backend/src/gateway-auth.ts:135-138` (commit `4f9cf3b32`); the leaked-session exposure is accepted in `docs/architecture/remote-gateway.md`, Security notes; the `__Host-` name remains in [todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md) |
 | H2 | Done | `apps/backend/src/core/container-scripts.ts:13-20`, `docker/container-zshrc.zsh:20-24` (commit `5fc5982aa`); cap removed from `egressEnforcement` (`apps/backend/src/core/egress-gateway.ts`); runtimes without a gateway keep the in-container firewall until rebuilt, and rootless gateway checks stay with [todo 0018](../../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 |
 | H3 | Done | `apps/backend/src/core/container-project-seed-files.ts:66-110`; no project file in `bindIfExists` calls (`apps/backend/src/core/commands-containers.ts:503-559`); commit `1565c7c16` |
-| H4 | Partly done | `packages/protocol/src/node/bridge-credential.ts` (a bridge holds a verifier and is non-dumpable), `apps/backend/src/core/container-bridge-credential.ts` (root-only token), `apps/backend/src/core/native-agent-session-operations.ts` (a user's widening), `packages/protocol/src/execution-policy-narrowing.ts`; `apps/backend/src/core/agent-credential-files.ts` (OpenCode's credential plugin, [4981](../../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)); `apps/backend/tests/bridge-credential-docker.test.ts` on a real container. Remainder in [4980](../../todo/containers-and-environments/4980-agent-uid-process-control.md) and [4982](../../todo/containers-and-environments/4982-bridge-credential-live-evidence.md) |
+| H4 | Partly done | `packages/protocol/src/node/bridge-credential.ts` (a bridge holds a verifier and is non-dumpable), `apps/backend/src/core/container-bridge-credential.ts` (root-only token), `apps/backend/src/core/native-agent-session-operations.ts` (a user's widening), `packages/protocol/src/execution-policy-narrowing.ts`; `apps/backend/src/core/agent-credential-files.ts` (OpenCode's credential plugin, 4981); `apps/backend/tests/bridge-credential-docker.test.ts` on a real container. Remainder in [4980](../../todo/containers-and-environments/4980-agent-uid-process-control.md) and [4982](../../todo/containers-and-environments/4982-bridge-credential-live-evidence.md) |
 | H5 | Done | `packages/protocol/src/app-config-defaults.ts:51`, `apps/backend/src/core/github-credentials.ts:31`; [container credential](../../architecture/github-cli.md#container-credential). New installs share nothing; an upgraded install keeps its current sharing, with a scope warning, until the user changes it. Per-environment repo-scoped credentials were not built. |
 | M1 | Partly done | `apps/backend/src/gateway-proxy.ts:231`, `apps/backend/src/gateway-auth.ts:305` (commit `4f9cf3b32`); remainder in [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | M2 | Done | `apps/backend/src/core/preview-runtime.ts:238`, `apps/backend/src/gateway-handlers.ts:442-444`, `apps/backend/src/gateway-proxy.ts:234-235`, `apps/desktop/electron/remote-gateway-request-auth.ts:75`; commit `71fb369be` |
@@ -81,8 +74,8 @@ When one of these becomes ready, it joins the lane shown.
 | M8 | Done | `apps/backend/src/core/portable-inputs.ts:333`, `apps/backend/src/core/claude-container-config.ts:62`, `docker/entrypoint.sh:898`; commit `6ae99a3ed`; the legacy raw mount went with M9 for new containers |
 | M9 | Done | A new container from an image without `staged-inputs` is refused by name (`requireStagedInputsImage`, `apps/backend/src/core/commands-containers.ts`); existing ones keep running and are listed in the cleanup review with a Rebuild action (`apps/backend/src/core/docker-cleanup-legacy-runtimes.ts`, `apps/web/src/components/docker/DockerCleanupReview.tsx`). Tests: `apps/backend/tests/container-legacy-host-mounts.test.ts`, `DockerCleanupReview.test.tsx`. The count of real environments and a real old-image run are in [todo 5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) |
 | M10 | Done | `apps/backend/src/core/coordinator-worker-mail.ts:417-434`, `docs/architecture/coordinator.md:1178-1205`; commit `5161688cf`; a reason and user approval replace the report's outright refusal, and a message within 3 hours of a sent one goes at once |
-| M11 | Open | `apps/backend/src/core/coordinator-worker-mail.ts:405-408`, `packages/protocol/src/agent-mail.ts:940`; [X1 part Security 0090](0090-x1-coordinator-trust-boundary.md#security-0090-limit-how-far-prompt-injection-can-spread-through-the-coordinator) |
-| M12 | Open | `docker/init-firewall.sh:140-155`, no proxy or resolver in `docker/Dockerfile`; [0100-m12-egress-sni-and-dns.md](0100-m12-egress-sni-and-dns.md) |
+| M11 | Done | `apps/backend/src/core/coordinator-environment-scope.ts`, `control-mcp-coordinator-environment-scope.ts`; `COORDINATOR_MAIL_ORIGIN_NOTE` in `packages/protocol/src/agent-mail.ts`; [coordinator.md](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on). What usage must show is in [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) |
+| M12 | Partly done | The egress gateway checks TLS SNI, HTTP Host and DNS names against the allowlist and fails closed (`docker/orkestrator-egress-filter.pl`, `docker/init-firewall.sh`, `egress-filter=1`), proven in a real container (`apps/backend/tests/container-live-egress-filter.test.ts`; [container qualification](../../development/container-qualification.md#egress-name-checks-on-docker-desktop-2026-11-05)); the residual risk is stated in both network settings and the README. The default allowlist is unchanged until the telemetry hosts are checked ([todo 6100](../../todo/containers-and-environments/6100-default-allowlist-telemetry-hosts.md)); Linux Engine and rootless runs are [6101](../../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md), what name checks cannot see is [6102](../../todo/containers-and-environments/6102-egress-name-check-residual-channels.md) |
 | M13 | Done | `bridges/codex-bridge/src/codex-config.ts:521`, `bridges/acp-bridge/src/acp-policy.ts:144`, `bridges/acp-bridge/src/acp-context.ts:1146`; commit `4cdc39fb6`; the app-server's own `/proc` entry belongs to H4 |
 | L1 | Done | `apps/backend/src/core/commands-environment.ts:2303-2306`, `apps/backend/src/core/commands-project-files.ts:80`, `:94`; commit `f2f842514` |
 | L2 | Done | `launchContainerScript` (`apps/backend/src/core/container-bridge-credential.ts`); `apps/backend/tests/container-bridge-credential.test.ts`. Whether Docker Desktop exposes argv the same way no longer matters: the tokens are not in it |
@@ -95,15 +88,15 @@ When one of these becomes ready, it joins the lane shown.
 | L9 | Done | `apps/backend/src/core/commands-files.ts:991`, `apps/backend/src/core/git-fsmonitor.ts:22`; commit `abe48fb37` |
 | L10 | Done | `apps/backend/src/gateway-host-policy.ts`, `apps/backend/src/gateway-credential-throttle.ts`, `apps/backend/tests/gateway-host-policy.test.ts`, `apps/backend/tests/gateway-credential-throttle.test.ts` |
 | L11 | Done | `apps/backend/src/gateway-bind-policy.ts:33-46`, `apps/backend/src/main.ts:144`; commit `129cb2d32` |
-| L12 | Partly done | `packages/cli/src/client/targets.ts:130-146`, `:215-222` (commit `b88623136`); remainder in [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) |
+| L12 | Done | Descriptor ownership and permissions: `readDescriptor` and `descriptorTrustRefusal` in `packages/cli/src/client/targets.ts` (commit `b88623136`). Same-user pid reuse: `descriptorProcessRefusal` (same file) compares the pid's start time, read by `packages/cli/src/client/process-start.ts`, with the descriptor's `startedAt` before any token is read; `packages/cli/tests/client-descriptor-process.test.ts`. A real-Mac run of the `ps` path is [todo 6220](../../todo/cli-and-slash-commands/6220-descriptor-start-time-macos-live-run.md) |
 | L13 | Done | `apps/web/src/lib/chat/file-url.ts:68-73`; commit `5c760e3c8` |
 | L14 | Done | `apps/backend/src/preview-relay-supervisor.ts:24`, `:355-373`, `:381-382`; commit `6cdd8115e` |
 | L15 | Open | `apps/backend/src/core/index.ts:536`, `apps/backend/src/core/agent-tools.ts:977`; [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) |
-| L16 | Partly done | Cursor and Pi policy fields closed by `2d4528dc5` and `a2bba9d80`; remainder in [X1 part Security 0180](0090-x1-coordinator-trust-boundary.md#security-0180-control-mcp-confirmation-operator-token-and-self-reminder-soft-spots) |
-| L17 | Open | `apps/backend/src/core/storage-config.ts:359-365`, `apps/backend/src/core/storage-database.ts:284`; [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) |
+| L16 | Done | Cursor and Pi policy fields closed by `2d4528dc5` and `a2bba9d80`. Claude coordinators: `bridges/claude-bridge/src/services/read-only-path-boundary.ts`; confirmation is stated not to be a human-approval boundary in [control-mcp.md](../../architecture/control-mcp.md#confirmation); self-reminders have `source: "self-reminder"`. Bubblewrap and the other providers are in [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) |
+| L17 | Done | Plaintext at 0600 recorded as an accepted risk in [storage.md](../../architecture/storage.md#provider-secrets-at-rest). The secrets live in `config.json` and its backups, not SQLite. Every start tightens those files (`apps/backend/src/core/storage-config.ts:326`) and every open tightens the database's companions (`apps/backend/src/core/storage-database.ts:280`); `apps/backend/src/core/storage-secrets-at-rest.test.ts`, `apps/backend/tests/container-data-directory-reach.test.ts`. No keychain or `safeStorage` path was built |
 | L18 | Open | `bun.lock:2389`, `:2117`, `:1583`; [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) |
 | I1 | Done | Grants and the relay refuse the machine's administration: `WORKSPACE_ADMINISTRATION_COMMANDS` (`apps/backend/src/core/nodes/workspace-grant-scope.ts`) in `isWorkspaceExcludedCommand` (`apps/backend/src/core/nodes/node-routing.ts`); terminals stay allowed; an older realm's unchanged settings echo is answered (`isGlobalConfigEcho`). Tests: `apps/backend/tests/gateway-workspace-grant-scope.test.ts`, `apps/backend/src/core/nodes/workspace-grant-scope.test.ts`. Live two-node and older-realm checks in [todo 5740](../../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md) |
-| I2 | Partly done | `docs/architecture/coordinator.md:352` is corrected, `README.md:19` and `docs/architecture/control-mcp.md:505` are not; [X1 part Security 0210](0090-x1-coordinator-trust-boundary.md#security-0210-correct-what-the-docs-say-a-side-agent-can-do) |
+| I2 | Done | `README.md` and `docs/architecture/control-mcp.md` now list `schedules`, as `docs/architecture/coordinator.md` did |
 | I3 | Done | `docker/orkestrator-git-credential.sh`, `apps/backend/src/core/commands-files.ts:2429`; [container credential](../../architecture/github-cli.md#container-credential). An image older than `github-git-credential` keeps the rewrite. |
 | I4 | No action | Maintainer decision that `no-new-privileges` stays off because the entrypoint is `sudo` (`docs/architecture/container-lifecycle.md:1099`, `docs/todo/containers-and-environments/0018-container-network-and-credential-isolation.md:961`); policy 1 survives only on images older than policy 2 and is kept until rebuilt (`apps/backend/src/core/container-network.ts:47-50`, `docs/architecture/container-lifecycle.md:555`) |
 | I5 | Partly done | Publication warns, and does not refuse, when its domain shares a site with the app: `sameSiteWarning` (`apps/backend/src/preview-publication.ts`), `apps/backend/src/core/host-site.ts` (each `ts.net` tailnet name is its own site), shown in `apps/web/src/components/settings/PreviewSettings.tsx`; `apps/backend/src/preview-publication.test.ts`, `apps/backend/src/core/host-site.test.ts`. Live check on a real private zone in [5240](../../todo/previews-and-annotations/5240-same-site-preview-domain-live.md) |
@@ -120,7 +113,7 @@ When one of these becomes ready, it joins the lane shown.
 | §8 Validation worker spot-checked | No action | Read for this split: commands come from the environment's own preparation agent and run in that environment with the agent's privileges, so no boundary is crossed (`apps/backend/src/core/review-validation-worker.ts:287`, `docs/architecture/review-preparation.md:5-10`); not a full audit |
 | §8 `tmux-hooks` `find` not reviewed | No action | Read for this split: the path is quoted and the other value is a number (`apps/backend/src/core/tmux-hooks.ts:966-968`, `apps/backend/src/core/tmux-shared.ts:299-301`, `:700`) |
 | §8 Pi's `grep` and `find` tools | No action | They live in the Pi SDK outside this repository, and the report asks for nothing |
-| §8 iOS app not reviewed | Partly done | Reviewed on 2026-11-05 against `69a3b4ca5`: `isTrustedBridgeOrigin` and `loginFormBody` (`apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`), `GatewayRedirectBlocker` (`apps/ios/OrkestratorMobile/Networking/GatewayConnectionValidator.swift`), with tests in `apps/ios/OrkestratorMobileTests/OrkestratorMobileTests.swift`; remainder in [5600](../../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md) |
+| §8 iOS app not reviewed | Partly done | Reviewed on 2026-11-05 against `69a3b4ca5`: `isTrustedBridgeOrigin` and `loginFormBody` (`apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`), `GatewayRedirectBlocker` (`apps/ios/OrkestratorMobile/Networking/GatewayConnectionValidator.swift`), with tests in `apps/ios/OrkestratorMobileTests/OrkestratorMobileTests.swift`; remainder in [5600](../../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and 5602 |
 | §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop and rootless, and gateway reach on Docker Desktop and Linux Engine (`docs/development/container-qualification.md`); shipping Safari remains in [todo 5500](../../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md) |
 | §9 step 1 (H1 + M1) | Partly done | [Todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | §9 step 2 (H3) | Done | See H3 |
@@ -130,4 +123,4 @@ When one of these becomes ready, it joins the lane shown.
 | §9 step 6 (M4, M5, L1) | Done | See M4, M5 and L1 |
 | §9 step 7 (M6, M7, L3, L4) | Done | See M6, M7, L3 and L4 |
 | §9 step 8 (H5, M8, M9) | Done | See H5, M8 and M9; what only a running install can answer is in [todo 5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) |
-| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) to [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md); I5 is partly done (see I5) |
+| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md); L12 is done (see L12); I5 is partly done (see I5) |

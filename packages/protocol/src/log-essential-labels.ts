@@ -1,4 +1,10 @@
 import { LOG_VOCABULARY, type LogAreaSpec } from "./log-vocabulary/index.js";
+import {
+  isRendererErrorBoundary,
+  isRendererErrorClass,
+  isRendererErrorFingerprint,
+  isRendererErrorRoute,
+} from "./renderer-errors.js";
 
 // This is a persistence allowlist, not a string grammar. Unknown error names,
 // codes and classifications are omitted even when they look like identifiers.
@@ -142,6 +148,8 @@ export function isEssentialLabel(
   if (field === "site") return Object.hasOwn(vocabulary[area]?.events ?? {}, value);
   if (field === "source" || (area === "local-server" && field === "key")) return SOURCE.test(value);
   if (area === "backend" && event === "starting" && field === "version") return VERSION.test(value);
+  if (area === "backend" && event === "previous-run" && field === "outcome")
+    return value === "clean" || value === "crashed";
   if (area === "docker" && field === "reason") {
     if (event === "writer-lease.lost") return ["reclaimed", "unreadable"].includes(value);
     if (event === "writer-lease.not-acquired")
@@ -158,6 +166,12 @@ export function isEssentialLabel(
     return TIMESTAMP.test(value);
   if (area === "storage" && event === "migration.failed" && field === "step")
     return ["snapshot", "migrate"].includes(value);
+  if (area === "renderer-errors" && event === "error.recorded") {
+    if (field === "errorClass") return isRendererErrorClass(value);
+    if (field === "boundary") return isRendererErrorBoundary(value);
+    if (field === "route") return isRendererErrorRoute(value);
+    if (field === "fingerprint") return isRendererErrorFingerprint(value);
+  }
   if (area === "desktop" && event === "startup.failed" && field === "step")
     return value === "gateway";
   return false;

@@ -98,3 +98,17 @@ Passing case counts were not retained by the logged runner. Evidence is
 This confirms intermittence in another flush-completion sibling; the fixed sleep
 is an evidence-backed timing hypothesis, not a proven root cause. No desktop
 code, timeout, assertion or skip changed. Status remains open.
+
+## Integrate review — 2026-11-05
+
+At `d96a45c1c`, the exact preparation rerun
+`mise run test:logged -- --name review-default-tests -- mise run test`
+(workspace/root/bridge/protocol reservations 6/1/2/1) failed
+`application logging shutdown > quits anyway when the flush outlives its deadline`
+at line 1144: quitCount was 0 instead of 1 after 72.59 ms. The complete unchanged
+owner passed alone (exit 0, 1.1 s):
+`mise run test:logged -- --name logging-isolated -- bun test --cwd=apps/desktop --preload ../../tests/setup-node.ts ./electron/application-logging.test.ts --parallel=1 --only-failures`.
+Evidence: workspace log in `orkestrator-test-run.tjKud0` under the host temporary
+directory; outer run `orkestrator-test-run.lBswTp`. Aggregate totals were not yet
+available. No logging implementation or test was changed. See aggregate case 5105
+for the companion Pi and diagnostics intermittence.

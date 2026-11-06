@@ -15,7 +15,7 @@ import {
   reviewArtifactDirectory,
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
-import { CommandFailedError, spawnCommand, runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { writeConfinedFile, workspaceFilePath } from "./path-safety.js";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
@@ -773,7 +773,7 @@ export async function writeEnvironmentReviewPackage(
   runner: EnvironmentCommandRunner,
   reviewPackage: ReviewPackage,
   dependencies: {
-    spawn?: typeof spawnCommand;
+    run?: typeof runCommand;
     timeoutMs?: number;
   } = {},
 ): Promise<ReviewPackageReference> {
@@ -793,74 +793,67 @@ export async function writeEnvironmentReviewPackage(
 
   const relativeDirectory = path.posix.dirname(reference.filePath);
   const filename = path.posix.basename(reference.filePath);
-  const child = (dependencies.spawn ?? spawnCommand)("docker", [
-    "exec",
-    "-i",
+  await writeContainerReviewPackage(
+    dependencies.run ?? runCommand,
     environment.containerId!,
-    "node",
-    "-e",
-    CONTAINER_PINNED_ATTACHMENT_WRITE,
-    "/workspace",
     relativeDirectory,
     filename,
-    String(contents.byteLength),
-    "",
-    "overwrite",
-    String(0o444),
-  ]);
-  await waitForContainerReviewPackageWrite(child, contents, dependencies.timeoutMs);
+    contents,
+    dependencies.timeoutMs,
+  );
   return reference;
 }
 
 const CONTAINER_REVIEW_PACKAGE_WRITE_TIMEOUT_MS = 60_000;
 const MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES = 4_096;
 
-/** Waits for the helper's complete diagnostic stream and bounds a wedged docker exec. */
-export function waitForContainerReviewPackageWrite(
-  child: ReturnType<typeof spawnCommand>,
+/** Writes through the pinned helper, keeping its diagnostic and bounding a wedged docker exec. */
+export async function writeContainerReviewPackage(
+  run: typeof runCommand,
+  containerId: string,
+  relativeDirectory: string,
+  filename: string,
   contents: Buffer,
   timeoutMs = CONTAINER_REVIEW_PACKAGE_WRITE_TIMEOUT_MS,
 ): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let stderr = Buffer.alloc(0);
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve();
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(new Error(`Container review package write timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      if (stderr.byteLength >= MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES) return;
-      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      stderr = Buffer.concat([
-        stderr,
-        bytes.subarray(0, MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES - stderr.byteLength),
-      ]);
-    });
-    child.once("close", (code) => {
-      if (code === 0) {
-        finish();
-        return;
-      }
-      const diagnostic = stderr.toString("utf8").trim();
-      finish(
-        new Error(
-          `Container review package write exited with ${code}${diagnostic ? `: ${diagnostic}` : ""}`,
-        ),
-      );
-    });
-    child.once("error", (error) => finish(error));
-    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-      if (error.code !== "EPIPE") finish(error);
-    });
-    child.stdin.end(contents.toString("base64"));
-  });
+  try {
+    await run(
+      "docker",
+      [
+        "exec",
+        "-i",
+        containerId,
+        "node",
+        "-e",
+        CONTAINER_PINNED_ATTACHMENT_WRITE,
+        "/workspace",
+        relativeDirectory,
+        filename,
+        String(contents.byteLength),
+        "",
+        "overwrite",
+        String(0o444),
+      ],
+      { stdin: contents.toString("base64"), timeoutMs },
+    );
+  } catch (error) {
+    if (!(error instanceof CommandFailedError)) throw error;
+    if (error.timedOut) {
+      throw new Error(`Container review package write timed out after ${timeoutMs}ms`);
+    }
+    if (error.executableMissing) throw new Error("Docker executable not found");
+    if (error.outputLimitExceeded)
+      throw new Error("Container review package write output limit exceeded");
+    if (error.exitCode === null)
+      throw new Error("Container review package write terminated without an exit status");
+    const diagnostic = Buffer.from(error.stderr)
+      .subarray(0, MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES)
+      .toString("utf8")
+      .trim();
+    throw new Error(
+      `Container review package write exited with ${error.exitCode}${diagnostic ? `: ${diagnostic}` : ""}`,
+    );
+  }
 }
 
 /**
@@ -1370,6 +1363,7 @@ export async function runStoredEnvironmentMerge<T>(
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
   expectedHeadSha?: string,
+  expectedAutoMergeEnabledAt?: string,
 ): Promise<T> {
   const release = environment.projectHome
     ? await context.projectGit?.beginTurnAfterMergeSync(environment.projectId)
@@ -1382,6 +1376,7 @@ export async function runStoredEnvironmentMerge<T>(
       context,
       onResult,
       expectedHeadSha,
+      expectedAutoMergeEnabledAt,
     );
   } finally {
     release?.();
@@ -1395,6 +1390,7 @@ async function runStoredEnvironmentMergeOnce<T>(
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
   expectedHeadSha?: string,
+  expectedAutoMergeEnabledAt?: string,
 ): Promise<T> {
   if (isProjectHomeEnvironment(environment)) {
     const previousPr = environment.prUrl;
@@ -1457,6 +1453,17 @@ async function runStoredEnvironmentMergeOnce<T>(
       lifecycleOperation: "merging",
       lifecycleOperationStartedAt: new Date().toISOString(),
     });
+    if (expectedAutoMergeEnabledAt !== undefined) {
+      const current = await context.storage.getEnvironment(environment.id);
+      if (
+        !current?.autoMerge ||
+        !current.autoMergeCleanup ||
+        current.prUrl !== environment.prUrl ||
+        current.autoMergeEnabledAt !== expectedAutoMergeEnabledAt
+      ) {
+        throw new Error("Integration options changed before merge dispatch");
+      }
+    }
     let result: MergePrResult;
     try {
       result =

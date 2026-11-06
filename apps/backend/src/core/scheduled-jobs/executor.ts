@@ -69,7 +69,12 @@ export interface ScheduledJobRuntime {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   storage: {
     sendAgentMail(
-      sender: { kind: "system"; projectId: string; source: "workflow"; resourceId: string },
+      sender: {
+        kind: "system";
+        projectId: string;
+        source: "workflow" | "self-reminder";
+        resourceId: string;
+      },
       input: {
         requestId: string;
         toEnvironmentId: string;
@@ -778,7 +783,13 @@ export class ScheduledJobExecutor {
       ? `\n\nThe user asked for this in their own words: "${grant.userInstruction}". This timer carries their permission to switch the active ${grant.platforms.join(" or ")} account${grant.nodeIds?.length ? ` (also on node ${grant.nodeIds.join(", ")})` : ""} without asking again, for ${SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs / 3_600_000} hours after this reminder was delivered: pass scheduleId ${job.id} to switch_provider_account.`
       : "";
     const message = await this.runtime.storage.sendAgentMail(
-      { kind: "system", projectId: destination.projectId, source: "workflow", resourceId: job.id },
+      // The session's own text comes back as its own note, not as Orkestrator's.
+      {
+        kind: "system",
+        projectId: destination.projectId,
+        source: "self-reminder",
+        resourceId: job.id,
+      },
       {
         requestId: fireRequestId(fire),
         toEnvironmentId: destination.environmentId,

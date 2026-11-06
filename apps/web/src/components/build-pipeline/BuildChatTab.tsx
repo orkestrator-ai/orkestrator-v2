@@ -22,6 +22,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { useMediaQuery } from "@/hooks";
 import { Button } from "@/components/ui/button";
+import { FloatingNotice } from "@/components/ui/floating-notice";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
@@ -311,6 +312,7 @@ export function BuildChatTab({
           )}
           <PipelineKeyInformationButton
             keyInformation={pipeline.keyInformation}
+            environmentId={pipeline.environmentId}
             onOpenTab={
               createTab
                 ? () =>
@@ -353,12 +355,16 @@ export function BuildChatTab({
               </div>
             )}
             {showStallWarning && (
-              <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200/90">
+              <FloatingNotice
+                tone="warning"
+                label="No recent activity"
+                summary={`${stalledSession?.label ?? "The active stage"} has not changed for an extended period.`}
+              >
                 {stalledSession?.awaitingBackgroundWork
                   ? `${stalledSession.label} finished its turn and is waiting on background work, but its transcript`
                   : `${stalledSession?.label ?? "The active stage"} is still running, but its transcript`}{" "}
                 has not changed for an extended period. It was not stopped automatically.
-              </div>
+              </FloatingNotice>
             )}
             <BuildCompletionStatus pipeline={pipeline} />
           </>

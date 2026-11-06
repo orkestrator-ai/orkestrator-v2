@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { DatabaseStorageCard } from "./DatabaseStorageCard";
+import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { PreviewSettings } from "./PreviewSettings";
@@ -12,6 +15,7 @@ import type {
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
 import { isSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
+import { resolveLogDetail } from "@orkestrator/protocol/log-policy";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -38,6 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LogDetailSettings } from "./LogDetailSettings";
+import { RendererDebugSettings } from "./RendererDebugSettings";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 import * as backend from "@/lib/backend";
@@ -99,7 +104,10 @@ import {
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { PLAN_USAGE_PLATFORMS } from "@orkestrator/protocol/plan-usage";
-import { ALLOWLIST_ENTRY_HINT } from "@orkestrator/protocol/network-allowlist";
+import {
+  ALLOWLIST_ENTRY_HINT,
+  ALLOWLIST_RESIDUAL_RISK,
+} from "@orkestrator/protocol/network-allowlist";
 import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/protocol/claude-background-commands";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
@@ -352,6 +360,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setDebugLogRetentionDays,
     logDetail,
     setLogDetail,
+    logDetailKeepRaised,
+    setLogDetailKeepRaised,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -1221,6 +1231,25 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </SelectContent>
         </Select>
       </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Coordinator safety level and web research are in{" "}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground focus-hairline"
+          onClick={() => requestGlobalSettings("coordinator")}
+        >
+          Coordinator settings
+        </button>
+        .
+      </p>
+    </SettingsPageLayout>
+  );
+
+  const renderCoordinator = () => (
+    <SettingsPageLayout
+      title="Coordinator"
+      description="How this machine's project coordinators are held to read-only and what they may look up."
+    >
       <div>
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -1265,6 +1294,22 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         servers={coordinatorResearchMcpServers}
         setServers={setCoordinatorResearchMcpServers}
       />
+      <div>
+        <h3 className="text-sm font-medium text-foreground">Messaging</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Workers report back to a coordinator through agent messaging, so delegation needs it on.
+          Coordinator status updates are set there too, with the rest of messaging.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-3"
+          onClick={() => requestGlobalSettings("messaging")}
+        >
+          Open Messaging settings
+        </Button>
+      </div>
     </SettingsPageLayout>
   );
 
@@ -1853,6 +1898,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
     >
       <div className="space-y-4">
+        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          {ALLOWLIST_RESIDUAL_RISK}
+        </p>
         <Textarea
           value={allowedDomains}
           onChange={handleDomainsChange}
@@ -2399,11 +2447,22 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </AlertDialogContent>
           </AlertDialog>
         </div>
+        <DatabaseStorageCard />
+        <DiagnosticsExportCard />
         <p className="text-xs text-muted-foreground/60">
           Changes apply straight away, with no restart and without interrupting running agents.
         </p>
       </div>
-      <LogDetailSettings value={logDetail} onChange={setLogDetail} />
+      <LogDetailSettings
+        value={logDetail}
+        onChange={setLogDetail}
+        stored={resolveLogDetail(global)}
+        expirySupported={!!global.logDetailExpiresAt || global.logDetailKeepRaised === true}
+        expiresAt={global.logDetailExpiresAt}
+        keepRaised={logDetailKeepRaised}
+        onKeepRaisedChange={setLogDetailKeepRaised}
+      />
+      <RendererDebugSettings />
     </SettingsPageLayout>
   );
 
@@ -2477,6 +2536,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     "version-control": renderVersionControl,
     defaults: renderDefaults,
     platforms: renderPlatforms,
+    coordinator: renderCoordinator,
     review: renderReview,
     claude: renderClaude,
     cursor: renderCursor,

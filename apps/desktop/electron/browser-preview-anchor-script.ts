@@ -287,6 +287,14 @@ export function browserPreviewAnchorKit() {
     if (element.parentElement) return element.parentElement;
     return asShadowRoot(element.parentNode)?.host ?? null;
   };
+  /** The element holding `node`: itself, its parent, or the host of a shadow root's top level. */
+  const elementOf = (node: Node | null | undefined): Element | null => {
+    if (!node) return null;
+    if (isElement(node)) return node;
+    return (
+      node.parentElement ?? asShadowRoot(node)?.host ?? asShadowRoot(node.parentNode)?.host ?? null
+    );
+  };
   const composedContains = (ancestor: Element, node: Node): boolean => {
     let current: Element | null = isElement(node) ? node : (node.parentElement ?? null);
     for (let depth = 0; current && depth < 512; depth += 1) {
@@ -344,7 +352,7 @@ export function browserPreviewAnchorKit() {
     );
   };
   const insideSensitive = (node: Node | null): boolean => {
-    let current: Element | null = isElement(node) ? node : (node?.parentElement ?? null);
+    let current = elementOf(node);
     for (let depth = 0; current && depth < 64; depth += 1) {
       if (isSensitiveElement(current)) return true;
       current = composedParent(current);
@@ -481,16 +489,27 @@ export function browserPreviewAnchorKit() {
     return current;
   };
 
+  /**
+   * `contextRoot` for a text range, whose context runs on to the top of its
+   * shadow root: a root's text map compares the same neighbouring text.
+   */
+  const rangeContextRoot = (common: Node): Node => {
+    const top =
+      asShadowRoot(common) ?? (isElement(common) ? null : asShadowRoot(common.parentNode));
+    if (top) return top;
+    const context = contextRoot(common, 3);
+    return asShadowRoot(context.parentNode) ?? context;
+  };
+
   const surrounding = (
     start: Marker,
     end: Marker,
-    anchorNode: Node,
+    context: Node,
     insideMax: number,
     budget: Budget,
   ): Quote & { complete: boolean } => {
-    const root = contextRoot(anchorNode, 3);
     const parts = splitText(
-      root,
+      context,
       start,
       end,
       { inside: insideMax, context: CONTEXT_CHARS },
@@ -774,13 +793,16 @@ export function browserPreviewAnchorKit() {
     if (element.tagName === "IFRAME" || element.tagName === "FRAME") {
       return { kind: "unsupported", reason: "iframe" };
     }
-    const hosts: ShadowHost[] = [];
-    let root: Node;
     try {
-      root = element.getRootNode();
+      return scopeOfRoot(element.getRootNode());
     } catch {
       return { kind: "unsupported", reason: "closed-root" };
     }
+  };
+  /** `scopeFor` once the element's own root is known. */
+  const scopeOfRoot = (start: Node): Anchor["scope"] => {
+    const hosts: ShadowHost[] = [];
+    let root = start;
     while (root !== document) {
       const shadow = asShadowRoot(root);
       if (!shadow) return { kind: "unsupported", reason: "shadow-root" };
@@ -800,7 +822,7 @@ export function browserPreviewAnchorKit() {
     surrounding(
       { kind: "enter", node: element },
       { kind: "exit", node: element },
-      element,
+      contextRoot(element, 3),
       ANCHOR_TEXT_CHARS,
       budget,
     );
@@ -822,6 +844,17 @@ export function browserPreviewAnchorKit() {
       cssPath: cssPathFor(element),
       scope: scopeFor(element),
     };
+  };
+
+  /**
+   * The container of a range at the top level of a shadow root, where no
+   * element inside the root contains it: the host's semantics and context,
+   * scoped to the root. A stable id or path would address the host in its own
+   * root, so it has neither, and `:host` matches nothing in a root query.
+   */
+  const shadowRootAnchor = (root: ShadowRoot): Anchor => {
+    const { stableId: _outerRootId, ...host } = anchorFor(root.host);
+    return { ...host, cssPath: ":host", scope: scopeOfRoot(root) };
   };
 
   const shorten = (value: string, max: number): string =>
@@ -1100,6 +1133,85 @@ export function browserPreviewAnchorKit() {
     return child ? { kind: "enter", node: child } : { kind: "exit", node: container };
   };
 
+  /**
+   * The selection as `getComposedRanges` reads it through every open shadow
+   * root on its path. An endpoint inside a root not listed reads as the
+   * position around its host, so each host at a boundary lists its root and
+   * the read repeats, one level per pass. A closed root's host has no
+   * `shadowRoot`, so its content stays out of reach.
+   */
+  const composedRangeOf = (selection: Selection): StaticRange | null => {
+    if (typeof selection.getComposedRanges !== "function") return null;
+    const shadowRoots: ShadowRoot[] = [];
+    try {
+      let composed = selection.getComposedRanges({ shadowRoots })[0] ?? null;
+      for (let pass = 0; composed && pass <= MAX_SHADOW_DEPTH; pass += 1) {
+        const before = shadowRoots.length;
+        for (const host of [
+          composed.startContainer.childNodes[composed.startOffset],
+          composed.endContainer.childNodes[composed.endOffset - 1],
+        ]) {
+          const root = isElement(host) ? host.shadowRoot : null;
+          if (root && !shadowRoots.includes(root)) shadowRoots.push(root);
+        }
+        if (shadowRoots.length === before) break;
+        composed = selection.getComposedRanges({ shadowRoots })[0] ?? null;
+      }
+      return composed;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * The range a text selection names, or null when nothing is selected. The
+   * two endpoints must share one tree: a selection across a shadow boundary
+   * is `unsupported`, because a range and a text map each cover one tree. So
+   * is a tree-local selection that `getRangeAt` reports differently, which means
+   * an endpoint sits in a tree page script cannot reach, a closed root. Select
+   * all is the one exception: Chromium composes it as the root element's
+   * contents and keeps a narrower live range, as it always has.
+   */
+  const selectionRange = (
+    selection: Selection,
+  ): { range: Range } | { error: "unsupported" } | null => {
+    if (selection.rangeCount === 0) return null;
+    const composed = composedRangeOf(selection);
+    if (!composed) {
+      return selection.isCollapsed ? null : { range: selection.getRangeAt(0).cloneRange() };
+    }
+    if (composed.collapsed) return null;
+    const root = composed.startContainer.getRootNode();
+    if (root !== composed.endContainer.getRootNode()) return { error: "unsupported" };
+    if (root === document) {
+      const live = selection.getRangeAt(0);
+      const agrees =
+        composed.startContainer === document.documentElement ||
+        (live.startContainer === composed.startContainer &&
+          live.startOffset === composed.startOffset &&
+          live.endContainer === composed.endContainer &&
+          live.endOffset === composed.endOffset);
+      return agrees && !live.collapsed ? { range: live.cloneRange() } : { error: "unsupported" };
+    }
+    // Document.getSelection retargets even valid open-root ranges. Read the
+    // innermost root's local selection instead: it preserves this tree's real
+    // endpoints, but retargets an inaccessible nested closed root to its host.
+    const local = (root as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.();
+    if (!local || local.rangeCount === 0) return { error: "unsupported" };
+    const live = local.getRangeAt(0);
+    if (
+      live.startContainer !== composed.startContainer ||
+      live.startOffset !== composed.startOffset ||
+      live.endContainer !== composed.endContainer ||
+      live.endOffset !== composed.endOffset
+    )
+      return { error: "unsupported" };
+    const range = document.createRange();
+    range.setStart(composed.startContainer, composed.startOffset);
+    range.setEnd(composed.endContainer, composed.endOffset);
+    return { range };
+  };
+
   /** A text selection's quote, containing anchor, and geometry; null when unsupported. */
   const describeRange = (
     range: Range,
@@ -1111,10 +1223,13 @@ export function browserPreviewAnchorKit() {
         redaction: Counters;
       } => {
     const common = range.commonAncestorContainer;
-    const container = isElement(common) ? common : common.parentElement;
+    // At a shadow root's top level no element inside the root contains the range.
+    const topLevel =
+      asShadowRoot(common) ?? (isElement(common) ? null : asShadowRoot(common.parentNode));
+    const container = topLevel ? topLevel.host : isElement(common) ? common : common.parentElement;
     if (!container) return { error: "unsupported" };
     try {
-      if (container.getRootNode() !== document) return { error: "unsupported" };
+      if (scopeOfRoot(common.getRootNode()).kind === "unsupported") return { error: "unsupported" };
     } catch {
       return { error: "unsupported" };
     }
@@ -1123,8 +1238,9 @@ export function browserPreviewAnchorKit() {
       return { error: "sensitive" };
     }
     try {
-      if (container.querySelector(SENSITIVE_SELECTOR) && range.intersectsNode) {
-        const sensitive = container.querySelectorAll(SENSITIVE_SELECTOR);
+      const searched = topLevel ?? container;
+      if (searched.querySelector(SENSITIVE_SELECTOR) && range.intersectsNode) {
+        const sensitive = searched.querySelectorAll(SENSITIVE_SELECTOR);
         for (let index = 0; index < Math.min(sensitive.length, 64); index += 1) {
           if (range.intersectsNode(sensitive[index]!)) return { error: "sensitive" };
         }
@@ -1135,12 +1251,12 @@ export function browserPreviewAnchorKit() {
     const quote = surrounding(
       markerFor(range.startContainer, range.startOffset),
       markerFor(range.endContainer, range.endOffset),
-      container,
+      rangeContextRoot(common),
       QUOTE_CHARS,
       createBudget(8_000, 40),
     );
     if (!quote.exact) return { error: "empty" };
-    const containerAnchor = anchorFor(container);
+    const containerAnchor = topLevel ? shadowRootAnchor(topLevel) : anchorFor(container);
     const rects: Rect[] = [];
     try {
       const clientRects = range.getClientRects();
@@ -1516,10 +1632,11 @@ export function browserPreviewAnchorKit() {
   };
 
   type TextMap = { text: string; nodes: Node[]; offsets: number[] };
-  let cachedTextMap: TextMap | null | undefined;
-  /** Whitespace-normalized document text with a map back to text nodes, bounded. */
-  const documentTextMap = (budget: Budget): TextMap | null => {
-    if (cachedTextMap !== undefined) return cachedTextMap;
+  const cachedTextMaps = new Map<Root, TextMap | null>();
+  /** Whitespace-normalized text of one tree with a map back to its text nodes, bounded. */
+  const textMapOf = (scoped: Root, budget: Budget): TextMap | null => {
+    const cached = cachedTextMaps.get(scoped);
+    if (cached !== undefined) return cached;
     const limit = 400_000;
     const characters: string[] = [];
     const nodes: Node[] = [];
@@ -1533,11 +1650,11 @@ export function browserPreviewAnchorKit() {
       offsets.push(last.offset);
       previousSpace = true;
     };
-    const root = document.body ?? document.documentElement;
+    const root: Node = scoped === document ? (document.body ?? document.documentElement) : scoped;
     const stack: Array<{ node: Node; exit: boolean }> = [{ node: root, exit: false }];
     while (stack.length > 0) {
       if (!spend(budget) || characters.length > limit) {
-        cachedTextMap = null;
+        cachedTextMaps.set(scoped, null);
         return null;
       }
       const { node, exit } = stack.pop()!;
@@ -1562,24 +1679,32 @@ export function browserPreviewAnchorKit() {
         }
         continue;
       }
-      if (!isElement(node)) continue;
-      if (node !== root && skipsText(node)) continue;
-      if (BLOCK_TAGS.has(node.tagName)) appendSpace();
-      stack.push({ node, exit: true });
+      if (isElement(node)) {
+        if (node !== root && skipsText(node)) continue;
+        if (BLOCK_TAGS.has(node.tagName)) appendSpace();
+        stack.push({ node, exit: true });
+      } else if (node !== root) {
+        continue;
+      }
       const children = node.childNodes;
       for (let index = Math.min(children.length, MAX_CHILDREN * 5) - 1; index >= 0; index -= 1) {
         stack.push({ node: children[index]!, exit: false });
       }
     }
-    cachedTextMap = { text: characters.join(""), nodes, offsets };
-    return cachedTextMap;
+    const map = { text: characters.join(""), nodes, offsets };
+    cachedTextMaps.set(scoped, map);
+    return map;
   };
 
   const resolveText = (quote: Quote, container: Anchor, budget: Budget): Resolution => {
-    if (container.scope.kind !== "document") return result("unsupported", "none", 0);
+    const scope = resolveRoot(container.scope, budget);
+    if ("failed" in scope) return scope.failed;
     const exact = normalize(quote.exact, QUOTE_CHARS);
     if (!exact) return result("missing", "none", 0);
-    const map = documentTextMap(budget);
+    // A sensitive element's text is in no text map, including a root it hosts.
+    const shadow = asShadowRoot(scope.root);
+    if (shadow && insideSensitive(shadow.host)) return result("missing", "none", 0);
+    const map = textMapOf(scope.root, budget);
     if (!map) return tooComplex();
     const occurrences: number[] = [];
     for (let from = 0; occurrences.length <= 20;) {
@@ -1591,7 +1716,7 @@ export function browserPreviewAnchorKit() {
     if (occurrences.length === 0) return result("missing", "none", 0);
     const prefix = normalize(quote.prefix, CONTEXT_CHARS).slice(-24);
     const suffix = normalize(quote.suffix, CONTEXT_CHARS).slice(0, 24);
-    // Document-wide text: compare only the characters adjacent to each occurrence.
+    // Tree-wide text: compare only the characters adjacent to each occurrence.
     const verdictAt = (index: number): Verdict => {
       if (!prefix && !suffix) return null;
       const before = map.text.slice(Math.max(0, index - prefix.length - 16), index);
@@ -1658,6 +1783,7 @@ export function browserPreviewAnchorKit() {
     createBudget,
     composedParent,
     composedContains,
+    elementOf,
     hoverLabel,
     rectOf,
     isInspectorNode,
@@ -1666,6 +1792,7 @@ export function browserPreviewAnchorKit() {
     anchorFor,
     labelFor,
     describeElement,
+    selectionRange,
     describeRange,
     sensitiveScan,
     sanitizeUrl,
@@ -1673,7 +1800,7 @@ export function browserPreviewAnchorKit() {
     visibleText,
     resolveTarget,
     resetResolverCache: () => {
-      cachedTextMap = undefined;
+      cachedTextMaps.clear();
       seenShadowRoots = [];
       undefinedHosts = [];
     },

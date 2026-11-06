@@ -1026,6 +1026,150 @@ describe("AgentMailService", () => {
     }
   });
 
+  test("holds mail for a conversation that failed to start, and nobody else's", async () => {
+    const { storage, dataDir } = await fixture();
+    const delivered: string[] = [];
+    try {
+      const now = new Date(0).toISOString();
+      const conversation = (id: string, role: "main" | "side") => ({
+        id,
+        tabId: `tab-${id}`,
+        logicalSessionKey: `coordinator-coordinator-1:${id}`,
+        agent: "codex" as const,
+        title: id,
+        createdAt: now,
+        mailboxIncarnationId: `incarnation-${id}`,
+        role,
+        ...(role === "side" ? { sideOrdinal: 1 } : {}),
+      });
+      await storage.coordinators.mutateCoordinatorWorkspace("project", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: "project",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [conversation("main", "main"), conversation("side", "side")],
+        selectedConversationId: "main",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      const coordinatorRoute = {
+        kind: "coordinator" as const,
+        projectId: "project",
+        coordinatorId: "coordinator-1",
+        conversationId: "main",
+        environmentId: coordinatorRuntimeId("coordinator-1", "main"),
+        tabId: "tab-main",
+      };
+      const toSide = await storage.sendAgentMail(coordinatorRoute, {
+        requestId: "to-side",
+        toEnvironmentId: coordinatorRuntimeId("coordinator-1", "side"),
+        toTabId: "tab-side",
+        body: "For the side agent.",
+      });
+      const toMain = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "to-main",
+          toEnvironmentId: "coordinator",
+          toTabId: "",
+          body: "For the main.",
+        },
+      );
+      await storage.coordinators.mutateCoordinatorWorkspace("project", (current) => ({
+        ...current!,
+        conversations: current!.conversations.map((item) =>
+          item.id === "side" ? { ...item, startupError: "bridge failed" } : item,
+        ),
+      }));
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          dispatchMailInject: async (input) => {
+            delivered.push(input.environmentId);
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+
+      expect(delivered).toEqual([coordinatorRuntimeId("coordinator-1", "main")]);
+      expect(toMain.placement).toBe("pending-inject");
+      const held = await storage.getAgentMailMessage(
+        coordinatorRuntimeId("coordinator-1", "side"),
+        "tab-side",
+        toSide.id,
+      );
+      expect(held).toMatchObject({ placement: "pending-inject" });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("delivers no mail while the coordinator is paused", async () => {
+    const { storage, dataDir } = await fixture();
+    let dispatches = 0;
+    try {
+      const now = new Date(0).toISOString();
+      await storage.coordinators.mutateCoordinatorWorkspace("project", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: "project",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "main",
+            tabId: "tab-main",
+            logicalSessionKey: "coordinator-coordinator-1:main",
+            agent: "codex",
+            title: "Coordinator",
+            createdAt: now,
+            mailboxIncarnationId: "incarnation-main",
+            role: "main",
+          },
+        ],
+        selectedConversationId: "main",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      const message = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        { requestId: "to-main", toEnvironmentId: "coordinator", toTabId: "", body: "Wait." },
+      );
+      await storage.coordinators.mutateCoordinatorWorkspace("project", (current) => ({
+        ...current!,
+        lifecycleState: "paused",
+      }));
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          dispatchMailInject: async (input) => {
+            dispatches += 1;
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+      expect(dispatches).toBe(0);
+      expect(message.placement).toBe("pending-inject");
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("pre-checks a busy native queue without claiming or rewriting mail", async () => {
     const { storage, dataDir } = await fixture();
     let dispatches = 0;

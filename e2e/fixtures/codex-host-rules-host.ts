@@ -25,4 +25,6 @@ process.on("SIGTERM", () => {
   fixture.close();
   process.exit(0);
 });
-console.log(`http://127.0.0.1:${server.port}`);
+// The production modules this host loads log to the same stdout, so the spec
+// waits for this marker rather than reading the first line as the address.
+console.log(`CODEX_HOST_RULES_FIXTURE_READY:${server.port}`);

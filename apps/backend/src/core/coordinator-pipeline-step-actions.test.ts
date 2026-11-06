@@ -8,7 +8,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { ControlMcpServer } from "./control-mcp-server.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
-import { createProject, StorageService } from "./storage.js";
+import { createEnvironment, createProject, StorageService } from "./storage.js";
 
 // A coordinator restarting a build pipeline step, here and on a connected
 // node: real MCP dispatch, scope checks, receipts and controller commands on
@@ -22,6 +22,7 @@ let leaf: StorageService;
 let scope: CoordinatorControlScope;
 let leafProjectId: string;
 let restarts: Array<{ node: string; pipelineId: string; stageId?: string; selection?: unknown }>;
+let resumes: Array<{ node: string; pipelineId: string }>;
 let olderNode: boolean;
 const loseAnswer = new Set<string>();
 
@@ -30,6 +31,11 @@ const tool = (name: string, input: Record<string, unknown>) =>
 
 function fakePipelines(node: string, storage: () => StorageService) {
   return {
+    resume: async (pipelineId: string) => {
+      const record = (await storage().getBuildPipeline(pipelineId))!;
+      resumes.push({ node, pipelineId });
+      return { ...(record.snapshot as Record<string, unknown>), phase: "fixing" };
+    },
     restartForCoordinator: async (
       pipelineId: string,
       stageId?: string,
@@ -66,11 +72,20 @@ async function savePipeline(
   id: string,
   snapshot: Record<string, unknown> = {},
 ) {
-  // No environment: the project check and the receipts are what is under test.
-  await storage.saveBuildPipeline(id, projectId, "", 1, {
+  // A real environment lets origin, project and receipt checks run together.
+  const environmentId = `${projectId}-pipeline-env`;
+  if (!(await storage.getEnvironment(environmentId))) {
+    const environment = createEnvironment(projectId, {
+      name: "pipeline worker",
+      environmentType: "local",
+    });
+    environment.id = environmentId;
+    await storage.addEnvironment(environment);
+  }
+  await storage.saveBuildPipeline(id, projectId, environmentId, 1, {
     id,
     projectId,
-    environmentId: "",
+    environmentId,
     phase: "failed",
     error: "Claude usage limit reached",
     sessions: [],
@@ -90,6 +105,7 @@ beforeEach(async () => {
   );
   leafProjectId = project.id;
   restarts = [];
+  resumes = [];
   olderNode = false;
   loseAnswer.clear();
   await savePipeline(world.storage, world.projectId, "pipe-local");
@@ -438,6 +454,7 @@ test("remote restart reopens only the matching node follow and preserves its epi
       requestId: nodeId,
       createdAt: new Date().toISOString(),
       terminalNotifiedAt: new Date().toISOString(),
+      environmentCreationSettledAt: new Date().toISOString(),
     });
   }
   const input = { pipelineId: "pipe-remote", nodeId: "bk_leaf", requestId: "remote-follow" };
@@ -449,9 +466,74 @@ test("remote restart reopens only the matching node follow and preserves its epi
     statusWakeEpisode: expect.any(String),
   });
   expect(before.find((entry) => entry.id === "bk_leaf")!.terminalNotifiedAt).toBeUndefined();
+  expect(
+    before.find((entry) => entry.id === "bk_leaf")!.environmentCreationSettledAt,
+  ).toBeUndefined();
+  expect(
+    before.find((entry) => entry.id === "bk_other")!.environmentCreationSettledAt,
+  ).toBeDefined();
   expect(before.find((entry) => entry.id === "bk_other")!.terminalNotifiedAt).toBeDefined();
   expect((await tool("restart_build_pipeline_step", input)).isError).toBe(false);
   expect(
     await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId),
   ).toEqual(before);
 });
+
+for (const remote of [false, true]) {
+  test(`pipeline mutation origin checks on ${remote ? "remote" : "local"} node`, async () => {
+    const pipelineId = remote ? "pipe-remote" : "pipe-local";
+    const nodeId = remote ? "bk_leaf" : undefined;
+    const ownerProjectId = remote ? leafProjectId : scope.projectId;
+    await savePipeline(remote ? leaf : world.storage, ownerProjectId, pipelineId, {
+      phase: "paused",
+    });
+    const optedIn = await tool("resume_build_pipeline", {
+      pipelineId,
+      ...(nodeId ? { nodeId } : {}),
+    });
+    expect(optedIn.isError).toBe(false);
+    expect(resumes).toHaveLength(1);
+    resumes = [];
+    await world.storage.patchRepositorySettings(scope.projectId, {}, [
+      "coordinatorOtherEnvironments",
+    ]);
+    for (const name of ["resume_build_pipeline", "restart_build_pipeline_step"]) {
+      const result = await tool(name, {
+        pipelineId,
+        ...(nodeId ? { nodeId } : {}),
+        ...(name.startsWith("restart") ? { requestId: `denied-${name}` } : {}),
+      });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("did not create that environment");
+      expect(restarts).toHaveLength(0);
+      expect(resumes).toHaveLength(0);
+    }
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "creation",
+      projectId: scope.projectId,
+      coordinatorId: scope.coordinatorId,
+      conversationId: scope.conversationId,
+      kind: "build-pipeline",
+      resourceId: pipelineId,
+      requestId: "created-pipeline",
+      createdEnvironmentId: `${remote ? leafProjectId : scope.projectId}-pipeline-env`,
+      nodeId,
+      createdAt: new Date().toISOString(),
+    });
+    const allowed = await tool("restart_build_pipeline_step", {
+      pipelineId,
+      requestId: "owned",
+      ...(nodeId ? { nodeId } : {}),
+    });
+    expect(allowed.isError).toBe(false);
+    expect(restarts).toHaveLength(1);
+    const projectId = remote ? leafProjectId : scope.projectId;
+    await savePipeline(remote ? leaf : world.storage, projectId, pipelineId, { phase: "paused" });
+    const resumed = await tool("resume_build_pipeline", {
+      pipelineId,
+      ...(nodeId ? { nodeId } : {}),
+    });
+    expect(resumed.isError).toBe(false);
+    expect(resumes).toEqual([{ node: remote ? "leaf" : "local", pipelineId }]);
+  });
+}

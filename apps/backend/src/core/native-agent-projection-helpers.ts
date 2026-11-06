@@ -475,6 +475,15 @@ export function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot):
 
 export const PROGRESSIVE_HYDRATION_MAX_ATTEMPTS = 3;
 export const PROGRESSIVE_HYDRATION_RETRY_BASE_MS = 25;
+/**
+ * Least time between two exact head-row recovery reads of one view. A
+ * streaming bridge publishes several revisions a second and each one used to
+ * start a whole `messages` read; a second keeps the recovered view at most a
+ * second behind while cutting those reads to one a second.
+ */
+export const PROGRESSIVE_HYDRATION_SETTLE_MS = 1_000;
+/** Views whose last recovery start is remembered before stale ones are dropped. */
+export const PROGRESSIVE_HYDRATION_READ_STARTS_LIMIT = 1_024;
 /** One row of a direct history page: a bridge's oversized-row ceiling plus projection slack. */
 export const DIRECT_PAGE_ROW_MAX_BYTES =
   Math.max(NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES, BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES) + 64 * 1024;

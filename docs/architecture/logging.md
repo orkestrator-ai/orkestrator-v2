@@ -267,6 +267,7 @@ and no site logs a stderr tail.
 | `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
 | `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
 | `process` | `uncaught-exception` | `error` | An exception reached the top of the backend, which then dies. See [the handler](#the-uncaught-exception-handler). |
+| `process` | `child.reaped`, `child.reap-abandoned`, `child.reap-unavailable` | `info`, `warn`, `warn` | macOS under Bun: a child whose exit Bun lost was reaped after its command settled, with `pid` and `waitedMs`; or was left a zombie, with `reason` (`not-a-zombie`, `capacity`, `waitpid-failed`); or `waitpid` could not be loaded. See [to-do 4260](../todo/cross-cutting/4260-bun-loses-child-process-events.md#6-reap-children-whose-exit-bun-lost). |
 | `docker` | `writer-lease.not-acquired` | `info` | A backend starts without the lease, with `reason` (`busy`, `schema-incompatible`). A second backend on one directory is normal. |
 | `local-server` | `bridge.exited` | `warn`, or `info` if the backend asked | Every exit of a local bridge, with `code`, `signal` and `requested`. A clean exit 0 nothing asked for warns. Read it with `server.stopping`. |
 | `bridge.pi`, `bridge.cursor` | `session.resume-fell-back` | `warn` | A saved conversation could not be resumed and a new one started. |
@@ -275,6 +276,7 @@ and no site logs a stderr tail.
 | `bridge.cursor` | `turn.timed-out`, `turn.send-failed`, `turn.recovery-failed` | `warn` | A turn outlived its budget; `send` rejected, so the outcome is unknown; a run recovered after a restart failed. |
 | `bridge.acp` | `agent.exited` | `warn` | An agent process exited, with `code`, `signal` and `requested` (true when the bridge closed it normally). |
 | `bridge.acp` | `http.route-failed` | `warn` | A route answered 500. A deliberate `HttpError` of another status and a client that hung up stay out. |
+| `native-agent` | `steer.qualification-failed` | `warn`, throttled per bridge connection | A bridge's steer qualification request failed or answered non-OK, so steering is not offered. Carries `agent` and `status` or the error class, never a session id or message. [To-do 4700](../todo/coordinator-and-multi-review/4700-coordinator-steer-missing-on-long-lived-coordinator.md#current-state) says how to read it. |
 | `storage` | `lease.heartbeat-failed` | `warn`, throttled by lease name | A lease heartbeat failed, which only shortens the lease. |
 | `storage` | `scrub.checkpoint-failed` | `warn`, throttled under `scrub` | The truncating checkpoint threw, or SQLite reported it blocked (`kind=busy`), which it does in a result row rather than as an error. Scrubbing is a [privacy step](storage.md#durability-and-deletion). |
 
@@ -401,9 +403,11 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
 | `event-loop` | `stalled` | `lagMs`, `intervalMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. |
 | `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs` | The same, for the main process. |
+| `backend` | `previous-run` | `outcome`, `ranForMs`, `lastSeenAgoMs` | This start read how the previous run ended, from the [health summary](#health-summary-and-the-clean-exit-marker). |
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
+| `renderer-errors` | `error.recorded` | `errorClass`, `boundary`, `route`, `fingerprint`, `count` | A desktop window reported new occurrences of a renderer failure; see [Renderer failures in the essential log](#renderer-failures-in-the-essential-log). |
 
 A lease is **regained** by the next backend, not by the one that lost it: a lost lease
 is final until that process restarts, so `writer-lease.regained` is written by whichever
@@ -527,9 +531,165 @@ unexplained beyond its exit signal.
 ### Reading it
 
 Each line is a record `parseLogRecordLine` reads, so `jq` works on the file. **Open log
-folder** in Settings → Debug shows it, as `essential/`. Later work may read it (a
-diagnostics export) or write to it (renderer diagnostics); neither is decided, and
-renderer lines do not reach it today.
+folder** in Settings → Debug shows it, as `essential/`. The bug report prompt points
+agents at it first, and [the diagnostics bundle](#the-diagnostics-bundle) carries it.
+Renderer lines do not reach it; only the content-free entries of the renderer error
+ring below do.
+
+### Renderer failures in the essential log
+
+A renderer failure used to leave nothing behind: its console stays in the browser
+(see [What stays out of the persistent log](#what-stays-out-of-the-persistent-log)).
+Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`), and a
+desktop window sends its new counts to the backend it drives, which writes them here as
+`renderer-errors` `error.recorded`.
+
+An entry is five fields and nothing else, defined in
+`packages/protocol/src/renderer-errors.ts`:
+
+| Field | Holds |
+| --- | --- |
+| `errorClass` | A built-in error class, `ChunkLoadError`, or `NonErrorThrow`. A custom class name is application text, so it becomes `Error`. |
+| `boundary` | Where it was caught: `lazy-view`, `message-row` or `rich-block` (the boundaries that name themselves), `boundary` (any other), `root` (no boundary caught it), `recoverable` (React recovered), `window` or `rejection` (the window's own error and unhandled-rejection events). |
+| `route` | Which renderer: `window` (a desktop window's own), `realm` (a workspace realm in one) or `browser` (the web client). The app has no URL router, so the surface stands in for a route pattern. |
+| `fingerprint` | Eight hex digits of FNV-1a over the class, stack and component stack, the same one the boundaries already log. It tells failures apart without keeping what it was computed from. |
+| `count` | Occurrences since the last report, capped at 1,000,000. |
+
+The error is used only to compute the class and fingerprint; **no message and no
+stack** is kept, in the ring or anywhere after it.
+
+```mermaid
+flowchart LR
+  B["React root onCaughtError / onUncaughtError / onRecoverableError"] --> R[(ring, 100 entries)]
+  W["window error / unhandledrejection"] --> R
+  R -->|"new counts, ≤ 20 per write, every 10 s"| C["record_renderer_errors"]
+  C -->|"parsed again, 30 entries a minute"| E[(logs/essential)]
+```
+
+Pending metadata (including in-flight counts) is bounded to 100 entries in per-window
+session storage and removed after acknowledgement. Reloads can recover it; pagehide
+also attempts a flush. Blocked storage falls back to memory. A lost acknowledgement
+can cause a duplicate count after reload; this is best-effort diagnostic delivery.
+
+- **Recorded once, at the root.** Every boundary's catch passes through React's root
+  `onCaughtError`, which receives the boundary instance; a boundary names itself with a
+  static `diagnosticBoundary`. Nothing is added to each boundary's `componentDidCatch`.
+- **Bounded in the renderer.** At most 100 distinct entries, the least recently seen
+  dropped first. A repeat only raises a count.
+- **Sent by a desktop window only.** Its own renderer starts the upload
+  (`renderer-error-upload.ts`) once the app starts: promptly for the first failure, then every 10 seconds, up to 20
+  entries a write. A failed send puts the counts back and waits twice as long, up to five
+  minutes. A backend that predates the command answers "Unknown backend command", which
+  stops the upload for that load. A workspace realm and a browser tab keep their ring
+  in memory: whose log their entries belong in is open
+  ([6300](../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md)).
+- **Validated and rate-bound in the backend.** `record_renderer_errors`
+  (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
+  other key (a `message`, a `stack`) or any value outside its list refuses the whole
+  write. Across every client it writes at most 30 entries a minute and counts the rest
+  in one `report.rate-limited` line per minute. The essential log's own per-event budget
+  applies after that. A workspace client may not call it
+  (`workspace-grant-scope.ts`): this machine's log is its own.
+- **Not the startup markers.** The ring never writes to the console and never uses the
+  `desktop.startup` area, so the [exact-marker rule](#what-stays-out-of-the-persistent-log)
+  is unchanged. It is also separate from `recentRendererErrors`, the bug report's
+  in-memory list, which does hold messages and is redacted by the agent.
+
+## Health summary and the clean exit marker
+
+Every in-memory metric resets when the backend restarts, so "is it leaking?", "why did
+it restart?" and "which job burns CPU?" had no answer afterwards.
+`apps/backend/src/core/health-summary.ts` keeps a rolling record in the `health-summary`
+store, one row each:
+
+| Row | When | Holds |
+| --- | --- | --- |
+| `sample` | Every 5 minutes, from one plain timer | Memory, CPU, event-loop stalls, database and backup sizes, and the 8 recurring job kinds with the most run time |
+| `started` | When the backend's background work starts | Pid and start time |
+| `clean-exit` | The last shutdown step, before the database closes, and only if the drain succeeded | Pid and start time |
+
+Rows hold numbers and job kinds only. A backend's identity is its pid and start time, so
+a row needs no string to say whose it is. The store keeps the newest 2,016 rows (seven
+days at one backend), pruned in the write's own transaction. Backends sharing a directory
+each write their own rows under that one bound, so two halve the history. The sample is
+not a recurring job, so it does not appear in the figures it reports, and health rows do
+not count as content for [the hourly snapshot](storage.md#snapshots): an idle machine does
+not take a copy because a sample landed.
+An older backend after a downgrade neither reads nor writes the store, so the rows stay
+until a later backend prunes them.
+
+The next start reads the rows and writes one `backend` `previous-run` line, which the
+[essential log](#the-essential-event-log) keeps: `outcome` is `clean` or `crashed`, at
+`info` and `warn`, with `ranForMs` and `lastSeenAgoMs`. No earlier run means no line.
+A run with no `clean-exit` reads as crashed, which is right for a kill or a power loss and
+is also what a shutdown failing late looks like. Another backend still running in the
+directory is skipped rather than reported: its pid answers and its last row is under ten
+minutes old, and the two together cover a reused pid.
+
+**What `process.memoryUsage` says under Bun 1.4.4.** Measured with 2 million objects, a
+200 MiB `Buffer` and 100 MiB in an in-memory SQLite database:
+
+| Field | Behaviour | Kept? |
+| --- | --- | --- |
+| `rss` | Follows objects, `Buffer`s and SQLite's own memory. The one a leak shows in | Yes |
+| `heapUsed`, `heapTotal` | From JavaScriptCore. `heapUsed` can exceed `heapTotal`, and it includes `Buffer` bytes after a collection | Yes, as trends |
+| `external` | Followed the `Buffer` only after a garbage collection | Yes, as a trend |
+| `arrayBuffers` | Stayed 0 with 200 MiB held in a `Buffer` | No |
+
+SQLite's memory appears only in `rss`. This was measured on Linux; macOS was not run.
+
+## The diagnostics bundle
+
+A local `.tar.gz` someone can read and then attach to a report, from **Settings → Debug →
+Export diagnostics** or `orkestrator diagnostics export`. Nothing uploads it. The code is
+`apps/backend/src/core/diagnostics-bundle.ts` (building and holding it),
+`diagnostics-redaction.ts` (the pass every file goes through) and `diagnostics-sources.ts`
+(what it holds).
+
+| File | Holds |
+| --- | --- |
+| `manifest.json` | Every file with its size, SHA-256, description and redaction count; what is absent and why; the notice below |
+| `metrics.json` | What `/__orkestrator/metrics` answers, read in-process |
+| `health-summary.json` | The rows above |
+| `database.json` | Size, free pages, backups, retention and top tables of both databases; lease waits |
+| `change-tracking.json`, `progressive-reads.json`, `artifact-metrics.json` | Those services' counters |
+| `log-policy.json` | Whether logs are saved and the levels in force: names and levels only |
+| `log-storage.json` | Log sizes and counts |
+| `logs/essential/*` | The essential log |
+| `logs/debug/*` | With **Save Logs to Disk** on: the newest 8 MiB across the daily log files, from a line start |
+
+**The manifest is what is written.** A plan builds the whole archive in the backend's
+memory and answers with the same `manifest.json` that is inside it. Reading a plan returns
+those bytes, piece by piece, and the client checks they add up before saving. A plan lasts
+15 minutes, at most two are held, and nothing reaches the backend's disk. Both steps are
+reads, on the command `plan_diagnostics_bundle`/`read_diagnostics_bundle` and the public
+actions `diagnostics.plan`/`diagnostics.read`; a workspace client is refused them.
+
+**The bundle must not carry a credential, and redaction is not a proof.** Assume a log can
+hold one: a real GitHub token has been found in validation logs. Every file goes through
+`DiagnosticsRedactor`, built on the rules in `bridge-output-redaction.ts`, which removes:
+
+- GitHub, Anthropic, OpenAI, GitLab, npm, Slack, AWS and Google keys by shape, and JWTs,
+  without the word boundary those rules otherwise use, so a prefix cannot hide one;
+- `Bearer`, `Basic` and `Token` values of any length, and `Cookie` headers;
+- values after a secret-looking key, including JSON-escaped ones. A log record is also
+  decoded and redacted field by field, so its escaping hides nothing;
+- private key blocks, URL userinfo and query credentials, and email addresses;
+- any run of 40 or more letters, digits and `_+=-` with both a letter and a digit, which
+  also removes a long hash on purpose;
+- home directories on Linux, macOS and Windows, this machine's data directory, user name
+  and host name.
+
+A file that still matches `containsCredentialShape` after that is left out and named as
+absent, never written. A line is cut only after redaction, and a tail starts at a line
+start, so no cut can halve a credential into something the rules miss. What remains can
+still include file names under a home directory, project names and anything with no
+recognisable shape, so the manifest's notice says redaction is not a proof and to read the
+files before sharing them. `diagnostics-bundle.test.ts` holds this to fixture logs with
+tokens in each format, a `Bearer` header and home paths, reading the written archive.
+
+Container server logs are not collected: each read is a `docker exec`, and they are raw
+provider lines ([6143](../todo/cross-cutting/6143-diagnostics-bundle-container-logs.md)).
 
 ## Command failures
 
@@ -726,7 +886,7 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
 ```
 
 - Every entry is one line in either format. Newlines, control characters and
-  U+2028/9 in a value are escaped, because Node's readline ends a line at those.
+  U+2028/9 in a value are escaped, because Bun's readline ends a line at those (Node's does not).
 - In JSON mode the saved log file is JSON lines throughout. A console call that
   did not come from the logger is wrapped as `{"orklog":1,"ts","level","message"}`
   with no area or event, and an entry over the 64 KiB bound becomes a shortened
@@ -773,7 +933,7 @@ interrupts a running agent.
 | Control | Config keys | Decides |
 | --- | --- | --- |
 | **Save Logs to Disk**, with retention | `debugLogging`, `debugLogRetentionDays` | Whether what is written reaches the log file, and for how long it stays. The [essential log](#the-essential-event-log) follows neither. |
-| **Log Detail** | `logDetail` (`level`, `areaLevels`) | What each process writes: a default level and levels by area. It cannot switch off an essential event. |
+| **Log Detail** | `logDetail` (`level`, `areaLevels`), `logDetailKeepRaised`; `logDetailExpiresAt` is the backend's | What each process writes: a preset, a default level and levels by area. Raised detail goes back to `info` after 24 hours unless kept on. It cannot switch off an essential event. |
 
 An area covers its children unless a child has its own entry: `desktop=debug` also
 covers `desktop.dialog`. The default is `info`. Bridge snapshots
@@ -827,7 +987,8 @@ flowchart LR
   A config without `logDetail` is upgraded once by `normalizePersistedConfig`: on
   maps to `level: info`, `areaLevels: { bridge: debug }`, off to the defaults.
   `bridge.diagnostics` inherits `debug` from `bridge`, so someone upgrading with it
-  on keeps the per-minute snapshot stream unchanged. The
+  on initially keeps the per-minute snapshot stream. This raised bridge detail
+  expires after 24 hours unless **Keep raised detail on** is enabled. The
   key names stay, so a downgrade still reads them. `resolveLogDetail` applies the
   same mapping for a reader that gets there first (Electron starts before its
   backend). A save from a client that predates `logDetail` keeps the stored value.
@@ -838,8 +999,43 @@ flowchart LR
   A bridge the backend launches inherits the backend's value at launch, so the
   override sits on top there too; a bridge already running keeps what it started
   with. Unset, the settings are the whole answer.
+- **Presets are a shortcut, not a setting.** **Log Detail** offers Normal, Quiet,
+  Agent sessions (`bridge=debug`), Crashes and stopped processes (`backend`, `desktop`
+  and `local-server` at `debug`, the lines
+  [the crash guide](../debugging/process-crashes-and-kills.md) reads), Updates
+  (`updater=debug`) and Everything (`debug`). Choosing one writes ordinary `level` and
+  `areaLevels`, so nothing new is stored and an older client sees plain values. The
+  current preset is found by comparison (`log-detail-presets.ts`); a level changed by
+  hand shows **Custom**. A preset's meaning is the one in the client that applied it.
+- **Raised detail expires.** Any level above `info`, the default or an area's, is
+  raised. Every write of the global config recomputes the backend-owned
+  `logDetailExpiresAt` (`nextLogDetailExpiresAt`): the same raised levels keep their
+  expiry, changed ones get 24 hours from now, and detail at `info` stores none. A value
+  a client sends is ignored, so an older client that raises detail still gets one. The
+  backend checks at start and every minute (`LogPolicyService`,
+  `reconcileLogDetailExpiry`); when it is due, raised levels go back to `info` (a
+  lowered area such as `updater=warn` stays) through an ordinary config write, so the
+  audit line, this process and every bridge follow, and `logging` `policy.detail-expired`
+  is written. **Save Logs to Disk** is never touched. A raised setting with no expiry,
+  written by hand, by an older backend or by the upgrade from `debugLogging`, gets one
+  at the next check. The expiry is in `config.json`, so it survives a restart, and an
+  expiry that passed while the backend was stopped is honoured at its next start.
+- **Keeping it raised.** `logDetailKeepRaised`, the **Keep raised detail on** switch,
+  stores no expiry for a long investigation. Turning it off starts a fresh 24 hours. It
+  is dropped when detail goes back to `info`, so it applies to one investigation. A save
+  that omits it (a client that predates it) keeps the stored value; the settings form
+  sends `false` rather than unsetting it. A downgraded backend ignores both keys and
+  keeps raised detail until it is changed; upgrading again restores the expiry or
+  stamps a new one.
+- **What logs leave out.** Settings says logs are designed to leave out prompts,
+  terminal output, file contents and credentials. It does not say "never": a string
+  field and output that is not a logger call cannot be proved clean
+  ([Restricted fields](#restricted-fields), [the bridge hop](#the-bridge-hop)).
+- **`orkestrator serve` has no log flags.** `ORKESTRATOR_LOG_LEVEL` is the way to set a
+  service's levels at start ([public-cli.md](public-cli.md#log-levels-for-serve)); it is
+  read before flags are parsed and reaches the bridges the backend launches.
 - **Renderer logs are not part of this.** See [What stays out of the persistent
-  log](#what-stays-out-of-the-persistent-log).
+  log](#what-stays-out-of-the-persistent-log) and [The renderer](#the-renderer).
 
 Live bridge delivery sends stored levels; each receiving process applies its own
 `ORKESTRATOR_LOG_LEVEL` override, which the settings do not replace. Local targets are delivered before Docker discovery completes;
@@ -943,8 +1139,21 @@ own backpressure and no ordering against stdout and stderr.
 The relay carries the [essential log](#the-essential-event-log) too, and its
 `essentialOnly` entries are the one thing it does not write to the normal log.
 
-The rest of the relay work (a line length bound, skipping the relay when nothing
-consumes it) is undecided and not built.
+**Lines are bounded.** The relay reads stdout and stderr through
+`forEachBoundedLine` (`packages/protocol/src/node/bounded-line-splitter.ts`), the
+same splitter the [bridge hop](#the-bridge-hop) uses, in place of `readline`, which
+held a whole line however long it grew. A line over 64 KiB (the file writer's
+per-entry bound) is passed on in 64 KiB pieces rather than held or dropped; a record
+cut that way stays as `[Backend]` text. Lines end where Node's `readline` ended them:
+at `\n`, `\r\n` and a lone `\r`. UTF-8 is decoded across chunk boundaries.
+
+**The relay runs even when nothing reads it.** With Save Logs to Disk off in a
+packaged app, every backend line is still parsed and written to a stdout nobody
+reads. It stays that way: it costs about 1–2.5 µs of CPU a line under Node
+(measured 2026-11-05 on macOS, 100,000 relayed record and raw lines with stdout at
+`/dev/null`), so the 12.5k lines a day one machine logged cost tens of milliseconds
+a day. The policy hint and the ready message arrive on the same lines, so a skip
+would not be a one-line change either.
 
 `writeProcessOutputLine` is how raw text enters the log. Only a stdio relay may
 call it: it bypasses levels because such text has none.
@@ -982,7 +1191,11 @@ flowchart LR
   environment.
   A bridge whose output nobody reads as records (one started by hand, or a model
   catalogue probe) stays on the format its environment asks for.
-- **Redaction runs before and after decoding.** Raw output is scrubbed per chunk.
+- **Redaction runs before and after decoding.** Raw output is scrubbed per bounded
+  line. A constant-size continuation flag carries a pending credential introducer (such as `password:` or `Bearer`)
+  across line endings and blank lines. The next value is scrubbed using the
+  shared assignment rule, conservatively including values of six or seven
+  characters after an auth scheme.
   Recognized records then have every decoded string scrubbed, including formatted
   errors, stack frames and causes, because JSON escaping can hide credential syntax.
   If the raw pass breaks a record's JSON, the line is kept as plain output.
@@ -990,7 +1203,9 @@ flowchart LR
   it, overriding anything the bridge claimed, and puts it first so a record already
   at the field limit keeps it through the next relay.
 - **Each line is its own entry.** A chunk used to be one call, so only its first
-  line carried the prefix. Every line of a stack now has it.
+  line carried the prefix. Every line of a stack now has it. Lines are split by
+  the bounded splitter the Electron relay uses, so a line over 64 KiB arrives in
+  64 KiB pieces, and a token cut at that boundary is not redacted.
 - **Nothing is lost.** Unstructured output, and a record from another build naming an
   area or event this one does not list, stay captured as text. The hop never filters.
 - **Ordering.** stdout and stderr are read separately, as before, so an `info` and a
@@ -1071,8 +1286,10 @@ flowchart LR
   is made of, and `application-logging.test.ts` covers the file: the tee is installed
   only for the production flavor, which no test may run against real data.
 
-Whether more may be saved is undecided (recommendation R8 in the
-[review](../reports/2026-10-29-logging-and-database-efficiency.md)).
+Recommendation R8 in the [review](../reports/2026-10-29-logging-and-database-efficiency.md)
+asked whether more may be saved. The answer is the content-free error ring:
+[Renderer failures in the essential log](#renderer-failures-in-the-essential-log). The
+console itself still stays in the browser.
 
 ## The renderer
 
@@ -1084,8 +1301,23 @@ with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
   reloading raises every area to `debug`: `applyRendererLogLevel`
   (`apps/web/src/lib/debug-log.ts`) reads it once at startup. This is the old
   `rendererDebugLog` gate, which every `debug` site now goes through, including those
-  that were plain `console.debug` and always wrote. It has no setting or UI, and
-  `trace` stays off.
+  that were plain `console.debug` and always wrote. `trace` stays off.
+- **Its switch.** Settings → Debug → **Renderer Debug Logging**
+  (`RendererDebugSettings.tsx`) sets or clears the key for this window and reloads. It
+  is per window by design: the key is in the window's own storage, so a browser tab or a
+  window on another machine sets its own, and a host setting never changes another
+  client's console. Renderer areas stay out of live policy.
+- **Developer Tools.** The packaged app opens DevTools only from **Help → Open Developer
+  Tools**, and that item exists only while a renderer has debug logging on. Each
+  renderer reports its state to the main process at start
+  (`orkestrator:window:set-renderer-debug`, on or off), and `renderer-debug-tools.ts`
+  rebuilds the menu when whether any renderer has it on changes. The item opens the
+  focused renderer, or its window's own, and only one that reported it on. Help is on
+  every platform; on macOS it is the system Help menu, with its search field. DevTools
+  shows what the renderer holds in memory, tokens included, which is why it is opt-in
+  and the switch says so. The artifact host and browser previews keep their own rules
+  (`artifact-host-session.ts`, `browser-preview-manager.ts`); the menu never targets
+  them.
 - **What a line now looks like.** One text line, not a console object: `error.name`,
   `error.message` and up to 8 relative frames, with no expandable object or
   source-mapped links in DevTools. Where a site logged an entity or a name, it now

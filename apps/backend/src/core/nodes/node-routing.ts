@@ -78,6 +78,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // A coordinator's actions on its nodes run on its own command node.
   "launch_coordinator_node_environment",
   "assert_coordinator_node_delegation_available",
+  "assert_coordinator_environment_scope",
   "open_coordinator_node_delegation",
   "send_coordinator_node_mail",
   "get_coordinator_node_mailbox",
@@ -150,7 +151,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
  */
 export function isWorkspaceExcludedCommand(command: string): boolean {
   return (
-    isNodeExcludedCommand(command) ||
+    // A workspace user may stop a worker on this coordinator. The handler
+    // revalidates the coordinator scope and worker; peer-node routing remains excluded.
+    (isNodeExcludedCommand(command) && command !== "stop_coordinator_worker_turn") ||
     WORKSPACE_ADMINISTRATION_COMMANDS.has(command) ||
     [
       "deliver_node_mail",

@@ -13,6 +13,7 @@ Analysed 2026-10-31 against `main` at `931e55417`. Tasks 3 and 4 rechecked
 4. **Older-node detection elsewhere matches the wrong wording**: two existing checks look for `Unknown command:`, while a real backend answers `Unknown backend command:`. Status: done (2026-11-01).
 5. **Keep history across a backend restart**: decide once coordinators are seen using the 24-hour figure. Status: open (deferred).
 6. **Retire the older-node path**: remove it when the support window allows. Status: open.
+7. **`list_nodes` reports each real node's build commit**: release builds report the commit they were built from, and an older or development node reports `buildCommit: null`. Moved from to-do 4840 (deleted 2026-11-06). Status: open (needs a release built from `533acf703` or later).
 
 ### 1. Rolling sampler, three windows, machine facts, `list_nodes`, coordinator guidance
 
@@ -118,6 +119,40 @@ Windows was not run: no Windows machine is reachable from here. `os.version()` i
   - **Keep it permanently.**
     - Pros: outside the window a node still gets a clear reason.
     - Cons: a path nobody retires; the `error` reason already covers such a node without failing the call.
+
+### 7. `list_nodes` reports each real node's build commit
+
+**Problem.** A node's hello now carries `buildCommit`, and `list_nodes` reports
+it beside `version`, so a coordinator can tell two builds of one version apart.
+No real release has carried it yet.
+
+**Context.** Moved from to-do 4840 (deleted 2026-11-06). `buildCommit` is in
+`packages/protocol/src/backend-profile.ts` and reported by
+`apps/backend/src/core/control-mcp-nodes.ts`; release builds set
+`ORKESTRATOR_BUILD_COMMIT` (`mise.toml`), and the rules are in
+[`releasing.md`](../../development/releasing.md). Task 2's two-machine run can
+take this check at the same time.
+
+**Investigation.** Steps:
+
+1. After the first desktop release and CLI publish built from a commit at or
+   after `533acf703`, install them on a command node and a second real machine
+   linked as a leaf.
+2. Ask the main coordinator to call `list_nodes`. Check that each node's
+   `buildCommit` is the commit its release was built from, and that `version`
+   is still shown.
+3. Link a leaf on an older release and one running a development build. Check
+   that both report `buildCommit: null` and still list normally.
+
+**Decisions.**
+
+- **Run it with task 2?**
+  - **Yes, on task 2's two machines (recommended).**
+    - Pros: the same machines and the same coordinator call.
+    - Cons: waits for a release that carries the field.
+  - **Alone, on one machine with two profiles.**
+    - Pros: no second machine.
+    - Cons: does not cover a real linked leaf.
 
 ## Current state
 

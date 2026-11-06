@@ -286,6 +286,8 @@ export function buildFixPrompt(facts: FixFacts): string {
         : "- No saved CLI connection was verified for this data directory. Use the local evidence above; do not run backend status commands against the saved default or change CLI configuration.",
     ),
     "",
+    "If the evidence is not enough, tell me I can make a diagnostics bundle to attach: Settings → Debug → Export diagnostics, or `orkestrator diagnostics export` in my own terminal. It saves a local `.tar.gz` of metrics, health figures and redacted logs, and shows what it holds first. This is my decision: never run it yourself, and do not read a bundle unless I give you one. Its redaction is not a proof, so remind me to read it before attaching it, because an issue is public.",
+    "",
     "## 3. Draft the issue",
     ...BUG_REPORT_REDACTION_RULES,
     "",

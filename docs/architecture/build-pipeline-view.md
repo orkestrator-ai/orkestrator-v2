@@ -368,9 +368,9 @@ it as a panel floating over the tab (`PipelineKeyInformation.tsx`; Escape, the
 close button or a click outside closes it). Its sections, each shown only once
 written:
 
-- **Summary**: one paragraph on the change as a whole, in plain language for a
-  reader who does not know the code. A brief written before this section
-  existed has none and opens on its Problem or Objective.
+- **Summary**: the change as a whole, in plain language for a reader who does
+  not know the code, in a few short paragraphs. A brief written before this
+  section existed has none and opens on its Problem or Objective.
 - **Problem** or **Objective**: `framing` is `problem` by default, `objective`
   when the ticket adds or changes something that was not broken.
 - **Context**, **Solution**, **What was done**.
@@ -391,6 +391,15 @@ uses the same behaviour (`key-information-section-nav.ts`). When Context and
 Solution share a row in the wide tab, scrolling within that row keeps its
 selected heading current. Entering the row from another section defaults to
 its first heading, Context.
+
+Summary, Problem or Objective, Context and Solution are laid out as paragraphs
+and lists (`key-information-blocks.ts`) in both the panel and the tab: a blank
+line starts a paragraph, and lines starting `- `, `* `, `• `, `1. ` or `1) `
+become a bulleted or numbered list. The Build prompt and the tool's field
+descriptions ask agents to write that way. Text recorded as one unbroken run,
+as older briefs were, is regrouped into paragraphs of a few whole sentences
+once it is 480 characters or longer, so it still does not read as one block;
+text with any line break is shown as written.
 
 Stage agents keep it through two agent tools, `get_key_information` and
 `update_key_information` (`build-pipeline-key-information-tools.ts`). They are
@@ -734,14 +743,20 @@ inspector links it. Nothing closes a pull request.
 
 Notes is the last step on the line, after the PR (or the "No PR" outcome). It
 is not an agent stage: it has no session, costs nothing and cannot fail. The
-node (`kind: "notes"`) is drawn ahead like the PR, is complete when the run is,
-and is not followed automatically, so a finished run still opens on the step it
-last reached. On a failed run it stays readable and its status says "So far".
-Only a cancelled run that never shipped omits it.
+node (`kind: "notes"`) is drawn ahead like the PR and is complete when the run
+is, which makes it the last step reached: a finished run opens on Notes, where
+the follow-ups are, unless the user has picked another node. Arriving there also
+scrolls to it (`landOnSelection`), at any width and over a remembered pan: the
+stacked column puts Notes at the top with its inspector below, and a tab hidden
+when the run finished lands when it is shown. It happens once per arrival, so the
+reader's own scrolling survives another pane taking over. On a failed run it
+stays readable, its status says "So far", and selection stays on the step that
+failed. Only a cancelled run that never shipped omits it.
 
-Its inspector (`PipelineNotesView`) leads with **Needs a look**, then shows the
-whole key information document (`KeyInformationDocument`, the same one the
-key information tab renders). The list comes from `pipelineFollowUps`
+Its inspector (`PipelineNotesView`) shows the whole key information document
+(`KeyInformationDocument`, the same one the key information tab renders), with
+**Needs a look** directly under the summary, or ahead of the sections when the
+brief has no summary. The list comes from `pipelineFollowUps`
 (`@orkestrator/protocol/build-pipeline-notes`), a pure reading of the record:
 
 - criteria the newest live Verify marked `not-checked`, with what was missing;

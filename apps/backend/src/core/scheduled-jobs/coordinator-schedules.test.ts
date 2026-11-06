@@ -80,6 +80,8 @@ beforeEach(async () => {
     switch (command) {
       case "get_project_coordinator":
         return { workspace: workspace() } as T;
+      case "assert_coordinator_environment_scope":
+        return { allowed: true } as never;
       case "get_config":
         return {
           global: {
@@ -229,7 +231,12 @@ describe("coordinator schedules", () => {
     await fire();
     expect(mail).toEqual([
       {
-        sender: { kind: "system", projectId: "project-1", source: "workflow", resourceId: job.id },
+        sender: {
+          kind: "system",
+          projectId: "project-1",
+          source: "self-reminder",
+          resourceId: job.id,
+        },
         input: expect.objectContaining({
           requestId: `sched:${job.id}@${Date.parse("2026-10-26T03:12:00Z")}`,
           toEnvironmentId: "coordinator",
@@ -348,6 +355,33 @@ test("coordinator launch startup errors retain the environment and resolved base
     state: "failed",
     error: { code: "startup-failed" },
     outcome: { environmentId: "env-new", baseCommit: COMMIT },
+  });
+});
+
+test("a main that failed to start retries the schedule, and Retry lets it through", async () => {
+  await call("main", "create_schedule", {
+    requestId: "failed-main",
+    everyMinutes: 5,
+    action: {
+      type: "send_prompt_to_tab",
+      environmentId: "env-worker",
+      tabId: "worker-tab",
+      prompt: "audit",
+    },
+  });
+  const main = currentWorkspace.conversations.find((item) => item.id === "main-1")!;
+  main.startupError = "bridge failed";
+  clock.now += 5 * 60_000;
+  await fire();
+  const waiting = service.list({ kind: "operator" })[0]!;
+  expect(waiting.state).toBe("active");
+  expect(waiting.activeFire).toMatchObject({ state: "pending" });
+  main.startupError = undefined;
+  clock.now += SCHEDULED_JOB_LIMITS.busyRetryDelayMs;
+  await fire();
+  expect(service.list({ kind: "operator" })[0]!.lastFire).toMatchObject({
+    state: "succeeded",
+    fireId: waiting.activeFire!.fireId,
   });
 });
 

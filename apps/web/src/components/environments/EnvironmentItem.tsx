@@ -9,6 +9,7 @@ import { useEnvironmentDisplayActivity } from "@/hooks/useEnvironmentDisplayActi
 import { useEnvironmentPrMergeState } from "@/hooks/useEnvironmentNameSignal";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
+import { isLocalDeletionRetryable } from "@/lib/federation/selected-environments";
 import { mergePrControl } from "@/lib/merge-pr-control";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { hydrationFreshnessNotice } from "@/lib/view-freshness";
@@ -103,6 +104,9 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const { displayedActivityState, isRunning } = useEnvironmentDisplayActivity(environment);
   const deleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
   const deletingStartedAt = useEnvironmentStore((s) => s.deletingStartedAt.get(environment.id));
+  const deletionRetryable = useEnvironmentStore((s) =>
+    isLocalDeletionRetryable(environment, s.deletingEnvironments),
+  );
   // Its pull request is ready to merge or blocked by conflicts (pr-merge-readiness).
   const prMergeState = useEnvironmentPrMergeState(environment.id, environment);
   const buildPipeline = useBuildPipelineStore((s) => s.buildEnvironmentIds.has(environment.id));
@@ -131,6 +135,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const facts = localEnvironmentRowFacts(environment, {
     deleting,
     deletingStartedAt,
+    deletionRetryable,
     activity: displayedActivityState,
     running: isRunning,
     buildPipeline,
@@ -154,6 +159,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       selected={isSelected}
       subtitle={subtitle}
       multiSelect={{
+        id: environment.id,
         active: isMultiSelectMode,
         checked: isChecked,
         // Toggle individual item selection (Cmd/Ctrl+Click behavior).

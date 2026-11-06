@@ -1,5 +1,5 @@
 import { startCoordinatedPoll } from "@/lib/coordinated-poll";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { listHumanPrompts, listUserCommands } from "@/lib/backend";
@@ -73,7 +73,10 @@ export function useUserCommands(
     });
   }, [running]);
 
-  return { commands, refresh: () => refreshRef.current() };
+  // Stable, so a caller can list it as a dependency without re-running on
+  // every render.
+  const refresh = useCallback(() => refreshRef.current(), []);
+  return { commands, refresh };
 }
 
 /**

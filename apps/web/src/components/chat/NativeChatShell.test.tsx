@@ -109,7 +109,7 @@ describe("NativeChatShell", () => {
       { id: "prompt", role: "user", content: "Hello", parts: [], createdAt: "2026-11-05" },
     ];
     const { rerender } = render(<NativeChatShell {...props} messages={messages} />);
-    expect(screen.queryByTestId("transcript-prompt-navigator")).toBeNull();
+    expect(screen.queryByTestId("transcript-prompt-navigator") === null).toBe(true);
     rerender(
       <NativeChatShell
         {...props}
@@ -129,7 +129,7 @@ describe("NativeChatShell", () => {
         scrollProps={{ ...props.scrollProps, controller }}
       />,
     );
-    expect(screen.queryByTestId("transcript-prompt-navigator")).toBeNull();
+    expect(screen.queryByTestId("transcript-prompt-navigator") === null).toBe(true);
     controller.dispose();
   });
 

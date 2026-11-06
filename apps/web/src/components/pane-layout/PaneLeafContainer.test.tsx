@@ -16,6 +16,7 @@ import { useAgentMailStore } from "@/stores/agentMailStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { ChangeDiffTarget, PaneLeaf } from "@/types/paneLayout";
+import { createPaneTabElementId } from "@/types/paneLayout";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realNativeAgent from "@/components/native-agent";
@@ -576,8 +577,48 @@ describe("PaneLeafContainer", () => {
     );
     expect(screen.getByTestId("tab-launch-shimmer")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
-    expect(screen.queryByTestId("tab-launch-shimmer")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
     expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
+  });
+
+  test("the content is the tabpanel its selected tab labels, launching or not", () => {
+    render(
+      <PaneLeafContainer
+        pane={hiddenPane}
+        containerId="container-hidden"
+        environmentId="env-hidden"
+        isActive
+      />,
+    );
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
+      createPaneTabElementId("env-hidden", hiddenPane.id, hiddenPane.activeTabId),
+    );
+
+    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    act(() => {
+      usePaneLayoutStore.setState({
+        environments: new Map(usePaneLayoutStore.getState().environments).set("env-hidden", {
+          ...state,
+          activePaneId: hiddenPane.id,
+        }),
+      });
+      beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
+    });
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
+      createPaneTabElementId("env-hidden", hiddenPane.id, "launch"),
+    );
+  });
+
+  test("an empty pane has no tabpanel", () => {
+    render(
+      <PaneLeafContainer
+        pane={{ ...hiddenPane, tabs: [], activeTabId: null }}
+        containerId="container-hidden"
+        environmentId="env-hidden"
+        isActive
+      />,
+    );
+    expectDomAbsent(screen.queryByRole("tabpanel"), "empty pane panel");
   });
 
   test("clicking another pane relinquishes the launch focus and scopes the update", () => {
@@ -594,7 +635,7 @@ describe("PaneLeafContainer", () => {
     expect(container.firstElementChild?.hasAttribute("data-pane-leaf")).toBe(true);
     fireEvent.click(container.firstElementChild as HTMLElement);
     expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
-    expect(screen.queryByTestId("tab-launch-shimmer")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
 
     expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
       "pane-hidden",

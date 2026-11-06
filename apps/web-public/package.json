@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/web-public",
-  "version": "2.36.3-beta",
+  "version": "2.36.5-beta",
   "private": true,
   "type": "module",
   "scripts": {

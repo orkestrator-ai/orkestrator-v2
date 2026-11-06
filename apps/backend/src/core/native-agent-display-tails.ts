@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { deepFreeze } from "./storage-frozen-snapshot.js";
 
 export const NATIVE_DISPLAY_TAIL_VERSION = 2 as const;
 export const NATIVE_DISPLAY_TAIL_SCHEMA = "native-agent-display-tail-v2";
@@ -133,6 +134,21 @@ function displayTailChecksumV2(input: Omit<NativeAgentDisplayTail, "checksum">):
     .slice(0, 32);
 }
 
+/**
+ * The serialized row of each tail `createNativeAgentDisplayTail` built. That
+ * function measures the tail by serializing it, so the store writes the same
+ * string instead of serializing it again. The tail is deep-frozen when it is
+ * registered, so the payload can never describe anything but the tail.
+ */
+const preparedPayloads = new WeakMap<NativeAgentDisplayTail, { payload: string; bytes: number }>();
+
+/** The row `createNativeAgentDisplayTail` already serialized for this tail, if any. */
+export function preparedDisplayTailPayload(
+  tail: NativeAgentDisplayTail,
+): { payload: string; bytes: number } | undefined {
+  return preparedPayloads.get(tail);
+}
+
 export function createNativeAgentDisplayTail(
   input: Omit<NativeAgentDisplayTail, "version" | "schema" | "checksum" | "messages"> & {
     messages: unknown[];
@@ -157,7 +173,14 @@ export function createNativeAgentDisplayTail(
   };
   const checksum = displayTailChecksum(record);
   const tail: NativeAgentDisplayTail = { ...record, checksum };
-  if (Buffer.byteLength(JSON.stringify(tail)) > NATIVE_DISPLAY_TAIL_MAX_BYTES) return null;
+  // One serialization measures the tail and becomes the stored row.
+  const payload = JSON.stringify(tail);
+  const bytes = Buffer.byteLength(payload);
+  if (bytes > NATIVE_DISPLAY_TAIL_MAX_BYTES) return null;
+  // Every object in it is new (stripping copies the messages), so freezing
+  // touches nothing a caller holds, and the store can cache it uncopied.
+  deepFreeze(tail);
+  preparedPayloads.set(tail, { payload, bytes });
   return tail;
 }
 
@@ -203,6 +226,9 @@ export function isNativeAgentDisplayTail(value: unknown): value is NativeAgentDi
   ) {
     return false;
   }
+  // Built and checksummed here from the frozen record it carries: recomputing
+  // would serialize the messages once more to reach the same answer.
+  if (preparedPayloads.has(value as NativeAgentDisplayTail)) return true;
   const expected = displayTailChecksum({
     version: candidate.version as NativeAgentDisplayTail["version"],
     schema: candidate.schema as NativeAgentDisplayTail["schema"],

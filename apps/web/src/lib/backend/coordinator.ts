@@ -12,12 +12,29 @@ import {
   type CoordinatorActivitySnapshot,
   type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
+import {
+  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+  parseCoordinatorLaunchOverrides,
+  type CoordinatorLaunchOverridesSnapshot,
+} from "@orkestrator/protocol/coordinator-launch-overrides";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { invoke } from "@/lib/native/backend";
 
+/**
+ * `keepConversationErrors`: this panel offers Retry for a conversation that
+ * failed to start, so opening it must not clear the failure. An older backend
+ * ignores the argument.
+ */
 export const ensureProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
-  invoke("ensure_project_coordinator", { projectId });
+  invoke("ensure_project_coordinator", { projectId, keepConversationErrors: true });
+
+/** Clears a conversation's startup failure so its pane can connect again. */
+export const retryCoordinatorConversation = (
+  projectId: string,
+  conversationId: string,
+): Promise<CoordinatorSnapshot> =>
+  invoke("retry_coordinator_conversation", { projectId, conversationId });
 
 export const getProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot | null> =>
   invoke("get_project_coordinator", { projectId });
@@ -41,6 +58,10 @@ export const getProjectCoordinatorView = (
 /** Every project whose coordinator is working or waiting. Older backends answer "Unknown backend command". */
 export const listCoordinatorActivity = (): Promise<CoordinatorActivitySnapshot> =>
   invoke<unknown>(COORDINATOR_ACTIVITY_COMMAND).then(parseCoordinatorActivitySnapshot);
+
+/** Worker tabs whose launch overrode the default. Older backends answer "Unknown backend command". */
+export const listCoordinatorLaunchOverrides = (): Promise<CoordinatorLaunchOverridesSnapshot> =>
+  invoke<unknown>(COORDINATOR_LAUNCH_OVERRIDES_COMMAND).then(parseCoordinatorLaunchOverrides);
 
 /** The turn holding this project's checkout. Older backends answer "Unknown backend command". */
 export const getCoordinatorCheckoutTurn = (
@@ -83,12 +104,6 @@ export const closeCoordinatorConversation = (
   conversationId: string,
 ): Promise<CoordinatorSnapshot> =>
   invoke("close_coordinator_conversation", { projectId, conversationId });
-
-/** Hide finished rows from the Work panel. Older backends answer "Unknown backend command". */
-export const hideCoordinatorWork = (
-  projectId: string,
-  associationIds: readonly string[],
-): Promise<CoordinatorSnapshot> => invoke("hide_coordinator_work", { projectId, associationIds });
 
 export const pauseProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
   invoke("pause_project_coordinator", { projectId });

@@ -197,8 +197,8 @@ describe("SchedulesSettings", () => {
     expect(
       within(screen.getAllByTestId("schedule-row")[1]!).queryByTestId(
         "schedule-account-switch-permission",
-      ),
-    ).toBeNull();
+      ) === null,
+    ).toBe(true);
   });
 
   test("production badge expires while mounted and reschedules on a same-key reload", async () => {

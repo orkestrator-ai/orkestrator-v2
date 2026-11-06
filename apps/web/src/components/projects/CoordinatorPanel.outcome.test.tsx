@@ -3,7 +3,7 @@
  * placeholder and starter prompts, the isolation badge, banners that leave the
  * transcript visible, separate errors, and the main-only close confirmation.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   coordinatorRuntimeId,
@@ -14,9 +14,13 @@ import {
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
+import * as clipboard from "@/lib/native/clipboard";
+import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { useUIStore } from "@/stores/uiStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
@@ -135,6 +139,7 @@ const pause = mock(async (): Promise<CoordinatorSnapshot> => {
 });
 const resume = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
 const closeConversation = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
+const retryConversation = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
 const select = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
 const assignAgent = mock(async () => ensuredSnapshot);
 const dispatchIntent = mock(
@@ -190,6 +195,19 @@ mock.module("@/lib/backend", () => ({
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
+  syncProjectGit: async () => {
+    ensuredGit = {
+      ...ensuredGit,
+      lastError: {
+        operation: "sync",
+        message: "sync failed",
+        stderr: "sync failed",
+        occurredAt: new Date(0).toISOString(),
+        retryable: true,
+      },
+    };
+    throw new Error("sync failed");
+  },
   checkCoordinatorUpstreamMerge: mock(async () => null),
   declineCoordinatorUpstreamMerge: mock(async () => undefined),
   getCoordinatorUpstreamAutoMerge: mock(async () => ({ enabled: false })),
@@ -198,6 +216,7 @@ mock.module("@/lib/backend", () => ({
   resumeProjectCoordinator: resume,
   selectCoordinatorConversation: select,
   closeCoordinatorConversation: closeConversation,
+  retryCoordinatorConversation: retryConversation,
   assignCoordinatorConversationAgent: assignAgent,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: ensureSession,
@@ -216,13 +235,26 @@ mock.module("@/components/native-agent", () => ({
         data-tab-id={props.tabId}
         data-placeholder={props.composerPlaceholder ?? ""}
         data-starter-prompts={(props.unassignedStarterPrompts ?? []).join("|")}
-      />
+      >
+        <div data-testid="composer-hint">{props.composerHint}</div>
+        {props.unassignedIntro ? <div data-testid="intro-slot">{props.unassignedIntro}</div> : null}
+      </div>
     ),
 }));
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
-import { COORDINATOR_STARTER_PROMPTS } from "./CoordinatorPanelNotices";
+import { COORDINATOR_COMMAND_HINT, COORDINATOR_STARTER_PROMPTS } from "./CoordinatorPanelNotices";
+import { COORDINATOR_INTRO_LINES } from "./CoordinatorIntro";
+import { FIRST_MESSAGE_COMMAND_RULE } from "@/components/native-agent/AgentNativeTab.helpers";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+
+async function openBadgeDetails(): Promise<Element> {
+  return waitFor(() => {
+    const element = document.querySelector("[data-coordinator-isolation-details]");
+    if (!element) throw new Error("badge details not open");
+    return element;
+  });
+}
 
 const unassigned = (conversation: CoordinatorConversation) => ({
   ...conversation,
@@ -232,6 +264,7 @@ const unassigned = (conversation: CoordinatorConversation) => ({
 describe("CoordinatorPanel outcome-first wording and banners", () => {
   beforeEach(() => {
     useRealAgentTab = false;
+    useUIStore.setState({ coordinatorIntroDismissed: false });
     resetNativeAgentSyncCapabilityForTests();
     useConfigStore.setState({ config: initialConfig });
     useNativeComposeStore.getState().clearDraft(sessionKey);
@@ -245,6 +278,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     pause.mockClear();
     resume.mockClear();
     closeConversation.mockClear();
+    retryConversation.mockClear();
     dispatchIntent.mockClear();
     ensureSession.mockClear();
     viewBody = null;
@@ -287,8 +321,121 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       ),
     );
     const side = screen.getByTestId("native-agent");
-    expect(side.getAttribute("data-placeholder")).toBe("What would you like to get done?");
+    expect(side.getAttribute("data-placeholder")).toBe("Ask a question about this project");
     expect(side.getAttribute("data-starter-prompts")).toBe("");
+  });
+
+  test("a side composer says what a side agent is for; both mention ! commands", async () => {
+    ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
+    render(<CoordinatorPanel projectId="project-1" />);
+    const mainHint = (await screen.findByTestId("composer-hint")).textContent ?? "";
+    expect(mainHint).toBe("Start a message with ! to run a command yourself in this checkout.");
+    expect(screen.getByTestId("intro-slot")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Side 1, Codex" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("native-agent").getAttribute("data-tab-id")).toBe(
+        "coordinator-side-1",
+      ),
+    );
+    const sideHint = screen.getByTestId("composer-hint").textContent ?? "";
+    expect(sideHint).toContain("can't launch workers");
+    expect(sideHint).toContain("Good for a second opinion or a parallel investigation.");
+    expect(sideHint).toContain("Start a message with !");
+    // The first-run card is the main's: a side agent never offers it.
+    expect(screen.queryByTestId("intro-slot") === null).toBe(true);
+  });
+
+  test("the footer speaks of the coordinator's work, so it does not contradict ! commands", async () => {
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    expect(
+      screen.getByText(
+        /The coordinator hands code changes, builds and fixes to build pipelines and prompt environments\./,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Code changes, commands, builds/) === null).toBe(true);
+  });
+
+  test("the first-run card explains the coordinator until dismissed, and ? shows it again", async () => {
+    useUIStore.setState({ coordinatorIntroDismissed: false });
+    useRealAgentTab = true;
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
+    const view = render(<CoordinatorPanel projectId="project-1" />);
+
+    const card = await screen.findByRole("region", { name: "How the coordinator works" });
+    for (const line of COORDINATOR_INTRO_LINES) expect(card.textContent).toContain(line);
+    expect(card.textContent).toContain("never changes it");
+    expect(card.textContent).toContain("Change agent");
+    // The starter prompts stay offered beside it.
+    expect(screen.getByRole("group", { name: "Starter prompts" })).toBeTruthy();
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Dismiss how the coordinator works" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "How the coordinator works" }) === null).toBe(
+        true,
+      ),
+    );
+    // Per user, in the UI store: it stays dismissed after a remount.
+    expect(useUIStore.getState().coordinatorIntroDismissed).toBe(true);
+    view.unmount();
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByRole("textbox", { name: "What would you like to get done?" });
+    expect(screen.queryByRole("region", { name: "How the coordinator works" }) === null).toBe(true);
+
+    // The toolbar's ? shows the same lines, whatever the composer's state.
+    fireEvent.pointerDown(screen.getByRole("button", { name: "How the coordinator works" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const menu = await waitFor(() => {
+      const element = document.querySelector("[data-coordinator-intro-menu]");
+      if (!element) throw new Error("intro menu not open");
+      return element;
+    });
+    for (const line of COORDINATOR_INTRO_LINES) expect(menu.textContent).toContain(line);
+  });
+
+  test("a first message starting with ! shows the rule under the composer, not only a toast", async () => {
+    useRealAgentTab = true;
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
+    render(<CoordinatorPanel projectId="project-1" />);
+    const input = await screen.findByRole("textbox", { name: "What would you like to get done?" });
+    expect(screen.getByText(COORDINATOR_COMMAND_HINT)).toBeTruthy();
+
+    fireEvent.input(input, { target: { textContent: "!git status" } });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("!git status"),
+    );
+    fireEvent.keyDown(input, { key: "Enter" });
+    const rule = await screen.findByRole("alert");
+    expect(rule.textContent).toBe(FIRST_MESSAGE_COMMAND_RULE);
+    expect(rule.hasAttribute("data-unassigned-command-refusal")).toBe(true);
+    // Nothing started, and the text is still in the box.
+    expect(assignAgent).not.toHaveBeenCalled();
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("!git status");
+
+    // Still shown while the text is a command; gone once the ! is dropped.
+    fireEvent.input(input, { target: { textContent: "!git status --short" } });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+        "!git status --short",
+      ),
+    );
+    expect(screen.getByRole("alert").textContent).toBe(FIRST_MESSAGE_COMMAND_RULE);
+    fireEvent.input(input, { target: { textContent: "git status --short" } });
+    await waitFor(() => expect(screen.queryByText(FIRST_MESSAGE_COMMAND_RULE) === null).toBe(true));
+    expect(screen.getByText(COORDINATOR_COMMAND_HINT)).toBeTruthy();
   });
 
   test("an empty conversation's starter prompt fills the real message box without sending", async () => {
@@ -365,29 +512,34 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     }
   });
 
-  test("the badge states isolation and keeps the path and revision in keyboard-reachable hover text", async () => {
+  test("the badge names the enforced tier and keeps the path and revision one tap away", async () => {
     render(<CoordinatorPanel projectId="project-1" />);
     const badge = await screen.findByRole("button", {
       name: /Changes run in isolated environments/,
     });
     expect(badge.getAttribute("data-coordinator-isolation-badge")).toBe("enforced");
     expect(badge.className).toContain("emerald");
-    expect(badge.textContent).not.toContain("advisory");
+    expect(badge.textContent).toContain("Read-only · Enforced");
+    expect(badge.textContent).not.toContain("dvisory");
     expect(screen.queryByText("Read-only coordinator") === null).toBe(true);
     // Neither the path nor the revision is header text any more.
     expect(screen.queryByText("/checkout") === null).toBe(true);
     expect(screen.queryByText(/Context r7/) === null).toBe(true);
 
+    // A menu, so it opens by keyboard and touch as well as by pointer.
     act(() => badge.focus());
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain("reads this checkout but never changes it");
-    expect(tooltip.textContent).toContain("build pipelines or prompt environments");
-    expect(tooltip.textContent).toContain("/checkout");
-    expect(tooltip.textContent).toContain("r7");
-    expect(tooltip.textContent).not.toContain("advisory");
+    fireEvent.keyDown(badge, { key: "Enter" });
+    const details = await openBadgeDetails();
+    expect(details.textContent).toContain("reads this checkout but never changes it");
+    expect(details.textContent).toContain("build pipelines or prompt environments");
+    expect(details.textContent).toContain("Codex's read-only protection is enforced.");
+    expect(details.textContent).toContain("blocks changes, whatever the agent attempts");
+    expect(details.textContent).toContain("/checkout");
+    expect(details.textContent).toContain("r7");
+    expect(details.textContent).not.toContain("dvisory");
   });
 
-  test("a provider whose read-only protection is not enforced gets an amber advisory badge", async () => {
+  test("a provider-configured platform is named as such, never as advisory, and links its setting", async () => {
     ensuredSnapshot = withWorkspace(
       {},
       {
@@ -401,6 +553,46 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         },
       },
     );
+    const opened: string[] = [];
+    const stop = onGlobalSettingsRequest((section) => opened.push(section));
+    try {
+      render(<CoordinatorPanel projectId="project-1" />);
+      const badge = await screen.findByRole("button", {
+        name: /Changes run in isolated environments/,
+      });
+      await waitFor(() =>
+        expect(badge.getAttribute("data-coordinator-isolation-badge")).toBe("provider-configured"),
+      );
+      expect(badge.textContent).toContain("Read-only · Provider-configured");
+      expect(badge.textContent).not.toContain("dvisory");
+      expect(badge.className).toContain("amber");
+
+      fireEvent.pointerDown(badge, { button: 0, ctrlKey: false });
+      const details = await openBadgeDetails();
+      expect(details.textContent).toContain("Codex's read-only protection is provider-configured.");
+      expect(details.textContent).toContain("no way for Orkestrator to verify");
+      expect(details.textContent).not.toContain("dvisory");
+
+      fireEvent.click(
+        within(details as HTMLElement).getByRole("menuitem", {
+          name: "Coordinator safety level in Settings",
+        }),
+      );
+      expect(opened).toEqual(["coordinator"]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("an advisory platform is the only one the badge calls advisory", async () => {
+    ensuredSnapshot = withWorkspace(
+      { conversations: [{ ...mainConversation, agent: "grok" }] },
+      {
+        providerAvailability: {
+          grok: { tier: "advisory", available: true, reason: "Grok is asked.", delegation: true },
+        },
+      },
+    );
     render(<CoordinatorPanel projectId="project-1" />);
     const badge = await screen.findByRole("button", {
       name: /Changes run in isolated environments/,
@@ -408,14 +600,11 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     await waitFor(() =>
       expect(badge.getAttribute("data-coordinator-isolation-badge")).toBe("advisory"),
     );
-    expect(badge.textContent).toContain("Read-only protection is advisory");
-    expect(badge.className).toContain("amber");
-    expect(screen.queryByText(/never changes it/) === null).toBe(true);
-
-    act(() => badge.focus());
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain("Codex is told not to change the checkout");
-    expect(tooltip.textContent).toContain("this protection is advisory");
+    expect(badge.textContent).toContain("Read-only · Advisory");
+    fireEvent.pointerDown(badge, { button: 0, ctrlKey: false });
+    const details = await openBadgeDetails();
+    expect(details.textContent).toContain("Grok Build's read-only protection is advisory.");
+    expect(details.textContent).toContain("a tool that does not ask is not stopped");
   });
 
   test("paused coordination keeps the transcript and resumes from the banner", async () => {
@@ -424,7 +613,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     render(<CoordinatorPanel projectId="project-1" />);
 
     const banner = await screen.findByText(/Coordination is paused/);
-    expect(banner.textContent).toContain("Messages will wait");
+    expect(banner.textContent).toContain("Mail and new turns wait until you resume");
     expect(screen.getByTestId("native-agent")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Pause" }) === null).toBe(true);
 
@@ -505,6 +694,297 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     },
   );
 
+  describe("a conversation that failed to start", () => {
+    const failedSide = {
+      ...sideConversation,
+      startupError: "codex server exited before becoming healthy",
+    };
+
+    function renderFailed(conversations: CoordinatorConversation[] = [failedSide]) {
+      ensuredSnapshot = withWorkspace({
+        conversations,
+        selectedConversationId: conversations[0]!.id,
+      });
+      return render(<CoordinatorPanel projectId="project-1" />);
+    }
+
+    test("is named in its own pane, whose transcript stays, and blames nothing else", async () => {
+      renderFailed();
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("Side 1 could not start.");
+      expect(alert.textContent).toContain("codex server exited before becoming healthy");
+      expect(screen.getByTestId("native-agent")).toBeTruthy();
+      expect(
+        alert.compareDocumentPosition(screen.getByTestId("native-agent")) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.queryByText(/Coordinator startup failed/) === null).toBe(true);
+    });
+
+    test("another conversation in front shows nothing and still connects", async () => {
+      useRealAgentTab = true;
+      renderFailed([mainConversation, failedSide]);
+      await waitFor(() => expect(ensureSession).toHaveBeenCalled());
+      expect(screen.queryByText(/could not start/) === null).toBe(true);
+    });
+
+    test("Retry clears it through the backend, so the pane connects again", async () => {
+      useRealAgentTab = true;
+      renderFailed();
+      const alert = await screen.findByRole("alert");
+      expect(ensureSession).not.toHaveBeenCalled();
+      retryConversation.mockImplementationOnce(async () =>
+        withWorkspace({
+          conversations: [sideConversation],
+          selectedConversationId: sideConversation.id,
+        }),
+      );
+      fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(retryConversation).toHaveBeenCalledWith("project-1", sideConversation.id),
+      );
+      await waitFor(() => expect(screen.queryByText(/could not start/) === null).toBe(true));
+      await waitFor(() => expect(ensureSession).toHaveBeenCalled());
+    });
+
+    test("Close closes a side agent at once", async () => {
+      renderFailed();
+      const alert = await screen.findByRole("alert");
+      fireEvent.click(within(alert).getByRole("button", { name: "Close conversation" }));
+      await waitFor(() =>
+        expect(closeConversation).toHaveBeenCalledWith("project-1", sideConversation.id),
+      );
+    });
+
+    test("Close asks first for the main, which is what the tab's own close does", async () => {
+      renderFailed([{ ...mainConversation, startupError: "bridge failed" }]);
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("Coordinator could not start.");
+      fireEvent.click(within(alert).getByRole("button", { name: "Close conversation" }));
+      expect((await screen.findByRole("alertdialog")).textContent).toContain(
+        "Close the main conversation?",
+      );
+      expect(closeConversation).not.toHaveBeenCalled();
+    });
+
+    test("Copy error copies the error text", async () => {
+      const writeText = spyOn(clipboard, "writeText").mockResolvedValue(undefined);
+      try {
+        renderFailed();
+        const alert = await screen.findByRole("alert");
+        fireEvent.click(within(alert).getByRole("button", { name: "Copy error" }));
+        await waitFor(() =>
+          expect(writeText).toHaveBeenCalledWith("codex server exited before becoming healthy"),
+        );
+      } finally {
+        writeText.mockRestore();
+      }
+    });
+
+    test("holds sending and establishes no session", async () => {
+      useRealAgentTab = true;
+      renderFailed();
+      await screen.findByRole("alert");
+      const input = await screen.findByRole("textbox");
+      expect(input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder")).toBe(
+        "This conversation could not start. Retry to send.",
+      );
+      expect(ensureSession).not.toHaveBeenCalled();
+    });
+  });
+
+  test("an older backend's workspace failure keeps the toolbar banner and holds every pane", async () => {
+    useRealAgentTab = true;
+    ensuredSnapshot = withWorkspace({ lifecycleState: "error", lastStartupError: "bridge failed" });
+    render(<CoordinatorPanel projectId="project-1" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Coordinator startup failed");
+    expect(alert.textContent).toContain("bridge failed");
+    expect(ensureSession).not.toHaveBeenCalled();
+    expect(retryConversation).not.toHaveBeenCalled();
+  });
+
+  describe("reads while paused", () => {
+    test("loads the saved transcript after a reload, establishing nothing and sending nothing", async () => {
+      useRealAgentTab = true;
+      ensuredSnapshot = withWorkspace({ lifecycleState: "paused" });
+      agentProjection = projection([
+        { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
+      ]);
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(/Coordination is paused/);
+      await waitFor(() =>
+        expect(
+          useNativeAgentProjectionStore
+            .getState()
+            .projections.get(sessionKey)
+            ?.messages.map((item) => (item as { id: string }).id),
+        ).toEqual(["saved"]),
+      );
+      const input = await screen.findByRole("textbox");
+      expect(input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder")).toBe(
+        "Coordination is paused. Resume to send.",
+      );
+
+      // Enter says why, keeps the draft and sends nothing.
+      fireEvent.input(input, { target: { textContent: "Review this branch" } });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+      expect(await screen.findByText("Coordination is paused. Resume to send.")).toBeTruthy();
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      expect(ensureSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("action errors", () => {
+    test("show as an announced alert, without a click, and dismiss", async () => {
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("pause failed");
+      // Nothing to expand: it is not behind a disclosure.
+      expect(alert.closest("details") === null).toBe(true);
+      fireEvent.click(within(alert).getByRole("button", { name: "Dismiss error" }));
+      await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
+    });
+
+    test("clear on the next successful action", async () => {
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      await screen.findByRole("alert");
+      pause.mockImplementationOnce(async () => withWorkspace({ lifecycleState: "paused" }));
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      await screen.findByText(/Coordination is paused/);
+      expect(screen.queryByRole("alert") === null).toBe(true);
+    });
+
+    test("a failed close is visible too, and clears what came before", async () => {
+      ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      await screen.findByText("pause failed");
+      closeConversation.mockImplementationOnce(async () => {
+        throw new Error("close failed");
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
+      await screen.findByText("close failed");
+      expect(screen.queryByText("pause failed") === null).toBe(true);
+    });
+  });
+
+  test("Pause says it holds mail and new turns for this project", async () => {
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    const title = screen.getByRole("button", { name: "Pause" }).getAttribute("title") ?? "";
+    expect(title).toContain("this project's coordinator");
+    expect(title).toContain("mail and new turns are held");
+  });
+
+  describe("the settings each state names", () => {
+    function settingsRequests() {
+      const sections: string[] = [];
+      const off = onGlobalSettingsRequest((section) => sections.push(section));
+      return { sections, off };
+    }
+
+    test("a platform held by the safety level links Coordinator settings", async () => {
+      const { sections, off } = settingsRequests();
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      ensuredSnapshot = withWorkspace(
+        {},
+        {
+          providerAvailability: {
+            codex: {
+              tier: "advisory",
+              available: false,
+              reason: "Weaker than the coordinator safety level allows.",
+              delegation: true,
+            },
+          },
+        },
+      );
+      render(<CoordinatorPanel projectId="project-1" />);
+      fireEvent.click(await screen.findByRole("button", { name: "Coordinator settings" }));
+      expect(sections).toEqual(["coordinator"]);
+      off();
+    });
+
+    test("a platform turned off links Platforms", async () => {
+      const { sections, off } = settingsRequests();
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      ensuredSnapshot = withWorkspace(
+        {},
+        {
+          providerAvailability: {
+            codex: {
+              tier: "enforced",
+              available: false,
+              reason: "This agent platform is turned off in settings.",
+              delegation: true,
+            },
+          },
+        },
+      );
+      render(<CoordinatorPanel projectId="project-1" />);
+      fireEvent.click(await screen.findByRole("button", { name: "Platform settings" }));
+      expect(sections).toEqual(["platforms"]);
+      off();
+    });
+
+    test("no qualified platform offers Coordinator settings beside the message", async () => {
+      const { sections, off } = settingsRequests();
+      useRealAgentTab = true;
+      ensuredSnapshot = withWorkspace(
+        { conversations: [unassigned(mainConversation)] },
+        { providerAvailability: {} },
+      );
+      render(<CoordinatorPanel projectId="project-1" />);
+      expect(await screen.findByText(/No agent platform meets/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Coordinator settings" }));
+      expect(sections).toEqual(["coordinator"]);
+      off();
+    });
+
+    test("no local checkout opens Repository settings", async () => {
+      useProjectStore.setState((state) => ({
+        projects: state.projects.map((project) => ({ ...project, localPath: null })),
+      }));
+      render(<CoordinatorPanel projectId="project-1" />);
+      fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+      expect(useAppDialogStore.getState().request).toEqual({
+        kind: "repository-settings",
+        projectId: "project-1",
+      });
+      useAppDialogStore.getState().close();
+    });
+
+    test("agent messaging off links Messaging", async () => {
+      const { sections, off } = settingsRequests();
+      ensuredSnapshot = withWorkspace({}, { agentMessaging: { enabled: false } });
+      render(<CoordinatorPanel projectId="project-1" />);
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Turn it on in Settings → Messaging" }),
+      );
+      expect(sections).toEqual(["messaging"]);
+      off();
+    });
+  });
+
+  test("a failed Sync stays announced after identical repository status arrives and can be dismissed", async () => {
+    ensuredGit = { ...gitStatus, upstream: "origin/main", behind: 1, ahead: 0 };
+    render(<CoordinatorPanel projectId="project-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(ensuredGit.lastError?.message).toBe("sync failed"));
+    expect(alert.textContent).toContain("sync failed");
+    expect(screen.queryByText("Repository error") === null).toBe(true);
+    fireEvent.click(within(alert).getByRole("button", { name: "Dismiss error" }));
+    await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
+    expect(await screen.findByText("Repository error")).toBeTruthy();
+  });
+
   test("identical repository and coordinator errors appear once", async () => {
     ensuredGit = {
       ...gitStatus,
@@ -522,7 +1002,10 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     await waitFor(() => expect(pause).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.getAllByText("pause failed")).toHaveLength(1);
-    expect(screen.queryByText("Coordinator error") === null).toBe(true);
+    expect((await screen.findByRole("alert")).textContent).toContain("pause failed");
+    expect(screen.queryByText("Repository error") === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(await screen.findByText("Repository error")).toBeTruthy();
   });
 
   test("an unavailable provider keeps the transcript under a banner", async () => {
@@ -556,8 +1039,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(screen.getByText("Repository error")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
-    expect(await screen.findByText("pause failed")).toBeTruthy();
-    expect(screen.getByText("Coordinator error")).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toContain("pause failed");
     expect(screen.getByText("fatal: could not read from remote")).toBeTruthy();
     expect(screen.getByText("Repository error")).toBeTruthy();
   });

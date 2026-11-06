@@ -1,3 +1,8 @@
+import type {
+  DatabaseStats,
+  DiagnosticsBundleChunk,
+  DiagnosticsBundlePlan,
+} from "@orkestrator/protocol/backend-diagnostics";
 import { invoke } from "@/lib/native/backend";
 import type {
   ControlMcpCredentialSummary,
@@ -438,6 +443,28 @@ export async function cleanupLogs(machine?: AccountMachine): Promise<LogStorageS
   return machineInvoke<LogStorageStats>(machine, "cleanup_logs");
 }
 
+export async function getDatabaseStats(machine?: AccountMachine): Promise<DatabaseStats> {
+  return machineInvoke<DatabaseStats>(machine, "get_database_stats");
+}
+
+/** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
+export async function planDiagnosticsBundle(
+  machine?: AccountMachine,
+): Promise<DiagnosticsBundlePlan> {
+  return machineInvoke<DiagnosticsBundlePlan>(machine, "plan_diagnostics_bundle");
+}
+
+export async function readDiagnosticsBundle(
+  planId: string,
+  offset: number,
+  machine?: AccountMachine,
+): Promise<DiagnosticsBundleChunk> {
+  return machineInvoke<DiagnosticsBundleChunk>(machine, "read_diagnostics_bundle", {
+    planId,
+    offset,
+  });
+}
+
 // --- Linear Commands ---
 
 export async function getLinearConnection(): Promise<LinearConnectionStatus> {
@@ -716,12 +743,19 @@ export async function mergeEnvironmentPr(
 /**
  * Turns the backend's auto-merge on or off: while on, it merges the open PR
  * once GitHub reports it ready and launches Resolve when it conflicts.
+ * `cleanupAfterMerge` also deletes the environment once the merge is
+ * confirmed; leaving it out turns any earlier cleanup request off.
  */
 export async function setEnvironmentAutoMerge(
   environmentId: string,
   enabled: boolean,
+  cleanupAfterMerge?: boolean,
 ): Promise<Environment> {
-  return invoke<Environment>("set_environment_auto_merge", { environmentId, enabled });
+  return invoke<Environment>("set_environment_auto_merge", {
+    environmentId,
+    enabled,
+    ...(cleanupAfterMerge === undefined ? {} : { cleanupAfterMerge }),
+  });
 }
 
 /** Submit and verify the current branch's PR merge from its container */

@@ -210,4 +210,4 @@ and would not classify those two failures.
 ## Related
 
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found these.
-- [2921](2921-component-browser-failures-on-main.md), other `test:browser` failures.
+- `2921-component-browser-failures-on-main.md` (deleted 2026-11-06), other `test:browser` failures.

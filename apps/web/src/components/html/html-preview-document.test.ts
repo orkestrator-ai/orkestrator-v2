@@ -88,7 +88,7 @@ describe("buildHtmlPreviewDocument", () => {
         '<svg><a href="#safe"><animate attributeName="href" values="https://evil.invalid"/><set attributeName="target" to="_self"/><text>Open</text></a></svg>',
       ).srcDoc,
     );
-    expect(parsed.querySelector("animate, set")).toBeNull();
+    expect(parsed.querySelector("animate, set") === null).toBe(true);
   });
 
   test("serialized markup is stable on reparse, including namespace mutation", () => {

@@ -634,7 +634,7 @@ describe("agent schedules", () => {
     });
     expect(ownInbox.messages).toEqual([
       expect.objectContaining({
-        from: expect.objectContaining({ kind: "system", source: "workflow" }),
+        from: expect.objectContaining({ kind: "system", source: "self-reminder" }),
         subject: expect.stringContaining("Scheduled reminder"),
         requestId: expect.stringMatching(/^sched:sch_/),
       }),
@@ -726,7 +726,30 @@ test("environment-wide schedule credentials select a caller mailbox and tab cred
   const tools = new AgentToolsServer(harness.storage);
   const scheduler = await attachScheduler(harness, { now: Date.now() }, tools);
   const a = await startIdleSession(harness, agents, stub, "claim-a");
-  const b = await startIdleSession(harness, agents, stub, "claim-b");
+  const claude = await startIdleSession(harness, agents, stub, "claim-claude");
+  // OpenCode's is the native tab that uses the environment-wide connection; the
+  // Claude tabs have their own, so that connection may not act as them.
+  const b = { tabId: "claim-opencode" };
+  const layout = (await harness.storage.getPaneLayout("env-1"))!;
+  const pane = layout.root as { tabs: unknown[] };
+  await harness.storage.savePaneLayout(
+    "env-1",
+    {
+      ...layout,
+      root: {
+        ...pane,
+        tabs: [
+          ...pane.tabs,
+          {
+            id: b.tabId,
+            type: "agent-native",
+            nativeAgentData: { platform: "opencode", environmentId: "env-1", isLocal: true },
+          },
+        ],
+      },
+    },
+    layout.revision,
+  );
   await harness.storage.synchronizeAgentMailboxes();
   await tools.start();
   try {
@@ -745,8 +768,12 @@ test("environment-wide schedule credentials select a caller mailbox and tab cred
       action: { type: "send_message", toEnvironmentId: "coordinator", body: "wake" },
     };
     expect((await call(environment, "create_schedule", input)).isError).toBe(true);
+    const refused = await call(environment, "create_schedule", { ...input, tabId: claude.tabId });
+    expect(refused.isError).toBe(true);
+    expect(refused.content?.[0]?.text).toContain("has its own Orkestrator connection");
     const created = await call(environment, "create_schedule", { ...input, tabId: b.tabId });
     expect(created.isError).not.toBe(true);
+    expect(typeof created.structuredContent?.scheduleId).toBe("string");
     const id = String(created.structuredContent!.scheduleId);
     expect(scheduler.service.get({ kind: "operator" }, id).owner).toMatchObject({
       kind: "agent",

@@ -4449,6 +4449,14 @@ describe("multi review commands", () => {
           ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
           ["restart_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
           [
+            "restart_multi_review_reviewer",
+            {
+              workflowId: "multi-1",
+              reviewerId: "reviewer-2",
+              model: { agent: "claude", model: "opus", reasoningEffort: "high" },
+            },
+          ],
+          [
             "restart_multi_review_step",
             {
               workflowId: "multi-1",
@@ -4481,7 +4489,12 @@ describe("multi review commands", () => {
         expect(cancel).toHaveBeenCalledWith("multi-1");
         expect(stopValidation).toHaveBeenCalledWith("multi-1");
         expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
-        expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
+        expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1", undefined);
+        expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-2", {
+          agent: "claude",
+          model: "opus",
+          reasoningEffort: "high",
+        });
         expect(restartStep).toHaveBeenCalledWith("multi-1", "consolidate", {
           agent: "codex",
           model: "gpt-5.6",
@@ -5101,6 +5114,7 @@ describe("build pipeline commands", () => {
   });
 
   test("delegates lifecycle operations to the backend supervisor", async () => {
+    const restartSelection = { agent: "claude", model: "opus", reasoningEffort: "high" };
     const start = mock(async (input: unknown) => ({ operation: "start", input }));
     const pause = mock(async (id: string) => ({ operation: "pause", id }));
     const resume = mock(async (id: string) => ({ operation: "resume", id }));
@@ -5268,6 +5282,17 @@ describe("build pipeline commands", () => {
           invoke("restart_build_pipeline_step", {
             pipelineId: "pipeline-1",
             stageId: "review-session",
+            selection: restartSelection,
+          }),
+        ).resolves.toEqual({
+          operation: "restart-step",
+          id: "pipeline-1",
+          stageId: "review-session",
+        });
+        await expect(
+          invoke("restart_build_pipeline_step", {
+            pipelineId: "pipeline-1",
+            stageId: "review-session",
           }),
         ).resolves.toEqual({
           operation: "restart-step",
@@ -5386,6 +5411,7 @@ describe("build pipeline commands", () => {
         expect(retryReview).toHaveBeenCalledWith("pipeline-1");
         expect(retryStage).toHaveBeenCalledWith("pipeline-1");
         expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session", undefined);
+        expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session", restartSelection);
         expect(restartCurrentStep).toHaveBeenCalledWith("pipeline-1");
         expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
       },
@@ -6100,18 +6126,17 @@ describe("pr monitor commands", () => {
         });
         // Every read of the environment store, through the facade or from
         // another repository, reaches the projects repository.
+        // Arming reads its one row directly, so this fails only the monitor's
+        // hydration, however many reads that takes.
         const projects = storageInternals(storage).repos.projects;
-        const loadEnvironments = projects.loadEnvironments.bind(projects);
-        let calls = 0;
         const loadSpy = spyOn(projects, "loadEnvironments").mockImplementation(async () => {
-          calls += 1;
-          if (calls === 2) throw new Error("temporary storage read failure");
-          return loadEnvironments();
+          throw new Error("temporary storage read failure");
         });
 
         const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
           environmentId: "e1",
         })) as string;
+        loadSpy.mockRestore();
         expect(armedAt).toEqual(expect.any(String));
         expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
           armedAt,
@@ -6121,7 +6146,6 @@ describe("pr monitor commands", () => {
             /arm\.track-failed environmentId=e1 .*temporary storage read failure/,
           ),
         );
-        loadSpy.mockRestore();
       } finally {
         warning.mockRestore();
       }

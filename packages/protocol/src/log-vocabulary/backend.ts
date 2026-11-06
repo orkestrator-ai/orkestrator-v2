@@ -44,6 +44,14 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
       "startup.looped-review-pending": "Cleanup of the retired Looped Review stays pending.",
       "notice.failed": "A background notice after a turn or prompt failed; `step` says which.",
       "artifacts.live-unavailable": "Live interactive artifacts are unavailable.",
+      "previous-run": {
+        description:
+          "This start read how the previous run ended: `outcome` is `clean` when it reached the end of shutdown and `crashed` when it did not, `ranForMs` its length and `lastSeenAgoMs` the time since its last health row.",
+        essential: true,
+        fields: { outcome: "label", ranForMs: "number", lastSeenAgoMs: "number" },
+      },
+      "health.write-failed":
+        "A health summary row could not be written or read; the next sample retries.",
       "shutdown.step-failed":
         "One part of shutdown failed and the rest went on; `step` says which.",
       "shutdown.signal-received": {

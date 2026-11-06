@@ -2,13 +2,17 @@
  * Removing a conversation from the resume list. Codex and Cursor offer it, and
  * it maps to the bridge's archive route, which keeps the conversation's history.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { CATALOG_TIMEOUT_MS } from "../../../../bridges/pi-bridge/src/config.js";
+import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import {
   claudeConnection,
   codexConnection,
   cursorConnection,
   httpProvider,
+  piConnection,
 } from "./agent-provider-test-support.js";
+import { BRIDGE_SESSION_LIST_TIMEOUT_MS } from "./http-bridge-transport.js";
 
 describe("HTTP bridge resume-list archive", () => {
   test.each([
@@ -33,9 +37,33 @@ describe("HTTP bridge resume-list archive", () => {
     const { provider } = httpProvider(() =>
       Response.json({ error: "Pi took too long to read its session history" }, { status: 504 }),
     );
-    await expect(provider.listResumableSessions!()).rejects.toThrow(
-      "Pi took too long to read its session history",
+    const failure = await provider.listResumableSessions!().catch((error: unknown) => error);
+    // The whole message: the resume dialog shows it to the user as is.
+    expect((failure as Error).message).toBe("Pi took too long to read its session history");
+    expect(failure).toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  test("a failed list with no reason in its body still names the operation", async () => {
+    const { provider } = httpProvider(() => new Response("oops", { status: 500 }));
+    const failure = await provider.listResumableSessions!().catch((error: unknown) => error);
+    expect((failure as Error).message).toBe(
+      "claude resumable session list is temporarily unavailable (HTTP 500)",
     );
+  });
+
+  test("a list waits for the bridge's own ceiling to answer", async () => {
+    const timeout = spyOn(AbortSignal, "timeout");
+    try {
+      const { requestTimeoutMs: _testOverride, ...connection } = piConnection;
+      const { provider } = httpProvider(() => Response.json({ sessions: [] }), connection);
+      await provider.listResumableSessions!();
+      // At the bridge's own ceiling this side gives up first, and the reason
+      // never reaches the user.
+      expect(timeout.mock.calls.at(-1)?.[0]).toBe(BRIDGE_SESSION_LIST_TIMEOUT_MS);
+      expect(BRIDGE_SESSION_LIST_TIMEOUT_MS).toBeGreaterThan(CATALOG_TIMEOUT_MS);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   test("asks for archived rows only on request, and keeps only a true flag", async () => {

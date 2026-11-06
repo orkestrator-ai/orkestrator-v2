@@ -920,7 +920,10 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     refreshCadence(owner, now);
 
     if (!disposed) {
-      if (owner.hasValue && owner.status !== "current") {
+      if (
+        owner.status !== "current" &&
+        (owner.hasValue || owner.failures > 0 || owner.status === "unsupported")
+      ) {
         const retained = snapshot(owner);
         queueMicrotask(() => {
           if (!subscriber.disposed) subscriber.onState?.(retained);

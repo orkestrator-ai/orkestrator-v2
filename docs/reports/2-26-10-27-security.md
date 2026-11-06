@@ -103,7 +103,7 @@ The material risks are concentrated in four themes:
 | M9 | Medium | Container | Legacy images still mount whole host agent homes | Fixed for new containers; existing ones are listed for rebuild (see §4) |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
-| M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
+| M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Partly fixed: the egress gateway checks SNI, Host and DNS names; the default allowlist is unchanged (see §4) |
 | M13 | Medium | Bridges | Codex worker shells inherit `*_TOKEN` env; ACP advertises write/terminal to read-only sessions | Fixed |
 | L1–L18 | Low | Various | See §5 | Mixed |
 | I1–I7 | Info | Various | See §6 | — |
@@ -254,14 +254,14 @@ realpath confinement, instead of bind-mounting them.
 SHA-256 of its token and is non-dumpable, on an image with `bridge-credential=1`
 the token is in a root-only file, and a user's wider policy restarts an idle
 bridge and resumes
-([todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md)).
+(todo 3930).
 The agent's uid can no longer read a token, answer an approval or clear
 `readOnly`. It can still kill the bridge and catch a token on its port, or plant
 code for the next start
 ([todo 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md));
 OpenCode has no bridge, so its plain password is kept from the agent by a plugin
 inside its server
-([todo 4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md));
+(todo 4981);
 and containers on older images keep the old behaviour until rebuilt.
 The rest of this status is the earlier state (2026-11-03). Every bridge now deletes its token from
 `process.env` at startup, so nothing it spawns through `node:child_process` or
@@ -273,14 +273,14 @@ MCP selection) is refused with 403 `policy-widening-refused` and nothing is
 applied (`packages/protocol/src/execution-policy-narrowing.ts`). That covers
 Claude's `/config` and `/session/create` recovery; Codex config, resume and
 prompt; and Pi, Cursor and ACP create, resume and prompt. Still open, in
-[todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md):
+todo 3930:
 the token file and `/proc/<bridge pid>/environ` are still readable by the
 agent's uid, so it can still answer its own approvals, and can kill the bridge
 and race the backend to set a restored session's policy; and a user's own
 widening reaches a live session only after the bridge restarts. A token holder
 can also still clear a session's read-only review boundary, which is not part of
 the policy
-([todo 4210](../todo/containers-and-environments/4210-read-only-boundary-from-a-token-holder.md)).
+(todo 4210).
 **Actor:** A1
 **Severity:** High only for hardened environments (see footnote in §2)
 
@@ -643,7 +643,16 @@ unless the user opts in, and mark delegations that originated from worker mail.
 
 ### M12. Egress firewall limitations (design)
 
-**Status:** Reported
+**Status:** Partly fixed (2026-11-05). On images with `egress-filter=1` the
+egress gateway checks the name each connection asks for (TLS SNI, or the Host
+of plain HTTP on a named port) and answers DNS only for allowlisted names,
+without decrypting anything, and fails closed when its daemon dies; an older
+image's gateway keeps address-only enforcement until it is rebuilt. The
+network settings and the README state that an allowed service still accepts
+whatever it is sent, and what the checks cannot see (an encrypted
+ClientHello, domain fronting, UDP and other protocols). The default allowlist
+still carries the telemetry hosts until a check without them is run
+([todo 6100](../todo/containers-and-environments/6100-default-allowlist-telemetry-hosts.md)).
 
 - **IP-based allowlist.** Domains are resolved into an ipset, with no SNI or Host check (`docker/firewall-domains.sh`). Default hosts on shared fronts (Google front-ends, Azure Blob, Cloudflare-fronted npm/OpenAI) let traffic reach other tenants on the same edge IPs.
 - **Allowed APIs accept attacker credentials.** Examples: `sentry.io` with an attacker DSN, `api.anthropic.com` or `openrouter.ai` with an attacker key, GitHub gists. `init-firewall.sh:21-22` acknowledges this.
@@ -699,7 +708,7 @@ write and terminal calls when the policy denies them.
 | L14 | Malformed relay credit frame can crash the backend | `preview-relay-supervisor.ts:389` | Relay is off by default. Validate frame lengths and catch errors in `onData`. | Fixed (2026-11-03): every fixed-size inbound frame must have its exact payload length (credit 4 bytes; opened, eof and close 0), and the `onData` frame loop is wrapped in try/catch; both paths shut the relay down with category `internal` instead of throwing out of the stdout listener. Tests: "a 0-byte / 2-byte / 5-byte credit frame shuts the relay down instead of throwing", "a 4-byte credit frame grants credit to its channel" and "an exception while handling a frame shuts the relay down, not the backend" in `apps/backend/src/preview-relay-supervisor.test.ts` |
 | L15 | Agent-tools MCP server binds `0.0.0.0` on the host | `apps/backend/src/core/agent-tools.ts:642` | Token-protected, but reachable from the LAN or tailnet. Bind to the Docker bridge or loopback addresses. | Verified |
 | L16 | Control MCP and scheduling soft spots | `control-mcp-confirm.ts`, `control-mcp-credentials.ts:330-345`, `scheduled-jobs/executor.ts:681-689`, `read-only-policy.ts:537` | **Confirmation:** the agent can complete it itself (HMAC-bound, but a speed bump, not human approval). **Operator token:** readable by the coordinator; add `denyRead` for the data directory. **Self-reminders:** presented as authenticated `system` notices. **Cursor/Pi:** accept some policy fields from the request body. | Reported |
-| L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Reported |
+| L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Accepted (2026-11-05): plaintext at 0600 is recorded as an accepted risk in [storage.md](../architecture/storage.md#provider-secrets-at-rest); no keychain or `safeStorage` path was built. Re-checking found the secrets in `config.json` and its backups, not SQLite. Two mode gaps were fixed: every start now tightens those files, and every open tightens the database's companion files. Tests: `apps/backend/src/core/storage-secrets-at-rest.test.ts`, `apps/backend/tests/container-data-directory-reach.test.ts` |
 | L18 | Dependency advisories | `bun audit` | `undici@8.10.2` (via `pi-bridge`): 1 high (DoS on excessive content-encodings), 2 moderate (GHSA-xjj6-f33q-929c, -4qv8-2p9j-2685, -f72v-6w45-q472). `postcss-selector-parser@6.0.10` (dev, moderate). Electron is locked at `45.0.0`; check for later 45.x security releases. Run `bun audit fix`. | Verified |
 
 ## 6. Informational
@@ -810,7 +819,7 @@ write and terminal calls when the policy denies them.
 - The review validation worker was only spot-checked: commands are passed as argv to `bash -lc`.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
-- The iOS app (`apps/ios`) was not reviewed at the time. It was reviewed on 2026-11-05 against `69a3b4ca5`, by reading the code and running it on simulators: three defects were fixed (a crash from a CSP-sandboxed page calling the native bridge, a status check that accepted an answer from a redirect target, and a sign-in that refused tokens containing `+`), and the rest is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md).
+- The iOS app (`apps/ios`) was not reviewed at the time. It was reviewed on 2026-11-05 against `69a3b4ca5`, by reading the code and running it on simulators: three defects were fixed (a crash from a CSP-sandboxed page calling the native bridge, a status check that accepted an answer from a redirect target, and a sign-in that refused tokens containing `+`), and the rest is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and 5602.
 - The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop and rootless Linux Engine (`docs/development/container-qualification.md`). Shipping Safari remains ([todo 5500](../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md)).
 
 ## 9. Recommended remediation order

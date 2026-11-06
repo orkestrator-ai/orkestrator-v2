@@ -28,6 +28,16 @@ describe("global settings synchronization", () => {
     expect(globalFormSignature(legacy)).toBe(globalFormSignature(current));
   });
 
+  test("tracks keep-raised changes, treating omitted and false as equal", () => {
+    const current = globalConfig();
+    expect(globalFormSignature({ ...current, logDetailKeepRaised: true })).not.toBe(
+      globalFormSignature(current),
+    );
+    expect(globalFormSignature({ ...current, logDetailKeepRaised: false })).toBe(
+      globalFormSignature(current),
+    );
+  });
+
   test("tracks the configured SSH agent socket", () => {
     const current = globalConfig();
     const configured = { ...current, sshAgentSocketPath: "/run/user/1000/agent.sock" };

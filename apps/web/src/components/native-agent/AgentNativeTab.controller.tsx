@@ -27,6 +27,7 @@ import {
 import { goalApprovalWarning } from "@/lib/chat/goal-presentation";
 import { useHumanPrompts, useUserCommands } from "@/hooks/useUserCommands";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
+import { useInFloatingNoticeLayer } from "@/components/ui/floating-notice";
 import { withUserCommandRows } from "@/lib/chat/user-command-rows";
 import { withPermissionRuleRows } from "@/lib/chat/permission-rule-rows";
 import { usePermissionRuleSession } from "@/hooks/usePermissionRuleSession";
@@ -150,10 +151,10 @@ import {
   withResumeCleanupNotices,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { isPeerMailCarrierContent } from "@orkestrator/protocol/agent-mail";
 import { hideMachineOutputText } from "@orkestrator/protocol/structured-review-transcript";
 import {
   presentPeerMailCarrierRow,
-  isPeerMailCarrierContent,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
   positionOptimisticNativeMessage,
@@ -201,6 +202,7 @@ import {
 } from "@/stores/conversationScrollTargetStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useShallow } from "zustand/react/shallow";
 import {
   nativeComposeDraft,
   nativeComposePersistenceStore,
@@ -343,9 +345,12 @@ export function SharedNativeAgentController({
   hiddenByLayout = false,
   beforeSend,
   composerPlaceholder,
+  composerHint,
   connectionEnabled = true,
+  sendingHeldReason,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
+  const sendingHeld = sendingHeldReason !== undefined;
   // A bug report's session runs in its own scratch directory, like a
   // coordinator without an Environment record or pane layout behind it.
   const reportId = bugReportIdFromRuntimeId(data.environmentId);
@@ -355,14 +360,40 @@ export function SharedNativeAgentController({
   const adapter = getNativeAgentAdapter(platform);
   const label = adapter.label;
   const config = useConfigStore((state) => state.config);
-  const environment = useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId));
+  // Only the fields this tab reads: the environment record changes for status,
+  // activity, pull request and name updates it does not use, and each of those
+  // would otherwise re-render the tab and its transcript.
+  const {
+    envAgentSettings,
+    envInitialPrompt,
+    envProjectId,
+    envSetupPhase,
+    envWorktreePath,
+    hasStartupAgentSession,
+    pendingAgentLaunch,
+    startupAgentFailed,
+  } = useEnvironmentStore(
+    useShallow((state) => {
+      const env = state.environments.find((e) => e.id === data.environmentId);
+      return {
+        envAgentSettings: env?.agentSettings,
+        envInitialPrompt: env?.initialPrompt,
+        envProjectId: env?.projectId,
+        envSetupPhase: env?.setupPhase,
+        envWorktreePath: env?.worktreePath,
+        hasStartupAgentSession: env?.startupAgentSession !== undefined,
+        pendingAgentLaunch: env?.pendingAgentLaunch === true,
+        startupAgentFailed: env?.startupAgentSession?.status === "error",
+      };
+    }),
+  );
   // The whole tier chain in one call, for this platform only. A model belongs
   // to its own platform's catalogue, so nothing here can hand one platform's id
   // to another.
   const configured = resolvedPlatformSettings(
     config,
-    environment?.projectId ?? coordinatorProjectId,
-    environment,
+    envProjectId ?? coordinatorProjectId,
+    { agentSettings: envAgentSettings },
     platform,
   );
   const configuredModel = configured.model;
@@ -391,8 +422,7 @@ export function SharedNativeAgentController({
   // against the project's checkout under their own read-only lifecycle. The
   // ordinary worker setup gate would otherwise classify that absence as
   // permanently pending and its override action cannot target a synthetic ID.
-  const setupPending =
-    hasEnvironmentRecord && isSetupBlocked({ setupPhase: environment?.setupPhase });
+  const setupPending = hasEnvironmentRecord && isSetupBlocked({ setupPhase: envSetupPhase });
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
@@ -572,6 +602,7 @@ export function SharedNativeAgentController({
     isActive,
     enabled:
       connectionEnabled && !setupPending && !draft.submissionPending && !awaitingResumeChoice,
+    sendingHeld,
   });
   const isDispatching = runtimeIsDispatching || draft.submissionPending === true;
   const noticeSessionIdentity = `${platform}\u0000${data.environmentId}\u0000${projection?.sessionId ?? data.sessionId ?? sessionKey}`;
@@ -669,7 +700,7 @@ export function SharedNativeAgentController({
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
   const fileSearch = useFileSearch(
     data.containerId,
-    environment?.worktreePath ?? coordinatorWorkspacePath,
+    envWorktreePath ?? coordinatorWorkspacePath,
     adapter.capabilities.attachments.files || adapter.capabilities.attachments.images,
   );
   const {
@@ -700,8 +731,7 @@ export function SharedNativeAgentController({
   });
   const classifyCommand = commandComposer.classify;
   const backendOwnsStartupPrompt =
-    tabId === STARTUP_AGENT_TAB_ID &&
-    (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
+    tabId === STARTUP_AGENT_TAB_ID && (pendingAgentLaunch || hasStartupAgentSession);
   const {
     favorites: allFavorites,
     toggleFavorite,
@@ -878,7 +908,7 @@ export function SharedNativeAgentController({
     source: requestedResumeSessionId
       ? undefined
       : backendOwnsStartupPrompt
-        ? environment?.initialPrompt
+        ? envInitialPrompt
         : initialPrompt,
     backendOwned: backendOwnsStartupPrompt,
     tabInitialPrompt: initialPrompt,
@@ -887,9 +917,7 @@ export function SharedNativeAgentController({
       (message) => message.role === "user" && !isClientOnlyNativeMessage(message),
     ),
     sendFailed: sendError !== null,
-    launchFailed:
-      environment?.startupAgentSession?.status === "error" &&
-      environment.pendingAgentLaunch !== true,
+    launchFailed: startupAgentFailed && !pendingAgentLaunch,
   };
   // The clock is read in the updater, never in render; the render-time call
   // only asks whether anything changed.
@@ -1032,6 +1060,7 @@ export function SharedNativeAgentController({
    */
   const promptEnvironments = useMemo(() => [data.environmentId], [data.environmentId]);
   const environmentPrompts = useHumanPrompts(promptEnvironments);
+  const floatingNotices = useInFloatingNoticeLayer();
   const agentPrompts = useMemo(
     () =>
       environmentPrompts.filter(
@@ -1567,6 +1596,7 @@ export function SharedNativeAgentController({
     isRunning && !recoverableDispatch && projection?.capabilities?.actions?.steer === true;
   const autoSteerEnabled = config.global.autoSteer === true;
   const sendLocked =
+    sendingHeld ||
     queueEditPending ||
     !projection ||
     !sessionStateAuthoritative ||
@@ -1916,9 +1946,14 @@ export function SharedNativeAgentController({
     ) => {
       if (queueEditPendingRef.current || submitInFlightRef.current || beforeSendPendingRef.current)
         return false;
+      // The draft stays: this says why Enter did nothing, and nothing is sent.
+      if (sendingHeldReason !== undefined) {
+        setSendError(sendingHeldReason);
+        return false;
+      }
       // A prompt with a stable id must not be queued: the queue carries no id,
       // so a copy the backend already sent would run twice. Retried by the
-      // caller once the turn ends and this callback changes.
+      // caller once the turn ends and this callback changes with `canQueue`.
       if (submitOptions?.noQueue && canQueue) return false;
       // Claim the intent before validation or dispatch. A remount cannot replay
       // it a second time, and every terminal validation return releases it.
@@ -2510,6 +2545,7 @@ export function SharedNativeAgentController({
       updateDraft,
       visibleAuthoritativeMessageIds,
       visibleDisplayMessageIds,
+      sendingHeldReason,
     ],
   );
 
@@ -2652,7 +2688,7 @@ export function SharedNativeAgentController({
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
-        worktreePath: environment?.worktreePath ?? coordinatorWorkspacePath,
+        worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
         allowFiles: adapter.capabilities.attachments.files,
         allowImages: adapter.capabilities.attachments.images,
         modelSupportsImages: selectedModel?.supportsImageInput,
@@ -2671,7 +2707,7 @@ export function SharedNativeAgentController({
       adapter.capabilities.attachments.files,
       adapter.capabilities.attachments.images,
       data.containerId,
-      environment?.worktreePath,
+      envWorktreePath,
       coordinatorWorkspacePath,
       selectedModel?.label,
       selectedModel?.supportsImageInput,
@@ -2699,7 +2735,7 @@ export function SharedNativeAgentController({
   useNativeComposeBarPaste({
     inputContainerRef,
     containerId: data.containerId ?? null,
-    worktreePath: isReadOnlyCoordinator || isBugReport ? undefined : environment?.worktreePath,
+    worktreePath: isReadOnlyCoordinator || isBugReport ? undefined : envWorktreePath,
     writeImage: isReadOnlyCoordinator || isBugReport ? writeSpecialImage : undefined,
     onAttach: handlePastedImage,
     canAttachImage: () =>
@@ -2878,6 +2914,8 @@ export function SharedNativeAgentController({
       clearTabInitialPrompt(tabId, data.environmentId);
       return;
     }
+    // A held opening prompt waits: this effect runs again once sending is allowed.
+    if (sendingHeld) return;
     if (!projection || initialPromptSentRef.current || !initialPrompt?.trim()) return;
     // A tab that asked to resume a specific conversation carries a prompt that
     // only makes sense inside it — "address every finding" means nothing in an
@@ -2911,25 +2949,33 @@ export function SharedNativeAgentController({
       if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
       else initialPromptSentRef.current = false;
     });
+    // `submit` refuses while a queue edit, another send or a pre-send check
+    // holds its ref. Refs wake nothing, so the states released alongside them
+    // are listed here and a refused prompt is retried once the last one clears
+    // (`sendLocked` already carries two of them, but not `preparingSend`).
   }, [
     backendOwnsStartupPrompt,
     clearTabInitialPrompt,
     data.environmentId,
     initialPrompt,
+    isSubmitting,
+    preparingSend,
     projection,
+    queueEditPending,
+    sendingHeld,
     setSendError,
     submit,
     tabId,
   ]);
 
   const submissionError = sendError ?? draft.submissionError;
+  // While sending is held the owner's own notice explains the pane, so a saved
+  // view's error, or a read an older backend refuses, is not a second failure.
   const errorMessage =
     submissionError ??
-    transcriptError ??
-    sessionStateError ??
-    runtimeError ??
-    projection?.turn.error ??
-    null;
+    (sendingHeld
+      ? null
+      : (transcriptError ?? sessionStateError ?? runtimeError ?? projection?.turn.error ?? null));
   // An uninitialized inactive tab has neither a projection nor an in-flight
   // refresh. That is still a pending connection, not a failed one: newly added
   // tabs can render for one commit before pane selection marks them active,
@@ -2942,8 +2988,11 @@ export function SharedNativeAgentController({
   // Retry and a new identity both start work with `isRefreshing`. That has to
   // win over the previous completed-read/error, or the only recovery control
   // stays on screen while the reconnect is already running.
-  const connectionState =
-    transcriptError || sessionStateError
+  const connectionState = sendingHeld
+    ? isRefreshing || transcriptRefreshing
+      ? ("connecting" as const)
+      : ("connected" as const)
+    : transcriptError || sessionStateError
       ? ("error" as const)
       : ((sessionStateAuthoritative ? projection?.connection : undefined) ??
         (isRefreshing ||
@@ -2969,7 +3018,9 @@ export function SharedNativeAgentController({
       return;
     }
     let refusal: string | undefined;
-    if (
+    if (sendingHeldReason !== undefined) {
+      refusal = sendingHeldReason;
+    } else if (
       heldSubmit.platform !== platform ||
       (heldSubmit.sessionId !== undefined && heldSubmit.sessionId !== heldSessionId)
     ) {
@@ -3029,6 +3080,7 @@ export function SharedNativeAgentController({
     recoverableDispatch,
     handoff.error,
     sendLocked,
+    sendingHeldReason,
     isDispatching,
     sessionKey,
     settleHeldSubmit,
@@ -3151,7 +3203,7 @@ export function SharedNativeAgentController({
     return (
       <SetupPendingOverlay
         environmentId={data.environmentId}
-        setupPhase={environment?.setupPhase}
+        setupPhase={envSetupPhase}
         subtext={`${label} will connect automatically once setup finishes`}
         pendingPrompt={startupPromptPreview ?? undefined}
       />
@@ -3716,7 +3768,9 @@ export function SharedNativeAgentController({
       elapsedStartedAt={elapsedStartedAt}
       finalElapsedSeconds={finalElapsedSeconds}
       centerCompose={composerCentered}
-      emptyStateMessage={`Ask ${label} to work on this repository.`}
+      emptyStateMessage={
+        sendingHeld ? "No saved messages to show." : `Ask ${label} to work on this repository.`
+      }
       transcriptHeader={
         showBytesNotice || showLoadEarlier || showOmittedNotice ? (
           <div className="relative mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
@@ -3776,7 +3830,8 @@ export function SharedNativeAgentController({
       virtuosoRef={virtuosoRef}
       highlightedMessageId={highlightedMessageId}
       blockingCards={[
-        ...(agentPrompts.length > 0
+        // In a pane with a notice layer the prompts float with its other notices.
+        ...(agentPrompts.length > 0 && !floatingNotices
           ? [<HumanPromptBanner key="human-prompts" prompts={agentPrompts} />]
           : []),
         ...pinnedInteractions.map((interaction) => (
@@ -3954,7 +4009,7 @@ export function SharedNativeAgentController({
           }}
           inputComboboxAria={commandComposer.inputComboboxAria}
           keyboardMenuOpen={fileMentionMenuOpen || commandComposer.menuOpen}
-          placeholder={composerPlaceholder ?? `Message ${label}`}
+          placeholder={sendingHeldReason ?? composerPlaceholder ?? `Message ${label}`}
           disabled={
             queueEditPending || isSubmitting || preparingSend || draft.submissionPending === true
           }
@@ -4217,6 +4272,7 @@ export function SharedNativeAgentController({
               : undefined
           }
           showSendButton={
+            sendingHeld ||
             authenticationRequired ||
             !sendLocked ||
             canQueue ||
@@ -4224,6 +4280,7 @@ export function SharedNativeAgentController({
             draftRunsGoal
           }
           sendDisabled={
+            sendingHeld ||
             queueEditPending ||
             (sendLocked && !draftSessionAction && !draftRunsGoal) ||
             (isDispatching && !draftRunsGoal) ||
@@ -4233,104 +4290,115 @@ export function SharedNativeAgentController({
               sendableTranscriptAnnotations(draft.annotations).length === 0)
           }
           sendTitle={
-            authenticationRequired && !draftRunsGoal
-              ? `Sign in to ${label} before sending`
-              : draftSessionAction
-                ? (draftSessionAction.error ?? `Send to the current ${label} turn`)
-                : draftCommandSendTitle
-                  ? draftCommandSendTitle
-                  : canQueue
-                    ? shouldAutoSteer({
-                        enabled: autoSteerEnabled,
-                        steerAvailable,
-                        command:
-                          commandComposer.previewClassification({
-                            text: draft.text,
-                            attachments: draft.attachments,
-                            annotationCount: sendableTranscriptAnnotations(draft.annotations)
-                              .length,
-                            pendingHandoff: Boolean(handoff.pendingHistory),
-                            busy: isRunning,
-                          }).kind !== "prompt",
-                        preparedPrompt: false,
-                        attachmentCount: draft.attachments.length,
-                        pendingHandoff: Boolean(handoff.pendingHistory),
-                      })
-                      ? `Steer the current ${label} turn`
-                      : // A coordinator turn is short by design — it delegates and
-                        // ends — so "queue" understates what happens: the message
-                        // runs as the next turn, usually within seconds.
-                        isReadOnlyCoordinator
-                        ? "Send after this turn"
-                        : "Add to queue"
-                    : "Send"
+            sendingHeldReason
+              ? sendingHeldReason
+              : authenticationRequired && !draftRunsGoal
+                ? `Sign in to ${label} before sending`
+                : draftSessionAction
+                  ? (draftSessionAction.error ?? `Send to the current ${label} turn`)
+                  : draftCommandSendTitle
+                    ? draftCommandSendTitle
+                    : canQueue
+                      ? shouldAutoSteer({
+                          enabled: autoSteerEnabled,
+                          steerAvailable,
+                          command:
+                            commandComposer.previewClassification({
+                              text: draft.text,
+                              attachments: draft.attachments,
+                              annotationCount: sendableTranscriptAnnotations(draft.annotations)
+                                .length,
+                              pendingHandoff: Boolean(handoff.pendingHistory),
+                              busy: isRunning,
+                            }).kind !== "prompt",
+                          preparedPrompt: false,
+                          attachmentCount: draft.attachments.length,
+                          pendingHandoff: Boolean(handoff.pendingHistory),
+                        })
+                        ? `Steer the current ${label} turn`
+                        : // A coordinator turn is short by design — it delegates and
+                          // ends — so "queue" understates what happens: the message
+                          // runs as the next turn, usually within seconds.
+                          isReadOnlyCoordinator
+                          ? "Send after this turn"
+                          : "Add to queue"
+                      : "Send"
           }
           onSend={() => sendFromComposer(draft.text)}
           footer={
-            projection?.queue ? (
-              <QueuedPromptsDialog
-                open={queueDialogOpen}
-                onOpenChange={setQueueDialogOpen}
-                messages={queuedMessages}
-                onOpenWebAnnotationRequest={(requestId) =>
-                  openWebAnnotationRequest(data.environmentId, requestId)
-                }
-                onEdit={editQueuedPrompt}
-                onMove={async (fromIndex, toIndex) => {
-                  const message = queuedMessages[fromIndex];
-                  if (!message || fromIndex === toIndex) return;
-                  // The durable queue moves one position at a time, so a drag
-                  // across several rows is applied as that many steps rather
-                  // than silently landing one slot from where it was dropped.
-                  const direction = toIndex < fromIndex ? "up" : "down";
-                  for (let step = 0; step < Math.abs(toIndex - fromIndex); step += 1) {
-                    await moveQueued(message.id, direction);
+            <>
+              {composerHint ? (
+                <div data-composer-hint className="mt-1.5 px-1 text-xs text-muted-foreground">
+                  {composerHint}
+                </div>
+              ) : null}
+              {projection?.queue ? (
+                <QueuedPromptsDialog
+                  open={queueDialogOpen}
+                  onOpenChange={setQueueDialogOpen}
+                  messages={queuedMessages}
+                  onOpenWebAnnotationRequest={(requestId) =>
+                    openWebAnnotationRequest(data.environmentId, requestId)
                   }
-                }}
-                onRemove={async (messageId) => {
-                  await removeQueued(messageId);
-                }}
-                onSteer={steerQueuedPrompt}
-                canSteer={canSteerQueuedPrompt}
-                renderMeta={(message) => {
-                  const queued = message as Record<string, unknown>;
-                  const steerNote = queuedRowSteerNote(message);
-                  const attachments = Array.isArray(queued.attachments)
-                    ? queued.attachments.length
-                    : 0;
-                  return (
-                    <>
-                      {queued.mode === "plan" || queued.mode === "build" ? (
-                        <span>{queued.mode === "plan" ? "Plan" : "Build"}</span>
-                      ) : null}
-                      {typeof queued.model === "string" ? (
-                        <span>{resolveModelLabel(queued.model)}</span>
-                      ) : null}
-                      {typeof queued.reasoningEffort === "string" ? (
-                        <span>{reasoningLabel(queued.reasoningEffort)}</span>
-                      ) : null}
-                      {queued.fastMode === true ? <span>Fast mode</span> : null}
-                      {typeof queued.executionAgent === "string" ||
-                      typeof queued.agent === "string" ? (
-                        <span>{String(queued.executionAgent ?? queued.agent)}</span>
-                      ) : null}
-                      {attachments > 0 ? (
-                        <span>
-                          {attachments} attachment{attachments === 1 ? "" : "s"}
-                        </span>
-                      ) : null}
-                      {steerNote ? <span>{steerNote}</span> : null}
-                    </>
-                  );
-                }}
-                dispatchError={
-                  projection.queue.blocked ? { message: projection.queue.blocked.error } : undefined
-                }
-                onRetryDispatch={async () => {
-                  await retryQueue();
-                }}
-              />
-            ) : null
+                  onEdit={editQueuedPrompt}
+                  onMove={async (fromIndex, toIndex) => {
+                    const message = queuedMessages[fromIndex];
+                    if (!message || fromIndex === toIndex) return;
+                    // The durable queue moves one position at a time, so a drag
+                    // across several rows is applied as that many steps rather
+                    // than silently landing one slot from where it was dropped.
+                    const direction = toIndex < fromIndex ? "up" : "down";
+                    for (let step = 0; step < Math.abs(toIndex - fromIndex); step += 1) {
+                      await moveQueued(message.id, direction);
+                    }
+                  }}
+                  onRemove={async (messageId) => {
+                    await removeQueued(messageId);
+                  }}
+                  onSteer={steerQueuedPrompt}
+                  canSteer={canSteerQueuedPrompt}
+                  renderMeta={(message) => {
+                    const queued = message as Record<string, unknown>;
+                    const steerNote = queuedRowSteerNote(message);
+                    const attachments = Array.isArray(queued.attachments)
+                      ? queued.attachments.length
+                      : 0;
+                    return (
+                      <>
+                        {queued.mode === "plan" || queued.mode === "build" ? (
+                          <span>{queued.mode === "plan" ? "Plan" : "Build"}</span>
+                        ) : null}
+                        {typeof queued.model === "string" ? (
+                          <span>{resolveModelLabel(queued.model)}</span>
+                        ) : null}
+                        {typeof queued.reasoningEffort === "string" ? (
+                          <span>{reasoningLabel(queued.reasoningEffort)}</span>
+                        ) : null}
+                        {queued.fastMode === true ? <span>Fast mode</span> : null}
+                        {typeof queued.executionAgent === "string" ||
+                        typeof queued.agent === "string" ? (
+                          <span>{String(queued.executionAgent ?? queued.agent)}</span>
+                        ) : null}
+                        {attachments > 0 ? (
+                          <span>
+                            {attachments} attachment{attachments === 1 ? "" : "s"}
+                          </span>
+                        ) : null}
+                        {steerNote ? <span>{steerNote}</span> : null}
+                      </>
+                    );
+                  }}
+                  dispatchError={
+                    projection.queue.blocked
+                      ? { message: projection.queue.blocked.error }
+                      : undefined
+                  }
+                  onRetryDispatch={async () => {
+                    await retryQueue();
+                  }}
+                />
+              ) : null}
+            </>
           }
         />
       }
@@ -4367,6 +4435,9 @@ export function SharedNativeAgentController({
                   turnActive={isTurnActive}
                 />
                 <div className="min-h-0 flex-1">{chatShell}</div>
+                {floatingNotices && agentPrompts.length > 0 ? (
+                  <HumanPromptBanner prompts={agentPrompts} />
+                ) : null}
               </div>
               {openSubork && openSuborkView ? (
                 <SuborkTranscriptDialog

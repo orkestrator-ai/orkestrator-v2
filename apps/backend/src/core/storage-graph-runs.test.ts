@@ -67,6 +67,74 @@ function activations(count: number, state: "complete" | "superseded" = "complete
 }
 
 describe("graph-runs store", () => {
+  for (const creates of [false, true]) {
+    test(`deferred provisioning ${creates ? "keeps creation" : "does not grant membership"} authority`, async () => {
+      const storage = await openStorage();
+      const fixture = graphRunFixture();
+      await storage.coordinators.saveCoordinatorWorkflowAssociation({
+        id: "graph-owner",
+        projectId: fixture.projectId,
+        coordinatorId: "coordinator",
+        conversationId: "conversation",
+        kind: "graph-run",
+        resourceId: fixture.id,
+        requestId: "launch",
+        createdAt: GRAPH_FIXTURE_AT,
+      });
+      const run = await storage.graphRuns.createGraphRun({
+        ...fixture,
+        environmentId: undefined,
+        status: "provisioning",
+        launch: { requestedBy: "coordinator", ...(creates ? { create: "worktree" as const } : {}) },
+      });
+      expect(
+        (await storage.coordinators.listCoordinatorWorkflowAssociations(fixture.projectId))[0]!
+          .createdEnvironmentId,
+      ).toBeUndefined();
+      await storage.graphRuns.saveGraphRun(
+        { ...run, environmentId: "e1", status: "running" },
+        run.revision,
+      );
+      if (creates) {
+        const running = (await storage.graphRuns.getGraphRun(run.id))!;
+        await storage.graphRuns.saveGraphRun({ ...running, status: "complete" }, running.revision);
+        expect(await storage.graphRuns.pruneFinishedGraphRuns("e1", 0)).toEqual([run.id]);
+        expect(await storage.graphRuns.getGraphRun(run.id)).toBeNull();
+      }
+      const reloaded = await openStorage(storage.getDataDir());
+      expect(
+        (await reloaded.coordinators.listCoordinatorWorkflowAssociations(fixture.projectId))[0]!
+          .createdEnvironmentId,
+      ).toBe(creates ? "e1" : undefined);
+    });
+  }
+
+  test("history pruning repairs creation publication interrupted by a restart", async () => {
+    const storage = await openStorage();
+    const run = await storage.graphRuns.createGraphRun(
+      graphRunFixture({
+        status: "complete",
+        launch: { requestedBy: "coordinator", create: "worktree" },
+      }),
+    );
+    // Model a launch receipt recovered after the run was already published.
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "recovered",
+      projectId: run.projectId,
+      coordinatorId: "coordinator",
+      conversationId: "conversation",
+      kind: "graph-run",
+      resourceId: run.id,
+      requestId: "launch",
+      createdAt: GRAPH_FIXTURE_AT,
+    });
+    await storage.graphRuns.pruneFinishedGraphRuns("e1", 0);
+    expect(
+      (await storage.coordinators.listCoordinatorWorkflowAssociations(run.projectId))[0]!
+        .createdEnvironmentId,
+    ).toBe("e1");
+  });
+
   test("creates, reloads in another process and lists by environment", async () => {
     const storage = await openStorage();
     const created = await storage.graphRuns.createGraphRun(graphRunFixture());

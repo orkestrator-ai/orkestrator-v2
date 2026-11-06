@@ -93,6 +93,7 @@ import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { BackendDiagnostics } from "./backend-diagnostics.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
@@ -173,7 +174,7 @@ import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
-import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
+import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
 import { BACKEND_CAPABILITIES, type BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
@@ -225,7 +226,7 @@ import {
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import type { Environment } from "./models.js";
+import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -358,6 +359,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
+  readonly diagnostics: BackendDiagnostics;
   private accountAutoSwitch!: AgentAccountAutoSwitcher;
   private usageLimitNotices!: CoordinatorUsageLimitNotices;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
@@ -802,6 +804,8 @@ export class OrkestratorBackend {
       forceRegistration: options.commandNode === true,
       portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
       selfAccess: () => this.selfAccessSource(),
+      // Work this node's coordinators were waiting on there can no longer arrive.
+      onNodesReleased: (nodes, reason) => void this.coordinators.nodesReleased(nodes, reason),
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
       ...(options.nodeLinks?.timers ? { timers: options.nodeLinks.timers } : {}),
       ...(options.nodeLinks?.heartbeatMs ? { heartbeatMs: options.nodeLinks.heartbeatMs } : {}),
@@ -820,6 +824,11 @@ export class OrkestratorBackend {
       },
     });
     context.machineLoad = this.machineLoad;
+    this.diagnostics = new BackendDiagnostics({
+      dataDir: options.dataDir,
+      changeTracking: () => this.runtime.changeTracking,
+    });
+    context.diagnostics = this.diagnostics;
     context.nodes = this.nodes;
     // While a leaf, this node works with its command node's settings.
     storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
@@ -853,6 +862,7 @@ export class OrkestratorBackend {
         invokeOnNode: (input) => this.nodePortal.invokeOnNode(input),
         summaries: (nodeIds) => this.nodePortal.summaries(nodeIds),
         collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
+        registeredNodeIds: () => this.nodes.registeredNodeIds(),
       }),
     );
     this.coordinators.noticeRouter.setOutbox({
@@ -1846,26 +1856,44 @@ export class OrkestratorBackend {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
-    return lastAssistantText((await this.workerProjection(environmentId, tabId, 6))?.messages);
+    const projection = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getProjection({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        messageLimit: 6,
+      }),
+    );
+    return lastAssistantText(projection?.messages);
   }
 
   /**
    * Whether a waiting worker tab is blocked on an approval or a question, from
    * its pending interactions rather than its activity state, which cannot say.
+   * Reads session state only: the interactions need no transcript.
    */
   private async waitingBlocker(
     environmentId: string,
     tabId: string,
   ): Promise<CoordinatorWaitingBlocker | undefined> {
-    return waitingBlocker((await this.workerProjection(environmentId, tabId, 1))?.interactions);
+    const state = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getSessionStateUpdate({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        viewVersion: 1,
+        forceSnapshot: true,
+      }),
+    );
+    return waitingBlocker(state?.status === "snapshot" ? state.value.interactions : undefined);
   }
 
-  /** A short projection read of one worker tab with a deadline; null when unavailable. */
-  private async workerProjection(
+  /** A short read of one worker tab's session with a deadline; null when unavailable. */
+  private async workerRead<T>(
     environmentId: string,
     tabId: string,
-    messageLimit: number,
-  ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
+    read: (agent: PersistedNativeAgentSession["agent"], logicalSessionKey: string) => Promise<T>,
+  ): Promise<T | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     const session = (await this.context.storage.readNativeAgentSessionsSnapshot()).find(
       (candidate) =>
@@ -1880,14 +1908,7 @@ export class OrkestratorBackend {
     });
     try {
       return await Promise.race([
-        this.nativeAgents
-          .getProjection({
-            environmentId,
-            agent: session.agent,
-            logicalSessionKey,
-            messageLimit,
-          })
-          .catch(() => null),
+        read(session.agent, logicalSessionKey).catch(() => null),
         deadline,
       ]);
     } finally {
@@ -2076,6 +2097,7 @@ export class OrkestratorBackend {
     });
     this.hostSuspendDetector.start();
     this.machineLoad.start();
+    if (process.env.NODE_ENV !== "test") this.diagnostics.health.start();
     this.accountAutoSwitch.start();
     // Containers hold Claude logins access-only; this hands them each host
     // renewal and renews the host login before it lapses.
@@ -2885,6 +2907,7 @@ export class OrkestratorBackend {
     installationId: string;
     generation: string;
     appVersion: string;
+    buildCommit: string | null;
     profile: BackendProfile;
     nodeMode: NodeMode;
   }> {
@@ -2897,6 +2920,7 @@ export class OrkestratorBackend {
       installationId: identity.instanceId,
       generation: storage.getResourceGeneration(),
       appVersion: APP_VERSION,
+      buildCommit: BUILD_COMMIT,
       profile,
       nodeMode: this.nodes.mode(),
     };
@@ -2911,6 +2935,7 @@ export class OrkestratorBackend {
       isPortalOriginAllowed: (origin) => this.nodes.isPortalOriginAllowed(origin),
       noteControllerContact: (id) => this.nodes.noteControllerContact(id),
       authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
+      onGrantRevoked: (token, listener) => this.nodePortal.grants.onRevoke(token, listener),
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
       isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };
@@ -2927,6 +2952,16 @@ export class OrkestratorBackend {
    */
   setSelfAccessSource(source: () => Promise<{ token: string | null; origins: string[] }>): void {
     this.selfAccessSource = source;
+  }
+
+  /** Cached database diagnostics for gateway transport adapters. */
+  databaseStats() {
+    return this.diagnostics.databaseStats();
+  }
+
+  /** Supplies the gateway metrics included in diagnostics exports. */
+  attachGatewayMetrics(source: () => unknown): void {
+    this.diagnostics.attachGatewayMetrics(source);
   }
 
   /** Backend-owned preview services, for gateway transport adapters. */
@@ -3046,7 +3081,9 @@ export class OrkestratorBackend {
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();
     cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
+    this.diagnostics.health.stop();
     const attempt = (async () => {
+      let drained = false;
       try {
         const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;
         // Close both admission gates before waiting on any in-flight work.
@@ -3135,6 +3172,7 @@ export class OrkestratorBackend {
         });
         if (!commandTermination.stopped)
           throw new Error("User command termination could not be confirmed. Retry shutdown.");
+        drained = true;
       } finally {
         // Even failed shutdown must retain ownership until every mirror writer settles.
         this.environmentLifecycleTasks.beginShutdown(this.environmentLifecycleDrainTimeoutMs);
@@ -3163,6 +3201,8 @@ export class OrkestratorBackend {
           this.hostMaintenance.close();
           compatibilityPathUsage.detach(this.compatibilityPathSink);
           closeEnvironmentCleanupStorage();
+          // The last shutdown step: a failed drain leaves no clean-exit marker.
+          this.diagnostics.close({ clean: drained });
           this.context.storage.close();
         };
         if (this.environmentLifecycleTasks.pendingCount() > 0) {

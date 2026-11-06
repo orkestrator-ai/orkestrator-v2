@@ -273,3 +273,16 @@ projection race; no root cause is established. Original group evidence:
 - The initial wait checked only identified children and the rejected spawn's name. That condition can hold before child activity hydration finishes.
 - Repair: wait for the three expected names and tool actions and the rejected spawn's failure action before taking the snapshot. All existing snapshot assertions remain.
 - Owning check: `mise run test:logged -- --name codex-cards -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed (one test, 0.7 seconds). This addresses the partial-hydration symptom; the earlier cold-restart recovering/idle symptom remains open.
+
+## Egress name-check repair validation — 2026-11-05
+
+The first `mise run test:logged -- --name review-default-tests -- mise run test`
+rerun failed `each child keeps one card, its transcript and status across a fresh
+backend and a cold restart` after 15,201.59 ms. The aggregate was interrupted by
+the pipeline pause before complete totals; its workspace used six reserved worker
+slots, with two workers per package. No card implementation or owner test changed.
+`mise run test:logged -- --name codex-cards-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`
+then passed with exit 0 in 1.4 s. The interrupted aggregate's original raw evidence
+is `orkestrator-test-run.20KKVR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+under the host temporary directory. Contention is a hypothesis; no host load was
+measured. This observation does not establish a fix.

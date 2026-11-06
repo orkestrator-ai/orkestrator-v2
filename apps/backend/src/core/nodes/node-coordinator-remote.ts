@@ -45,6 +45,8 @@ export interface NodeCoordinatorRemoteDeps {
   summaries(nodeIds?: string[]): Promise<NodeSummariesResult>;
   /** Collect a node's outbox now (the mail collector). */
   collectMail?(nodeId: string): Promise<boolean>;
+  /** The node registry's controlled node ids (`NodeService.registeredNodeIds`). */
+  registeredNodeIds?(): Promise<ReadonlySet<string>>;
 }
 
 /** A routed read, or `"unavailable"` when the node did not answer. */
@@ -127,7 +129,15 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
-    const projection = await this.workerProjection(nodeId, environmentId, tabId, 5);
+    const projection = await this.workerRead(
+      nodeId,
+      environmentId,
+      tabId,
+      (logicalSessionKey, agent) => [
+        "get_native_agent_projection",
+        { environmentId, agent, logicalSessionKey, messageLimit: 5 },
+      ],
+    );
     return projection ? lastAssistantText(projection.messages) : undefined;
   }
 
@@ -136,28 +146,36 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     environmentId: string,
     tabId: string,
   ): Promise<CoordinatorWaitingBlocker | undefined> {
-    const projection = await this.workerProjection(nodeId, environmentId, tabId, 1);
-    return projection ? waitingBlocker(projection.interactions) : undefined;
+    // Session state only: the interactions need no transcript read. Every node
+    // in the support window serves this command (since #670).
+    const update = await this.workerRead(
+      nodeId,
+      environmentId,
+      tabId,
+      (logicalSessionKey, agent) => [
+        "get_native_agent_session_state_update",
+        { environmentId, agent, logicalSessionKey, viewVersion: 1, forceSnapshot: true },
+      ],
+    );
+    const state =
+      update?.status === "snapshot" && isRecord(update.value) ? update.value : undefined;
+    return state ? waitingBlocker(state.interactions) : undefined;
   }
 
-  /** The worker tab's native projection on its node, or undefined when it cannot be read. */
-  private async workerProjection(
+  /** One read of the worker tab's native session on its node, or undefined when it cannot be read. */
+  private async workerRead(
     nodeId: string,
     environmentId: string,
     tabId: string,
-    messageLimit: number,
+    command: (logicalSessionKey: string, agent: unknown) => [string, JsonRecord],
   ): Promise<JsonRecord | undefined> {
     const layout = await read<unknown>(this.deps, nodeId, "get_pane_layout", { environmentId });
     if (layout === "unavailable") return undefined;
     const native = nativeTab(layout, tabId);
     if (!native) return undefined;
-    const projection = await read<unknown>(this.deps, nodeId, "get_native_agent_projection", {
-      environmentId,
-      agent: native.agent,
-      logicalSessionKey: `env-${environmentId}:${tabId}`,
-      messageLimit,
-    });
-    return projection === "unavailable" || !isRecord(projection) ? undefined : projection;
+    const [name, args] = command(`env-${environmentId}:${tabId}`, native.agent);
+    const result = await read<unknown>(this.deps, nodeId, name, args);
+    return result === "unavailable" || !isRecord(result) ? undefined : result;
   }
 
   async workflow(
@@ -221,6 +239,11 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
         ? { deleting: true }
         : {}),
     };
+  }
+
+  registeredNodeIds(): Promise<ReadonlySet<string>> {
+    if (!this.deps.registeredNodeIds) return Promise.reject(new Error("Node registry unavailable"));
+    return this.deps.registeredNodeIds();
   }
 
   async nodeName(nodeId: string): Promise<string> {

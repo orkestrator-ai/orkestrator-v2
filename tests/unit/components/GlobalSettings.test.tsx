@@ -1379,7 +1379,7 @@ describe("GlobalSettings", () => {
     expect(screen.getByText("Limit resources of new containers")).toBeTruthy();
     rerender(<GlobalSettings activeSection="experimental" />);
     expect(screen.getByRole("switch", { name: "Enable scheduling" })).toBeTruthy();
-    expect(screen.queryByText("Codex Raw Event Logging")).toBeNull();
+    expect(screen.queryByText("Codex Raw Event Logging") === null).toBe(true);
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("App version")).toBeTruthy();
     expect(screen.getByText("Save Logs to Disk")).toBeTruthy();
@@ -1644,7 +1644,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
     const choices = screen.getByRole("radiogroup", { name: "Coordinator web research" });
     expect(
       (within(choices).getByRole("radio", { name: /Web search only/ }) as HTMLInputElement).checked,
@@ -1691,7 +1691,7 @@ describe("GlobalSettings", () => {
   });
 
   test("persists a coordinator safety level change on its own", async () => {
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {
@@ -1720,7 +1720,7 @@ describe("GlobalSettings", () => {
         global: { ...state.config.global, coordinatorProviderTiers: "enforced" },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {
@@ -2165,7 +2165,7 @@ describe("GlobalSettings", () => {
     expect(
       screen.getByRole("combobox", { name: "GitHub access for containers" }).textContent,
     ).toContain("No GitHub access");
-    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.queryByRole("note") === null).toBe(true);
 
     await chooseContainerCredential("Share host GitHub CLI token");
     expect(screen.getByRole("note").textContent).toContain("read this token in every container");
@@ -2180,12 +2180,12 @@ describe("GlobalSettings", () => {
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
 
     await chooseContainerCredential("No GitHub access");
-    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.queryByRole("note") === null).toBe(true);
   });
 
   test("offers the token field for containers while the backend keeps the host login", async () => {
     render(<GlobalSettings activeSection="version-control" />);
-    expect(screen.queryByLabelText("GitHub token")).toBeNull();
+    expect(screen.queryByLabelText("GitHub token") === null).toBe(true);
 
     await chooseContainerCredential("Personal access token");
 
@@ -2960,13 +2960,13 @@ describe("GlobalSettings", () => {
     try {
       window.orkestrator = undefined;
       const browser = render(<GlobalSettings activeSection="experimental" />);
-      expect(screen.queryByRole("switch", { name })).toBeNull();
+      expect(screen.queryByRole("switch", { name }) === null).toBe(true);
       browser.unmount();
 
       window.orkestrator = { ...original, isolatedViewState: true } as NonNullable<typeof original>;
       window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "https://desk.example" };
       const remote = render(<GlobalSettings activeSection="experimental" />);
-      expect(screen.queryByRole("switch", { name })).toBeNull();
+      expect(screen.queryByRole("switch", { name }) === null).toBe(true);
       remote.unmount();
 
       window.orkestratorGateway = undefined;

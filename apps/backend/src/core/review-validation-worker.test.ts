@@ -1721,22 +1721,42 @@ test("a measured command reserves its observed CPU use on the next run", async (
   expect(done.results[2]).toMatchObject({ reservedWorkers: 1 });
 }, 30000);
 
+test("drift-check Git calls disable optional locks", async () => {
+  const { root, run } = await fixture([command("check", "exit 0")]);
+  const calls = path.join(root, ".git", "lock-settings");
+  const env = await gitOnPath(`printf '%s:%s\\n' "$GIT_OPTIONAL_LOCKS" "$*" >> '${calls}'`);
+  // Exercise the complete worker, including HEAD, status and usage-scope reads.
+  const started = await control(root, run, "start", { ...env, GIT_OPTIONAL_LOCKS: "1" });
+  if (["planned", "running"].includes(started.status)) {
+    await observeUntil(root, run, (next) => !["planned", "running"].includes(next.status), 12_000);
+  }
+  const done = await control(root, run, "status");
+  expect(done.status).toBe("completed");
+  const recorded = (await readFile(calls, "utf8")).trim().split("\n");
+  expect(recorded).toContain("0:rev-parse --verify HEAD^{commit}");
+  expect(recorded).toContain("0:status --porcelain=v1 -z --untracked-files=all");
+  expect(recorded).toContain("0:rev-parse --git-common-dir");
+  expect(recorded.every((call) => call.startsWith("0:"))).toBe(true);
+}, 15_000);
+
 for (const interpreter of ["bun", "node"]) {
   test(`status timeout reports ETIMEDOUT and retries without fsmonitor (${interpreter})`, async () => {
     const { root } = await fixture();
     const calls = path.join(root, ".git", "status-calls");
     const env = await gitOnPath(`
-printf '%s\\n' "$*" >> '${calls}'
+printf '%s:%s\\n' "$GIT_OPTIONAL_LOCKS" "$*" >> '${calls}'
 if [ "$1" = "status" ]; then
   exec '${process.execPath}' -e 'setInterval(() => {}, 1000)'
 fi
 `);
     // Execute the worker's exact status/path helpers with a shorter deadline.
     // This is a real spawnSync timeout, rather than an invented error object.
+    // The deadline must outlast the fake Git's startup, or it dies before it
+    // records the call this test asserts on.
     const helpers = REVIEW_VALIDATION_WORKER.slice(
       REVIEW_VALIDATION_WORKER.indexOf("function gitOptions()"),
       REVIEW_VALIDATION_WORKER.indexOf("const seenDriftPaths"),
-    ).replace("timeout: 10000", "timeout: 200");
+    ).replace("timeout: 10000", "timeout: 2000");
     const script = `const { spawnSync } = require("node:child_process");
 const root = ${JSON.stringify(root)};
 ${helpers}
@@ -1744,7 +1764,7 @@ const status = worktreeStatus();
 process.stdout.write(JSON.stringify({ status: status.status, error: status.error?.code, stdout: status.stdout }));`;
     await writeFile(path.join(root, "source.txt"), "changed\n");
     const child = Bun.spawn([interpreter, "-e", script], {
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, GIT_OPTIONAL_LOCKS: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1757,8 +1777,8 @@ process.stdout.write(JSON.stringify({ status: status.status, error: status.error
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toEqual({ status: 0, stdout: " M source.txt\0" });
     expect((await readFile(calls, "utf8")).trim().split("\n")).toEqual([
-      "status --porcelain=v1 -z --untracked-files=all",
-      "-c core.fsmonitor=false status --porcelain=v1 -z --untracked-files=all",
+      "0:status --porcelain=v1 -z --untracked-files=all",
+      "0:-c core.fsmonitor=false status --porcelain=v1 -z --untracked-files=all",
     ]);
   }, 10_000);
 }

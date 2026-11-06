@@ -29,7 +29,7 @@ environment operations (`backend-runtime.test.ts`; the state moved by todo 1070 
 | --- | --- | --- |
 | `gitHubCli` | `GitHubCliSelection` | The `gh` this backend runs: its toolchain's pin, recorded at startup (`pin`), or the newest release under its data directory when the gh channel follows upstream (`select`, from `applyGhChannel` and `startGhUpdate`). Host `gh` runs take it as an argument (`gitHubCli(selection)`), beside `gitHubCliEnv`'s config source; `PrMonitorRuntime` and `CoordinatorPullRequestWatches` are handed it at construction. |
 | `diffStats` | `DiffStatsTracking` | Diff-stats tracking, Git freshness, worktree watchers. |
-| `terminals` | `TerminalRuntime` | PTYs, session configs, bounded replay buffers and deltas, stable tab keys, orphan reaping, terminal activity timers, and the account homes terminals were launched on (`recordAccountHome`, `isAccountHomeInUse`). `history` (`TerminalHistory`) owns durable terminal history: collectors, configurations, I/O tails, retention and page-read concurrency. Its write queue is bounded per session and overall, by bytes (each record also charged for its in-memory overhead) and by records; output past a bound is dropped and reported as `historyGap`. A flush starts at a high-water mark as well as on its timer, and writes its records once per segment. |
+| `terminals` | `TerminalRuntime` | PTYs, session configs, bounded replay buffers and deltas, stable tab keys, orphan reaping, terminal activity timers, and the account homes terminals were launched on (`recordAccountHome`, `isAccountHomeInUse`). `history` (`TerminalHistory`) owns durable terminal history: collectors, configurations, I/O tails, retention and page-read concurrency. Its write queue holds raw output chunks and is bounded per session and overall, by bytes (each chunk also charged for its in-memory overhead) and by chunks; output past a bound is dropped and reported as `historyGap`, and the archive then resumes at the next whole line. Chunks become sanitized, numbered rows only when a flush writes them, or earlier when a snapshot or checkpoint needs `session.sequence`, which numbers them without waiting for the disk. A flush starts at a high-water mark as well as on its timer, and writes in bounded batches. |
 | `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCodeAgentTools` (`OpenCodeAgentToolsReconciler`) owns OpenCode MCP reconciliation and, as `research` (`OpenCodeCoordinatorResearch`), the coordinator research registrations it forgets with the same keys; `openCodeHostStart` (`OpenCodeHostStartGate`) takes host OpenCode starts one at a time and holds the locked-database retry delays; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `catalogSeeds` (`HostCatalogSeeds`) owns the host model catalogue seeds (`host-model-catalog-seed.ts`): one flight per platform (and project, for OpenCode), the failure cooldown and the generation a sign-in bumps (`resetHostModelCatalogSeedCooldown(context, agent)`); `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in; `gitHubCliLogin` (`GitHubCliLoginSlot`) the single in-flight GitHub CLI sign-in, which isolates progress and cancellation only, since `gh auth login` writes the host's `gh` configuration; `openCodeProviderLogin` (`OpenCodeProviderLoginSlot`) the OpenCode provider sign-in, the reservation that lets one login change run at a time and the provider list single flight. |
 | `environments` | `EnvironmentOperations` | Setup sessions, the start/setup/baseline dedupe tasks, the per-environment lifecycle queue, the project-home ensures per project, the allowlist apply queue per environment, the environments a stop is draining (`container-readiness.ts` fences their containers), container replacement cancellations, and the delete and merge guards. `fence` (`EnvironmentMutationFence`) admits agent work, file writes and worker starts against a runtime replacement or a worktree move. |
 | `prMonitor` | `PrMonitorRuntime` | The `PrMonitorService` and its timers, its `external-pr` admission pool (both created on first use, because every pool registers in the process-wide diagnostics registry, capped at `MAX_DIAGNOSTIC_SOURCES` = 32, and most test runtimes never monitor a PR), the storage/emit binding of the latest caller (not the runtime's own `emit`, so tests that capture events through their context still see them), and the serialised sync queue. Merge cleanup is a construction option (`prMonitor.scheduleMergeCleanup`). |
@@ -165,6 +165,30 @@ Three limits apply:
   comes from reading XNU and has not been measured on a Mac. Do not use
   background QoS (`taskpolicy -b`), which throttles even on an idle machine.
 
+## One-shot commands
+
+A command that runs to completion goes through `runCommand` or
+`runCommandBuffer`. They live in `packages/protocol/src/node/command-capture.ts`,
+so the bridges share them, and the backend re-exports them from `shell.ts`. Its
+copy of `command-capture.ts` installs the hook that charges each one to
+recurring-work metrics.
+
+Output goes to unlinked files rather than pipes, because Bun can lose the end of
+a stream or a child's exit
+([case 1537](../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)).
+Nothing depends on a pipe's `close` event, and a deadline settles the call as a
+failure whatever the runtime reports, so a lost event can never read as success
+with output missing. Under Bun the child comes from `Bun.spawn`; where `Bun` does
+not exist (Electron's main process runs the SSH adapter) it comes from
+`node:child_process`.
+
+Use `spawnCommand` or `spawnParentBoundCommand` only for a child read while it
+runs: a log follower, a server, a stream. A caller that hands over one payload
+and waits for one answer is not a follower, and `runCommand`'s `stdin` covers it.
+Two sites keep their own capture and a deadline of their own: the review worktree
+fingerprint script has to stay self-contained for the container, and the database
+copy holds stdin open as its supervisor's liveness pipe.
+
 ## Process-wide on purpose
 
 Some module state describes the host or the Docker daemon, not one backend,
@@ -195,7 +219,7 @@ declaration:
 | `environment-cleanup-reconciler.ts` | `reportedStrayWithContent`, `scheduled` | Keyed by the resolved data directory. |
 | `bug-report-service.ts` | `filingFlights` | Keyed by data directory and report id. |
 | `git-fsmonitor.ts` | `fsmonitorMigrations` | Keyed by worktree path: the migration edits that worktree's config file on the host. |
-| `shell.ts` | `commandInvocations`, `commandObservers` | Count this process's own subprocesses for benchmarks; `runCommand` has no backend in reach. |
+| `packages/protocol/src/node/command-capture.ts` | `commandInvocations`, `commandObservers`, `commandCaptureMetrics` | Count this process's own subprocesses for benchmarks and recurring-work metrics; `runCommand` has no backend in reach. |
 | `transcript-artifacts/preview-supervisor.ts` | `backendStartIdentity` | The start identity of this process, which names the preview scratch it owns. |
 | `transcript-artifacts/dependency-manifest.ts` | `cache` | Verified bytes of a pinned bundle file, keyed by bundle and directory. |
 | `control-mcp-direct-tools.ts` | `compiled` | Schemas compiled from constants. |

@@ -1,0 +1,50 @@
+# Environment-deletion main merge validation
+
+- **ID:** 9839
+- **Status:** open
+- **Date observed:** 2026-11-06
+- **Original command:** `mise run test:logged -- --name merge-default -- mise run test`
+- **Merge parents:** `aeb6617edd1cc0a525c74eedf2b432584ac83b41` and `9f94b114204f3f98c643bc3489d2ac7d2c5220c6`.
+- **Worker configuration:** default aggregate; root one isolated worker, backend four isolated workers, and bridge group two worker slots. The nine-worker component browser suite and one-worker isolated gateway smoke also ran on this host.
+- **Suite counts:** root 3,707 pass and four fail across 191 files (505.77 s). The Codex bridge reported 2,400 pass, 63 skip and one fail across 113 files (80.07 s). Workspace summaries: backend 16,483 pass, 138 skip and eight fail across 1,101 files; web 13,056 pass, ten skip and one fail across 869 files; protocol 4,980 pass, two skip and one fail; CLI 501 pass, eight skip and three fail. Desktop, public web and toolchain had no failures. Aggregate exit 1 after 1,317.5 s. Counts preserve the original run, including the in-progress row assertion and subsequently repaired registry IDs.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HtWRHT/`, compressed by the aggregate on completion.
+
+## Aggregate failures whose complete unchanged owners passed alone
+
+Each rerun used `mise run test:logged`, one explicit owning file and `--parallel=1 --only-failures`; passing raw output was deleted by that runner. No assertion, timeout or skip changed.
+
+| Test | Owner | Original failure | Isolated rerun | Result |
+| --- | --- | --- | --- | --- |
+| `fallback to the ordinary clone > an object lost from deep in the history, which only the clone can find` | `tests/unit/workspace-setup-git-mirror.test.ts:309` | Git child status null; 6,809.93 ms, beyond the 5 s case deadline | `mise run test:logged -- --name merge-git-mirror-alone -- bun test ./tests/unit/workspace-setup-git-mirror.test.ts --parallel=1 --only-failures` | exit 0, 46.4 s |
+| `native shell completion execution > zsh bashcompinit parses option values and offers short flags` | `packages/cli/tests/command-surface.test.ts:375` | Bash child status null; 5,004.27 ms | `mise run test:logged -- --name merge-cli-completion-alone -- bun test --cwd packages/cli ./tests/command-surface.test.ts --parallel=1 --only-failures` | exit 0, 6.8 s |
+| `container removal safety and shared revert behavior > revert refuses a newly added folder containing a nested repository without mutation` | `apps/backend/src/core/commands-files-delete-folder.test.ts:260` | Expected nested-repository refusal, received an empty error; 5,305.84 ms and timeout | `mise run test:logged -- --name merge-folder-delete-alone -- bun test --cwd apps/backend ./src/core/commands-files-delete-folder.test.ts --parallel=1 --only-failures` | exit 0, 14.7 s |
+| `never runs the worktree's fsmonitor hook or takes optional locks (node)` | `apps/backend/src/core/review-worktree-fingerprint.test.ts` | 5,054.04 ms timeout | `mise run test:logged -- --name merge-fingerprint-alone -- bun test --cwd apps/backend ./src/core/review-worktree-fingerprint.test.ts --parallel=1 --only-failures` | exit 0, 24.1 s |
+| `bounded in-container boot wait > returns as soon as the current boot is ready, and prints what one read would` | `apps/backend/tests/container-readiness.test.ts:314` | Probe took 1,064.68 ms, expected below 1,000 ms; case 1,333.58 ms | `mise run test:logged -- --name merge-readiness-alone -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures` | exit 0, 9.5 s |
+
+The isolated passes establish intermittence. Host scheduling pressure is a hypothesis, not an established cause.
+
+Known recurrences are recorded in their existing cases: [0210](../agent-bridges/0210-fake-codex-process-timeout.md), [6193](../backend-services-and-tooling/6193-webkit-generation-reader-einval.md), [4843](4843-e8-recorded-backend-failures.md) and [9838](../environments-and-containers/9838-container-status-excludes-aggregate-timeout.md).
+
+## Other validation results
+
+These are not classified as flakes:
+
+- The register uniqueness test found three different files using ID 9834. The merge retained their evidence and assigned two unique IDs, 9837 and 9838, updating links and index rows. `mise run test:logged -- --name merge-registry -- bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures` then passed (1.2 s).
+- The aggregate started before the row selection integration assertion was added. It later failed `multi-select takes a failed cleanup but not a delete in flight, on either path` at the new assertion. A complete settled-source owner rerun passed (0.8 s), and `mise run test:logged -- --name merge-environments-federation -- bun test --cwd apps/web ./src/components/environments ./src/components/federation ./src/lib/federation --parallel=2 --only-failures` passed the environment/federation component and library groups together (31.7 s). This in-progress run is not classified as a flake.
+- `packages/protocol/src/node/shell-process-state.test.ts` still failed alone: seven pass, two fail (2.7 s). Both empty/zombie process-group checks returned true rather than false. Source and owner match the target parent exactly. Evidence: `orkestrator-test-run.mcEEhJ/merge-process-state-alone.log.gz` under the same temporary root.
+- `packages/cli/tests/cli.test.ts` still failed alone: 12 pass, one fail (37.9 s), `starts and gracefully stops the packaged backend`, readiness not observed within 20 s. The other NODE_ENV startup case passed alone. Evidence: `orkestrator-test-run.j0BPNV/merge-cli-package-alone.log.gz`.
+- `e2e/agent-testing/packaged-electron-app.test.ts` still failed alone: 13 pass, one fail (0.9 s). Its Linux-path expectation disagrees with the macOS path returned on this host. Evidence: `orkestrator-test-run.9uNwJY/merge-packaged-fixture-alone.log.gz`.
+- The aggregate also timed out `logins > Codex: a rotation and then a sign-out reach the home` in `apps/backend/tests/portable-inputs-stamps.test.ts` at 60,034.25 ms.
+- `apps/backend/tests/portable-inputs-stamps.test.ts` did not settle its isolated rerun: `mise run test:logged -- --name merge-stamps-alone -- bun test --cwd apps/backend ./tests/portable-inputs-stamps.test.ts --parallel=1 --only-failures` was stopped by the logged runner after 300.1 s without output. Evidence: `orkestrator-test-run.dr0X64/merge-stamps-alone.log.gz`. No isolated pass or root cause is claimed.
+- The restore-plan cap owner still timed out alone (19 pass, one fail and one between-test error in 11.8 s); the recurrence and exact command are recorded in [5360](../coordinator-and-multi-review/5360-measurement-file-cap-restore-plan-parallel-timeout.md).
+- The isolated gateway/deletion smoke had 13 pass, 11 skip and two failures (422.7 s): signed-out recovery received signed-in auth, and the diff-baseline clear did not settle in 15 s. The real deletion-failure/inactive-view/reload/Retry scenario passed. Evidence: `orkestrator-test-run.EPovyT/merge-live-delete.log.gz` and `output/agent-testing/merge-delete-0bf060/browser/`. The disposable profile was stopped and reset.
+
+Static checks and the resolved storage, protocol and row owners passed. The aggregate is not claimed green.
+
+## Full browser suite
+
+`mise run test:logged -- --name merge-browser -- mise run test:browser` exited 1 after 1,281.1 s: 1,517 pass, 135 skip and two failures. Both failures were `only the tab whose launch overrode the default is marked` in `e2e/TabLaunchOverride.spec.ts:8`, one at each viewport, because the expected button accessible name was absent. The requested badge itself passed its count, text and tooltip assertions. Original evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.Cfz7YY/merge-browser.log.gz`.
+
+`mise run test:logged -- --name merge-tab-launch-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/TabLaunchOverride.spec.ts --workers=1` reproduced both failures in the complete owner (four pass, two fail; 20.5 s). The owner and fixture match the target parent exactly. Isolated evidence: `orkestrator-test-run.j7kxnl/merge-tab-launch-alone.log.gz` under the same temporary root. This persistent failure is not classified as a flake.
+
+Electron, Docker and iOS scenario suites were not run: the conflict resolutions do not change those execution paths. The disposable real-stack profile `merge-delete-0bf060` was stopped and reset; its deletion failure screenshot is `output/visual-previews/delete-retry-real-failure.png`.

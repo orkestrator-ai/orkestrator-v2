@@ -86,7 +86,27 @@ export async function runStatusScenario(input: {
   const budgets = coordinatorLiveBudgets();
 
   // Saved Multi Review defaults on this platform, as the button would use.
-  const config = await invoke<{ global: Record<string, unknown> }>("get_config");
+  const config = await invoke<{
+    global: Record<string, unknown>;
+    repositories: Record<string, { coordinatorOtherEnvironments?: boolean }>;
+  }>("get_config");
+  // These fixtures are made by the harness, so the coordinator needs the
+  // project's explicit opt-in before it can review or prompt them.
+  const previousOtherEnvironments = config.repositories[projectId]?.coordinatorOtherEnvironments;
+  cleanup.push(() =>
+    invoke("patch_repository_settings", {
+      projectId,
+      updates:
+        previousOtherEnvironments === undefined
+          ? {}
+          : { coordinatorOtherEnvironments: previousOtherEnvironments },
+      unset: previousOtherEnvironments === undefined ? ["coordinatorOtherEnvironments"] : [],
+    }),
+  );
+  await invoke("patch_repository_settings", {
+    projectId,
+    updates: { coordinatorOtherEnvironments: true },
+  });
   const previousAgentSettings = config.global.agentSettings;
   await invoke("update_global_config", {
     global: {

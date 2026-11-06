@@ -94,9 +94,9 @@ Pi also discovers project extensions from agent-writable workspace paths when `p
 
 ## Related
 
-- [`3930-bridge-credential-out-of-agent-uid.md`](3930-bridge-credential-out-of-agent-uid.md) (the design this limits)
-- [`4981-opencode-password-readable-by-agent.md`](4981-opencode-password-readable-by-agent.md) (what OpenCode's server does now)
-- [`4210-read-only-boundary-from-a-token-holder.md`](4210-read-only-boundary-from-a-token-holder.md)
+- `3930-bridge-credential-out-of-agent-uid.md` (deleted 2026-11-06) (the design this limits)
+- `4981-opencode-password-readable-by-agent.md` (deleted 2026-11-06) (what OpenCode's server does now)
+- `4210-read-only-boundary-from-a-token-holder.md` (deleted 2026-11-06)
 - `docs/reports/2-26-10-27-security.md`, H4.
 
 ## Assumptions and decisions

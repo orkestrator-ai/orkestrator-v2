@@ -16,6 +16,7 @@ import {
   isCoordinatorReadOnlyPolicy,
   processExecutionPolicyIsCoordinator,
 } from "./read-only-policy.js";
+import { coordinatorReadBoundary, type ReadBoundary } from "./read-only-path-boundary.js";
 
 /**
  * The paths a read-only turn's commands may not write: the checkout as named
@@ -95,12 +96,19 @@ export function claudeReadOnlyCommandSandbox(
 export function claudeExecutionSandbox(
   policy: NativeAgentExecutionPolicy | undefined,
   asksForApproval: boolean,
-  readOnly: { cwd?: string; commandSandbox?: CoordinatorCommandSandbox } = {},
+  readOnly: {
+    cwd?: string;
+    commandSandbox?: CoordinatorCommandSandbox;
+    /** Tests name one; a bridge reads the launcher's from its environment. */
+    readBoundary?: ReadBoundary | null;
+  } = {},
 ): Options["sandbox"] {
   if (policy && isCoordinatorReadOnlyPolicy(policy)) {
+    const workspaces = claudeReadOnlyWorkspaces(readOnly.cwd ?? claudeWorkspaceCwd());
     return claudeReadOnlySandbox(policy, {
-      workspaces: claudeReadOnlyWorkspaces(readOnly.cwd ?? claudeWorkspaceCwd()),
+      workspaces,
       commandSandbox: readOnly.commandSandbox ?? claudeReadOnlyCommandSandbox().commandSandbox,
+      readBoundary: readOnly.readBoundary ?? coordinatorReadBoundary(workspaces),
     });
   }
   if (policy?.sandbox !== "provider") return undefined;

@@ -47,6 +47,7 @@ describe("test tier selection", () => {
     for (const [pkg, file] of [
       ["apps/backend", "tests/gateway-proxy-idle-timers.test.ts"],
       ["packages/protocol", "src/node/preview-forward.test.ts"],
+      ["packages/protocol", "src/node/command-capture-reap.integration.test.ts"],
     ]) {
       expect(tierArguments("slow", repositoryRoot, pkg!, ["."])).toContain(`./${file}`);
       expect(tierArguments("default", repositoryRoot, pkg!, ["."])).toContain(

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   emptyContainerLifecycle,
@@ -432,14 +432,28 @@ printf '%s\\n' "$1" >> "$FAKE_DOCKER_LOG"
 exit 0
 `,
       async (log) => {
+        const pollMs = 100;
+        const timeoutMs = 450;
+        const probes = () =>
+          existsSync(log.path)
+            ? readFileSync(log.path, "utf8")
+                .split("\n")
+                .filter((command) => command === "exec").length
+            : 0;
+        const startedAt = Date.now();
         const failure = await waitForContainerBoot("container-1", {
-          pollMs: 100,
-          timeoutMs: 450,
+          pollMs,
+          timeoutMs,
+          // Spawning the fake docker can use the whole budget on a loaded host,
+          // so the deadline holds off until a second probe has had its turn.
+          now: () => (probes() < 2 ? Math.min(Date.now(), startedAt + timeoutMs - 1) : Date.now()),
         }).catch((e) => e);
+        const elapsedMs = Date.now() - startedAt;
         expect((failure as ContainerInitializationError).reason).toBe("timed-out");
-        const execs = (await log.read()).trim().split("\n").length;
+        const execs = probes();
         expect(execs).toBeGreaterThanOrEqual(2);
-        expect(execs).toBeLessThanOrEqual(6);
+        // Probe starts are at least pollMs apart, however long the wait took.
+        expect(execs).toBeLessThanOrEqual(Math.ceil(elapsedMs / pollMs) + 1);
       },
     );
   });

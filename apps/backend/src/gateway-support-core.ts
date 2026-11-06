@@ -1,3 +1,4 @@
+import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
   type IncomingHttpHeaders,
@@ -39,6 +40,10 @@ export type BackendInvoker = {
    * such as during shutdown.
    */
   hasCommand?(command: string): boolean;
+  /** The database figures `/metrics` reports; absent from a backend with no database. */
+  databaseStats?(): DatabaseStats;
+  /** Lets the backend's diagnostics read the same snapshot `/metrics` answers. */
+  attachGatewayMetrics?(source: () => unknown): void;
 };
 
 export type NetworkInterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;
@@ -88,6 +93,8 @@ export interface BackendHelloIdentity {
   installationId: string;
   generation: string;
   appVersion: string;
+  /** Absent or `null` when this build has no commit to report. */
+  buildCommit?: string | null;
   profile: import("@orkestrator/protocol/backend-profile").BackendProfile;
   /** Command-node role; absent from embedded gateways without command nodes. */
   nodeMode?: "standalone" | "command" | "leaf";
@@ -100,6 +107,11 @@ export interface GatewayNodeHooks {
   noteControllerContact(controllerId: string): void;
   /** Expiry (ms) of a live client grant this token proves, else `null`. */
   authenticateGrant?(token: string): number | null;
+  /**
+   * Calls `listener` once when the client grant this token proves is removed and
+   * returns the unsubscribe; `null` when the token proves no grant held here.
+   */
+  onGrantRevoked?(token: string, listener: () => void): (() => void) | null;
   /** Where `/__orkestrator/nodes/<id>/…` relays to; `null` while that node is not connected. */
   relayTarget?(nodeId: import("@orkestrator/protocol/federation").BackendId): {
     baseUrl: string;
@@ -144,6 +156,11 @@ export interface OrkestratorGatewayOptions {
   allowedOrigins?: string[];
   compression?: GatewayCompressionMode;
   keepaliveMs?: number;
+  /** Optional traffic clock/scheduler, for deterministic burst attribution tests. */
+  trafficSummary?: Pick<
+    import("./gateway-traffic-summary.js").GatewayTrafficSummaryOptions,
+    "now" | "schedule"
+  >;
   proxyBodyIdleTimeoutMs?: number;
   /** Legacy browser-preview connect+headers deadline (default 30 s). */
   browserPreviewHeadersTimeoutMs?: number;

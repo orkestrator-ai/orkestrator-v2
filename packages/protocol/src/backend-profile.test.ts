@@ -100,6 +100,37 @@ describe("backend hello", () => {
     expect(() => parseBackendHello(hello({ capabilities: { "Bad Name": 1 } }))).toThrow();
   });
 
+  test("keeps a valid build commit, abbreviated or full", () => {
+    for (const commit of ["abc1234", "0123456789abcdef0123456789abcdef01234567"]) {
+      expect(parseBackendHello(hello({ buildCommit: commit })).buildCommit).toBe(commit);
+    }
+  });
+
+  test("a hello without a build commit has none", () => {
+    const parsed = parseBackendHello(hello());
+    expect(parsed.buildCommit).toBeUndefined();
+    expect("buildCommit" in parsed).toBe(false);
+  });
+
+  test("drops an invalid build commit and still accepts the hello", () => {
+    for (const buildCommit of [
+      "",
+      "abc123",
+      "ABC1234",
+      "abc1234-dirty",
+      "abc1234\n",
+      "g".repeat(40),
+      "a".repeat(41),
+      1234567,
+      null,
+      { commit: "abc1234" },
+    ]) {
+      const parsed = parseBackendHello(hello({ buildCommit }));
+      expect(parsed.installationId as string).toBe("bk_one");
+      expect("buildCommit" in parsed).toBe(false);
+    }
+  });
+
   test("a backend outside the client API range is incompatible", () => {
     const parsed = parseBackendHello(
       hello({ clientApi: { minVersion: CLIENT_API_VERSION + 1, maxVersion: 9 } }),

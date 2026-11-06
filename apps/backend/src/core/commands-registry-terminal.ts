@@ -46,10 +46,11 @@ import {
   inferLanguage,
   assertEditorTextFileSize,
   decodeEditorTextFile,
-  spawnCommand,
+  runCommand,
   writeFileBase64,
   CommandFailedError,
 } from "./shell.js";
+import { runContainerWrite } from "./container-write.js";
 import {
   INITIAL_PROMPT_STAGING_DIRECTORY,
   MAX_TOTAL_ATTACHMENT_BYTES,
@@ -129,8 +130,11 @@ import { readableHostFileRoots } from "./readable-host-roots.js";
 import { containerGitBlobReadCommand, decodeGitBatchOutput } from "./git-blob-read.js";
 import {
   parseReviewWorktreeFingerprint,
-  REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
+  REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS,
+  REVIEW_WORKTREE_PROBE_TIMEOUT_MS,
+  reviewWorktreeProbeArgs,
 } from "./review-worktree-fingerprint.js";
+import { KeyedTrailingFlight } from "./keyed-trailing-flight.js";
 import type { TerminalHistory } from "./terminal-history.js";
 import {
   activeAgentAccountShellEnvironment,
@@ -236,6 +240,14 @@ function resizeTerminalHistoryBestEffort(
       .catch(() => undefined);
   }
 }
+
+/**
+ * One worktree probe at a time per environment and kind. A guard, a stage
+ * start and a review fan-out can all ask at once, and on a slow or busy disk
+ * concurrent `git status` walks of one checkout only slow each other down.
+ * Process-wide on purpose: the worktree is shared by every backend that asks.
+ */
+const worktreeProbes = new KeyedTrailingFlight<string>();
 
 export function registerTerminalCommands(
   register: CommandRegistrar,
@@ -1008,15 +1020,15 @@ export function registerTerminalCommands(
   register("delete_local_file", async ({ environmentId, filePath }, context) => {
     const id = asString(environmentId, "environmentId");
     return withLocalFileMutation(context, id, async (environment) => {
-      const result = await deleteLocalFile(
-        environment.worktreePath!,
-        asString(filePath, "filePath"),
-      );
-      context.runtime.diffStats.service.invalidateChanges({
-        worktreePath: environment.worktreePath!,
-      });
-      context.runtime.diffStats.service.refresh(id);
-      return result;
+      try {
+        return await deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
+      } finally {
+        // A failed recursive removal can still have changed files or the index.
+        context.runtime.diffStats.service.invalidateChanges({
+          worktreePath: environment.worktreePath!,
+        });
+        context.runtime.diffStats.service.refresh(id);
+      }
     });
   });
   register(
@@ -1148,12 +1160,17 @@ export function registerTerminalCommands(
     // Electron and need not contain any Node at all. Use the same managed Bun
     // the rest of the local command surface relies on.
     const local = environment.environmentType === "local";
+    const timeoutMs = wantFingerprint
+      ? REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS
+      : REVIEW_WORKTREE_PROBE_TIMEOUT_MS;
     const captured = parseReviewWorktreeFingerprint(
-      await runner(
-        local ? resolveBunBinary(context) : "node",
-        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, ...(wantFingerprint ? ["fingerprint"] : [])],
-        wantFingerprint ? 120_000 : 30_000,
-        local ? envWithManagedBinaries(context) : undefined,
+      await worktreeProbes.run(`${environment.id}\0${wantFingerprint}`, () =>
+        runner(
+          local ? resolveBunBinary(context) : "node",
+          reviewWorktreeProbeArgs(wantFingerprint, timeoutMs),
+          timeoutMs,
+          local ? envWithManagedBinaries(context) : undefined,
+        ),
       ),
     );
     return {
@@ -1269,7 +1286,7 @@ export function registerTerminalCommands(
       // App-owned evidence: no symbolic link anywhere on the path, exclusive
       // temp file, atomic rename. A workspace cannot redirect this write.
       await runContainerEvidenceScript(
-        spawnCommand,
+        runCommand,
         id,
         CONTAINER_EVIDENCE_WRITER,
         ["/workspace", target, String(MAX_BASE64_PAYLOAD_BYTES)],
@@ -1278,31 +1295,16 @@ export function registerTerminalCommands(
       return fullPath;
     }
     const write = async () => {
-      const child = spawnCommand("docker", [
-        "exec",
-        "-i",
+      // A refused precondition exits before reading stdin, which is expected.
+      await runContainerWrite(
         id,
-        "bash",
-        "-lc",
-        containerFileWriteScript(fullPath, precondition),
-      ]);
-      // A refused precondition exits before reading stdin; the broken pipe that
-      // leaves behind is expected and must not surface as an unhandled error.
-      child.stdin.on("error", () => undefined);
-      child.stdin.write(data);
-      child.stdin.end();
-      await new Promise<void>((resolve, reject) => {
-        child.once("exit", (code) =>
-          code === 0
-            ? resolve()
-            : reject(
-                code === CONTAINER_WRITE_CONFLICT_EXIT
-                  ? fileWriteConflictError()
-                  : new Error(`docker exec exited with ${code}`),
-              ),
-        );
-        child.once("error", reject);
-      });
+        ["bash", "-lc", containerFileWriteScript(fullPath, precondition)],
+        data,
+        {
+          errorForExit: (code) =>
+            code === CONTAINER_WRITE_CONFLICT_EXIT ? fileWriteConflictError() : undefined,
+        },
+      );
       return fullPath;
     };
     return precondition ? serializeFileWrite(`container:${id}:${fullPath}`, write) : write();
@@ -1323,7 +1325,7 @@ export function registerTerminalCommands(
       throw new Error("paths must be at most 200 workspace-relative paths");
     }
     // Paths travel as JSON on stdin, never on the exec command line.
-    return runContainerPathCheck(spawnCommand, id, paths as string[]);
+    return runContainerPathCheck(runCommand, id, paths as string[]);
   });
   register("delete_container_annotation_evidence", async ({ containerId, filePath, digest }) => {
     const id = asString(containerId, "containerId");
@@ -1334,7 +1336,7 @@ export function registerTerminalCommands(
     const hash = asString(digest, "digest");
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("digest is invalid");
     const output = await runContainerEvidenceScript(
-      spawnCommand,
+      runCommand,
       id,
       CONTAINER_EVIDENCE_REMOVER,
       ["/workspace", target, hash, String(WEB_ANNOTATION_LIMITS.imageBytes)],
@@ -1372,10 +1374,13 @@ export function registerTerminalCommands(
     );
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
-    await dockerExec(id, containerDeleteFileCommand(target));
-    context.runtime.diffStats.service.invalidateChanges({ containerId: id });
-    context.runtime.diffStats.service.refresh(environmentIdString);
-    return target;
+    try {
+      await dockerExec(id, containerDeleteFileCommand(target));
+      return target;
+    } finally {
+      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+      context.runtime.diffStats.service.refresh(environmentIdString);
+    }
   });
   register(
     "move_container_file",
@@ -1599,28 +1604,19 @@ export function registerTerminalCommands(
           );
         } else {
           const fullPath = workspaceFilePath(relativePath);
-          const child = spawnCommand("docker", [
-            "exec",
-            "-i",
+          await runContainerWrite(
             environment.containerId!,
-            "node",
-            "-e",
-            CONTAINER_PINNED_ATTACHMENT_WRITE,
-            "/workspace",
-            batchRelativeDirectory,
-            name,
-            String(base64DecodedByteLength(data)),
-          ]);
-          await new Promise<void>((resolve, reject) => {
-            child.once("exit", (code) =>
-              code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)),
-            );
-            child.once("error", reject);
-            child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-              if (error.code !== "EPIPE") reject(error);
-            });
-            child.stdin.end(data);
-          });
+            [
+              "node",
+              "-e",
+              CONTAINER_PINNED_ATTACHMENT_WRITE,
+              "/workspace",
+              batchRelativeDirectory,
+              name,
+              String(base64DecodedByteLength(data)),
+            ],
+            data,
+          );
           resolvedPath = fullPath;
         }
         saved.push({ name, path: resolvedPath });

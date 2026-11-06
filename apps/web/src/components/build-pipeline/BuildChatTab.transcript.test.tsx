@@ -160,6 +160,7 @@ function renderTab() {
     />
   );
   const view = render(element(true));
+  fireEvent.click(screen.getByRole("tab", { name: /^Verify,/ }));
   return { rerender: (isActive = true) => view.rerender(element(isActive)) };
 }
 
@@ -250,7 +251,7 @@ describe("BuildChatTab referenced transcripts", () => {
     renderTab();
 
     await waitFor(() => expect(screen.getByText("All criteria pass")).toBeTruthy());
-    expect(screen.queryByText(draft)).toBeNull();
+    expect(screen.queryByText(draft) === null).toBe(true);
     expect(screen.getAllByTestId("transcript-row")).toHaveLength(2);
   });
 

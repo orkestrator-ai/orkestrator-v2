@@ -29,6 +29,7 @@
         "$TURBO_ROOT$/packages/protocol/tsconfig.json",
         "$TURBO_ROOT$/packages/protocol/src/**"
       ],
+      "env": ["ORKESTRATOR_BUILD_COMMIT"],
       "outputs": ["dist/**", "resources/**"]
     }
   }

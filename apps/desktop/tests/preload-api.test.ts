@@ -458,6 +458,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:window:set-zoom-factor",
       args: [1.5],
     });
+    await expect(api.window.setRendererDebugLogging(true)).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:window:set-renderer-debug",
+      args: [true],
+    });
     const bounds = { x: 10, y: 20, width: 640, height: 480 };
     await expect(
       api.browserPreview.attach({
@@ -677,6 +681,98 @@ test("the portal channel is exposed only in a workspace realm", async () => {
 
   const onCommandNode = { ...ipc.ipc, sendSync: () => ({ connectionId: "local" }) };
   expect(exposePortal({ exposeInMainWorld: () => undefined }, onCommandNode)).toBe(false);
+});
+
+describe("telling main which per-node relayed events a document listens to", () => {
+  const LEAF_EVENT = "relayed-node-event:bk_leaf";
+
+  function reportingIpc(answerListen: () => Promise<unknown> = async () => undefined) {
+    const order: unknown[][] = [];
+    const ipc = {
+      invoke: mock(async (channel: string, ...args: unknown[]) => {
+        order.push([channel, ...args]);
+        return channel === "orkestrator:relayed-events:listen" ? answerListen() : undefined;
+      }),
+      send: (channel: string, ...args: unknown[]) => void order.push([channel, ...args]),
+      on: () => undefined,
+    } as unknown as IpcRendererLike;
+    return { ipc, order };
+  }
+
+  for (const [channel, create] of [
+    ["workspace", createOrkestratorElectronApi],
+    ["portal", createPortalApi],
+  ] as const) {
+    test(`on the ${channel} channel: a new document starts empty, in order`, () => {
+      const { ipc, order } = reportingIpc();
+      const api = create(ipc);
+      const stop = api.listen(LEAF_EVENT, () => undefined);
+      stop();
+      expect(order).toEqual([
+        ["orkestrator:relayed-events:reset", channel],
+        ["orkestrator:relayed-events:listen", channel, LEAF_EVENT],
+        ["orkestrator:relayed-events:unlisten", channel, LEAF_EVENT],
+      ]);
+    });
+
+    test(`on the ${channel} channel: several callbacks are one listen`, () => {
+      const { ipc, order } = reportingIpc();
+      const api = create(ipc);
+      order.length = 0;
+      const first = api.listen(LEAF_EVENT, () => undefined);
+      const second = api.listen(LEAF_EVENT, () => undefined);
+      expect(order).toEqual([["orkestrator:relayed-events:listen", channel, LEAF_EVENT]]);
+      order.length = 0;
+      first();
+      first();
+      expect(order).toEqual([]);
+      second();
+      expect(order).toEqual([["orkestrator:relayed-events:unlisten", channel, LEAF_EVENT]]);
+    });
+
+    test(`on the ${channel} channel: any other event is not main's to know`, async () => {
+      const { ipc, order } = reportingIpc();
+      const api = create(ipc);
+      order.length = 0;
+      api.listen("nodes-changed", () => undefined)();
+      api.listen("relayed-node-event", () => undefined)();
+      await api.eventStreamReady("nodes-changed");
+      expect(order).toEqual([]);
+    });
+
+    test(`on the ${channel} channel: ready waits for main's stream, and a refusal ends the wait`, async () => {
+      let open: (() => void) | undefined;
+      const { ipc } = reportingIpc(() => new Promise<void>((resolve) => (open = resolve)));
+      const api = create(ipc);
+      api.listen(LEAF_EVENT, () => undefined);
+      let settled = false;
+      const ready = api.eventStreamReady(LEAF_EVENT).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      open?.();
+      await ready;
+      expect(settled).toBe(true);
+
+      const refused = reportingIpc(async () => {
+        throw new Error("Expected a per-node relayed event");
+      });
+      const refusedApi = create(refused.ipc);
+      refusedApi.listen(LEAF_EVENT, () => undefined);
+      await expect(refusedApi.eventStreamReady(LEAF_EVENT)).resolves.toBeUndefined();
+    });
+  }
+
+  test("frames still reach the callbacks here, on their own channel", () => {
+    const { ipc, on, emit } = createIpcMock();
+    void on;
+    const api = createOrkestratorElectronApi(ipc);
+    const seen: unknown[] = [];
+    api.listen(LEAF_EVENT, (payload) => void seen.push(payload));
+    emit("orkestrator:event", LEAF_EVENT, { nodeId: "bk_leaf", kind: "resync" });
+    expect(seen).toEqual([{ nodeId: "bk_leaf", kind: "resync" }]);
+  });
 });
 
 test("dialog dismissal uses a dedicated desktop IPC channel", async () => {

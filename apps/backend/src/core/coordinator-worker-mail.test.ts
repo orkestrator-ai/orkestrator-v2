@@ -17,6 +17,7 @@ import {
   PROJECT_HOME_WARNING,
   projectHomeApprovalRequestId,
 } from "./coordinator-worker-mail.js";
+import { COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR } from "./coordinator-workflow-retention.js";
 import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import { isNodeExcludedCommand } from "./nodes/node-routing.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
@@ -89,6 +90,7 @@ beforeEach(async () => {
   storage = new StorageService(path.join(root, "data"));
   await storage.init();
   const project = await storage.addProject(createProject("remote", checkout));
+  await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
   const coordinator = new CoordinatorService(storage, () => ({
     enabled: true,
     running: true,
@@ -158,6 +160,19 @@ const homeMessage = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("coordinator messages to the project home", () => {
+  test("a conversation that failed to start cannot send; nothing is sent", async () => {
+    await storage.coordinators.mutateCoordinatorWorkspace(scope.projectId, (current) => ({
+      ...current!,
+      conversations: current!.conversations.map((item) =>
+        item.id === scope.conversationId ? { ...item, startupError: "bridge failed" } : item,
+      ),
+    }));
+    await expect(
+      send({ requestId: "failed-sender", toEnvironmentId: workerId, body: "Hello" }),
+    ).rejects.toThrow("unavailable");
+    expect(await mailTo(workerId)).toHaveLength(0);
+  });
+
   test("ordinary workers are messaged exactly as before: no approval, no warning", async () => {
     const sent = await send({ requestId: "worker-1", toEnvironmentId: workerId, body: "Go." });
     expect(sent).toMatchObject({ placement: "pending-inject", coordinatorDelegationOpened: true });
@@ -165,6 +180,9 @@ describe("coordinator messages to the project home", () => {
     expect(sent).not.toHaveProperty("projectHomeWarning");
     expect(await pendingRequests()).toEqual([]);
     expect(await mailTo(workerId)).toHaveLength(1);
+    expect(
+      (await storage.coordinators.listOpenCoordinatorDelegations())[0]?.delegation?.request,
+    ).toMatchObject({ summary: "Go." });
   });
 
   test("a message without a reason is refused and nothing is sent or held", async () => {
@@ -622,6 +640,25 @@ describe("coordinator request ids on worker mail", () => {
       expect(result.delegationNote).toContain("The message was sent");
       expect(result.delegationNote).toContain("Do not resend");
       expect(result.delegationNote).not.toContain("Nothing was");
+      expect(await mailTo(workerId)).toHaveLength(1);
+    } finally {
+      opening.mockRestore();
+    }
+  });
+  test("a full workflow store still sends the mail, and says no wake will come and why", async () => {
+    const opening = spyOn(storage.coordinators, "openCoordinatorDelegation").mockRejectedValue(
+      new Error(COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR),
+    );
+    try {
+      const result = await send({
+        requestId: "store-full",
+        toEnvironmentId: workerId,
+        body: "Go.",
+      });
+      expect(result).toMatchObject({ coordinatorDelegationOpened: false });
+      expect(result.delegationNote).toContain("you will not be woken when the worker answers");
+      expect(result.delegationNote).toContain("the coordinator workflow store is full");
+      expect(result.delegationNote).toContain("Delete finished worker environments");
       expect(await mailTo(workerId)).toHaveLength(1);
     } finally {
       opening.mockRestore();

@@ -49,5 +49,5 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 ## Related
 
-- [`3930-bridge-credential-out-of-agent-uid.md`](3930-bridge-credential-out-of-agent-uid.md)
+- `3930-bridge-credential-out-of-agent-uid.md` (deleted 2026-11-06)
 - [`4980-agent-uid-process-control.md`](4980-agent-uid-process-control.md)

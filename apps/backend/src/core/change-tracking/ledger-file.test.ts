@@ -4,6 +4,7 @@ import {
   LEDGER_MOVE_CHANGES,
 } from "../../../../../scripts/qualification-ledger.js";
 import { afterEach, describe, expect, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { Database } from "bun:sqlite";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -208,6 +209,33 @@ describe("the change ledger's own file (report 0760)", () => {
     expect((await fs.stat(path.join(directory, CHANGE_LEDGER_DATABASE_FILE))).mode & 0o777).toBe(
       0o600,
     );
+  });
+
+  test("only a move that carried rows logs ledger.moved", async () => {
+    const movedEvents = (capture: ReturnType<typeof captureLogs>) =>
+      capture.records().filter((record) => record.event === "ledger.moved");
+    const capture = captureLogs();
+    try {
+      const fresh = await dataDir();
+      open.push(openBackendDatabase(fresh));
+      expect(movedEvents(capture)).toEqual([]);
+
+      const empty = await dataDir();
+      openBeforeMove(empty).close();
+      open.push(openBackendDatabase(empty));
+      expect(movedEvents(capture)).toEqual([]);
+
+      const populated = await dataDir();
+      const before = openBeforeMove(populated);
+      seedLedger(before.db, 3);
+      before.close();
+      open.push(openBackendDatabase(populated));
+      const [moved, ...others] = movedEvents(capture);
+      expect(others).toEqual([]);
+      expect(moved?.fields?.rows).toBeGreaterThan(0);
+    } finally {
+      capture.restore();
+    }
   });
 
   test("an hourly snapshot of the main database no longer copies the ledger", async () => {

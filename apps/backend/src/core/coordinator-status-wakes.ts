@@ -31,6 +31,11 @@
  * Progress is not a status: individual reviewers finishing never wake anyone,
  * and build-pipeline stages only do under the opt-in `stages` mode.
  */
+import { coordinatorRequestAlias } from "./coordinator-workflow-retention.js";
+import {
+  needsPipelineCreationRepair,
+  reconcilePipelineCreation,
+} from "./coordinator-pipeline-origin.js";
 import {
   pipelineDeliverySummary,
   type ResumableBuildPhase,
@@ -146,6 +151,8 @@ export interface CoordinatorStatusResource {
   id: string;
   environmentId?: string;
   tabId?: string;
+  /** The connected node a worker runs on, so its tile can open it there. */
+  nodeId?: string;
   label?: string;
 }
 
@@ -713,6 +720,7 @@ export function renderCoordinatorStatusNotice(
         id: resource.id,
         ...(resource.environmentId ? { environmentId: resource.environmentId } : {}),
         ...(resource.tabId ? { tabId: resource.tabId } : {}),
+        ...(resource.nodeId ? { nodeId: resource.nodeId } : {}),
         ...(resource.label ? { label: boundedLine(resource.label, MAX_LABEL_CHARS) } : {}),
       },
       state: status.state,
@@ -804,8 +812,7 @@ function hasFollowRequest(
     (item) =>
       item.coordinatorId === coordinatorId &&
       (item.requestId === requestId ||
-        (item.kind === "pull-request" &&
-          item.requestAliases?.some((alias) => alias.requestId === requestId) === true)),
+        (item.kind === "pull-request" && coordinatorRequestAlias(item, requestId) !== undefined)),
   );
 }
 
@@ -1080,7 +1087,7 @@ export class CoordinatorStatusWakes {
           association.resourceId === resourceId &&
           association.nodeId === nodeId &&
           !association.pending &&
-          !association.terminalNotifiedAt,
+          (!association.terminalNotifiedAt || needsPipelineCreationRepair(association)),
       );
       if (owned.length === 0) return;
       const mode = await this.mode();
@@ -1133,7 +1140,7 @@ export class CoordinatorStatusWakes {
           association.kind === "pull-request" ||
           association.kind === "feature-plan") &&
         (!association.pending || association.kind === "feature-plan") &&
-        !association.terminalNotifiedAt
+        (!association.terminalNotifiedAt || needsPipelineCreationRepair(association))
       ) {
         await this.observeAssociation(state.workspaces, association, mode, state.workflows).catch(
           (error: unknown) => {
@@ -1214,7 +1221,20 @@ export class CoordinatorStatusWakes {
       : kind === "build-pipeline"
         ? await this.storage.getBuildPipeline(association.resourceId)
         : await this.storage.getMultiReviewWorkflow(association.resourceId);
-    // An unreachable node is no news; the sweep asks again.
+    // Reconcile creation even with notices disabled or already delivered.
+    if (
+      read !== "unavailable" &&
+      remote &&
+      association.kind === "build-pipeline" &&
+      association.createsEnvironment &&
+      !association.createdEnvironmentId
+    )
+      await reconcilePipelineCreation(
+        this.storage,
+        association,
+        read === null ? null : read?.snapshot,
+        this.timers.now(),
+      );
     if (!read || read === "unavailable") return;
     const persisted = read as {
       snapshot: unknown;
@@ -1969,7 +1989,13 @@ export class CoordinatorStatusWakes {
     resource: CoordinatorStatusResource,
     status: CoordinatorStatus,
   ): Promise<boolean> {
-    const { subject, body, notice } = renderCoordinatorStatusNotice(resource, status);
+    // A worker on another node: the transcript tile opens it through that node.
+    const { subject, body, notice } = renderCoordinatorStatusNotice(
+      association.nodeId && (resource.kind === "agent-tab" || resource.kind === "environment")
+        ? { ...resource, nodeId: association.nodeId }
+        : resource,
+      status,
+    );
     return this.router.deliver({
       projectId: association.projectId,
       coordinatorId: association.coordinatorId,

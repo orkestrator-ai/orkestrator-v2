@@ -12,7 +12,14 @@ import {
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { withCoordinatorAccountSwitchGrant } from "@orkestrator/protocol/coordinator-account-switch-grant";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
-import { parseLogDetail } from "@orkestrator/protocol/log-policy";
+import {
+  logDetailExpiryAction,
+  logDetailIsRaised,
+  nextLogDetailExpiresAt,
+  parseLogDetail,
+  resolveLogDetail,
+  type LogDetailExpiryAction,
+} from "@orkestrator/protocol/log-policy";
 import { isMultiReviewEngine } from "@orkestrator/protocol/multi-review";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
@@ -33,6 +40,7 @@ import {
   firstEnabledAgentPlatform,
   fs,
   getUnscopedLegacyOpenCodeModelCatalog,
+  isMissingFileError,
   isRecord,
   normalizeAcpModelCatalogEntries,
   normalizeAgentPlatforms,
@@ -56,7 +64,7 @@ import {
 } from "@orkestrator/protocol/review-lens";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
@@ -199,6 +207,26 @@ function withDefaultInheritedSettings(global: AppConfig["global"]): AppConfig["g
   return values as unknown as AppConfig["global"];
 }
 
+/**
+ * "Keep raised detail" and the backend-owned expiry, for every write of this
+ * machine's global settings. A save that omits the keep choice (a client that
+ * predates it) keeps the stored one; the expiry is always recomputed, so a
+ * client cannot set it and one that predates it still gets one when it raises
+ * detail. Detail back at `info` drops both: keeping applies to one investigation.
+ */
+function settleLogDetailExpiry(
+  next: AppConfig["global"],
+  stored: AppConfig["global"],
+  nowMs: number,
+): void {
+  if (next.logDetailKeepRaised === undefined && stored.logDetailKeepRaised !== undefined)
+    next.logDetailKeepRaised = stored.logDetailKeepRaised;
+  if (!logDetailIsRaised(resolveLogDetail(next))) delete next.logDetailKeepRaised;
+  const expiresAt = nextLogDetailExpiresAt(next, stored, nowMs);
+  if (expiresAt) next.logDetailExpiresAt = expiresAt;
+  else delete next.logDetailExpiresAt;
+}
+
 export class ConfigRepository {
   constructor(
     private readonly context: StorageContext,
@@ -317,6 +345,44 @@ export class ConfigRepository {
   }
 
   /**
+   * `config.json` holds the provider secrets and each backup copies them. Saves
+   * write both 0600, but a file left wider by an older build or a restore would
+   * stay that way until the next save, so every start tightens them. A mode that
+   * cannot be changed is logged rather than stopping the backend.
+   */
+  async restrictConfigFileModes(): Promise<void> {
+    const config = this.files.configFile();
+    const files = [config, ...this.context.jsonBackupPaths(config)];
+    // Atomic saves can survive a crash before rename/cleanup. Keep remnants
+    // (another backend may still be writing one), but restrict their modes too.
+    try {
+      const entries = await fs.readdir(path.dirname(config), { withFileTypes: true });
+      for (const entry of entries) {
+        if (
+          entry.isFile() &&
+          /^\.config\.json(?:\.bak\.[1-5])?\.(?:recovery\.)?[0-9a-f-]{36}\.tmp$/i.test(entry.name)
+        ) {
+          files.push(path.join(path.dirname(config), entry.name));
+        }
+      }
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        log.warn("config.restrict-mode-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      }
+    }
+    for (const file of files) {
+      await fs.chmod(file, 0o600).catch((error: unknown) => {
+        if (isMissingFileError(error)) return;
+        log.warn("config.restrict-mode-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      });
+    }
+  }
+
+  /**
    * Persist the one-shot schema migration before services begin concurrent
    * reads. Re-read under the same cross-process lock used by every config
    * writer so a stale migration snapshot cannot revert a settings save.
@@ -359,6 +425,7 @@ export class ConfigRepository {
       // Older clients must not erase the user's container credential choice.
       if (ownGlobal.containerGitHubCredential === undefined)
         ownGlobal.containerGitHubCredential = own.global.containerGitHubCredential;
+      settleLogDetailExpiry(ownGlobal, own.global, Date.now());
       const next = current
         ? {
             ...validated,
@@ -735,6 +802,10 @@ export class ConfigRepository {
     if (requestedLogDetail !== undefined && !logDetail) {
       throw new Error("Log detail must name a valid level for each area");
     }
+    const keepRaised = reviewValidated.logDetailKeepRaised as unknown;
+    if (keepRaised !== undefined && typeof keepRaised !== "boolean") {
+      throw new Error("Keeping raised log detail must be on or off");
+    }
     const validated: AppConfig["global"] = {
       ...reviewValidated,
       ...(logDetail ? { logDetail } : {}),
@@ -811,6 +882,7 @@ export class ConfigRepository {
     // Likewise a save that predates the split of the logging setting.
     if (validated.logDetail === undefined && config.global.logDetail !== undefined)
       validated.logDetail = config.global.logDetail;
+    settleLogDetailExpiry(validated, config.global, Date.now());
     if (
       validated.containerResourceLimits === undefined &&
       config.global.containerResourceLimits !== undefined
@@ -859,6 +931,42 @@ export class ConfigRepository {
     await this.context.saveSensitiveJson(this.files.configFile(), config);
     this.context.changes.announce("config", "app");
     return this.withInheritedSettings(config);
+  }
+
+  /**
+   * The backend's log detail expiry check, run at start and every minute
+   * (`LogPolicyService`). Reverting goes through this ordinary config write, so
+   * the policy service sees a change like any other: the audit line, this
+   * process's levels and every running bridge follow. Saving is never touched.
+   * Reads first and takes the config lock only when something is due.
+   */
+  async reconcileLogDetailExpiry(
+    nowMs: number = Date.now(),
+  ): Promise<LogDetailExpiryAction["kind"]> {
+    const peek = await this.loadOwnConfig();
+    if (logDetailExpiryAction(peek.global, nowMs).kind === "none") return "none";
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      const action = logDetailExpiryAction(config.global, nowMs);
+      switch (action.kind) {
+        case "none":
+          return action.kind;
+        case "stamp":
+          config.global.logDetailExpiresAt = action.expiresAt;
+          break;
+        case "clear":
+          delete config.global.logDetailExpiresAt;
+          break;
+        case "revert":
+          config.global.logDetail = action.detail;
+          delete config.global.logDetailExpiresAt;
+          delete config.global.logDetailKeepRaised;
+          break;
+      }
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
+      return action.kind;
+    });
   }
 
   /** Replace where new worktrees are created; paths are validated by the caller. */

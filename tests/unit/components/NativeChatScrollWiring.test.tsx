@@ -251,6 +251,9 @@ describe("native chat scroll wiring", () => {
       />,
     );
 
+    // A finished build lands on Notes; the transcript is one click away.
+    fireEvent.click(view.getByRole("tab", { name: /^Build,/ }));
+
     expect(view.queryByLabelText("Send a message to the agent") === null).toBe(true);
     expect(view.getByLabelText("Scroll to bottom of transcript")).toBeTruthy();
   });

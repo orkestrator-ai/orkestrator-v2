@@ -37,6 +37,12 @@ On every cold launch, the native app asks which saved server to open. Returning 
 
 If the active server is offline or its credential has expired, use **Switch saved server** on the native failure screen to reach another Keychain-backed connection without re-entering its token.
 
+Forgetting a server deletes its known session cookie and makes a best-effort logout request only to the origin that issued it. Cookie ownership is recorded during native login, independently of saved servers, because cookies ignore ports. An unknown cookie is never sent to a logout endpoint; it is removed locally when no saved server on that host needs it. A known cookie from another port is preserved. A slow or failed logout does not delay forgetting; a session that cannot be revoked ends at the backend's own expiry.
+
+If the Keychain cannot be read, for example while the device is locked, the app shows an empty list and says the saved servers have not been removed. It reads again when it returns to the foreground and before any save, and it refuses to save while the read still fails, because a save replaces the whole vault. Only malformed data can be replaced: connecting again overwrites it. If a draft was refused, foreground recovery keeps its address and token in the editor so it can be retried. Selecting a saved server instead clears the draft token.
+
+An opaque cover shows whenever the scene is not active, so the snapshot iOS keeps for the app switcher should not show the screen. It also appears during brief interruptions such as Control Center. [To-do 5601, task 6](../../docs/todo/cross-cutting/5601-ios-runtime-security-checks.md#6-check-the-privacy-cover-on-a-device) holds the device check.
+
 Run the native unit tests on an installed simulator with:
 
 ```bash
@@ -56,6 +62,6 @@ mise run test:logged -- --name ios-tests -- mise run test:ios
 
 The download is several gigabytes. Check `xcrun simctl runtime match list` if a downloaded runtime still does not satisfy Xcode: its build number must satisfy the SDK's runtime mapping, and `xcrun simctl runtime scan-and-mount` can reconcile an installed image that is not mounted. See [Apple's component installation guide](https://developer.apple.com/documentation/xcode/downloading-and-installing-additional-xcode-components).
 
-This runs the repository's shared `OrkestratorMobile` scheme, including its app host and asset catalog; a separate `swiftc` host does not validate those project settings. On 2026-11-05 the scheme passed all 66 tests on iOS 26.2, built with Xcode 26.6. [To-do 5601, task 1](../../docs/todo/cross-cutting/5601-ios-runtime-security-checks.md#1-run-the-suite-through-xcodes-own-scheme) records the runtime setup, command and result bundle. Device and signed-release checks remain open.
+This runs the repository's shared `OrkestratorMobile` scheme, including its app host and asset catalog; a separate `swiftc` host does not validate those project settings. On 2026-11-05 the scheme passed all 66 tests on iOS 26.2, built with Xcode 26.6. [To-do 5601, task 1](../../docs/todo/cross-cutting/5601-ios-runtime-security-checks.md#1-run-the-suite-through-xcodes-own-scheme) records the runtime setup, command and result bundle. Device and signed-release checks remain open. To-do 5602 (deleted 2026-11-06) recorded a later run of 98 tests with the catalog left out, on a Mac without the iOS 26.5 runtime; it does not validate the catalog.
 
 Plain HTTP and invalid TLS certificates are intentionally rejected. Use Tailscale Serve HTTPS as described in the repository root README.

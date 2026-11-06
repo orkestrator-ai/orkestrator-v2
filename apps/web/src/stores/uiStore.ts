@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
 import type { ActivitySortOrder } from "@orkestrator/protocol/environment-activity-order";
-import type { CoordinatorWorkBucket } from "@/lib/coordinator-work-items";
 import { windowStorageKey } from "@/lib/desktop-storage-key";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -14,6 +13,8 @@ const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 const ZOOM_DEFAULT = 100;
 const RECENT_PROJECT_LIMIT = 5;
+/** The removed coordinator Work panel's folded sections. */
+const RETIRED_PERSISTED_FIELDS = ["collapsedWorkBuckets"] as const;
 
 const isFolderCollapsed = (collapsed: string[], folder: string): boolean =>
   collapsed.some((name) => projectFolderKey(name) === projectFolderKey(folder));
@@ -57,8 +58,6 @@ interface UIState {
   selectedEnvironmentId: string | null;
   /** Whether the left projects/environments panel is visible. */
   sidebarOpen: boolean;
-  /** Coordinator Work panel sections folded shut, on this device, across projects. */
-  collapsedWorkBuckets: CoordinatorWorkBucket[];
   /** Most recently opened project IDs, newest first. */
   recentProjectIds: string[];
   projectBoardTab: ProjectBoardTab;
@@ -98,6 +97,11 @@ interface UIState {
    * the notice returns after a restart.
    */
   openedLeafCoordinators: string[];
+  /**
+   * The coordinator's first-run card was dismissed. Per user on this device,
+   * across projects: the coordinator works the same way in every project.
+   */
+  coordinatorIntroDismissed: boolean;
 
   // Actions
   selectProject: (projectId: string | null) => void;
@@ -110,8 +114,6 @@ interface UIState {
   setSidebarWidth: (width: number) => void;
   setMultiReviewGraphHeight: (height: number | null) => void;
   setPipelineGraphHeight: (height: number | null) => void;
-  /** Fold or unfold one section of the coordinator Work panel */
-  toggleWorkBucketCollapsed: (bucket: CoordinatorWorkBucket) => void;
   /** Toggle the collapsed state of a project */
   toggleProjectCollapse: (projectId: string) => void;
   /** Set the collapsed state of a project */
@@ -145,6 +147,7 @@ interface UIState {
   setDataSaving: (enabled: boolean) => void;
   /** Remember, for this app session, that the user opened a gated coordinator. */
   openLeafCoordinator: (key: string) => void;
+  setCoordinatorIntroDismissed: (dismissed: boolean) => void;
 }
 
 export const createUIStore = () =>
@@ -156,7 +159,6 @@ export const createUIStore = () =>
         projectSelectionRevision: 0,
         selectedEnvironmentId: null,
         sidebarOpen: true,
-        collapsedWorkBuckets: [],
         recentProjectIds: [],
         projectBoardTab: initialProjectBoardTab(),
         sidebarWidth: 280,
@@ -172,15 +174,9 @@ export const createUIStore = () =>
         pipelineGraphHeight: null,
         dataSaving: false,
         openedLeafCoordinators: [],
+        coordinatorIntroDismissed: false,
 
         // Actions
-        toggleWorkBucketCollapsed: (bucket) =>
-          set((state) => ({
-            collapsedWorkBuckets: state.collapsedWorkBuckets.includes(bucket)
-              ? state.collapsedWorkBuckets.filter((item) => item !== bucket)
-              : [...state.collapsedWorkBuckets, bucket],
-          })),
-
         selectProject: (projectId) =>
           set((state) => ({
             selectedProjectId: projectId,
@@ -313,14 +309,22 @@ export const createUIStore = () =>
               ? state
               : { openedLeafCoordinators: [...state.openedLeafCoordinators, key] },
           ),
+
+        setCoordinatorIntroDismissed: (dismissed) => set({ coordinatorIntroDismissed: dismissed }),
       }),
       {
         name: windowStorageKey("ui-storage"),
         storage: createJSONStorage(() => createUIStateStorage()),
+        merge: (persisted, current) => {
+          const restored = { ...(persisted as Record<string, unknown> | undefined) };
+          // Fields earlier releases saved for UI that no longer exists; the
+          // next write leaves them out, since `partialize` does not name them.
+          for (const field of RETIRED_PERSISTED_FIELDS) delete restored[field];
+          return { ...current, ...(restored as Partial<UIState>) };
+        },
         partialize: (state) => ({
           sidebarWidth: state.sidebarWidth,
           sidebarOpen: state.sidebarOpen,
-          collapsedWorkBuckets: state.collapsedWorkBuckets,
           collapsedProjects: state.collapsedProjects,
           projectCollapseChoices: state.projectCollapseChoices,
           collapsedProjectFolders: state.collapsedProjectFolders,
@@ -331,6 +335,7 @@ export const createUIStore = () =>
           multiReviewGraphHeight: state.multiReviewGraphHeight,
           pipelineGraphHeight: state.pipelineGraphHeight,
           dataSaving: state.dataSaving,
+          coordinatorIntroDismissed: state.coordinatorIntroDismissed,
         }),
       },
     ),

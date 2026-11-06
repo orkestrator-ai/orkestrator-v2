@@ -10,6 +10,7 @@ const EDITABLE_KEYS = [
   "filesToCopy",
   "entryPort",
   "agentSettings",
+  "coordinatorOtherEnvironments",
 ] as const satisfies readonly (keyof RepositoryConfig)[];
 
 /** A stored record in the exact shape the dialog would save it. */
@@ -27,6 +28,8 @@ export function editableRepositorySettings(config: RepositoryConfig): Repository
     entryPort:
       entryPort !== undefined && entryPort >= 1 && entryPort <= 65535 ? entryPort : undefined,
     agentSettings: normalizeAgentSettings(config.agentSettings),
+    // Off is the absent default, so a save never writes `false` to every record.
+    coordinatorOtherEnvironments: config.coordinatorOtherEnvironments === true ? true : undefined,
   };
 }
 

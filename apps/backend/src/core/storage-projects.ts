@@ -1010,6 +1010,7 @@ export class ProjectsRepository {
         "cleanupAfterMergeRequestedAt",
         "cleanupAfterMergeError",
         "deletionError",
+        "autoMergeResolveCompletedAt",
         "lifecycleOperationStartedAt",
         "setupSessionId",
         "setupStartedAt",
@@ -1202,7 +1203,30 @@ export class ProjectsRepository {
         // Cleared as an explicit `false`: renderers merge snapshots field-by-field.
         environment.setupApprovalRequired = updates.setupApprovalRequired === true;
       }
+      if (
+        typeof updates.autoMergeResolveAttempts === "number" &&
+        Number.isSafeInteger(updates.autoMergeResolveAttempts) &&
+        updates.autoMergeResolveAttempts >= 0 &&
+        updates.autoMergeResolveAttempts <= 3
+      ) {
+        environment.autoMergeResolveAttempts = updates.autoMergeResolveAttempts;
+      }
+      // Confirmed external merges must publish cleanup before disarming it.
+      if (
+        environment.autoMerge &&
+        environment.autoMergeCleanup &&
+        environment.autoMergePrUrl === environment.prUrl &&
+        environment.prState === "merged" &&
+        environment.prUrl === previousPrUrl &&
+        environment.branch === previousBranch &&
+        !environment.projectHome
+      ) {
+        environment.cleanupAfterMergeRequestedAt ??= new Date().toISOString();
+        environment.cleanupAfterMergeError = undefined;
+      }
       if ("autoMerge" in updates) {
+        environment.autoMergeResolveAttempts = 0;
+        environment.autoMergeResolveCompletedAt = undefined;
         // Off is an explicit `false`, like lifecycleError's `null`: renderers
         // merge snapshots field-by-field, so a dropped key would leave it on.
         environment.autoMerge =
@@ -1210,6 +1234,9 @@ export class ProjectsRepository {
         environment.autoMergePrUrl = environment.autoMerge ? environment.prUrl : null;
         environment.autoMergeEnabledAt = environment.autoMerge ? new Date().toISOString() : null;
         environment.autoMergeError = null;
+        // Set only together with `autoMerge`, so a later toggle that does not
+        // ask for cleanup withdraws an earlier request.
+        environment.autoMergeCleanup = environment.autoMerge && updates.autoMergeCleanup === true;
       }
       if ("autoMergeError" in updates) {
         environment.autoMergeError =
@@ -1226,6 +1253,7 @@ export class ProjectsRepository {
         environment.autoMergePrUrl = null;
         environment.autoMergeEnabledAt = null;
         environment.autoMergeError = null;
+        environment.autoMergeCleanup = false;
       }
       if (
         !environment.autoMerge ||
@@ -1233,6 +1261,16 @@ export class ProjectsRepository {
         environment.prUrl !== previousPrUrl
       ) {
         environment.autoMergeResolveRequestId = undefined;
+      }
+      if (
+        "prRecheckAfterAgentCompletionArmedAt" in updates &&
+        !environment.prRecheckAfterAgentCompletionArmedAt
+      ) {
+        environment.autoMergeResolveRequestId = undefined;
+      }
+      if (environment.hasMergeConflicts === false) {
+        environment.autoMergeResolveAttempts = 0;
+        environment.autoMergeResolveCompletedAt = undefined;
       }
       if ("tabTeardownIntents" in updates) {
         const intents = updates.tabTeardownIntents;
@@ -1474,6 +1512,12 @@ export class ProjectsRepository {
           !isEnvironmentReadyForAgents(environment))
       )
         return { environment, armedAt: null };
+      // A manual Resolve owns its own completion; an older automatic outcome
+      // must never release its armed token while that manual turn is running.
+      if (!claim?.autoMergePrUrl) {
+        environment.autoMergeResolveRequestId = undefined;
+        environment.autoMergeResolveCompletedAt = undefined;
+      }
       if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)
         environment.autoMergeResolveRequestId = claim.requestId;
       const previousArmedAt = environment.prRecheckAfterAgentCompletionArmedAt;

@@ -89,6 +89,7 @@ beforeEach(async () => {
   storage = new StorageService(path.join(root, "data"));
   await storage.init();
   const project = await storage.addProject(createProject("remote", checkout));
+  await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
   const coordinator = new CoordinatorService(storage, () => ({
     enabled: true,
     running: true,
@@ -1008,20 +1009,33 @@ test("grok refuses unsupported launch options before starting a terminal", async
   expect(launch).not.toHaveBeenCalled();
 });
 
-for (const phase of ["running", "waiting", "projection-error", "missing", "idle", "error"]) {
+for (const phase of [
+  "running",
+  "waiting",
+  "read-error",
+  "unavailable",
+  "missing",
+  "idle",
+  "error",
+]) {
   test(`native close handles ${phase} safely`, async () => {
     await saveLayout([
       { id: "native", type: "agent-native", nativeAgentData: { platform: "codex" } },
     ]);
     const teardown = mock(async () => ({}));
     commands.set("teardown_tab", teardown as unknown as CommandHandler);
+    // The guard reads session state only; a projection read would fetch rows.
     context.nativeAgents = {
-      getProjection: async () => {
-        if (phase === "projection-error") throw new Error("offline");
-        if (phase === "missing") return null;
+      getSessionStateUpdate: async () => {
+        if (phase === "read-error") throw new Error("offline");
+        if (phase === "missing") return { status: "missing" };
+        if (phase === "unavailable") return { status: "unavailable", error: "offline" };
         return {
-          turn: { phase: phase === "waiting" ? "idle" : phase },
-          interactions: phase === "waiting" ? [{}] : [],
+          status: "snapshot",
+          value: {
+            turn: { phase: phase === "waiting" ? "idle" : phase },
+            interactions: phase === "waiting" ? [{}] : [],
+          },
         };
       },
     } as unknown as CommandContext["nativeAgents"];

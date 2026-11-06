@@ -966,7 +966,7 @@ describe("Notes node labels and selection", () => {
   });
 
   test.each(["open-pr", "push-no-pr", "commit-only"] as const)(
-    "completed %s runs follow delivery even with complete Notes",
+    "completed %s runs land on Notes rather than delivery",
     (policy) => {
       useEnvironmentStore.setState({
         environments: [
@@ -985,10 +985,29 @@ describe("Notes node labels and selection", () => {
         }),
       );
       expect(graphNode("Notes").getAttribute("data-flow-state")).toBe("complete");
-      expect(graphNode("Notes").getAttribute("aria-selected")).toBe("false");
+      expect(graphNode("Notes").getAttribute("aria-selected")).toBe("true");
       expect(graphNode(policy === "open-pr" ? "PR" : "No PR").getAttribute("aria-selected")).toBe(
-        "true",
+        "false",
       );
     },
   );
+
+  test.each(["building", "failed"] as const)("a %s run does not land on Notes", (phase) => {
+    renderPipelineTab(build({ phase, sessions: [session("build", "build", 0)] }));
+    expect(graphNode("Notes").getAttribute("aria-selected")).toBe("false");
+    expect(graphNode("Build").getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("a node the user picked keeps the selection when the run completes", () => {
+    const pipeline = build({ sessions: [session("build", "build", 0)] });
+    renderPipelineTab({ ...pipeline, phase: "building" });
+    fireEvent.click(graphNode("Build"));
+    act(() =>
+      useBuildPipelineStore.setState({
+        pipelines: new Map([[pipeline.id, { ...pipeline, phase: "complete" }]]),
+      }),
+    );
+    expect(graphNode("Notes").getAttribute("data-flow-state")).toBe("complete");
+    expect(graphNode("Build").getAttribute("aria-selected")).toBe("true");
+  });
 });

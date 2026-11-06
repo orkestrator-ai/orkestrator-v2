@@ -6,7 +6,7 @@
  * the groups they lead) from `ps`, signals all of them, and verifies they are
  * gone before releasing capacity.
  */
-import { execFile } from "node:child_process";
+import { runCommand } from "../shell.js";
 
 export interface ProcessEntry {
   pid: number;
@@ -19,52 +19,48 @@ export interface ProcessEntry {
 }
 
 const PS_TIMEOUT_MS = 2_000;
+const PS_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
-export function listProcesses(options: { commands?: boolean } = {}): Promise<ProcessEntry[]> {
+export async function listProcesses(options: { commands?: boolean } = {}): Promise<ProcessEntry[]> {
   const commands = options.commands === true;
-  return new Promise((resolve) => {
-    execFile(
+  let stdout: string;
+  try {
+    ({ stdout } = await runCommand(
       "ps",
       // `-ww` lifts the column limit so a long command line is not cut short.
       commands
         ? ["-A", "-ww", "-o", "pid=,ppid=,pgid=,rss=,stat=,command="]
         : ["-A", "-o", "pid=,ppid=,pgid=,rss=,stat="],
-      { timeout: PS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
-      (error, stdout) => {
-        if (error) {
-          resolve([]);
-          return;
-        }
-        const entries: ProcessEntry[] = [];
-        for (const line of stdout.split("\n")) {
-          // Only the fixed ps columns are whitespace-delimited. The command
-          // contains literal paths, whose internal whitespace must survive.
-          const columns = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:[ \t]+(.*))?$/.exec(line);
-          if (!columns) continue;
-          const [pid, ppid, pgid, rss] = columns
-            .slice(1, 5)
-            .map((value) => Number.parseInt(value, 10));
-          if (
-            !pid ||
-            ppid === undefined ||
-            pgid === undefined ||
-            rss === undefined ||
-            [pid, ppid, pgid, rss].some(Number.isNaN)
-          )
-            continue;
-          entries.push({
-            pid,
-            ppid,
-            pgid,
-            rssKiB: rss,
-            zombie: (columns[5] ?? "").startsWith("Z"),
-            ...(commands ? { command: columns[6] ?? "" } : {}),
-          });
-        }
-        resolve(entries);
-      },
-    );
-  });
+      { timeoutMs: PS_TIMEOUT_MS, maxOutputBytes: PS_MAX_OUTPUT_BYTES },
+    ));
+  } catch {
+    return [];
+  }
+  const entries: ProcessEntry[] = [];
+  for (const line of stdout.split("\n")) {
+    // Only the fixed ps columns are whitespace-delimited. The command
+    // contains literal paths, whose internal whitespace must survive.
+    const columns = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:[ \t]+(.*))?$/.exec(line);
+    if (!columns) continue;
+    const [pid, ppid, pgid, rss] = columns.slice(1, 5).map((value) => Number.parseInt(value, 10));
+    if (
+      !pid ||
+      ppid === undefined ||
+      pgid === undefined ||
+      rss === undefined ||
+      [pid, ppid, pgid, rss].some(Number.isNaN)
+    )
+      continue;
+    entries.push({
+      pid,
+      ppid,
+      pgid,
+      rssKiB: rss,
+      zombie: (columns[5] ?? "").startsWith("Z"),
+      ...(commands ? { command: columns[6] ?? "" } : {}),
+    });
+  }
+  return entries;
 }
 
 /** Descendants of `roots` (inclusive), plus members of process groups led by any of them. */

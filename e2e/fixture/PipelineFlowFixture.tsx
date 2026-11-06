@@ -792,6 +792,7 @@ function seed(): BuildPipeline {
   const params = new URLSearchParams(window.location.search);
   const stored = params.has("restore") ? sessionStorage.getItem("pipeline-flow-snapshot") : null;
   const pipeline: BuildPipeline = stored ? JSON.parse(stored) : scenario();
+  if (params.has("unfinished")) pipeline.phase = "verifying";
   const delivered = params.get("delivered");
   if (delivered === "push-no-pr" || delivered === "commit-only") {
     // A build that ended on the ticket's policy instead of a pull request.
@@ -975,11 +976,26 @@ function SplitPipelineViews({ pipeline }: { pipeline: BuildPipeline }) {
 /** Hides the tab with `display: none`, as `PaneLeafContainer` does when another tab takes over. */
 function BuildPaneControls({ pipeline }: { pipeline: BuildPipeline }) {
   const [isActive, setIsActive] = useState(true);
+  const [mount, setMount] = useState(0);
   return (
     <div className="flex h-screen flex-col">
       <div className="shrink-0">
         <button onClick={() => setIsActive(!isActive)}>
           {isActive ? "Activate other pane" : "Activate build pane"}
+        </button>
+        <button onClick={() => setMount(mount + 1)}>Reopen the tab</button>
+        <button
+          onClick={() => {
+            const { pipelines, replacePipeline } = useBuildPipelineStore.getState();
+            const current = pipelines.get(pipeline.id)!;
+            replacePipeline({
+              ...current,
+              phase: "complete",
+              backendRevision: current.backendRevision + 1,
+            });
+          }}
+        >
+          Finish the run
         </button>
         {new URLSearchParams(window.location.search).has("longTranscript") ? (
           <button onClick={() => void window.orkestrator!.invoke("fixture_append_transcript")}>
@@ -989,6 +1005,7 @@ function BuildPaneControls({ pipeline }: { pipeline: BuildPipeline }) {
       </div>
       <div hidden={!isActive} className="relative flex min-h-0 flex-1 flex-col">
         <BuildChatTab
+          key={mount}
           data={{
             pipelineId: pipeline.id,
             environmentId: pipeline.environmentId,

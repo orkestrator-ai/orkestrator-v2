@@ -1,10 +1,17 @@
+import { coordinatorLaunchOverrides } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { describe, expect, test } from "bun:test";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 
+import { COORDINATOR_REQUEST_ID_REUSED_ERROR } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_WORKFLOW_CLEANUP_BATCH,
+  COORDINATOR_WORKFLOW_NEAR_LIMIT,
   COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS,
   COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR,
+  coordinatorDelegationNotOpenedNote,
+  coordinatorRequestAlias,
+  coordinatorRequestMatch,
+  coordinatorWorkflowStoreState,
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
   selectCoordinatorWorkflowsToClear,
 } from "./coordinator-workflow-retention.js";
@@ -70,6 +77,53 @@ describe("selectCoordinatorWorkflowsToClear", () => {
         },
       ),
     ).toEqual(expected);
+  });
+
+  test("keeps creation provenance for existing pipeline and graph environments", () => {
+    const records = [
+      finished("pipeline", { kind: "build-pipeline", createdEnvironmentId: "live" }),
+      finished("graph", { kind: "graph-run", createdEnvironmentId: "live" }),
+      finished("remote", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createdEnvironmentId: "remote-live",
+      }),
+      finished("deleted", { kind: "graph-run", createdEnvironmentId: "gone" }),
+    ];
+    expect(select(records, { environments: ["live"] })).toEqual(new Set(["deleted"]));
+  });
+
+  test("keeps a remote creation intent until late provisioning identifies the environment", () => {
+    const records = [
+      finished("pending-provision", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createsEnvironment: true,
+      }),
+      finished("existing-target", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createsEnvironment: false,
+      }),
+    ];
+    expect(select(records)).toEqual(new Set(["existing-target"]));
+  });
+
+  test("settled terminal or deleted remote creation intents expire after their observation replay window", () => {
+    for (const terminalNotifiedAt of [undefined, OLD]) {
+      const settled = finished("remote-settled", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createsEnvironment: true,
+        terminalNotifiedAt,
+        environmentCreationSettledAt: OLD,
+      });
+      expect(select([settled])).toEqual(new Set([settled.id]));
+      expect(select([{ ...settled, environmentCreationSettledAt: minutesAgo(1) }])).toEqual(
+        new Set(),
+      );
+      expect(select([{ ...settled, pending: true }])).toEqual(new Set());
+    }
   });
 
   test("clears the oldest finished records first, up to the batch", () => {
@@ -182,6 +236,28 @@ describe("selectCoordinatorWorkflowsToClear", () => {
     );
   });
 
+  test("keeps the newest source-stating launch by request time, including default launches", () => {
+    const row = (id: string, requestedAt: string, source?: "requested" | "default") =>
+      finished(id, {
+        kind: "environment",
+        resourceId: "live",
+        delegation: {
+          workerTabId: "job-tab",
+          requestedAt,
+          state: "completed",
+          wokenAt: OLD,
+          ...(source ? { request: { source } } : {}),
+        },
+      });
+    const rows = [
+      row("latest-launch", "2026-10-03T00:00:00.000Z", "default"),
+      row("older-launch", OLD, "requested"),
+      row("follow-up", "2026-10-04T00:00:00.000Z"),
+    ];
+    expect(select(rows, { environments: ["live"] })).toEqual(new Set(["older-launch"]));
+    expect(select(rows)).toEqual(new Set(rows.map((row) => row.id)));
+  });
+
   test("keeps anything created inside the replay window", () => {
     const workflows = [
       finished("recent", { createdAt: minutesAgo(60), terminalNotifiedAt: minutesAgo(30) }),
@@ -250,6 +326,28 @@ function history(count: number): CoordinatorWorkflowAssociation[] {
 }
 
 describe("coordinator workflow store cleanup", () => {
+  test("the real store reclaims settled remote creation intents at capacity", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const rows = history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS).map((row, index) => ({
+        ...row,
+        kind: "build-pipeline" as const,
+        nodeId: "leaf",
+        createsEnvironment: true,
+        terminalNotifiedAt: undefined,
+        ...(index === 0 ? {} : { environmentCreationSettledAt: OLD }),
+      }));
+      seedWorkflows(dataDir, rows);
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("after-remote-cleanup"));
+      const ids = new Set(storedWorkflows(dataDir).map((row) => row.id));
+      expect(ids.has(rows[0]!.id)).toBe(true);
+      expect(ids.has(rows[1]!.id)).toBe(false);
+      expect(ids.has("after-remote-cleanup")).toBe(true);
+      expect(ids.size).toBe(
+        MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - COORDINATOR_WORKFLOW_CLEANUP_BATCH + 1,
+      );
+    });
+  });
+
   test("a full store clears one batch of its oldest finished records and accepts the new one", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const finishedCount = 500;
@@ -277,6 +375,44 @@ describe("coordinator workflow store cleanup", () => {
         ids.has(`history-${String(COORDINATOR_WORKFLOW_CLEANUP_BATCH).padStart(4, "0")}`),
       ).toBe(true);
       expect(ids.has("new")).toBe(true);
+    });
+  });
+
+  test("a job launch override survives capacity cleanup after a newer follow-up", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const project = await storage.addProject(createProject("https://example.invalid/repo.git"));
+      const environment = await storage.addEnvironment(createEnvironment(project.id));
+      const launch = finished("job-launch", {
+        kind: "environment",
+        resourceId: environment.id,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        delegation: {
+          workerTabId: "job-tab",
+          requestedAt: "2026-01-01T00:00:00.000Z",
+          state: "completed",
+          wokenAt: OLD,
+          request: { source: "requested", model: "opus" },
+        },
+      });
+      const followUp = {
+        ...launch,
+        id: "follow-up",
+        requestId: "follow-up",
+        delegation: { ...launch.delegation!, requestedAt: OLD, request: undefined },
+      };
+      seedWorkflows(dataDir, [
+        launch,
+        followUp,
+        ...history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 2),
+      ]);
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("new"));
+      const after = storedWorkflows(dataDir);
+      expect(after.some((row) => row.id === "job-launch")).toBe(true);
+      expect(after.some((row) => row.id === "follow-up")).toBe(true);
+      expect(after.some((row) => row.id === "history-0000")).toBe(false);
+      expect(coordinatorLaunchOverrides(after)).toEqual([
+        { environmentId: environment.id, tabId: "job-tab", model: "opus" },
+      ]);
     });
   });
 
@@ -514,6 +650,133 @@ describe("coordinator workflow store cleanup", () => {
       await expect(
         storage.coordinators.reserveCoordinatorWorkflowAssociation(fresh("reserve-refused")),
       ).rejects.toThrow(COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR);
+    });
+  });
+});
+
+describe("released nodes", () => {
+  test("a released node's records are cleared like local work whose environment is gone", () => {
+    const remote = {
+      kind: "environment" as const,
+      nodeId: "leaf",
+      resourceId: "leaf-env",
+      delegation: {
+        requestedAt: OLD,
+        workerTabId: "tab",
+        state: "stopped" as const,
+        completedAt: OLD,
+        wokenAt: OLD,
+      },
+    };
+    const records = [
+      finished("still-controlled", remote),
+      finished("released", {
+        ...remote,
+        nodeId: "gone",
+        nodeRelease: { at: OLD, reason: "forgotten", notifiedAt: OLD },
+      }),
+      finished("released-intent", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createsEnvironment: true,
+        nodeRelease: { at: OLD, reason: "handed-over", notifiedAt: OLD },
+      }),
+    ];
+    expect(select(records)).toEqual(new Set(["released", "released-intent"]));
+  });
+});
+
+describe("coordinator workflow store state", () => {
+  test("near the limit once less than one cleanup batch is left, full when every record is in use", () => {
+    expect(COORDINATOR_WORKFLOW_NEAR_LIMIT).toBe(
+      MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - COORDINATOR_WORKFLOW_CLEANUP_BATCH,
+    );
+    expect(coordinatorWorkflowStoreState(0)).toBe("ok");
+    expect(coordinatorWorkflowStoreState(COORDINATOR_WORKFLOW_NEAR_LIMIT - 1)).toBe("ok");
+    expect(coordinatorWorkflowStoreState(COORDINATOR_WORKFLOW_NEAR_LIMIT)).toBe("near-limit");
+    expect(coordinatorWorkflowStoreState(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS)).toBe("full");
+  });
+
+  for (const [label, rows, expected] of [
+    ["an empty store", () => [], "ok"],
+    ["records below the threshold", () => active(COORDINATOR_WORKFLOW_NEAR_LIMIT - 1), "ok"],
+    [
+      "a full store that cleanup can still clear",
+      () => [...active(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 500), ...history(500)],
+      "ok",
+    ],
+    [
+      "records in use at the threshold",
+      () => active(COORDINATOR_WORKFLOW_NEAR_LIMIT),
+      "near-limit",
+    ],
+    [
+      "a full store with fewer than a batch clearable",
+      () => [...active(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 50), ...history(50)],
+      "near-limit",
+    ],
+    ["a full store of records in use", () => active(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS), "full"],
+  ] as const) {
+    test(`${label} reads ${expected}`, async () => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        seedWorkflows(dataDir, [...rows()]);
+        expect(await storage.coordinators.getCoordinatorWorkflowStoreState()).toBe(expected);
+      });
+    });
+  }
+
+  test("a refused send tells the coordinator no wake will come and what frees room", () => {
+    const note = coordinatorDelegationNotOpenedNote(
+      new Error(COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR),
+      "sent",
+    );
+    expect(note).toStartWith("The message was sent, but no delegation was opened");
+    expect(note).toContain("you will not be woken");
+    expect(note).toContain("the coordinator workflow store is full");
+    expect(note).toContain("Delete finished worker environments");
+    expect(note).toContain("Do not resend");
+    expect(
+      coordinatorDelegationNotOpenedNote(
+        new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR),
+        "delivered",
+      ),
+    ).toContain("may already belong to another worker");
+  });
+});
+
+describe("request alias lookup", () => {
+  const record = finished("aliased", {
+    requestId: "own",
+    payloadHash: "own-hash",
+    requestAliases: [
+      null as never,
+      { requestId: "joined", payloadHash: "joined-hash", receivedAt: OLD },
+      { requestId: "malformed", payloadHash: 7 as never },
+    ],
+  });
+
+  test("answers the record's own request and its aliases, with their payload hashes", () => {
+    expect(coordinatorRequestMatch(record, "own")).toEqual({ payloadHash: "own-hash" });
+    expect(coordinatorRequestMatch(record, "joined")).toEqual({ payloadHash: "joined-hash" });
+    expect(coordinatorRequestAlias(record, "joined")?.receivedAt).toBe(OLD);
+    expect(coordinatorRequestMatch(record, "other")).toBeUndefined();
+    expect(coordinatorRequestAlias(record, "own")).toBeUndefined();
+  });
+
+  test("a malformed alias still names its request, with no hash, so a retry is refused", async () => {
+    expect(coordinatorRequestMatch(record, "malformed")).toEqual({ payloadHash: undefined });
+    await withTemporaryStorage(async (storage, dataDir) => {
+      seedWorkflows(dataDir, [record, finished("other")]);
+      // The store's alias admission reads the same lookup the review actions do.
+      await expect(
+        storage.coordinators.addCoordinatorWorkflowRequestAlias(
+          "other",
+          "coordinator-1",
+          "conversation-1",
+          "malformed",
+          "any-hash",
+        ),
+      ).rejects.toThrow(COORDINATOR_REQUEST_ID_REUSED_ERROR);
     });
   });
 });

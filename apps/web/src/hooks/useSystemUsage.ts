@@ -9,6 +9,8 @@ import {
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   getReadCoordinator,
+  readKeyId,
+  type ReadCoordinator,
   type ReadCoordinatorClock,
   type ReadKey,
 } from "@/lib/read-coordinator";
@@ -46,6 +48,13 @@ export const ENVIRONMENT_PROCESS_USAGE_READ_KEY: ReadKey = {
  */
 export const SYSTEM_USAGE_STALE_AFTER_MS = 10_000;
 
+/**
+ * A usage read that has not answered by now counts as failed. It sits above the
+ * backend's own bounds: process enumeration admits probes for ten seconds,
+ * and its final batch has a two-second timeout. This leaves transport headroom.
+ */
+export const USAGE_READ_TIMEOUT_MS = 20_000;
+
 export interface UsageView<T> {
   /** Last successful sample, retained across failures. */
   sample: T | null;
@@ -62,8 +71,54 @@ export interface UsageView<T> {
    * ago. A failed, paused or hung refresh never makes a sample younger.
    */
   stale: boolean;
-  /** The latest refresh failed; the retained sample is from an earlier read. */
+  /**
+   * The latest finished read failed or this backend lacks the command; any
+   * retained sample is from an earlier read. A retry in flight does not clear it.
+   */
   failed: boolean;
+}
+
+/** One bounded result per physical request, retained until that request settles. */
+const outstandingRequests = new WeakMap<ReadCoordinator, Map<string, Promise<unknown>>>();
+
+/**
+ * Fails a read that outlives {@link USAGE_READ_TIMEOUT_MS}. `invoke` cannot be
+ * aborted, so the request stays open; retrying alongside it would add one more
+ * open request per retry, and in a browser those use up the connections the
+ * whole app shares. The key therefore fails at once until its request settles,
+ * and that late answer is dropped, since it describes the past.
+ */
+function readWithTimeout<T>(
+  coordinator: ReadCoordinator,
+  id: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  const outstanding = outstandingRequests.get(coordinator) ?? new Map<string, Promise<unknown>>();
+  outstandingRequests.set(coordinator, outstanding);
+  const pending = outstanding.get(id);
+  if (pending) return pending as Promise<T>;
+  const request = Promise.resolve(read());
+  const result = new Promise<T>((resolve, reject) => {
+    const timer = coordinator.clock.setTimeout(() => {
+      reject(new Error("The usage read timed out"));
+    }, USAGE_READ_TIMEOUT_MS);
+    request.then(
+      (value) => {
+        coordinator.clock.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        coordinator.clock.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+  outstanding.set(id, result);
+  const settled = () => {
+    if (outstanding.get(id) === result) outstanding.delete(id);
+  };
+  void request.then(settled, settled);
+  return result;
 }
 
 function isTimestamp(value: unknown): value is string {
@@ -116,8 +171,10 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
     coordinator,
     enabled: active,
     demand: { active, intervalMs, priority: "auxiliary" },
-    read: async () => {
-      const sample = await read();
+    read: async ({ connectionGeneration }) => {
+      // A request to a previous server says nothing about the current one.
+      const id = `${readKeyId(key)}@${connectionGeneration}`;
+      const sample = await readWithTimeout(coordinator, id, read);
       // A malformed answer is a failed read, never a new measurement.
       if (!isSample(sample)) throw new Error("The backend returned an invalid usage sample");
       return sample;
@@ -135,7 +192,7 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
     observedAt,
     stale:
       observedAt !== null && coordinator.clock.now() - observedAt > SYSTEM_USAGE_STALE_AFTER_MS,
-    failed: state?.status === "error",
+    failed: state !== null && (state.failures > 0 || state.status === "unsupported"),
   };
 }
 

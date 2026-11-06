@@ -118,6 +118,7 @@ function boundEnvironments(
       environment.lifecycleOperationStartedAt
         ? { deletingSince: environment.lifecycleOperationStartedAt }
         : {}),
+      ...(environment.cleanupAfterMergeError ? { deletionRetryable: true as const } : {}),
       isProjectHome: environment.projectHome === true,
     });
     byProject.set(environment.projectId, list);

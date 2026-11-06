@@ -4,7 +4,9 @@ import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  normalizeCoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
+import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString, assertOnlyKeys } from "./commands-helpers.js";
@@ -20,6 +22,11 @@ import {
   type CoordinatorActivitySnapshot,
   type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
+import {
+  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+  coordinatorLaunchOverrides,
+  type CoordinatorLaunchOverridesSnapshot,
+} from "@orkestrator/protocol/coordinator-launch-overrides";
 import { randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
@@ -136,9 +143,18 @@ export function registerCoordinatorCommands(
     workflowStarts.set(key, started);
     return started;
   };
-  register("ensure_project_coordinator", async ({ projectId }, context) => {
+  register("ensure_project_coordinator", async ({ projectId, keepConversationErrors }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    return context.coordinators.ensure(asNonBlankString(projectId, "projectId"));
+    return context.coordinators.ensure(asNonBlankString(projectId, "projectId"), {
+      clearConversationErrors: keepConversationErrors !== true,
+    });
+  });
+  register("retry_coordinator_conversation", ({ projectId, conversationId }, context) => {
+    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+    return context.coordinators.retryConversation(
+      asNonBlankString(projectId, "projectId"),
+      asNonBlankString(conversationId, "conversationId"),
+    );
   });
   register("get_project_coordinator", async ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
@@ -192,6 +208,18 @@ export function registerCoordinatorCommands(
         ),
       };
     },
+  );
+  // The worker tabs whose launch overrode the default, for the marker on the
+  // tab. Reads only the coordinator store, across every project, so one read
+  // answers every tab and a project with no coordinator costs nothing and cannot
+  // fail. Bounded by the store's own association limit.
+  register(
+    COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+    async (_args, context): Promise<CoordinatorLaunchOverridesSnapshot> => ({
+      overrides: coordinatorLaunchOverrides(
+        await context.storage.coordinators.listAllCoordinatorWorkflowAssociations(),
+      ),
+    }),
   );
   // Which turn is holding the project's checkout, for the panel's Git controls.
   // The panel's own projections only cover the tabs it has mounted, so it has
@@ -458,6 +486,13 @@ export function registerCoordinatorCommands(
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const conversation = asNonBlankString(conversationId, "conversationId");
       await requireCoordinatorConversation(context, project, coordinator, conversation);
+      // Backend takeover (`force`) calls the store directly and is unaffected.
+      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
+      if (workspace?.conversations.find((item) => item.id === conversation)?.role === "side") {
+        throw new Error(
+          "A side agent cannot adopt workflows: every worker reports to the main coordinator. Ask the main coordinator to adopt it.",
+        );
+      }
       return context.storage.coordinators.adoptCoordinatorWorkflowAssociation(
         project,
         coordinator,
@@ -573,6 +608,8 @@ export function registerCoordinatorCommands(
               context.runtime.coordinatorRequests.workerTabs,
               receipt.association.id,
               STARTUP_AGENT_TAB_ID,
+              undefined,
+              launchDelegationRequest(input, environment),
             ),
           );
         }
@@ -629,7 +666,7 @@ export function registerCoordinatorCommands(
   );
   register(
     "open_coordinator_delegation",
-    async ({ scope, environmentId, tabId, requestId }, context) => {
+    async ({ scope, environmentId, tabId, requestId, request }, context) => {
       if (!record(scope)) throw new Error("Coordinator scope is required");
       const projectId = asNonBlankString(scope.projectId, "projectId");
       const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
@@ -646,6 +683,7 @@ export function registerCoordinatorCommands(
         worker,
         asNonBlankString(tabId, "tabId"),
         asNonBlankString(requestId, "requestId"),
+        normalizeCoordinatorDelegationRequest(request),
       );
       return { opened };
     },
@@ -712,6 +750,7 @@ export function registerCoordinatorCommands(
           conversationId,
           kind: "build-pipeline",
           resourceId: `pending:${stableRequestId}`,
+          createsEnvironment: !input.existingEnvironmentId,
           requestId: stableRequestId,
           payloadHash,
           baseBranch: input.delegationBaseBranch,
@@ -728,10 +767,22 @@ export function registerCoordinatorCommands(
         }
         // BuildPipelineService has its own durable admission key, so reclaiming a
         // reservation after a crash returns the already-created workflow.
-        const workflow = await buildPipelines.start({ ...input, source });
+        const workflow = await buildPipelines.start({ ...input, source }, receipt.association.id);
+        if (
+          !input.existingEnvironmentId &&
+          workflow.coordinatorLaunchId !== receipt.association.id
+        ) {
+          await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+            receipt.association.id,
+          );
+          throw new Error(
+            "Build admission belongs to another caller; no creation authority granted",
+          );
+        }
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,
+          input.existingEnvironmentId ? undefined : workflow.environmentId,
         );
         return workflow;
       },

@@ -605,14 +605,21 @@ test.describe(() => {
       await page.goto(status.browserUrl!);
       const rendered = page.getByText(fixture!.name, { exact: false }).first();
       const unreachable = page.getByRole("heading", { name: "Orkestrator couldn’t connect" });
-      await expect(rendered.or(unreachable)).toBeVisible({ timeout: 30_000 });
+      // A page that lost its entry modules shows neither, so wait without failing
+      // and let the outcome decide.
+      await expect(rendered.or(unreachable))
+        .toBeVisible({ timeout: 30_000 })
+        .catch(() => undefined);
       const outcome = directLoadOutcome(failures, await rendered.isVisible());
       page.off("requestfailed", onFailed);
       page.off("response", onResponse);
       if (outcome === "loaded") break;
-      expect(outcome, `module loads failed: ${[...new Set(failures)].join(", ")}`).toBe(
-        "network-changed",
-      );
+      expect(
+        outcome,
+        failures.length > 0
+          ? `module loads failed: ${[...new Set(failures)].join(", ")}`
+          : "the renderer did not load, and no module load failed",
+      ).toBe("network-changed");
       if (attempt === attempts)
         throw new Error(
           `All ${attempts} loads lost module requests to ${NETWORK_CHANGED}: host network interfaces kept changing (flake 2340)`,

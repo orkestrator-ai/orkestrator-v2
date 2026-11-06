@@ -120,7 +120,8 @@ The alternatives were to keep the single write and leave the service unproved un
 Added an opt-in regression that uses real Git, the real planner and real
 `fs.watch`. After attaching the root it consumes the remaining kernel watch
 quota, checks that child attachment reports `ENOSPC` without qualifying partial
-coverage, then releases the quota and checks recovery and a single source write.
+coverage, then releases the quota and checks recovery by writing distinct source
+files until a hint names one.
 All test handles and files are released in `finally`.
 
 It needs a small quota that no other process shares. On Linux 5.11 or later, an

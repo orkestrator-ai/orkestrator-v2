@@ -126,40 +126,93 @@ export class SocketWriter {
 /** Container half: accepts on loopback and forwards every connection to stdout. */
 function runContainerHalf(port: number, listen: string): void {
   const out: Writable = { write: (data) => process.stdout.write(data) };
-  const sockets = new Map<number, SocketWriter>();
-  let nextId = 1;
+  const relay = createContainerRelay(out);
   const decoder = new FrameDecoder();
   process.stdin.on("data", (chunk: Buffer) => {
-    for (const frame of decoder.push(new Uint8Array(chunk))) {
-      const socket = sockets.get(frame.id);
-      if (frame.type === FRAME_DATA) socket?.write(frame.payload);
-      if (frame.type === FRAME_CLOSE) {
-        sockets.delete(frame.id);
-        socket?.end();
-      }
-    }
+    for (const frame of decoder.push(new Uint8Array(chunk))) relay.receive(frame);
   });
   process.stdin.on("end", () => process.exit(0));
-  Bun.listen<{ id: number; writer: SocketWriter }>({
-    hostname: listen,
-    port,
-    socket: {
-      open(socket) {
-        socket.data = { id: nextId++, writer: new SocketWriter(socket) };
-        sockets.set(socket.data.id, socket.data.writer);
-        out.write(encodeFrame(FRAME_OPEN, socket.data.id));
-      },
-      data(socket, data) {
-        for (const frame of encodeData(socket.data.id, new Uint8Array(data))) out.write(frame);
-      },
-      drain(socket) {
-        socket.data.writer.drain();
-      },
-      close(socket) {
-        if (sockets.delete(socket.data.id)) out.write(encodeFrame(FRAME_CLOSE, socket.data.id));
-      },
+  Bun.listen({ hostname: listen, port, socket: relay.socket });
+}
+
+/** Container socket callbacks and inbound frames, without owning process IO. */
+export function createContainerRelay(out: Writable) {
+  const sockets = new Map<number, SocketWriter>();
+  let nextId = 1;
+  const receive = (frame: Frame) => {
+    const socket = sockets.get(frame.id);
+    if (frame.type === FRAME_DATA) socket?.write(frame.payload);
+    if (frame.type === FRAME_CLOSE) {
+      sockets.delete(frame.id);
+      socket?.end();
+    }
+  };
+  const socket: Bun.SocketHandler<{ id: number; writer: SocketWriter }> = {
+    open(socket) {
+      socket.data = { id: nextId++, writer: new SocketWriter(socket) };
+      sockets.set(socket.data.id, socket.data.writer);
+      out.write(encodeFrame(FRAME_OPEN, socket.data.id));
     },
-  });
+    data(socket, data) {
+      for (const frame of encodeData(socket.data.id, new Uint8Array(data))) out.write(frame);
+    },
+    drain(socket) {
+      socket.data.writer.drain();
+    },
+    close(socket) {
+      if (sockets.delete(socket.data.id)) out.write(encodeFrame(FRAME_CLOSE, socket.data.id));
+    },
+  };
+  return { receive, socket };
+}
+
+type HostHandlers = {
+  data(socket: RelaySocket, data: Uint8Array): void;
+  drain(): void;
+  close(): void;
+  error(): void;
+};
+
+/** Frame handling shared by the host runner and deterministic lifecycle tests. */
+export function createHostRelay(
+  toContainer: Writable,
+  connect: (handlers: HostHandlers) => Promise<RelaySocket>,
+): (frame: Frame) => void {
+  const sockets = new Map<number, Promise<SocketWriter | null>>();
+  return (frame) => {
+    if (frame.type === FRAME_OPEN) {
+      const id = frame.id;
+      let writer: SocketWriter | undefined;
+      sockets.set(
+        id,
+        connect({
+          data(_socket, data) {
+            for (const out of encodeData(id, new Uint8Array(data))) toContainer.write(out);
+          },
+          drain() {
+            writer?.drain();
+          },
+          close() {
+            if (sockets.delete(id)) toContainer.write(encodeFrame(FRAME_CLOSE, id));
+          },
+          error() {},
+        })
+          .then((socket) => (writer = new SocketWriter(socket)))
+          .catch(() => {
+            sockets.delete(id);
+            toContainer.write(encodeFrame(FRAME_CLOSE, id));
+            return null;
+          }),
+      );
+    } else if (frame.type === FRAME_DATA) {
+      const payload = frame.payload;
+      void sockets.get(frame.id)?.then((socket) => socket?.write(payload));
+    } else if (frame.type === FRAME_CLOSE) {
+      const pending = sockets.get(frame.id);
+      sockets.delete(frame.id);
+      void pending?.then((socket) => socket?.end());
+    }
+  };
 }
 
 /** Host half: runs the container half and dials the backend on loopback per connection. */
@@ -194,7 +247,9 @@ async function runHostHalf(container: string, port: number, listen: string): Pro
       child.stdin.flush();
     },
   };
-  const sockets = new Map<number, Promise<SocketWriter | null>>();
+  const receive = createHostRelay(toContainer, (socket) =>
+    Bun.connect({ hostname: "127.0.0.1", port, socket }),
+  );
   const decoder = new FrameDecoder();
   const shutdown = () => {
     child.kill();
@@ -203,44 +258,7 @@ async function runHostHalf(container: string, port: number, listen: string): Pro
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
   for await (const chunk of child.stdout) {
-    for (const frame of decoder.push(chunk)) {
-      if (frame.type === FRAME_OPEN) {
-        const id = frame.id;
-        let writer: SocketWriter | undefined;
-        sockets.set(
-          id,
-          Bun.connect({
-            hostname: "127.0.0.1",
-            port,
-            socket: {
-              data(_socket, data) {
-                for (const out of encodeData(id, new Uint8Array(data))) toContainer.write(out);
-              },
-              drain() {
-                writer?.drain();
-              },
-              close() {
-                if (sockets.delete(id)) toContainer.write(encodeFrame(FRAME_CLOSE, id));
-              },
-              error() {},
-            },
-          })
-            .then((socket) => (writer = new SocketWriter(socket)))
-            .catch(() => {
-              sockets.delete(id);
-              toContainer.write(encodeFrame(FRAME_CLOSE, id));
-              return null;
-            }),
-        );
-      } else if (frame.type === FRAME_DATA) {
-        const payload = frame.payload;
-        void sockets.get(frame.id)?.then((socket) => socket?.write(payload));
-      } else if (frame.type === FRAME_CLOSE) {
-        const pending = sockets.get(frame.id);
-        sockets.delete(frame.id);
-        void pending?.then((socket) => socket?.end());
-      }
-    }
+    for (const frame of decoder.push(chunk)) receive(frame);
   }
   process.exit((await child.exited) ?? 1);
 }

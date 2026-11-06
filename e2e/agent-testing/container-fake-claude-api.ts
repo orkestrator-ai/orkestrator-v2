@@ -220,6 +220,16 @@ export function scriptedAction(
   body: MessageBody,
   stats: FakeClaudeApiStats & { seen: Set<string> } = createFakeClaudeApiStats(),
 ): FakeAction | null {
+  // Tool-result messages continue a turn; a new user prompt starts fresh execution.
+  // Keep result-target lookup on the full history so a correction can reuse its key.
+  const messages = body.messages ?? [];
+  const start = messages.findLastIndex(
+    (message) =>
+      message.role === "user" &&
+      (typeof message.content === "string" ||
+        ((message.content ?? []).some((block) => block.type === "text") &&
+          !(message.content ?? []).some((block) => block.type === "tool_result"))),
+  );
   const target = resultTarget(body);
   if (!target) return null;
   const tools = body.tools ?? [];
@@ -248,12 +258,23 @@ export function scriptedAction(
     stats.seen.add(call.id);
     stats.results.push({ step: call.step, isError: errors.get(call.id)! });
   }
+  const turnIds = new Set(
+    messages
+      .slice(Math.max(0, start))
+      .flatMap((message) =>
+        Array.isArray(message.content)
+          ? message.content.filter((block) => block.type === "tool_use").map((block) => block.id)
+          : [],
+      ),
+  );
+  // Stats span the session, but only this prompt's calls decide its next action.
+  const turnCalls = calls.filter((call) => turnIds.has(call.id));
   const tool = (step: ScriptedStep): FakeAction => {
     const id = `toolu_fixture_${step}_${crypto.randomUUID().replaceAll("-", "")}`;
     if (step === "output") {
       const input = minimalInstance(schema) as Record<string, unknown>;
       // The commit the read step printed; held only for this reply.
-      const read = calls.find((call) => call.step === "read");
+      const read = turnCalls.find((call) => call.step === "read");
       const head = read ? /\b[0-9a-f]{40}\b/.exec(outputs.get(read.id) ?? "")?.[0] : undefined;
       if (wantsHead && head) input.headRef = head;
       // A plan with no commands must say why (`isReviewValidationPlan`).
@@ -269,7 +290,7 @@ export function scriptedAction(
     return { kind: "tool", id, name: "Bash", input: { command } };
   };
   // Load a deferred tool first: only then is its schema known.
-  const done = new Set(calls.map((call) => call.step));
+  const done = new Set(turnCalls.map((call) => call.step));
   if (target.deferred) {
     return done.has("load")
       ? { kind: "text", text: "The result tool could not be loaded." }
@@ -279,7 +300,7 @@ export function scriptedAction(
   if (hasBash && !done.has("read")) return tool("read");
   if (hasBash && !done.has("write")) return tool("write");
   if (!done.has("output")) return tool("output");
-  const submitted = calls.findLast((call) => call.step === "output")!;
+  const submitted = turnCalls.findLast((call) => call.step === "output")!;
   return {
     kind: "text",
     text: errors.get(submitted.id) ? "The result was refused." : "Done.",

@@ -115,15 +115,20 @@ function playTurn(
   prompt: string,
   tools: Array<{ name: string; input_schema?: Record<string, unknown> }>,
   answer: (action: Extract<FakeAction, { kind: "tool" }>) => { isError: boolean; text: string },
-  options: { loadTools?: typeof tools } = {},
+  options: {
+    loadTools?: typeof tools;
+    messages?: Message[];
+    stats?: ReturnType<typeof createFakeClaudeApiStats>;
+  } = {},
 ) {
-  const stats = createFakeClaudeApiStats();
-  const messages: Message[] = [{ role: "user", content: prompt }];
+  const stats = options.stats ?? createFakeClaudeApiStats();
+  const messages = options.messages ?? [];
+  messages.push({ role: "user", content: prompt });
   const actions: FakeAction[] = [];
   let offered = tools;
   for (let index = 0; index < 8; index += 1) {
     const action = scriptedAction({ messages, tools: offered }, stats);
-    if (!action) return { actions, stats, unscripted: true };
+    if (!action) return { actions, stats, messages, unscripted: true };
     actions.push(action);
     if (action.kind === "text") break;
     messages.push({
@@ -135,10 +140,13 @@ function playTurn(
       offered = [...tools, ...options.loadTools];
     messages.push({
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: action.id, is_error: isError, content: text }],
+      content: [
+        { type: "tool_result", tool_use_id: action.id, is_error: isError, content: text },
+        { type: "text", text: "<system-reminder>Continue this turn.</system-reminder>" },
+      ],
     });
   }
-  return { actions, stats, unscripted: false };
+  return { actions, stats, messages, unscripted: false };
 }
 
 const REPORT_SCHEMA = {
@@ -257,6 +265,67 @@ describe("container fake Claude API, Multi Review steps (todo 0190)", () => {
     });
     expect(actions.at(-1)).toEqual({ kind: "text", text: "Done." });
   });
+
+  for (const transport of ["structured", "deferred"] as const) {
+    for (const refused of [false, true]) {
+      test(`${transport} starts fresh after a ${refused ? "refused" : "completed"} retained turn`, () => {
+        const submit = {
+          name: "mcp__orkestrator__submit_review_report",
+          input_schema: { properties: { result: REPORT_SCHEMA } },
+        };
+        const tools =
+          transport === "structured"
+            ? [{ name: "Bash" }, { name: "StructuredOutput", input_schema: REPORT_SCHEMA }]
+            : [{ name: "Bash" }, { name: "ToolSearch" }];
+        const prompt = (key: string) =>
+          `call the Orkestrator \`submit_review_report\` tool with resultKey "${key}". mcp__orkestrator__submit_review_report`;
+        const first = playTurn(
+          prompt("0d6f6f8e-5c1a-4d7e-9a43-9b1f6f3f2a11"),
+          tools,
+          (action) =>
+            action.name === submit.name || action.name === "StructuredOutput"
+              ? { isError: refused, text: refused ? "refused" : "accepted" }
+              : readOnlyHook(action),
+          { loadTools: [submit] },
+        );
+        expect(first.actions.at(-1)).toEqual({
+          kind: "text",
+          text: refused ? "The result was refused." : "Done.",
+        });
+        const secondKey = refused
+          ? "0d6f6f8e-5c1a-4d7e-9a43-9b1f6f3f2a11"
+          : "1d6f6f8e-5c1a-4d7e-9a43-9b1f6f3f2a11";
+        const second = playTurn(
+          refused ? "Correct the refused result and submit again." : prompt(secondKey),
+          tools,
+          readOnlyHook,
+          {
+            loadTools: [submit],
+            messages: first.messages,
+            stats: first.stats,
+          },
+        );
+        const calls = second.actions.filter((action) => action.kind === "tool");
+        expect(calls.map((action) => action.name)).toEqual(
+          transport === "structured"
+            ? ["Bash", "Bash", "StructuredOutput"]
+            : ["ToolSearch", "Bash", "Bash", submit.name],
+        );
+        expect(calls.at(-3)!.input).toEqual({ command: SCRIPTED_COMMANDS.read });
+        expect(calls.at(-2)!.input).toEqual({ command: SCRIPTED_COMMANDS.write });
+        expect(calls.at(-1)!.input).toEqual(
+          transport === "structured"
+            ? minimalInstance(REPORT_SCHEMA)
+            : { resultKey: secondKey, result: minimalInstance(REPORT_SCHEMA) },
+        );
+        expect(second.actions.at(-1)).toEqual({ kind: "text", text: "Done." });
+        expect(second.stats.results.filter((result) => result.step === "output")).toEqual([
+          { step: "output", isError: refused },
+          { step: "output", isError: false },
+        ]);
+      });
+    }
+  }
 
   test("a submit tool that never loads ends the turn instead of looping", () => {
     const prompt = `call \`validate_workflow_result\` with resultKey "0d6f6f8e-5c1a-4d7e-9a43-9b1f6f3f2a11" ... call the Orkestrator \`submit_review_report\` tool. mcp__orkestrator__submit_review_report`;

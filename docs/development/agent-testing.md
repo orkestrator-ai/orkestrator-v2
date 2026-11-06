@@ -547,7 +547,10 @@ to `tee` who wants the window passes `--no-headless`. `--headless-electron`
 still works as another spelling of `--headless`.
 
 `mise run dev` never goes headless and rejects these flags. On macOS and Windows
-they are accepted and change nothing, because Ozone does not exist there.
+they are accepted and change nothing, because Ozone does not exist there. When
+anything above would have made Linux headless (the flag, a variable, or no
+terminal), the launcher says that Electron opens a window and which input it
+ignored, so an agent's run there does open a window on the desktop.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
 `capturePage` hangs in this mode. The switch has to be on Electron's command

@@ -12,16 +12,42 @@ export * from "@playwright/test";
  * styles outside Chromium's network stack. Navigations, commands and event
  * streams still go through the browser.
  *
- * `browser-gateway.spec.ts` and `client-outage.spec.ts` keep `@playwright/test`
- * on purpose: they are about the browser's own network path, so a gateway fault
- * that only a browser sees still shows there.
+ * `client-outage.spec.ts` keeps `@playwright/test` on purpose: it is about the
+ * browser's own network path through outages. `browser-gateway.spec.ts` has one
+ * case that sets `modulesThroughChromium`, so a gateway fault that only a
+ * browser sees still shows there.
  */
-export const test = base.extend({
-  context: async ({ context }, use) => {
-    await fetchModulesOutsideChromium(context);
+export const test = base.extend<{ modulesThroughChromium: boolean }>({
+  /**
+   * Leaves the default context's module loads on Chromium's own network path.
+   * Only a case that is about that path sets it, and it must survive a load
+   * lost to a network change itself (see {@link directLoadOutcome}).
+   */
+  modulesThroughChromium: [false, { option: true }],
+  context: async ({ context, modulesThroughChromium }, use) => {
+    if (!modulesThroughChromium) await fetchModulesOutsideChromium(context);
     await use(context);
   },
 });
+
+/** The error Chromium gives a request it aborted because a host interface changed. */
+export const NETWORK_CHANGED = "net::ERR_NETWORK_CHANGED";
+
+/**
+ * How one page load went for a case that loads its modules through Chromium.
+ * `failures` holds what went wrong with each module load (Chromium's error
+ * text, or the HTTP status a load answered with). A load that lost modules
+ * only to host network changes says nothing about the gateway and is worth
+ * loading again; anything else is a real failure.
+ */
+export function directLoadOutcome(
+  failures: readonly string[],
+  rendered: boolean,
+): "loaded" | "network-changed" | "failed" {
+  if (failures.some((failure) => failure !== NETWORK_CHANGED)) return "failed";
+  if (failures.length > 0) return "network-changed";
+  return rendered ? "loaded" : "failed";
+}
 
 /** A loopback origin: the profile's gateway, its renderer, or a fixture server. */
 export const LOOPBACK_URL = /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?\//;

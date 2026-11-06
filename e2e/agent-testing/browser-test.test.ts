@@ -6,7 +6,9 @@ import { parseSync, visitorKeys, type Node } from "oxc-parser";
 import {
   LOOPBACK_URL,
   ModuleCache,
+  NETWORK_CHANGED,
   decodedBodyHeaders,
+  directLoadOutcome,
   fetchModulesOutsideChromium,
   isModuleLoad,
 } from "./browser-test";
@@ -15,9 +17,11 @@ const directory = import.meta.dirname;
 
 /** Specs that keep Chromium's own network path for module loads, and why. */
 const DIRECT_SPECS = new Map([
-  ["browser-gateway.spec.ts", "the gateway's direct browser check"],
   ["client-outage.spec.ts", "outages of the browser's own network path"],
 ]);
+
+/** Specs with cases that load modules through Chromium themselves, and how many. */
+const DIRECT_CASES = new Map([["browser-gateway.spec.ts", 1]]);
 
 function browserSuiteSpecs(): string[] {
   const config = readFileSync(path.join(directory, "playwright.browser.config.ts"), "utf8");
@@ -124,6 +128,24 @@ describe("the browser suite's shared test", () => {
       return DIRECT_SPECS.has(spec) === shared;
     });
     expect(offenders).toEqual([]);
+  });
+
+  test("only the listed cases opt back into Chromium's own module loads", () => {
+    const counts = browserSuiteSpecs().flatMap((spec) => {
+      const source = readFileSync(path.join(directory, spec), "utf8");
+      const count = source.split("modulesThroughChromium: true").length - 1;
+      return count > 0 ? [[spec, count] as const] : [];
+    });
+    expect(new Map(counts)).toEqual(DIRECT_CASES);
+  });
+
+  test("a direct load is retried only when it lost modules to network changes alone", () => {
+    expect(directLoadOutcome([], true)).toBe("loaded");
+    expect(directLoadOutcome([], false)).toBe("failed");
+    expect(directLoadOutcome([NETWORK_CHANGED, NETWORK_CHANGED], false)).toBe("network-changed");
+    expect(directLoadOutcome([NETWORK_CHANGED], true)).toBe("network-changed");
+    expect(directLoadOutcome([NETWORK_CHANGED, "HTTP 502"], false)).toBe("failed");
+    expect(directLoadOutcome(["net::ERR_CONNECTION_RESET"], true)).toBe("failed");
   });
 
   test("every context a browser-suite spec creates also fetches its modules itself", () => {

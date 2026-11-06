@@ -4,9 +4,16 @@ import {
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import { createHash } from "node:crypto";
-// Not `./browser-test`: this file is the suite's direct check that the gateway
-// serves the renderer's modules through a real browser's network stack.
-import { expect, test, type Page } from "@playwright/test";
+import {
+  NETWORK_CHANGED,
+  directLoadOutcome,
+  expect,
+  isModuleLoad,
+  test,
+  type Page,
+  type Request as PageRequest,
+  type Response as PageResponse,
+} from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -556,6 +563,56 @@ test("project Home retains background work and unread attention beneath the boar
     await invoke("close_local_terminal_session", { sessionId: terminal.sessionId });
     await invoke("set_environment_unread", { environmentId: home.id, unread: false });
   }
+});
+
+// The suite's one check that the gateway serves the renderer's modules through a
+// real browser's network stack; every other case fetches them outside Chromium.
+// On Linux, Chromium aborts in-flight loads whenever a host interface changes
+// (flake 2340), so a load that lost modules only that way is loaded again.
+test.describe(() => {
+  test.use({ modulesThroughChromium: true });
+
+  test("the gateway serves the renderer's modules to Chromium's own network stack", async ({
+    page,
+  }) => {
+    const status = await profileStatus();
+    expect(status.status).toBe("ready");
+    const invoke = await authenticatedInvoke(page, status);
+    const fixture = (await invoke<Project[]>("get_projects")).find(
+      (project) => project.localPath === status.testProject,
+    );
+    expect(fixture).toBeTruthy();
+    const attempts = 4;
+    for (let attempt = 1; ; attempt += 1) {
+      // Start from a blank page, so no load from the previous attempt is counted.
+      await page.goto("about:blank");
+      const failures: string[] = [];
+      const onFailed = (request: PageRequest) => {
+        if (isModuleLoad(request)) failures.push(request.failure()?.errorText ?? "failed");
+      };
+      const onResponse = (response: PageResponse) => {
+        if (isModuleLoad(response.request()) && response.status() !== 200)
+          failures.push(`HTTP ${response.status()}`);
+      };
+      page.on("requestfailed", onFailed);
+      page.on("response", onResponse);
+      await page.goto(status.browserUrl!);
+      const rendered = page.getByText(fixture!.name, { exact: false }).first();
+      const unreachable = page.getByRole("heading", { name: "Orkestrator couldn’t connect" });
+      await expect(rendered.or(unreachable)).toBeVisible({ timeout: 30_000 });
+      const outcome = directLoadOutcome(failures, await rendered.isVisible());
+      page.off("requestfailed", onFailed);
+      page.off("response", onResponse);
+      if (outcome === "loaded") break;
+      expect(outcome, `module loads failed: ${[...new Set(failures)].join(", ")}`).toBe(
+        "network-changed",
+      );
+      if (attempt === attempts)
+        throw new Error(
+          `All ${attempts} loads lost module requests to ${NETWORK_CHANGED}: host network interfaces kept changing (flake 2340)`,
+        );
+    }
+  });
 });
 
 test("real browser gateway exercises an authoritative local environment", async ({ page }) => {

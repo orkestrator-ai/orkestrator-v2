@@ -1337,11 +1337,14 @@ network's create and removal, the stale-probe reap and reviewed cleanup
 report each change (`docker-network-changes.ts`), which marks the list stale
 and reloads it at once. A request that arrives while a reload is running
 waits for the entire refresh chain, including changes reported during a read.
-Every non-loopback peer, including cached members, reloads the list at most once every 15 s
-unless a change was reported, so a labelled network another process created
+Every non-loopback peer, including cached members, reloads the list once 15 s
+have elapsed since the last read completed unless a change was reported, so a labelled network another process created
 is admitted on its first call after that, and an outside peer costs at most
 one Docker read per 15 s. A failed read revokes cached permissions until a
-successful retry; retries remain rate-limited. Superseded reads cannot admit
+successful retry; retries remain rate-limited from completion, so slow reads
+do not immediately expire. A network removed between listing and inspection
+is omitted; other inspect failures invalidate the whole snapshot and log a
+classified warning, as do list failures. Superseded reads cannot admit
 a peer. HTTP parser errors close silently, and automatic Expect responses
 are sent only after admission. The first
 read happens on the first non-loopback peer, so a backend whose containers

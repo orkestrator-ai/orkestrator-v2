@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   AgentToolsPeerFilter,
   isLoopbackPeer,
@@ -8,7 +9,7 @@ import {
   parseIpv4Subnet,
 } from "./agent-tools-peer-filter.js";
 import { reportDockerNetworkChange } from "./docker-network-changes.js";
-import type { runCommand } from "./shell.js";
+import { CommandFailedError, type runCommand } from "./shell.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -93,6 +94,61 @@ describe("AgentToolsPeerFilter", () => {
     now += 1;
     expect(await filter.admits("10.200.0.5")).toBe(true);
     expect(loads).toBe(2);
+  });
+
+  for (const duration of [MISS_RELOAD_INTERVAL_MS, MISS_RELOAD_INTERVAL_MS + 3_000]) {
+    test(`a successful ${duration}ms load stays fresh from completion`, async () => {
+      let now = 0;
+      let loads = 0;
+      const filter = new AgentToolsPeerFilter({
+        now: () => now,
+        loadSubnets: async () => {
+          loads += 1;
+          now += duration;
+          return ["172.25.0.0/16"];
+        },
+      });
+      expect(await filter.admits("172.25.0.2")).toBe(true);
+      expect(await filter.admits("172.26.0.2")).toBe(false);
+      now += MISS_RELOAD_INTERVAL_MS - 1;
+      expect(filter.verdict("172.25.0.2")).toBe("admit");
+      expect(loads).toBe(1);
+      now += 1;
+      expect(await filter.admits("172.25.0.2")).toBe(true);
+      expect(loads).toBe(2);
+    });
+  }
+
+  test("a slow null read revokes permissions, warns, and backs off from completion", async () => {
+    const logs = captureLogs();
+    try {
+      let now = 0;
+      let loads = 0;
+      const filter = new AgentToolsPeerFilter({
+        now: () => now,
+        loadSubnets: async () => {
+          loads += 1;
+          if (loads !== 2) return ["172.25.0.0/16"];
+          now += 18_000;
+          return null;
+        },
+      });
+      expect(await filter.admits("172.25.0.2")).toBe(true);
+      filter.networksChanged();
+      expect(await filter.admits("172.25.0.2")).toBe(false);
+      expect(filter.allowedSubnets()).toEqual([]);
+      expect(
+        logs.records().filter((record) => record.event === "peers.subnets-load-failed"),
+      ).toMatchObject([{ level: "warn" }]);
+      now += MISS_RELOAD_INTERVAL_MS - 1;
+      expect(await filter.admits("172.25.0.2")).toBe(false);
+      expect(loads).toBe(2);
+      now += 1;
+      expect(await filter.admits("172.25.0.2")).toBe(true);
+      expect(loads).toBe(3);
+    } finally {
+      logs.restore();
+    }
   });
 
   test("a reported network change makes the next unknown peer reload at once", async () => {
@@ -287,6 +343,74 @@ describe("AgentToolsPeerFilter", () => {
 });
 
 describe("loadOwnedDockerSubnets", () => {
+  for (const stderr of [
+    "Error: No such network: aaaaaaaaaaaa",
+    "Error response from daemon: network aaaaaaaaaaaa not found",
+  ]) {
+    test(`a confirmed removal is omitted without a failure warning (${stderr})`, async () => {
+      const logs = captureLogs();
+      try {
+        const run = (async (_command: string, args: string[]) => {
+          if (args[1] === "ls") return { stdout: "aaaaaaaaaaaa", stderr: "" };
+          if (args.at(-1) === "bridge") return { stdout: "172.17.0.0/16", stderr: "" };
+          throw new CommandFailedError(stderr, { exitCode: 1, stderr });
+        }) as unknown as typeof runCommand;
+        expect(await loadOwnedDockerSubnets("0123456789abcdef", run)).toEqual(["172.17.0.0/16"]);
+        expect(logs.records().filter((record) => record.level === "warn")).toEqual([]);
+      } finally {
+        logs.restore();
+      }
+    });
+  }
+
+  for (const message of ["Command timed out", "Cannot connect to the Docker daemon"]) {
+    test(`an inspect failure revokes the snapshot and warns (${message})`, async () => {
+      const logs = captureLogs();
+      try {
+        let fail = false;
+        const run = (async (_command: string, args: string[]) => {
+          if (args[1] === "ls") return { stdout: "aaaaaaaaaaaa\n", stderr: "" };
+          if (args.at(-1) === "bridge") return { stdout: "172.17.0.0/16", stderr: "" };
+          if (fail)
+            throw new CommandFailedError(message, {
+              timedOut: message === "Command timed out",
+              exitCode: message === "Command timed out" ? null : 1,
+              stderr: message === "Command timed out" ? "No such network: aaaaaaaaaaaa" : message,
+            });
+          return { stdout: "172.25.0.0/16", stderr: "" };
+        }) as unknown as typeof runCommand;
+        const filter = new AgentToolsPeerFilter({
+          now: () => 0,
+          loadSubnets: () => loadOwnedDockerSubnets("0123456789abcdef", run),
+        });
+        expect(await filter.admits("172.25.0.2")).toBe(true);
+        fail = true;
+        filter.networksChanged();
+        expect(await filter.admits("172.25.0.2")).toBe(false);
+        expect(filter.allowedSubnets()).toEqual([]);
+        expect(
+          logs.records().filter((record) => record.event === "peers.subnets-loaded"),
+        ).toHaveLength(1);
+        expect(
+          logs.records().filter((record) => record.event === "network.inspect-failed"),
+        ).toMatchObject([
+          {
+            level: "warn",
+            fields: {
+              network: "aaaaaaaaaaaa",
+              reason: message === "Command timed out" ? "timed-out" : "daemon-unavailable",
+            },
+          },
+        ]);
+        expect(logs.records().some((record) => record.event === "peers.subnets-load-failed")).toBe(
+          true,
+        );
+      } finally {
+        logs.restore();
+      }
+    });
+  }
+
   test("reads the default bridge and every network labelled with the owner", async () => {
     const calls: string[][] = [];
     const run = (async (_command: string, args: string[]) => {
@@ -296,7 +420,10 @@ describe("loadOwnedDockerSubnets", () => {
       const name = args.at(-1);
       if (name === "bridge") return { stdout: "172.17.0.0/16 \n", stderr: "" };
       if (name === "aaaaaaaaaaaa") return { stdout: "172.25.0.0/16 fd00:1::/64 \n", stderr: "" };
-      throw new Error("Error: No such network: bbbbbbbbbbbb");
+      throw new CommandFailedError("Error: No such network: bbbbbbbbbbbb", {
+        exitCode: 1,
+        stderr: "Error: No such network: bbbbbbbbbbbb",
+      });
     }) as unknown as typeof runCommand;
     expect(await loadOwnedDockerSubnets("0123456789abcdef", run)).toEqual([
       "172.17.0.0/16",
@@ -318,9 +445,27 @@ describe("loadOwnedDockerSubnets", () => {
   });
 
   test("is null when Docker cannot list networks", async () => {
-    const run = (async () => {
-      throw new Error("Cannot connect to the Docker daemon");
-    }) as unknown as typeof runCommand;
-    expect(await loadOwnedDockerSubnets("0123456789abcdef", run)).toBeNull();
+    const logs = captureLogs();
+    try {
+      const run = (async () => {
+        throw new CommandFailedError("Cannot connect to the Docker daemon", { exitCode: 1 });
+      }) as unknown as typeof runCommand;
+      expect(await loadOwnedDockerSubnets("0123456789abcdef", run)).toBeNull();
+      const filter = new AgentToolsPeerFilter({
+        loadSubnets: () => loadOwnedDockerSubnets("0123456789abcdef", run),
+      });
+      expect(await filter.admits("172.17.0.2")).toBe(false);
+      expect(
+        logs.records().filter((record) => record.event === "network.list-failed"),
+      ).toMatchObject([
+        { level: "warn", fields: { reason: "daemon-unavailable" } },
+        { level: "warn", fields: { reason: "daemon-unavailable" } },
+      ]);
+      expect(
+        logs.records().filter((record) => record.event === "peers.subnets-load-failed"),
+      ).toMatchObject([{ level: "warn" }]);
+    } finally {
+      logs.restore();
+    }
   });
 });

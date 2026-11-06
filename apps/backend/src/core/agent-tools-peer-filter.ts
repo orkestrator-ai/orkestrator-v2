@@ -1,7 +1,8 @@
 import { createLogger } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
 import { subscribeDockerNetworkChanges } from "./docker-network-changes.js";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 
 const log = createLogger("docker.reachability");
 
@@ -90,7 +91,7 @@ export class AgentToolsPeerFilter {
   private subnets: Ipv4Subnet[] = [];
   /** True before the first read, and after every reported change. */
   private stale = true;
-  private lastLoadStartedAt = Number.NEGATIVE_INFINITY;
+  private lastLoadCompletedAt = Number.NEGATIVE_INFINITY;
   private loading: Promise<void> | null = null;
   /** Set when a change is reported during a load: that load may predate it. */
   private changedDuringLoad = false;
@@ -136,7 +137,7 @@ export class AgentToolsPeerFilter {
 
   /** A network was created or removed: the list is stale; reload it now if it was ever loaded. */
   networksChanged(): void {
-    const wasLoaded = this.lastLoadStartedAt !== Number.NEGATIVE_INFINITY;
+    const wasLoaded = this.lastLoadCompletedAt !== Number.NEGATIVE_INFINITY;
     this.stale = true;
     if (this.loading) this.changedDuringLoad = true;
     if (wasLoaded) void this.reload();
@@ -172,17 +173,15 @@ export class AgentToolsPeerFilter {
     }
     if (this.loading) return this.loading;
     const load = this.options.loadSubnets;
-    this.lastLoadStartedAt = this.now();
     this.changedDuringLoad = false;
     const running = (async () => {
       let loaded: readonly string[] | null = null;
       try {
         loaded = await load();
-      } catch (error) {
-        log.warn("peers.subnets-load-failed", {
-          error: error instanceof Error ? error.message.slice(0, 300) : "unknown",
-        });
+      } catch {
+        // Command output may contain private data; log only the outcome below.
       }
+      if (loaded === null) log.warn("peers.subnets-load-failed");
       if (loaded && !this.changedDuringLoad) {
         const parsed: Ipv4Subnet[] = [];
         for (const text of loaded) {
@@ -199,6 +198,7 @@ export class AgentToolsPeerFilter {
       // Retry failed reads on the interval, not on every connection. Only
       // a new change bypasses that backoff and starts a replacement read.
       this.stale = this.changedDuringLoad;
+      this.lastLoadCompletedAt = this.now();
     })().finally(() => {
       this.loading = null;
       if (this.stale) void this.reload();
@@ -211,7 +211,7 @@ export class AgentToolsPeerFilter {
     if (!this.options.loadSubnets) return false;
     if (this.loading || this.stale) return true;
     // An unexplained miss reloads at most once per interval.
-    return this.now() - this.lastLoadStartedAt >= this.missReloadIntervalMs;
+    return this.now() - this.lastLoadCompletedAt >= this.missReloadIntervalMs;
   }
 
   /** Follows the network code's change reports until the returned function is called. */
@@ -249,11 +249,12 @@ export async function loadOwnedDockerSubnets(
         .filter((line) => /^[0-9a-f]{6,64}$/i.test(line))
         .slice(0, MAX_NETWORKS),
     ];
-  } catch {
+  } catch (error) {
+    log.warn("network.list-failed", { ...classifyCommandFailure(error, { tools: ["docker"] }) });
     return null;
   }
-  // One inspect per network: a network removed between the listing and
-  // the inspect fails only itself.
+  // A network removed between listing and inspection is harmless. Every
+  // other failure makes the snapshot incomplete and must revoke permissions.
   const results = await Promise.all(
     names.map(async (name) => {
       try {
@@ -263,12 +264,31 @@ export async function loadOwnedDockerSubnets(
           { timeoutMs: DOCKER_TIMEOUT_MS },
         );
         return stdout.split(/\s+/).filter((value) => parseIpv4Subnet(value) !== null);
-      } catch {
-        return [];
+      } catch (error) {
+        // A timeout/abort is never evidence of removal, even if partial stderr
+        // happens to mention a missing network.
+        if (
+          error instanceof CommandFailedError &&
+          error.exitCode === 1 &&
+          !error.timedOut &&
+          !error.aborted &&
+          !error.outputLimitExceeded &&
+          /^(?:Error(?: response from daemon)?: )?(?:No such network:|network \S+ not found)\s*/im.test(
+            error.stderr,
+          )
+        )
+          return [];
+        log.warn("network.inspect-failed", {
+          network: name,
+          ...classifyCommandFailure(error, { tools: ["docker"] }),
+        });
+        return null;
       }
     }),
   );
-  return results.flat();
+  return results.some((result) => result === null)
+    ? null
+    : results.flatMap((result) => result ?? []);
 }
 
 /**

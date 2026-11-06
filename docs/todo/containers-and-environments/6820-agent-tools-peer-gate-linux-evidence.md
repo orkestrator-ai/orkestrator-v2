@@ -1,10 +1,8 @@
 # Prove the agent-tools peer gate on Linux Engine, rootless and other topologies
 
-Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS only. What is left needs a Linux host.
-
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `0db245422`.
+Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`.
 
 ### Tasks
 
@@ -103,6 +101,28 @@ Analysed 2026-11-05 against `main` at `0db245422`.
   - **Also bind per-gateway listeners so nothing on the LAN accepts at all.**
     - Pros: invisible to a scan.
     - Cons: the report's rejected option: listeners follow networks, and ports must be free on each.
+
+## Assumptions and decisions
+
+### Tasks 1 and 2: retain live topology checks as open work
+
+The review-fix session on 2026-11-06 confirmed `uname -s` is `Darwin` and
+`docker context ls` lists only the default socket and Docker Desktop's
+`desktop-linux` context. No native Linux or rootless daemon was available in
+this environment. The Desktop VM does not establish how a host backend sees
+peers on either topology, so neither task is marked done. The script and C22
+remain the required live checks; fake-clock and Docker-command tests establish
+refresh timing and failure handling only.
+
+## Current state
+
+Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS only. What is left needs a Linux host.
+
+The 2026-11-06 review fixes measure freshness and failure backoff from read
+completion. Null reads warn and clear permissions. Inspect failures other than
+a confirmed network removal invalidate the entire snapshot and log a classified
+reason. Deterministic regressions cover these cases; they do not replace the
+outstanding live topology evidence.
 
 ## Related
 

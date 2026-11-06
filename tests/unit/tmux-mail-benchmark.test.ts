@@ -181,33 +181,38 @@ test.each(["SIGINT", "SIGTERM"] as const)(
   15_000,
 );
 
-test.each(["host-grant", "active-account", "legacy-active-account", "missing-grants"])(
-  "rejects %s before configuration or dispatch",
-  async (mode) => {
-    const root = temporary();
-    const h = mailBenchmarkFixture(root);
-    const manifestPath = path.join(h.dataDir, "..", "profile.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    if (mode === "host-grant") manifest.credentialSources = ["claude"];
-    if (mode === "missing-grants") delete manifest.credentialSources;
-    writeFileSync(manifestPath, JSON.stringify(manifest));
-    if (mode === "active-account")
-      seedStore(h.dataDir, "agent-accounts.json", {
-        active: { claude: "added-account" },
-        accounts: [],
-      });
-    if (mode === "legacy-active-account")
-      writeFileSync(
-        path.join(h.dataDir, "agent-accounts.json"),
-        JSON.stringify({ active: { claude: "added-account" } }),
-      );
-    await expect(runMailBenchmark(options(root), undefined, h.runtime)).rejects.toThrow(
-      /credential-free|active added Claude/,
+test.each([
+  "host-grant",
+  "active-account",
+  "legacy-active-account",
+  "legacy-with-database",
+  "missing-grants",
+])("rejects %s before configuration or dispatch", async (mode) => {
+  const root = temporary();
+  const h = mailBenchmarkFixture(root);
+  const manifestPath = path.join(h.dataDir, "..", "profile.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (mode === "host-grant") manifest.credentialSources = ["claude"];
+  if (mode === "missing-grants") delete manifest.credentialSources;
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  if (mode === "active-account")
+    seedStore(h.dataDir, "agent-accounts.json", {
+      active: { claude: "added-account" },
+      accounts: [],
+    });
+  if (mode === "legacy-with-database")
+    seedStore(h.dataDir, "agent-accounts.json", { active: { claude: "default" }, accounts: [] });
+  if (mode === "legacy-active-account" || mode === "legacy-with-database")
+    writeFileSync(
+      path.join(h.dataDir, "agent-accounts.json"),
+      JSON.stringify({ active: { claude: "added-account" } }),
     );
-    expect(h.events).toEqual([]);
-    restored(h.claudeDir);
-  },
-);
+  await expect(runMailBenchmark(options(root), undefined, h.runtime)).rejects.toThrow(
+    /credential-free|active added Claude/,
+  );
+  expect(h.events).toEqual([]);
+  restored(h.claudeDir);
+});
 
 test.each([false, true])(
   "second fixture write fails and rolls back (rollback failure: %s)",

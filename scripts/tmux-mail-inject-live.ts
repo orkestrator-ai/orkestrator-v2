@@ -283,15 +283,24 @@ export function isolatedClaudeDirectory(dataDir: string, profile: string): strin
   // Older --checkout targets still keep this registry as JSON. Do not open
   // a new database in those profiles just to inspect their account choice.
   const legacy = path.join(dataDir, "agent-accounts.json");
-  const accounts = existsSync(path.join(dataDir, "orkestrator.sqlite"))
-    ? readStoredValue<{ active?: { claude?: unknown } }>(dataDir, "agent-accounts.json")
-    : existsSync(legacy)
+  // Snapshot JSON first: opening the database can migrate/move that file.
+  const registries = [
+    existsSync(legacy)
       ? (JSON.parse(readFileSync(legacy, "utf8")) as { active?: { claude?: unknown } })
-      : undefined;
+      : undefined,
+    existsSync(path.join(dataDir, "orkestrator.sqlite"))
+      ? readStoredValue<{ active?: { claude?: unknown } }>(dataDir, "agent-accounts.json")
+      : undefined,
+  ];
+  // An older checkout can still read JSON even if another tool opened a DB.
+  // Reject either active override rather than guessing which backend is live.
   if (
-    accounts !== undefined &&
-    accounts.active?.claude !== undefined &&
-    accounts.active.claude !== "default"
+    registries.some(
+      (accounts) =>
+        accounts !== undefined &&
+        accounts.active?.claude !== undefined &&
+        accounts.active.claude !== "default",
+    )
   )
     throw new Error("Benchmark refuses an active added Claude account");
   return directory;

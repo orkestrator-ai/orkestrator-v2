@@ -6,8 +6,11 @@
  * points Claude Code at it through `~/.claude/settings.json` `env`
  * (`ANTHROPIC_BASE_URL`, a fixture `ANTHROPIC_AUTH_TOKEN`).
  *
- *   bun container-fake-claude-api.ts --port 47123
+ *   bun container-fake-claude-api.ts --port 47123 [--reply-delay-ms 3000]
  *
+ * `--reply-delay-ms` holds each reply back, so a turn lasts long enough for
+ * its `working` state to be seen, as a real model's would. Without it the
+ * whole turn can fit between two reads of a 1 s poll.
  * Every `POST /v1/messages` gets one text reply. A prompt asking for "the word
  * PONG and then A plus B" is answered `PONG <A+B>`, so the spec's answer check
  * still cannot match its own echoed input; anything else (title or topic
@@ -81,7 +84,7 @@ export function messageStream(id: string, model: string, text: string): string {
     .join("");
 }
 
-export async function handleFakeClaudeApi(request: Request): Promise<Response> {
+export async function handleFakeClaudeApi(request: Request, replyDelayMs = 0): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "POST" && url.pathname === "/v1/messages/count_tokens") {
     return Response.json({ input_tokens: 1 });
@@ -96,6 +99,7 @@ export async function handleFakeClaudeApi(request: Request): Promise<Response> {
   const model = body.model ?? "claude-fixture";
   const id = `msg_fixture_${crypto.randomUUID().replaceAll("-", "")}`;
   const text = fakeReply(body);
+  if (replyDelayMs > 0) await Bun.sleep(replyDelayMs);
   if (!body.stream) return Response.json(message(id, model, text));
   return new Response(messageStream(id, model, text), {
     headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
@@ -106,5 +110,15 @@ if (import.meta.main) {
   const index = process.argv.indexOf("--port");
   const port = Number(index === -1 ? NaN : process.argv[index + 1]);
   if (!Number.isInteger(port) || port <= 0) throw new Error("--port is required");
-  Bun.serve({ hostname: "127.0.0.1", port, fetch: handleFakeClaudeApi });
+  const delayIndex = process.argv.indexOf("--reply-delay-ms");
+  const replyDelayMs = delayIndex === -1 ? 0 : Number(process.argv[delayIndex + 1]);
+  if (!Number.isFinite(replyDelayMs) || replyDelayMs < 0) {
+    throw new Error("--reply-delay-ms must be a non-negative number");
+  }
+  Bun.serve({
+    hostname: "127.0.0.1",
+    port,
+    idleTimeout: 0,
+    fetch: (request) => handleFakeClaudeApi(request, replyDelayMs),
+  });
 }

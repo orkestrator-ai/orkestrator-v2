@@ -96,6 +96,7 @@ function docker(args: string[], input?: string): string {
 }
 
 const FAKE_API_PORT = 47_123;
+const FAKE_API_REPLY_DELAY_MS = 3_000;
 const FAKE_API_SCRIPT = "/tmp/orkestrator-qa-fake-claude-api.ts";
 const SETTINGS_BACKUP = "/tmp/orkestrator-qa-claude-settings.json";
 
@@ -133,6 +134,9 @@ async function installFakeClaudeApi(containerId: string): Promise<() => void> {
       FAKE_API_SCRIPT,
       "--port",
       String(FAKE_API_PORT),
+      // A turn as long as a short real one, so its `working` edge is visible.
+      "--reply-delay-ms",
+      String(FAKE_API_REPLY_DELAY_MS),
     ]);
     const env = JSON.stringify({
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${FAKE_API_PORT}`,

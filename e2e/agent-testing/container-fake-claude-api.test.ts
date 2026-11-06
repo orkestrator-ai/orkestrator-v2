@@ -81,6 +81,19 @@ describe("container fake Claude API", () => {
     ).toBe(404);
   });
 
+  test("holds a reply back by the configured delay", async () => {
+    const started = performance.now();
+    const response = await handleFakeClaudeApi(
+      new Request("http://127.0.0.1:47123/v1/messages", {
+        method: "POST",
+        body: JSON.stringify({ messages: [{ role: "user", content: PROMPT }] }),
+      }),
+      50,
+    );
+    expect(performance.now() - started).toBeGreaterThanOrEqual(45);
+    expect((await response.json()).content[0].text).toBe("PONG 42");
+  });
+
   test("the stream helper frames each event for SSE", () => {
     expect(messageStream("msg_1", "m", "x").endsWith("\n\n")).toBe(true);
   });

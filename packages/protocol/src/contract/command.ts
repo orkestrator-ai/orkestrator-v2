@@ -101,6 +101,14 @@ export interface CommandDef<
    * (transcript bodies). Result validation skips it.
    */
   readonly encoded: boolean;
+  /**
+   * A per-keystroke or per-frame command (terminal input, resize, output
+   * reads; plan item 7002). The backend still validates its result only in
+   * development and tests, like every command; a domain client may skip
+   * decoding its result in production (`validateHotPathResults`), so the
+   * input and output path gains no per-call result validation.
+   */
+  readonly hotPath: boolean;
 }
 
 /** Any command definition, for constraints. */
@@ -138,6 +146,7 @@ export function defineCommand<
   readonly result: Res;
   readonly critical: readonly ArgKeyOf<Args>[];
   readonly encoded?: boolean;
+  readonly hotPath?: boolean;
 }): CommandDef<Domain, Name, Args, Res> {
   const { domain, name } = spec;
   if (
@@ -176,6 +185,7 @@ export function defineCommand<
     result: spec.result,
     critical: Object.freeze(critical),
     encoded: spec.encoded ?? false,
+    hotPath: spec.hotPath ?? false,
   });
 }
 

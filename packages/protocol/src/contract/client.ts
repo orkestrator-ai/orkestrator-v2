@@ -250,6 +250,14 @@ export interface DomainClientOptions {
   readonly invoke?: LegacyInvoke;
   /** Usage counter for adapters below the current version (`client-usage.ts`). */
   readonly usage?: DomainAdapterUsageRecorder;
+  /**
+   * Whether results of `hotPath` commands (terminal input and output, plan
+   * item 7002) are decoded. Defaults to `true`; a renderer passes `false` in
+   * production so the per-keystroke path gains no validation cost, as the
+   * backend validates results only in development and tests (plan item
+   * 1003). Every other command's result is always decoded.
+   */
+  readonly validateHotPathResults?: boolean;
 }
 
 /** A domain client bound to one node's transport. */
@@ -373,6 +381,9 @@ export function createDomainClient<Domain extends AnyDomainDef, Api>(
       const wire = args as EncodedArgsOf<typeof command>;
       const envelope = version === 0 ? undefined : contractEnvelopeFields(command, wire, version);
       const raw = await options.call(command, wire, envelope);
+      if (command.hotPath && options.validateHotPathResults === false) {
+        return raw as ResultOf<typeof command>;
+      }
       const decoded = decodeCommandResult(command, raw);
       if (Result.isFailure(decoded)) throw decoded.failure;
       return decoded.success;

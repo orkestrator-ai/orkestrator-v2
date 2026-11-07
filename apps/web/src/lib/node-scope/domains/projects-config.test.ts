@@ -104,9 +104,8 @@ describe("config over a lib/backend client", () => {
       (call: unknown[]) => call[0] === "update_global_config",
     );
     expect(nodeWrite?.length).toBe(2);
-    expect(
-      (nodeWrite?.[1] as { preserveInheritedSettings?: boolean }).preserveInheritedSettings,
-    ).toBe(true);
+    const nodeArgs = nodeWrite?.[1] as { preserveInheritedSettings?: boolean } | undefined;
+    expect(nodeArgs?.preserveInheritedSettings).toBe(true);
     expect(node.invokeRaw.mock.calls.map((call: unknown[]) => call[0])).toEqual([
       "get_config",
       "update_global_config",

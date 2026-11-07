@@ -820,7 +820,7 @@ function createWindowBrowserPreviews(
     transport,
     captureStore: browserPreviewCaptureStore(),
     nativeImage,
-    ...(node ?? {}),
+    ...node,
     // External browsers never inherit Electron's request hooks. They sign in
     // through the private preview origin with a one-use grant POSTed by a
     // loopback handoff page (the grant is never part of a URL), or, for a

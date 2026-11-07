@@ -47,13 +47,14 @@ import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import {
   configStore,
+  featurePlanStore,
   projectStore,
   useAgentModelCatalogStore,
   useFeaturePlanStore,
   useKanbanStore,
 } from "@/stores";
 import { isActiveFeaturePlanningPhase } from "@/stores/featurePlanStore";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { buildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as backend from "@/lib/backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
@@ -235,9 +236,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const draftKey = composeDraftKey("feature-chat", projectId, "all");
     const featureLoadPromise = loadFeatures(projectId);
+    const featurePlans = scope.store(featurePlanStore);
 
     const projectDrafts = () => {
-      const state = useFeaturePlanStore.getState();
+      const state = featurePlans.getState();
       const featureIds = new Set(
         state.features
           .filter((feature) => feature.projectId === projectId)
@@ -272,7 +274,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       }, 400);
     };
 
-    const unsubscribe = useFeaturePlanStore.subscribe((state, previous) => {
+    const unsubscribe = featurePlans.subscribe((state, previous) => {
       if (state.chatDrafts !== previous.chatDrafts) {
         draftsChanged = true;
       }
@@ -296,8 +298,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           return;
         }
         for (const [key, value] of Object.entries(persisted.value)) {
-          if (typeof value === "string" && !useFeaturePlanStore.getState().chatDrafts.has(key)) {
-            useFeaturePlanStore.getState().setChatDraft(key, value);
+          if (typeof value === "string" && !featurePlans.getState().chatDrafts.has(key)) {
+            featurePlans.getState().setChatDraft(key, value);
           }
         }
       })
@@ -319,7 +321,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       unsubscribe();
       if (draftsChanged) persistCurrentDrafts();
     };
-  }, [loadFeatures, projectId]);
+  }, [loadFeatures, projectId, scope]);
 
   const projectFeatures = useMemo(
     () =>
@@ -563,15 +565,17 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             claimFeatureBuild,
             updateFeature,
             startBuild,
+            scope,
           });
           return;
         }
         const pipeline = started.pipeline as BuildPipeline;
-        useBuildPipelineStore.getState().replacePipeline(pipeline);
+        scope.store(buildPipelineStore).getState().replacePipeline(pipeline);
         scheduleBuildPipelineTabActivation(
           projectId,
           pipeline.id,
           pipeline.environmentId || undefined,
+          scope,
         );
         void loadFeatures(projectId);
         if (!started.reused) toast.success("Build pipeline started");

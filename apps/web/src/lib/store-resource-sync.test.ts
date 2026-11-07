@@ -12,6 +12,7 @@ import type { PersistedPaneLayout } from "@/types/paneLayout";
 // modules before replacing them and restore in afterAll, so a non-isolated run
 // does not leave those suites testing these fakes (AGENTS.md, Bun mock rules).
 import * as realBuildPipeline from "@/lib/build-pipeline-persistence";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import * as realMultiReview from "@/lib/multi-review-persistence";
 import * as realPromptQueue from "@/lib/prompt-queue-persistence";
 import * as realPromptQueueSources from "@/lib/prompt-queue-sources";
@@ -513,7 +514,12 @@ describe("build-pipeline binding", () => {
     await tick();
 
     // Control state only: no transcript of this pipeline is on screen.
-    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {});
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+      "pipeline-1",
+      undefined,
+      {},
+      appCommandScope(),
+    );
   });
 
   test("patches bodies too while a transcript of the pipeline is on screen", async () => {
@@ -522,10 +528,12 @@ describe("build-pipeline binding", () => {
       dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision: 1 });
       await tick();
 
-      expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {
-        transcripts: true,
-        prioritySessionKey: "session-1",
-      });
+      expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+        "pipeline-1",
+        undefined,
+        { transcripts: true, prioritySessionKey: "session-1" },
+        appCommandScope(),
+      );
     } finally {
       stop();
     }
@@ -593,7 +601,7 @@ describe("multi-review binding", () => {
     dispatchResourceChange({ resource: "multi-review", id: "multi-1", revision: 1 });
     await tick();
 
-    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1");
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1", appCommandScope());
   });
 
   test("contains a backend refresh failure", async () => {
@@ -631,9 +639,14 @@ describe("workflow bindings in a hidden window", () => {
     await tick();
 
     expect(hydrateBuildPipeline).toHaveBeenCalledTimes(1);
-    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {});
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+      "pipeline-1",
+      undefined,
+      {},
+      appCommandScope(),
+    );
     expect(hydrateMultiReviewWorkflow).toHaveBeenCalledTimes(1);
-    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1");
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1", appCommandScope());
   });
 
   for (const overflow of [false, true]) {
@@ -733,8 +746,15 @@ describe("workflow bindings in a hidden window", () => {
     await tick();
 
     expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
-    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
-    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith("project-1");
+    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith(
+      "env-1",
+      appCommandScope(),
+    );
+    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith(
+      "project-1",
+      undefined,
+      appCommandScope(),
+    );
   });
 });
 
@@ -3078,8 +3098,15 @@ describe("authoritative resync", () => {
 
     expect(hydratePromptQueuesForEnvironment).toHaveBeenCalledWith("env-1", expect.anything());
     expect(loadSessionsForEnvironment).toHaveBeenCalledWith("env-1");
-    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
-    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith("project-1");
+    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith(
+      "env-1",
+      appCommandScope(),
+    );
+    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith(
+      "project-1",
+      undefined,
+      appCommandScope(),
+    );
     expect(loadTasks).toHaveBeenCalledWith("project-1");
     expect(loadNotes).toHaveBeenCalledWith("project-1");
     expect(loadFeatures).toHaveBeenCalledWith("project-1");

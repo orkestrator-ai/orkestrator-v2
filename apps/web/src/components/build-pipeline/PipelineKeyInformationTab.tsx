@@ -8,7 +8,8 @@ import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 import { Button } from "@/components/ui/button";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { cn } from "@/lib/utils";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore, useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData } from "@/types/paneLayout";
 import { keyInformationUpdatedLine } from "./key-information-format";
@@ -68,6 +69,7 @@ const TILE_TONE: Record<SummaryTile["tone"], string> = {
  */
 export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabData }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
+  const scope = useShimNodeScope(buildPipelineStore.name);
   const notes = data.view === "notes";
   const subject = notes ? "notes" : "key information";
   const Icon = notes ? StickyNote : FileText;
@@ -97,7 +99,7 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
   useEffect(() => {
     if (pipeline) return;
     let cancelled = false;
-    void hydrateBuildPipeline(data.pipelineId).then(
+    void hydrateBuildPipeline(data.pipelineId, undefined, undefined, scope).then(
       () => {
         if (!cancelled) setHydration({ pipelineId: data.pipelineId, attempt, status: "missing" });
       },
@@ -108,7 +110,7 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
     return () => {
       cancelled = true;
     };
-  }, [data.pipelineId, pipeline, attempt]);
+  }, [data.pipelineId, pipeline, attempt, scope]);
 
   if (!pipeline) {
     const status =

@@ -18,7 +18,8 @@ import {
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import type { BuildTabData } from "@/types/paneLayout";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore, useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { useMediaQuery } from "@/hooks";
 import { Button } from "@/components/ui/button";
@@ -110,6 +111,7 @@ export function BuildChatTab({
   layout,
 }: BuildChatTabProps) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
+  const scope = useShimNodeScope(buildPipelineStore.name);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   // Distinguishes "the user picked this step" from "we follow the pipeline".
   const [pinnedId, setPinnedId] = useState<string | null>(null);
@@ -127,14 +129,14 @@ export function BuildChatTab({
   useEffect(() => {
     if (pipeline || hydrationAttemptedFor.current === data.pipelineId) return;
     hydrationAttemptedFor.current = data.pipelineId;
-    void hydrateBuildPipeline(data.pipelineId).catch((error) => {
+    void hydrateBuildPipeline(data.pipelineId, undefined, undefined, scope).catch((error) => {
       log.warn("pipeline.hydrate-failed", {
         source: "chat-tab",
         pipelineId: data.pipelineId,
         error: formatLogError(error),
       });
     });
-  }, [data.pipelineId, pipeline]);
+  }, [data.pipelineId, pipeline, scope]);
 
   if (!pipeline) {
     return (

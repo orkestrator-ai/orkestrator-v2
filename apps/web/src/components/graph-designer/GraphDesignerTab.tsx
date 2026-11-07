@@ -169,6 +169,7 @@ export function GraphDesignerTab({
   const undo = useGraphDesignerStore((state) => state.undo);
   const redo = useGraphDesignerStore((state) => state.redo);
   const acknowledge = useGraphDesignerStore((state) => state.acknowledge);
+  const edit = useGraphDesignerStore((state) => state.edit);
   const [jsonOpen, setJsonOpen] = useState(false);
   // Leaving unsaved edits asks first; this is what to do once confirmed.
   const [pendingDiscard, setPendingDiscard] = useState<{ label: string; run: () => void } | null>(
@@ -661,11 +662,7 @@ export function GraphDesignerTab({
           onSaveAsCopy={() => void saveAsCopy()}
           onReload={() => guardDiscard("reload the latest revision", () => void reloadDraft(tabId))}
           onToggleJson={() => setJsonOpen((value) => !value)}
-          onArrange={() =>
-            useGraphDesignerStore
-              .getState()
-              .edit(tabId, "Arrange automatically", arrangeGraphLayout)
-          }
+          onArrange={() => edit(tabId, "Arrange automatically", arrangeGraphLayout)}
           onClose={() =>
             guardDiscard("stop editing", () => {
               closeEditor(tabId);
@@ -741,9 +738,7 @@ export function GraphDesignerTab({
               <GraphJsonEditor
                 draft={editor.draft}
                 onChange={(template) =>
-                  useGraphDesignerStore
-                    .getState()
-                    .edit(tabId, "Edit JSON", () => template, { coalesce: "json" })
+                  edit(tabId, "Edit JSON", () => template, { coalesce: "json" })
                 }
                 onClose={() => setJsonOpen(false)}
               />

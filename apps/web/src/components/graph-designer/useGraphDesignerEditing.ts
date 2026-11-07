@@ -53,6 +53,7 @@ export function useGraphDesignerEditing(options: {
   const { tabId, draft, library, compile, providers, ceiling, onSelect, subgraphs } = options;
   const edit = useGraphDesignerStore((state) => state.edit);
   const acknowledge = useGraphDesignerStore((state) => state.acknowledge);
+  const loadSubgraphTemplate = useGraphDesignerStore((state) => state.loadSubgraphTemplate);
   const [dialog, setDialog] = useState<{ command: GraphEditorCommand; nodeId: string } | null>(
     null,
   );
@@ -133,36 +134,33 @@ export function useGraphDesignerEditing(options: {
             subgraphChoices: subgraphs.choices,
             addSubgraph: (summary, position) => {
               const ref = graphSubgraphRefFor(summary);
-              void useGraphDesignerStore
-                .getState()
-                .loadSubgraphTemplate(subgraphs.projectId, ref)
-                .then((entry) => {
-                  if (entry.status !== "ready" || !("template" in entry.resolution)) {
-                    toast.error(`Could not add ${summary.name}`, {
-                      description:
-                        entry.status === "ready" && "missing" in entry.resolution
-                          ? `The template is ${entry.resolution.missing}`
-                          : "The template could not be read",
-                    });
-                    return;
-                  }
-                  const child = entry.resolution.template;
-                  let nodeId: string | null = null;
-                  editDraft(`Add sub-graph ${child.name}`, (template) => {
-                    const result = addGraphNode(
-                      template,
-                      {
-                        kind: "subgraph",
-                        ref: graphSubgraphPinnedRef(ref, child, entry.summary),
-                        child,
-                      },
-                      position,
-                    );
-                    nodeId = result.nodeId;
-                    return result.template;
+              void loadSubgraphTemplate(subgraphs.projectId, ref).then((entry) => {
+                if (entry.status !== "ready" || !("template" in entry.resolution)) {
+                  toast.error(`Could not add ${summary.name}`, {
+                    description:
+                      entry.status === "ready" && "missing" in entry.resolution
+                        ? `The template is ${entry.resolution.missing}`
+                        : "The template could not be read",
                   });
-                  if (nodeId) onSelect({ kind: "node", id: nodeId }, true);
+                  return;
+                }
+                const child = entry.resolution.template;
+                let nodeId: string | null = null;
+                editDraft(`Add sub-graph ${child.name}`, (template) => {
+                  const result = addGraphNode(
+                    template,
+                    {
+                      kind: "subgraph",
+                      ref: graphSubgraphPinnedRef(ref, child, entry.summary),
+                      child,
+                    },
+                    position,
+                  );
+                  nodeId = result.nodeId;
+                  return result.template;
                 });
+                if (nodeId) onSelect({ kind: "node", id: nodeId }, true);
+              });
             },
           }
         : {}),
@@ -173,7 +171,7 @@ export function useGraphDesignerEditing(options: {
       },
       command: (command, nodeId) => setDialog({ command, nodeId }),
     };
-  }, [draft, library, connect, editDraft, onSelect, subgraphs]);
+  }, [draft, library, connect, editDraft, loadSubgraphTemplate, onSelect, subgraphs]);
 
   const context = useMemo<GraphEditorContextValue | null>(
     () =>

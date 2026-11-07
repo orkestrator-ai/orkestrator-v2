@@ -414,11 +414,11 @@ function ConnectedApp() {
   useEffect(() => {
     if (!pipelineProjectIds) return;
     for (const projectId of pipelineProjectIds.split(",")) {
-      void hydrateBuildPipelinesForProject(projectId).catch((error) => {
+      void hydrateBuildPipelinesForProject(projectId, undefined, commandScope).catch((error) => {
         log.warn("build-pipelines.restore-failed", { projectId, error: formatLogError(error) });
       });
     }
-  }, [pipelineProjectIds]);
+  }, [commandScope, pipelineProjectIds]);
   const [claudeCliAvailable, setClaudeCliAvailable] = useState<boolean | null>(null);
   const [claudeConfigAvailable, setClaudeConfigAvailable] = useState<boolean | null>(null);
   const [githubCliAvailable, setGithubCliAvailable] = useState<boolean | null>(null);

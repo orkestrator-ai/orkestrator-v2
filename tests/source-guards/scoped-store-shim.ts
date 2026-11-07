@@ -103,6 +103,52 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/worktreeSnapshotStore",
     hook: "useWorktreeSnapshotStore",
   },
+  // Plan item 3011: the pipeline, Kanban, feature plan, coordinator and graph stores.
+  {
+    store: "build-pipeline",
+    module: "apps/web/src/stores/buildPipelineStore",
+    hook: "useBuildPipelineStore",
+  },
+  {
+    store: "kanban",
+    module: "apps/web/src/stores/kanbanStore",
+    hook: "useKanbanStore",
+  },
+  {
+    store: "feature-plan",
+    module: "apps/web/src/stores/featurePlanStore",
+    hook: "useFeaturePlanStore",
+  },
+  {
+    store: "coordinator-activity",
+    module: "apps/web/src/stores/coordinatorActivityStore",
+    hook: "useCoordinatorActivityStore",
+  },
+  {
+    store: "coordinator-launch-override",
+    module: "apps/web/src/stores/coordinatorLaunchOverrideStore",
+    hook: "useCoordinatorLaunchOverrideStore",
+  },
+  {
+    store: "coordinator-pane-layout",
+    module: "apps/web/src/stores/coordinatorPaneLayoutStore",
+    hook: "useCoordinatorPaneLayoutStore",
+  },
+  {
+    store: "graph-designer",
+    module: "apps/web/src/stores/graphDesignerStore",
+    hook: "useGraphDesignerStore",
+  },
+  {
+    store: "graph-run",
+    module: "apps/web/src/stores/graphRunStore",
+    hook: "useGraphRunStore",
+  },
+  {
+    store: "graph-describe",
+    module: "apps/web/src/stores/graphDescribeStore",
+    hook: "useGraphDescribeStore",
+  },
   // Plan item 3009: the agent and transcript stores.
   {
     store: "native-agent-projection",

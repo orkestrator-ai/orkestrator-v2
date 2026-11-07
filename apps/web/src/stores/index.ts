@@ -22,6 +22,7 @@ export { formatErrorContext, useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorContext, ErrorDetails } from "./errorDialogStore";
 export { fileDirtyStore, useFileDirtyStore } from "./fileDirtyStore";
 export {
+  kanbanStore,
   useKanbanStore,
   type KanbanTask,
   type KanbanStatus,
@@ -29,6 +30,7 @@ export {
   type ProjectNotes,
 } from "./kanbanStore";
 export {
+  featurePlanStore,
   useFeaturePlanStore,
   type FeaturePlan,
   type FeaturePlanMessage,
@@ -37,7 +39,7 @@ export {
 } from "./featurePlanStore";
 export { githubIssuesStore, useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
 export { prMonitorStore, usePrMonitorStore } from "./prMonitorStore";
-export { useBuildPipelineStore } from "./buildPipelineStore";
+export { buildPipelineStore, useBuildPipelineStore } from "./buildPipelineStore";
 export { multiReviewStore, useMultiReviewStore } from "./multiReviewStore";
 export type {
   BuildPipeline,

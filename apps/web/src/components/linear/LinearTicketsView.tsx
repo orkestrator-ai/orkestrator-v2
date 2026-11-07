@@ -42,7 +42,12 @@ import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import {
+  buildPipelineStore,
+  useBuildPipelineStore,
+  type BuildPipeline,
+} from "@/stores/buildPipelineStore";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import {
   connectLinear,
@@ -375,6 +380,7 @@ export function LinearTicketsViewContent({
   }, [selectedIssueId, commentBody]);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
+  const pipelineStore = useScopedStoreApi(buildPipelineStore);
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
@@ -531,7 +537,7 @@ export function LinearTicketsViewContent({
     // the authoritative store again at confirmation time so a stale render can
     // never submit configuration that the backend will discard in favour of the
     // already-active admission.
-    const activePipeline = getIssuePipeline(useBuildPipelineStore.getState().pipelines, detail.id);
+    const activePipeline = getIssuePipeline(pipelineStore.getState().pipelines, detail.id);
     if (activePipeline && isActivePipeline(activePipeline)) {
       setBuildDialogOpen(false);
       await navigateToPipeline(activePipeline);

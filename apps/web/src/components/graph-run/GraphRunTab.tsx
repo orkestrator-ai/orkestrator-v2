@@ -272,6 +272,7 @@ function GraphRunView({
     useEnvironmentStore((state) => state.getEnvironmentById(environmentId)?.containerId) ??
     undefined;
   const applyRun = useGraphRunStore((state) => state.applyRun);
+  const reloadRun = useGraphRunStore((state) => state.loadRun);
   const modelCatalog = useReviewModelCatalog(run.projectId, true);
   const viewKey = `graph-run:${run.id}`;
   // View state is remembered per node: run ids are only unique on theirs.
@@ -416,7 +417,7 @@ function GraphRunView({
       ...reply,
     });
     // The answer's own change event re-reads the run; read now for a prompt face.
-    void useGraphRunStore.getState().loadRun(run.id);
+    void reloadRun(run.id);
   };
 
   const answerHuman = async (activation: NodeActivation, reply: GraphHumanNodeAnswer) => {
@@ -428,7 +429,7 @@ function GraphRunView({
       waitId: wait.id,
       ...reply,
     });
-    void useGraphRunStore.getState().loadRun(run.id);
+    void reloadRun(run.id);
   };
 
   const contextMenuFor = (node: GraphRunFlowNode, actions: GraphRunActionSpec[]): ReactNode => {

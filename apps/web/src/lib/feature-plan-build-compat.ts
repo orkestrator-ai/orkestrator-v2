@@ -10,8 +10,9 @@
  */
 import type { FeaturePlan } from "@/lib/backend";
 import { formatFeatureStoriesForBuild } from "@/lib/feature-planner";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useKanbanStore, type KanbanTask } from "@/stores/kanbanStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { kanbanStore, type KanbanTask } from "@/stores/kanbanStore";
 import type { EnvironmentType } from "@/types";
 
 export const FEATURE_BUILD_ALREADY_ACTIVE = "This feature already has an active build";
@@ -35,6 +36,8 @@ export interface LegacyFeaturePlanBuildDeps {
     agent: "codex",
     options: { existingEnvironmentId?: string; featurePlanId: string },
   ) => Promise<unknown>;
+  /** The node the plan, ticket and pipeline are on. */
+  scope: NodeScope;
 }
 
 /** Runs the sequence; throws what a caller shows. An already-built plan throws the shared message. */
@@ -51,7 +54,10 @@ export async function legacyStartFeaturePlanBuild(
     if (!taskId) throw new Error("Failed to create the Kanban task for the build pipeline");
     unreservedTaskId = taskId;
 
-    const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
+    const task = deps.scope
+      .store(kanbanStore)
+      .getState()
+      .tasks.find((candidate) => candidate.id === taskId);
     if (!task) throw new Error("Created build task was not found in the Kanban store");
 
     // Persist the feature→task half of the launch before navigation can
@@ -75,7 +81,7 @@ export async function legacyStartFeaturePlanBuild(
       existingEnvironmentId: feature.codexEnvironmentId,
       featurePlanId: feature.id,
     });
-    const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(taskId);
+    const pipeline = deps.scope.store(buildPipelineStore).getState().getPipelineByTaskId(taskId);
     if (!pipeline || pipeline.phase === "failed") {
       // startBuild surfaces its own error toast and clears or fails the
       // pipeline when it cannot start. Undo the durable reservation so the

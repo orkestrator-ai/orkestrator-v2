@@ -47,7 +47,8 @@ import { pipelineDeliveryTooLateNote } from "@orkestrator/protocol/build-pipelin
 import { sectionsFromTicketText, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
-import { useKanbanStore } from "@/stores/kanbanStore";
+import { kanbanStore, useKanbanStore } from "@/stores/kanbanStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
@@ -190,6 +191,7 @@ export function KanbanTaskDialog({
   onOpenChange,
   createForProjectId,
 }: KanbanTaskDialogProps) {
+  const kanban = useScopedStoreApi(kanbanStore);
   const updateTask = useKanbanStore((s) => s.updateTask);
   const updateTaskContent = useKanbanStore((s) => s.updateTaskContent);
   const deleteTask = useKanbanStore((s) => s.deleteTask);
@@ -767,8 +769,7 @@ export function KanbanTaskDialog({
           toast.error(`Failed to save ${failedImages} image${failedImages > 1 ? "s" : ""}`);
         }
 
-        newTask =
-          useKanbanStore.getState().tasks.find((candidate) => candidate.id === newTaskId) ?? null;
+        newTask = kanban.getState().tasks.find((candidate) => candidate.id === newTaskId) ?? null;
         if (!newTask) {
           toast.error("Task created but could not start build");
           handleOpenChange(false);

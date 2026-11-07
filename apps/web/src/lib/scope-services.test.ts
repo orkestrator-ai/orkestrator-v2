@@ -39,7 +39,7 @@ import {
   storeResourceSyncService,
 } from "@/lib/store-resource-sync";
 import { getNodeConnectivity, transportConnectivityService } from "@/lib/transport-connectivity";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -63,6 +63,8 @@ const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
+
+type Subscribe = (listener: (state: unknown, previous: unknown) => void) => () => void;
 
 /**
  * Everything a service could leave behind: timers (a timeout counts until it
@@ -140,26 +142,11 @@ class LeftoverTracker {
       });
     }
 
-    type Subscribe = (listener: (state: unknown, previous: unknown) => void) => () => void;
     for (const [name, store] of [
       ["ui", useUIStore as unknown as { subscribe: Subscribe }],
       ["pane-layout", usePaneLayoutStore as unknown as { subscribe: Subscribe }],
-      ["build-pipeline", useBuildPipelineStore as unknown as { subscribe: Subscribe }],
     ] as const) {
-      const subscribe = store.subscribe;
-      store.subscribe = ((listener: Parameters<Subscribe>[0]) => {
-        this.storeSubscriptions.set(name, (this.storeSubscriptions.get(name) ?? 0) + 1);
-        const unsubscribe = subscribe(listener);
-        let active = true;
-        return () => {
-          if (active) this.storeSubscriptions.set(name, this.storeSubscriptions.get(name)! - 1);
-          active = false;
-          unsubscribe();
-        };
-      }) as typeof subscribe;
-      this.restores.push(() => {
-        store.subscribe = subscribe;
-      });
+      this.trackStore(name, store);
     }
 
     for (const client of clients) {
@@ -180,6 +167,24 @@ class LeftoverTracker {
         };
       };
     }
+  }
+
+  /** Counts subscriptions to `store` (a hook's statics or a scope's instance). */
+  trackStore(name: string, store: { subscribe: Subscribe }): void {
+    const subscribe = store.subscribe;
+    store.subscribe = ((listener: Parameters<Subscribe>[0]) => {
+      this.storeSubscriptions.set(name, (this.storeSubscriptions.get(name) ?? 0) + 1);
+      const unsubscribe = subscribe(listener);
+      let active = true;
+      return () => {
+        if (active) this.storeSubscriptions.set(name, this.storeSubscriptions.get(name)! - 1);
+        active = false;
+        unsubscribe();
+      };
+    }) as typeof subscribe;
+    this.restores.push(() => {
+      store.subscribe = subscribe;
+    });
   }
 
   restore(): void {
@@ -237,6 +242,11 @@ beforeEach(() => {
   windowScope = new WindowScope();
   command = windowScope.open({ role: "command", client: commandClient });
   leaf = windowScope.open({ role: "leaf", client: leafClient });
+  // Completion notes watch their own scope's pipelines (plan item 3011).
+  tracker.trackStore(
+    "build-pipeline",
+    command.store(buildPipelineStore) as unknown as { subscribe: Subscribe },
+  );
 });
 
 afterEach(async () => {

@@ -7,7 +7,9 @@ import {
   revealCoordinatorConversation,
   type CoordinatorPaneLayout,
 } from "@/lib/coordinator-pane-layout";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import {
+  coordinatorPaneLayoutStore,
   selectCoordinatorPaneLayout,
   selectCoordinatorPaneLayoutReady,
   useCoordinatorPaneLayoutStore,
@@ -33,6 +35,8 @@ export function useCoordinatorSelection({
   setError,
 }: UseCoordinatorSelectionOptions) {
   const conversationIdsRef = useRef(conversationIds);
+  // This node's tab groups (plan item 3011).
+  const paneLayouts = useScopedStoreApi(coordinatorPaneLayoutStore);
   /*
    * Tab groups. The layout is stored by the backend per project so every
    * client shows the same groups, and is presentation over the backend's open
@@ -48,8 +52,8 @@ export function useCoordinatorSelection({
   );
   const setStoredLayout = useCoordinatorPaneLayoutStore((state) => state.setLayout);
   useEffect(() => {
-    void useCoordinatorPaneLayoutStore.getState().hydrate(projectId);
-  }, [projectId]);
+    void paneLayouts.getState().hydrate(projectId);
+  }, [paneLayouts, projectId]);
   const layout = useMemo(
     () =>
       snapshot && storedLayoutReady
@@ -65,9 +69,7 @@ export function useCoordinatorSelection({
   });
   const updateLayout = useCallback(
     (change: (layout: CoordinatorPaneLayout) => CoordinatorPaneLayout) => {
-      const current = selectCoordinatorPaneLayout(projectId)(
-        useCoordinatorPaneLayoutStore.getState(),
-      );
+      const current = selectCoordinatorPaneLayout(projectId)(paneLayouts.getState());
       if (!current && !layoutRef.current) return;
       setStoredLayout(
         projectId,
@@ -76,7 +78,7 @@ export function useCoordinatorSelection({
         ),
       );
     },
-    [projectId, setStoredLayout],
+    [paneLayouts, projectId, setStoredLayout],
   );
   const backendSelectedId = snapshot?.workspace.selectedConversationId ?? null;
   useEffect(() => {
@@ -145,15 +147,13 @@ export function useCoordinatorSelection({
   const changeLayout = useCallback(
     (change: (layout: CoordinatorPaneLayout) => CoordinatorPaneLayout) => {
       updateLayout(change);
-      const current = selectCoordinatorPaneLayout(projectId)(
-        useCoordinatorPaneLayoutStore.getState(),
-      );
+      const current = selectCoordinatorPaneLayout(projectId)(paneLayouts.getState());
       const focused = current ? focusedCoordinatorConversationId(current) : null;
       if (focused && focused !== (selectionRef.current?.desired ?? backendSelectedId)) {
         selectConversation(focused);
       }
     },
-    [backendSelectedId, projectId, selectConversation, updateLayout],
+    [backendSelectedId, paneLayouts, projectId, selectConversation, updateLayout],
   );
   const selectionPending = useCallback(() => selectionRef.current?.pending === true, []);
   return {

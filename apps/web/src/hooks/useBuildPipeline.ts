@@ -9,7 +9,12 @@ import {
   type BuildPipelineTicket,
   type GitHubIssueBuildInput,
 } from "@orkestrator/protocol/build-pipeline-tickets";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  buildPipelineStore,
+  useBuildPipelineStore,
+  type BuildPipeline,
+} from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -63,6 +68,8 @@ function findBuildTabInTree(
 export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
+  // This node's pipelines (plan item 3011).
+  const scope = useShimNodeScope(buildPipelineStore.name);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
 
@@ -107,6 +114,7 @@ export function useBuildPipeline() {
           ticket.projectId,
           pipeline.id,
           pipeline.environmentId || undefined,
+          scope,
         );
         toast.success("Build pipeline started");
         return pipeline.id;
@@ -122,7 +130,7 @@ export function useBuildPipeline() {
         return undefined;
       }
     },
-    [config, replacePipeline],
+    [config, replacePipeline, scope],
   );
 
   const startBuild = useCallback(
@@ -176,10 +184,10 @@ export function useBuildPipeline() {
 
   const navigateToBuild = useCallback(
     async (task: KanbanTask) => {
-      const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(task.id);
+      const pipeline = scope.store(buildPipelineStore).getState().getPipelineByTaskId(task.id);
       if (pipeline) await navigateToPipeline(pipeline);
     },
-    [navigateToPipeline],
+    [navigateToPipeline, scope],
   );
 
   return {

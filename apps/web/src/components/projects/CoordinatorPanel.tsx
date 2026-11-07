@@ -11,7 +11,8 @@ import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkerPrompts } from "./CoordinatorWorkerPrompts";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import {
   COORDINATOR_SIDE_AGENT_EXPLANATION,
   COORDINATOR_TIER_LABELS,
@@ -64,6 +65,8 @@ interface CoordinatorPanelProps {
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   // The project is on the node of the scope this page renders in.
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
+  // This node's coordinator tab groups (plan item 3011).
+  const paneLayouts = useScopedStoreApi(coordinatorPaneLayoutStore);
   const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
   const {
     snapshot,
@@ -371,7 +374,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         // Read after the requests, before publishing the new open set can
         // reconcile away the placeholder. Keep moves and divider edits made
         // while the backend was busy.
-        const latestLayout = useCoordinatorPaneLayoutStore.getState().entries[projectId]?.layout;
+        const latestLayout = paneLayouts.getState().entries[projectId]?.layout;
         const replacementLayout =
           replacingMain && latestLayout ? structuredClone(latestLayout) : null;
         const replacementId = createdSnapshot.workspace.selectedConversationId;
@@ -406,7 +409,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           setReplacement(null);
         });
         if (replacementLayout && replacementId) {
-          useCoordinatorPaneLayoutStore.getState().setLayout(projectId, replacementLayout);
+          paneLayouts.getState().setLayout(projectId, replacementLayout);
         }
         const createdId = createdSnapshot.workspace.selectedConversationId;
         if (createdId && (replacingMain || selectionPending())) selectConversation(createdId);

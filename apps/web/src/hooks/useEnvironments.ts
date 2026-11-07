@@ -6,10 +6,10 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/nati
 import { toast } from "sonner";
 import type { StoreApi } from "zustand";
 import {
+  buildPipelineStore,
   createSessionKey,
   environmentStore,
   projectStore,
-  useBuildPipelineStore,
   useEnvironmentStore,
   formatErrorContext,
   useErrorDialogStore,
@@ -1038,7 +1038,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // desynced probe re-arms itself on every failure, which would otherwise
         // reach for a bridge that no longer exists once a minute forever.
         cleanupDeletedEnvironmentSubscriptions(environmentId);
-        useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
+        scope.store(buildPipelineStore).getState().removePipelinesForEnvironment(environmentId);
         removeEnvironmentFromStore(environmentId);
         // The backend drops this environment's pane layout with the
         // environment, so the remembered selection has nothing left to point

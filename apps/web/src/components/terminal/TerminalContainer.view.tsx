@@ -80,7 +80,7 @@ import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
@@ -142,6 +142,8 @@ export function TerminalContainer({
   const tabLaunchScope = useShimNodeScope(tabLaunchStore.name);
   // This node's environments (plan item 3004).
   const environments = useScopedStoreApi(environmentStore);
+  // This node's build pipelines (plan item 3011).
+  const buildPipelines = useScopedStoreApi(buildPipelineStore);
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
   const onRevealRef = useRef(onReveal);
@@ -944,7 +946,7 @@ export function TerminalContainer({
           isLocal: latestEnvironment.environmentType === "local",
           worktreePath: latestEnvironment.worktreePath,
           hasBuildPipeline: (pipelineId) =>
-            dependenciesUnknown || useBuildPipelineStore.getState().pipelines.has(pipelineId),
+            dependenciesUnknown || buildPipelines.getState().pipelines.has(pipelineId),
           hasMultiReview: (workflowId) =>
             // A failed workflow-list request means existence is unknown,
             // not that every persisted review was deleted. Preserve those
@@ -1094,6 +1096,7 @@ export function TerminalContainer({
     worktreePath,
     multiReviewScope,
     environments,
+    buildPipelines,
   ]);
 
   // Reset pane layout when container changes within the same environment

@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realBackend from "@/lib/backend";
 import type { KanbanTask } from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
+import { appCommandScope } from "@/lib/node-scope-slots";
 // The shared sonner replacement lives in tests/setup.ts; a competing local
 // mock.module for it would leak through Bun's global module cache.
 import { mockToastError, mockToastWarning } from "../../../../tests/mocks/sonner";
@@ -381,7 +382,10 @@ describe("kanbanStore task actions", () => {
   test("finds environment tasks directly and through kanban-owned pipelines", () => {
     const direct = task({ id: "direct", environmentId: "env-direct" });
     useKanbanStore.setState({ tasks: [direct] });
-    expect(findTaskForEnvironment("env-direct")).toEqual({ task: direct, taskId: "direct" });
+    expect(findTaskForEnvironment("env-direct", appCommandScope())).toEqual({
+      task: direct,
+      taskId: "direct",
+    });
 
     const pipeline = buildPipelineFixture({
       id: "pipeline-fallback",
@@ -390,11 +394,14 @@ describe("kanbanStore task actions", () => {
       source: { type: "kanban", taskId: "fallback-task" },
     });
     useBuildPipelineStore.setState({ pipelines: new Map([[pipeline.id, pipeline]]) });
-    expect(findTaskForEnvironment("env-fallback")).toEqual({
+    expect(findTaskForEnvironment("env-fallback", appCommandScope())).toEqual({
       task: undefined,
       taskId: "fallback-task",
     });
-    expect(findTaskForEnvironment("missing")).toEqual({ task: undefined, taskId: undefined });
+    expect(findTaskForEnvironment("missing", appCommandScope())).toEqual({
+      task: undefined,
+      taskId: undefined,
+    });
   });
 
   test("adds, updates, and deletes tasks", async () => {

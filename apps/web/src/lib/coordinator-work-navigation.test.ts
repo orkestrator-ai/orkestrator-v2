@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import { onGraphRunViewRequested, takePendingGraphRunView } from "./graph-run-navigation";
@@ -144,7 +148,26 @@ describe("openCoordinatorWorkTarget", () => {
       { type: "build", projectId: "project-1", pipelineId: "pipe-1", environmentId: "env-9" },
       nav,
     );
-    expect(nav.openBuild).toHaveBeenCalledWith("project-1", "pipe-1", "env-9");
+    expect(nav.openBuild).toHaveBeenCalledWith("project-1", "pipe-1", "env-9", appCommandScope());
+  });
+
+  test("a build row opens on the scope it names", () => {
+    const windowScope = new WindowScope();
+    try {
+      const leaf = windowScope.open({
+        role: "leaf",
+        client: new FakeNodeClient({ nodeId: "bk_leaf-node" as BackendId }),
+      });
+      const nav = navigation();
+      openCoordinatorWorkTarget(
+        { type: "build", projectId: "project-1", pipelineId: "pipe-1" },
+        nav,
+        leaf,
+      );
+      expect(nav.openBuild).toHaveBeenCalledWith("project-1", "pipe-1", undefined, leaf);
+    } finally {
+      windowScope.dispose();
+    }
   });
 
   test("a graph run row selects its environment and asks the run view to open it", () => {

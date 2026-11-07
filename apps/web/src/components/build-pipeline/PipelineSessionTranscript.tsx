@@ -5,7 +5,12 @@ import {
   isSupersededPipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { type BuildPipeline, type PipelineSession } from "@/stores/buildPipelineStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  buildPipelineStore,
+  type BuildPipeline,
+  type PipelineSession,
+} from "@/stores/buildPipelineStore";
 import {
   hydrateBuildPipeline,
   isBuildPipelineTranscriptStale,
@@ -173,6 +178,8 @@ export function PipelineSessionTranscript({
     activation: "latest",
   });
 
+  // The node the pipeline is on (plan item 3011).
+  const nodeScope = useShimNodeScope(buildPipelineStore.name);
   const transcriptStale = isBuildPipelineTranscriptStale(session);
   const transcriptUnavailable = isBuildPipelineTranscriptUnavailable(session);
   const transcriptRequestRef = useRef<string | null>(null);
@@ -185,8 +192,8 @@ export function PipelineSessionTranscript({
   // While on screen, change events patch this session's body in the same read.
   useEffect(() => {
     if (!isActive || !visible || !sessionKey) return;
-    return watchBuildPipelineTranscript(pipeline.id, sessionKey);
-  }, [pipeline.id, isActive, visible, sessionKey]);
+    return watchBuildPipelineTranscript(pipeline.id, sessionKey, nodeScope);
+  }, [pipeline.id, isActive, visible, sessionKey, nodeScope]);
   // Once per revision, so an unreadable transcript is reported rather than
   // re-requested on every render; failures back off to at most ten seconds.
   useEffect(() => {
@@ -194,10 +201,12 @@ export function PipelineSessionTranscript({
     const request = `${pipeline.id}\0${sessionKey}\0${messageRevision}\0${loadedCount}`;
     if (transcriptRequestRef.current === request) return;
     transcriptRequestRef.current = request;
-    void hydrateBuildPipeline(pipeline.id, undefined, {
-      transcripts: true,
-      prioritySessionKey: sessionKey,
-    })
+    void hydrateBuildPipeline(
+      pipeline.id,
+      undefined,
+      { transcripts: true, prioritySessionKey: sessionKey },
+      nodeScope,
+    )
       .then(() => {
         if (transcriptRequestRef.current !== request) return;
         transcriptRetryAttemptRef.current = 0;
@@ -227,6 +236,7 @@ export function PipelineSessionTranscript({
     sessionKey,
     transcriptStale,
     transcriptRetryTick,
+    nodeScope,
   ]);
   useEffect(
     () => () => {

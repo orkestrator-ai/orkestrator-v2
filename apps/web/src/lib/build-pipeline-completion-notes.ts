@@ -10,8 +10,11 @@
  */
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import { openKeyInformationTab } from "@/components/build-pipeline/key-information-open-tab";
+import type { StoreApi } from "zustand/vanilla";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { buildPipelineStore, type BuildPipelineState } from "@/stores/buildPipelineStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 const MAX_PENDING_NOTES = 64;
@@ -47,10 +50,13 @@ function openNotes(environmentId: string, pipelineId: string): void {
 }
 
 /** `pendingNotes`: completions still waiting for their environment's layout, by pipeline. */
-function reconcile(pendingNotes: Map<string, string>): void {
+function reconcile(
+  pipelines: StoreApi<BuildPipelineState>,
+  pendingNotes: Map<string, string>,
+): void {
   const panes = usePaneLayoutStore.getState();
   for (const [pipelineId, environmentId] of Array.from(pendingNotes)) {
-    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+    const pipeline = pipelines.getState().pipelines.get(pipelineId);
     if (pipeline?.phase !== "complete" || pipeline.environmentId !== environmentId) {
       pendingNotes.delete(pipelineId);
       continue;
@@ -63,12 +69,16 @@ function reconcile(pendingNotes: Map<string, string>): void {
 }
 
 /**
- * Starts watching for completions; returns the stop function. Each watcher
- * keeps its own pending completions, so a stopped one leaves nothing behind.
+ * Starts watching `scope`'s pipelines for completions; returns the stop
+ * function. Each watcher keeps its own pending completions, so a stopped one
+ * leaves nothing behind.
  */
-export function startBuildPipelineCompletionNotes(): () => void {
+export function startBuildPipelineCompletionNotes(
+  scope: NodeScope = appCommandScope(),
+): () => void {
+  const pipelines = scope.store(buildPipelineStore);
   const pendingNotes = new Map<string, string>();
-  const offPipelines = useBuildPipelineStore.subscribe((state, previous) => {
+  const offPipelines = pipelines.subscribe((state, previous) => {
     if (state.pipelines === previous.pipelines) return;
     for (const [pipelineId, environmentId] of Array.from(pendingNotes)) {
       const pipeline = state.pipelines.get(pipelineId);
@@ -89,14 +99,14 @@ export function startBuildPipelineCompletionNotes(): () => void {
     while (pendingNotes.size > MAX_PENDING_NOTES) {
       pendingNotes.delete(pendingNotes.keys().next().value!);
     }
-    if (added) reconcile(pendingNotes);
+    if (added) reconcile(pipelines, pendingNotes);
   });
   const offPanes = usePaneLayoutStore.subscribe((state, previous) => {
     if (pendingNotes.size === 0) return;
     if (state.hydration === previous.hydration && state.environments === previous.environments) {
       return;
     }
-    reconcile(pendingNotes);
+    reconcile(pipelines, pendingNotes);
   });
   return () => {
     offPipelines();
@@ -106,16 +116,17 @@ export function startBuildPipelineCompletionNotes(): () => void {
 }
 
 /**
- * Completion notes as a scoped service (plan item 3014). Command scope only:
- * it reads the build-pipeline and pane-layout stores, both still command-scope
- * singletons (plan items 3011 and 3013 scope them).
+ * Completion notes as a scoped service (plan item 3014). It watches its own
+ * scope's pipelines (plan item 3011), but opens the tab in the pane-layout
+ * store, still a command-scope singleton (plan item 3013 scopes it), so it
+ * runs on the command scope only.
  */
 export const buildPipelineCompletionNotesService = defineScopedService(
   "build-pipeline-completion-notes",
   (scope) => {
     if (scope.role !== "command") {
-      throw new Error("Completion notes run on the command scope until their stores are scoped.");
+      throw new Error("Completion notes run on the command scope until the pane layout is scoped.");
     }
-    return { stop: startBuildPipelineCompletionNotes() };
+    return { stop: startBuildPipelineCompletionNotes(scope) };
   },
 );

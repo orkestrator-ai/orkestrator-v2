@@ -267,7 +267,10 @@ not advertise at its version before sending it.
 | `node list` | `node.list` | the command node's registry and links (never routes or credentials) | read |
 | `attention [--follow --jsonl]` | `attention.list` | pending interactions of sessions observed waiting, the caller's settled runs, finished setups | read |
 | `ticket list/get` | `ticket.list/get` | Kanban storage | read |
-| `ticket create/update/comment` | `ticket.create/update/comment` | Kanban storage; the operation ID is the store's request key | metadata |
+| `ticket create/update/comment` | `ticket.create/update/comment` | Kanban storage; the operation ID is the store's request key. `--label` (repeatable) sets the labels; `update --clear-labels` removes them | metadata |
+| `ticket labels --project P` | `ticket.labels` | The project's label catalogue plus every label in use, with ticket counts ([tickets.md](tickets.md#labels)) | read |
+| `ticket label TICKET --project P --name L [--remove]` | `ticket.label` | Adds or removes one label on a ticket | metadata |
+| `ticket label-create --project P --name L [--color #RRGGBB] [--description TEXT]` | `ticket.label.create` | Creates a label in the project's catalogue, or updates an existing one's colour and description | metadata |
 | `mail mailboxes` | `mail.mailboxes` | agent-mail directory (refused while messaging is disabled) | read |
 | `mail send ENV TAB` | `mail.send` | external agent mail, inbox-only, never injected | metadata |
 | `schedule list/get` | `schedule.list/get` | `ScheduledJobService` ([scheduled-jobs.md](scheduled-jobs.md)) | read |

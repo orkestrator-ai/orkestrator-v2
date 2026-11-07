@@ -1,5 +1,10 @@
 import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
+import {
+  normalizeTicketLabels,
+  ticketLabelKey,
+  isTicketLabelList,
+} from "@orkestrator/protocol/ticket-labels";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import {
   olderLeafTicketMessage,
@@ -130,6 +135,25 @@ function olderLeaf(node: TicketNode): JsonRecord {
   };
 }
 
+/** Older commands can accept an unknown field and silently ignore it. Check the answer. */
+function labelUpdateWarning(node: TicketNode, input: JsonRecord, ticket: KanbanTask): JsonRecord {
+  if (input.labels === undefined) return {};
+  const requested = normalizeTicketLabels(input.labels).map(ticketLabelKey);
+  const actual = ticket.labels ?? [];
+  const matches =
+    isTicketLabelList(actual) &&
+    actual.length === requested.length &&
+    requested.every((key) => actual.some((name) => ticketLabelKey(name) === key));
+  if (matches) return {};
+  return {
+    synced: false,
+    sync: {
+      state: "update-required",
+      message: `${node.nodeName} returned a ticket without the requested labels. Update that machine and read the ticket before retrying; other requested changes may have been applied.`,
+    },
+  };
+}
+
 function offline(node: TicketNode): never {
   throw new Error(
     `${node.nodeName} is not connected, and it cannot sync tickets with this board, so nothing was changed. Retry when it reconnects (list_nodes).`,
@@ -146,7 +170,15 @@ function where(node: TicketNode): JsonRecord {
 
 function contentInput(input: JsonRecord): JsonRecord {
   const content: JsonRecord = {};
-  for (const key of ["title", "description", "acceptanceCriteria", "status", "kind", "sections"]) {
+  for (const key of [
+    "title",
+    "description",
+    "acceptanceCriteria",
+    "status",
+    "kind",
+    "sections",
+    "labels",
+  ]) {
     if (input[key] !== undefined) content[key] = input[key];
   }
   return content;
@@ -184,6 +216,7 @@ export function registerCoordinatorNodeTicketCommands(register: CommandRegistrar
               ...(typeof args.status === "string" ? { status: args.status as never } : {}),
               ...(typeof args.kind === "string" ? { kind: args.kind as never } : {}),
               ...(record(args.sections) ? { sections: args.sections as never } : {}),
+              ...(Array.isArray(args.labels) ? { labels: args.labels as string[] } : {}),
             },
           );
           return {
@@ -200,7 +233,12 @@ export function registerCoordinatorNodeTicketCommands(register: CommandRegistrar
           { projectId: node.projectId, requestId, description: "", ...contentInput(args) },
           `ticket:${requestId}`,
         );
-        return { ticket, ...where(node), ...olderLeaf(node) };
+        return {
+          ticket,
+          ...where(node),
+          ...olderLeaf(node),
+          ...labelUpdateWarning(node, args, ticket),
+        };
       }
       case "list":
       case "get": {
@@ -279,6 +317,7 @@ export function registerCoordinatorNodeTicketCommands(register: CommandRegistrar
                 note: `This ticket exists only on ${node.nodeName}; it is not on this board.`,
               }
             : olderLeaf(node)),
+          ...(action === "update" ? labelUpdateWarning(node, args, ticket) : {}),
         };
       }
       default:

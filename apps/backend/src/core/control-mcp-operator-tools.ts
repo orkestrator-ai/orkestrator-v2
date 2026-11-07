@@ -1,6 +1,7 @@
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { allPublicPages as allPages } from "./control-mcp-pages.js";
 import { randomUUID } from "node:crypto";
+import { ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { PUBLIC_ALL_NODES, type PublicActionName } from "@orkestrator/protocol/public-api";
 import {
@@ -9,6 +10,7 @@ import {
   type PublicProjectSummary,
   type PublicSessionSummary,
   type PublicTicketDetail,
+  type PublicTicketLabel,
   type PublicTicketSummary,
 } from "@orkestrator/protocol/public-api-resources";
 import {
@@ -59,6 +61,9 @@ export const OPERATOR_TOOL_ACTIONS: Readonly<Record<string, readonly PublicActio
     create_ticket: ["ticket.create", "ticket.get"],
     update_ticket: ["ticket.update", "ticket.get"],
     add_ticket_comment: ["ticket.comment", "ticket.get"],
+    list_ticket_labels: ["ticket.labels"],
+    create_ticket_label: ["ticket.label.create"],
+    set_ticket_label: ["ticket.label", "ticket.get"],
     launch_environment: ["environment.launch"],
     launch_job: ["session.start"],
     send_prompt_to_tab: ["session.prompt"],
@@ -259,6 +264,7 @@ function legacyTicketSummary(ticket: PublicTicketSummary): JsonRecord {
     environmentId: ticket.environmentId ?? undefined,
     prUrl: ticket.pr.url ?? undefined,
     prState: ticket.pr.state ?? undefined,
+    labels: ticket.labels ?? [],
   };
 }
 
@@ -305,7 +311,7 @@ export async function operatorListProjects(caller: ControlMcpCaller) {
 
 export async function operatorListTickets(
   caller: ControlMcpCaller,
-  input: { projectId: string; status?: string },
+  input: { projectId: string; status?: string; label?: string },
 ) {
   const pages = await allPages<PublicTicketSummary>(caller, "ticket.list", input);
   if ("envelope" in pages) return failure(pages.envelope);
@@ -351,6 +357,7 @@ export async function operatorCreateTicket(
     status: string;
     kind?: string;
     sections?: JsonRecord;
+    labels?: string[];
   },
 ) {
   const { requestId, ...fields } = input;
@@ -386,6 +393,77 @@ export async function operatorAddTicketComment(
 ) {
   const { requestId, ...fields } = input;
   const envelope = await runPublicAction(caller, "ticket.comment", fields, requestId, undefined);
+  if (!envelope.ok) return failure(envelope);
+  return ticketDetail(caller, input.projectId, input.ticketId, envelope.receipt);
+}
+
+export async function operatorListTicketLabels(
+  caller: ControlMcpCaller,
+  input: { projectId: string },
+) {
+  const envelope = await runPublicAction(caller, "ticket.labels", input, undefined, undefined);
+  if (!envelope.ok) return failure(envelope);
+  return legacyResult(envelope.result as JsonRecord);
+}
+
+export async function operatorCreateTicketLabel(
+  caller: ControlMcpCaller,
+  input: {
+    requestId: string;
+    projectId: string;
+    name: string;
+    color?: string;
+    description?: string;
+  },
+) {
+  const { requestId, ...fields } = input;
+  const envelope = await runPublicAction(
+    caller,
+    "ticket.label.create",
+    fields,
+    requestId,
+    undefined,
+  );
+  if (!envelope.ok) return failure(envelope);
+  const listed = await runPublicAction(
+    caller,
+    "ticket.labels",
+    { projectId: input.projectId },
+    undefined,
+    undefined,
+  );
+  if (!listed.ok) return failure(listed);
+  const label = (listed.result as { labels: PublicTicketLabel[] }).labels.find(
+    (candidate) =>
+      ticketLabelKey(candidate.name) === ticketLabelKey((envelope.result as { name: string }).name),
+  );
+  if (!label) throw new Error("Created label was not found in the project catalogue");
+  return legacyResult({
+    label,
+    created: (envelope.result as JsonRecord).created,
+    ...(envelope.receipt ? { receipt: envelope.receipt } : {}),
+  });
+}
+
+/** Like `update_ticket`, each change gets a fresh key unless the caller supplies one. */
+export async function operatorSetTicketLabel(
+  caller: ControlMcpCaller,
+  input: {
+    requestId?: string;
+    projectId: string;
+    ticketId: string;
+    name: string;
+    present: boolean;
+  },
+) {
+  const { requestId, ...fields } = input;
+  const envelope = await runPublicAction(
+    caller,
+    "ticket.label",
+    fields,
+    requestId ?? `set-ticket-label-${randomUUID()}`,
+    undefined,
+  );
   if (!envelope.ok) return failure(envelope);
   return ticketDetail(caller, input.projectId, input.ticketId, envelope.receipt);
 }

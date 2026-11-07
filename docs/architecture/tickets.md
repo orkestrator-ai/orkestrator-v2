@@ -104,6 +104,35 @@ read these.
   and the sections are rebuilt from the text, keeping the results of criteria
   whose text did not change.
 
+## Labels
+
+A ticket carries label names (`labels`), in the order they were added; a
+ticket with none has no field. Each project also has a label catalogue (store
+`kanban-labels`, one row per project): labels created ahead of use, with an
+optional colour (`#rrggbb`) and description. Code:
+`packages/protocol/src/ticket-labels.ts` (rules and limits),
+`apps/backend/src/core/storage-kanban-labels.ts` (the catalogue) and
+`KanbanRepository.setKanbanTaskLabel`/`getKanbanLabels`/`createKanbanLabel`.
+
+- **Names.** One line, 1 to 50 characters, whitespace runs collapsed to one
+  space. They match ignoring case, and a name the project already uses (in
+  its catalogue first, then on its tickets) keeps that spelling: adding `BUG`
+  where `bug` exists adds `bug`. A ticket holds at most 20; a catalogue 200.
+- **What a project offers** (`ticket.labels`, `list_ticket_labels`) is the
+  catalogue in creation order, then every other name its tickets carry,
+  alphabetically, each with `ticketCount`. A label used on a ticket but never
+  created is listed too, without colour; it disappears once no ticket carries
+  it.
+- **Creating** a name that exists (any case) is not an error: it reports
+  `created: false` and takes a colour or description the call gives.
+- **Adding** a label to a ticket does not require creating it first. Adding
+  one a ticket has, or removing one it lacks, changes nothing.
+- **Sync.** Labels are part of a ticket's `content` field across machines
+  (same revisions and conflicts as the text). New nodes always send the list,
+  empty when there are none; content from a node that predates labels has no
+  list, and the receiver keeps the labels it has. The catalogue is not synced:
+  each machine lists its own catalogue plus the labels on its tickets.
+
 ## Tools
 
 `create_ticket` and `update_ticket` (worker agent tools and the coordinator's
@@ -112,8 +141,19 @@ Control MCP), the public `ticket.create`/`ticket.update` actions, the CLI
 commands accept `kind` and `sections`. A `sections` update replaces only the
 sections it names; an empty value clears one. `description` and
 `acceptanceCriteria` are still accepted. Reads return `kind`, the text
-mirrors, `criteria` (id, text start, status, evidence; bounded) and
-`deliveryPolicy`. A command node coordinator's ticket tools also take a
+mirrors, `criteria` (id, text start, status, evidence; bounded),
+`deliveryPolicy` and `labels`.
+
+Labels: `create_ticket` and `update_ticket` take `labels` (update replaces the
+list; `[]` clears it), `list_tickets` and `ticket.list` filter by `label`, and
+three tools manage them one at a time. Worker agent tools and the Control MCP
+(coordinators and operators) call them `list_ticket_labels`,
+`create_ticket_label` and `set_ticket_label` (`present: false` removes); the
+public actions, and the operator's direct tools named after them, are
+`ticket.labels`, `ticket.label.create` and `ticket.label`
+(`ticket_labels`, `ticket_label_create`, `ticket_label`). The worker groups
+are `orkestrator:tickets.read` (list) and `orkestrator:tickets.write` (create,
+set). A command node coordinator's ticket tools also take a
 `nodeId` ([Sync across machines](#sync-across-machines)).
 
 ## Verify

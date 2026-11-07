@@ -61,6 +61,8 @@ export interface KanbanTask {
   kind?: TicketKind;
   /** Absent from backends that predate sections; derive them from the text. */
   sections?: TicketSections;
+  /** Label names, in the order they were added; absent when it has none or the backend predates labels. */
+  labels?: string[];
   status: KanbanStatus;
   comments: KanbanComment[];
   images: KanbanImage[];

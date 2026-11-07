@@ -805,7 +805,7 @@ export const PUBLIC_ACTIONS = {
     effects: [],
     observation: "immediate",
     milestone: "D",
-    summary: "List a project's Kanban tickets.",
+    summary: "List a project's Kanban tickets, optionally only those with one label.",
   },
   "ticket.get": {
     version: 1,
@@ -829,7 +829,7 @@ export const PUBLIC_ACTIONS = {
     effects: ["metadata"],
     observation: "receipt",
     milestone: "D",
-    summary: "Change a Kanban ticket's title, description, criteria or column.",
+    summary: "Change a Kanban ticket's title, description, criteria, labels or column.",
   },
   "ticket.comment": {
     version: 1,
@@ -838,6 +838,32 @@ export const PUBLIC_ACTIONS = {
     observation: "receipt",
     milestone: "D",
     summary: "Append a comment to a Kanban ticket.",
+  },
+  "ticket.labels": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "List the labels a project's Kanban tickets can carry: its label catalogue and every label in use, with ticket counts.",
+  },
+  "ticket.label": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Add or remove one label on a Kanban ticket.",
+  },
+  "ticket.label.create": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Create a Kanban ticket label in a project's catalogue, with an optional colour and description.",
   },
   "mail.mailboxes": {
     version: 1,

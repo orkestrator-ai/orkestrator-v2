@@ -570,6 +570,18 @@ describe("delete_environment host cleanup", () => {
           `#!/bin/sh\nsleep 30 &\necho $$ > '${pidFile}'\nwait\n`,
           { mode: 0o755 },
         );
+        // Expire only once the fixture has created its descendant. A real 300 ms
+        // deadline can kill the leader during shell startup under aggregate load.
+        const deadlineMs = 12_347;
+        const realSetTimeout = globalThis.setTimeout;
+        let expire = () => {};
+        const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+          ...timerArgs: Parameters<typeof setTimeout>
+        ) => {
+          const [handler, ms] = timerArgs;
+          if (ms === deadlineMs) expire = () => (handler as () => void)();
+          return realSetTimeout(...timerArgs);
+        }) as typeof setTimeout);
         const originalPath = process.env.PATH;
         process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ""}`;
         // Exercise real capture cancellation, holding only its exit evidence.
@@ -579,6 +591,10 @@ describe("delete_environment host cleanup", () => {
         let childPid = 0;
         let leaderHeld = true;
         let groupHeld = true;
+        let sawGroupCheck!: () => void;
+        const groupChecked = new Promise<void>((resolve) => {
+          sawGroupCheck = resolve;
+        });
         let sawKill!: () => void;
         const killed = new Promise<void>((resolve) => {
           sawKill = resolve;
@@ -595,7 +611,9 @@ describe("delete_environment host cleanup", () => {
           ...args: Parameters<typeof Bun.spawn>
         ) => {
           const child = realSpawn(...args);
-          const argv = args[0] as string[];
+          const argv = Array.isArray(args[0])
+            ? args[0]
+            : (args[0] as unknown as { cmd: string[] }).cmd;
           if (!argv.includes("fsmonitor--daemon") || !argv.includes(worktreePath)) return child;
           childPid = child.pid;
           const confirmed = child.exited.then(async (code) => {
@@ -624,7 +642,9 @@ describe("delete_environment host cleanup", () => {
             sawKill();
             return true;
           }
-          return realKill(pid, signal);
+          const result = realKill(pid, signal);
+          if (pid === -childPid && signal === 0 && !leaderHeld && groupHeld) sawGroupCheck();
+          return result;
         });
         const releaseGroup = () => {
           if (!groupHeld || !childPid) return;
@@ -635,10 +655,9 @@ describe("delete_environment host cleanup", () => {
             /* Group already gone. */
           }
         };
-        const startedAt = Date.now();
         let settled = false;
         const deleting = deleteEnvironmentTask("e1", context, {
-          stepDeadlinesMs: { worktree: 300 },
+          stepDeadlinesMs: { worktree: deadlineMs },
         })
           .then(
             () => undefined,
@@ -649,6 +668,10 @@ describe("delete_environment host cleanup", () => {
           });
         let error: unknown;
         try {
+          for (let attempt = 0; attempt < 500 && !existsSync(pidFile); attempt++)
+            await Bun.sleep(5);
+          expect(existsSync(pidFile)).toBe(true);
+          expire();
           await killed;
           await exited;
           expect(settled).toBe(false);
@@ -658,7 +681,7 @@ describe("delete_environment host cleanup", () => {
           );
           leaderHeld = false;
           releaseLeader();
-          await Bun.sleep(30);
+          await groupChecked;
           expect(settled).toBe(false);
           await expect(deleteEnvironmentTask("e1", context)).rejects.toThrow(
             "already being deleted",
@@ -672,11 +695,11 @@ describe("delete_environment host cleanup", () => {
           await deleting;
           spawnSpy.mockRestore();
           killSpy.mockRestore();
+          timerSpy.mockRestore();
           process.env.PATH = originalPath;
         }
-        // Stopped at the deadline, well before the command's own 5 s timeout,
-        // and the child is gone by the time the delete reports it.
-        expect(Date.now() - startedAt).toBeLessThan(4_000);
+        // The controlled deadline cancelled the capture, and the child is gone
+        // by the time the delete reports it.
         expect((error as Error).message).toBe(
           "Deletion stopped while removing the worktree: it took longer than 1 min. Retry to continue.",
         );

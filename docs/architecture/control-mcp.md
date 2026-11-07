@@ -247,6 +247,10 @@ original tools remain:
 
 - See projects, environments, tabs, tab state, and bounded transcripts.
 - Create and update Kanban tickets and add comments.
+- Label Kanban tickets: list a project's labels, create a label, and add or
+  remove one on a ticket (`list_ticket_labels`, `create_ticket_label`,
+  `set_ticket_label`; [tickets.md](tickets.md#labels)). These are ticket
+  labels, separate from a pull request's labels (`pr_label`, `pr_options`).
 - Create a validated environment with an initial agent prompt.
 - Launch a new job in an existing running environment.
 - Send a new prompt to an existing native-agent tab.
@@ -348,7 +352,8 @@ For operator credentials the original mutation tools are adapters over one
 public action each (`control-mcp-operator-tools.ts`): `launch_environment` →
 `environment.launch`, `launch_job` → `session.start`, `send_prompt_to_tab` →
 `session.prompt`, `create_ticket`/`update_ticket`/`add_ticket_comment` →
-`ticket.*`, `send_message` → `mail.send`; `list_projects`, `list_tickets`,
+`ticket.*`, `list_ticket_labels` → `ticket.labels`, `create_ticket_label` →
+`ticket.label.create`, `set_ticket_label` → `ticket.label`, `send_message` → `mail.send`; `list_projects`, `list_tickets`,
 `get_ticket` and `list_mailboxes` read the matching public action. Coordinator
 credentials keep their own implementations. Recorded differences from the
 pre-public tools:

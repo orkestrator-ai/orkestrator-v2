@@ -813,7 +813,12 @@ export interface PublicTicketSummary {
   imageCount: number;
   environmentId: string | null;
   pr: { url: string | null; state: string | null };
+  /** Label names, in the order they were added. Absent from backends that predate labels. */
+  labels?: string[];
 }
+
+/** One label a project's tickets can carry (`ticket.labels`). */
+export type PublicTicketLabel = import("./ticket-labels.js").TicketLabelSummary;
 
 export interface PublicTicketDetail extends PublicTicketSummary {
   /** Absent from backends that predate ticket kinds: a feature ticket. */

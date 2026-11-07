@@ -24,6 +24,15 @@ import {
 } from "./storage-shared.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 import {
+  canonicalTicketLabels,
+  normalizeTicketLabelName,
+  normalizeTicketLabels,
+  summarizeTicketLabels,
+  ticketLabelKey,
+  TICKET_LABEL_LIMITS,
+  type TicketLabelSummary,
+} from "@orkestrator/protocol/ticket-labels";
+import {
   isTicketTombstone,
   parseTicketSyncItem,
   ticketSyncConflictComment,
@@ -36,7 +45,9 @@ import {
 } from "@orkestrator/protocol/ticket-sync";
 import {
   acceptsFieldChange,
+  assignTicketContent,
   attributeFields,
+  storedTicketContent,
   emptyKanbanSyncStore,
   parseKanbanSyncStore,
   pendingTicketFields,
@@ -50,71 +61,25 @@ import {
 } from "./storage-kanban-sync.js";
 
 const log = createLogger("storage");
-type AgentInteractionOrigin = shared.AgentInteractionOrigin;
-type AgentInteractionPolicy = shared.AgentInteractionPolicy;
-type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
-type StoredDesktopConnections = shared.StoredDesktopConnections;
 type FeaturePlanningRecord = shared.FeaturePlanningRecord;
-type BuildPipelineAgent = shared.BuildPipelineAgent;
-type PaneLayoutMergeInput = shared.PaneLayoutMergeInput;
-type PaneLayoutSelectionIntent = shared.PaneLayoutSelectionIntent;
-type ConditionalResourceSnapshot<T> = shared.ConditionalResourceSnapshot<T>;
-type ResourceChange = shared.ResourceChange;
-type ResourceKind = shared.ResourceKind;
-type ResourceManifestKind = shared.ResourceManifestKind;
-type ResourceRevisionManifest = shared.ResourceRevisionManifest;
-type ResourceRevisionMap = shared.ResourceRevisionMap;
-type ResourceSnapshotRevision = shared.ResourceSnapshotRevision;
-type AgentModel = shared.AgentModel;
-type AgentActivityState = shared.AgentActivityState;
-type AgentActivitySource = shared.AgentActivitySource;
-type AgentModelCatalogCache = shared.AgentModelCatalogCache;
-type AppConfig = shared.AppConfig;
-type ClaudeModelCatalogSnapshot = shared.ClaudeModelCatalogSnapshot;
-type ClaudeModelCatalogEntry = shared.ClaudeModelCatalogEntry;
-type CodexModelCatalogEntry = shared.CodexModelCatalogEntry;
-type CodexReasoningEffort = shared.CodexReasoningEffort;
-type Environment = shared.Environment;
-type EnvironmentStatus = shared.EnvironmentStatus;
-type EnvironmentType = shared.EnvironmentType;
-type OpenCodeModelCatalogEntry = shared.OpenCodeModelCatalogEntry;
-type OpenCodeModelCatalogSnapshot = shared.OpenCodeModelCatalogSnapshot;
-type PortMapping = shared.PortMapping;
-type PrState = shared.PrState;
-type Project = shared.Project;
-type PersistedPaneLayout = shared.PersistedPaneLayout;
-type PersistedMultiReviewWorkflow = shared.PersistedMultiReviewWorkflow;
-type PersistedBuildPipeline = shared.PersistedBuildPipeline;
-type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
-type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
-type PersistedComposeDraft = shared.PersistedComposeDraft;
-type PersistedFileDraft = shared.PersistedFileDraft;
-type PersistedPromptQueue = shared.PersistedPromptQueue;
-type PersistedAgentHandoff = shared.PersistedAgentHandoff;
-type RepositoryConfig = shared.RepositoryConfig;
-type Session = shared.Session;
-type SessionType = shared.SessionType;
-type JsonRecord = shared.JsonRecord;
-type KanbanComment = shared.KanbanComment;
 type KanbanImage = shared.KanbanImage;
 type KanbanStatus = shared.KanbanStatus;
-type MutablePaneLayoutLeaf = shared.MutablePaneLayoutLeaf;
 type KanbanTask = shared.KanbanTask;
 type ProjectNotes = shared.ProjectNotes;
-type FeaturePlanStatus = shared.FeaturePlanStatus;
 type FeaturePlanMessage = shared.FeaturePlanMessage;
-type FeatureStoryCard = shared.FeatureStoryCard;
 type FeaturePlan = shared.FeaturePlan;
 type LinearAuth = shared.LinearAuth;
 type LinearCompletionComment = shared.LinearCompletionComment;
 type GitHubCompletionComment = shared.GitHubCompletionComment;
-type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
-type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
-type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
+import {
+  KanbanLabelCatalogueStore,
+  type KanbanLabelCreateResult,
+  type KanbanLabelInput,
+} from "./storage-kanban-labels.js";
 
 /**
  * A stored row as current content. Legacy rows get their kind and sections
@@ -142,74 +107,31 @@ export interface KanbanCriterionCheckInput {
   check: AcceptanceCriterionCheck;
 }
 
+/**
+ * `labels` as a ticket stores them, spelled as the project already spells
+ * them (its catalogue, then its other tickets). Empty is stored as absent.
+ */
+function boardLabels(
+  labels: unknown,
+  catalogue: ReadonlyArray<{ name: string }>,
+  tasks: readonly KanbanTask[],
+  projectId: string,
+): string[] {
+  const known = [
+    ...catalogue.map((label) => label.name),
+    ...tasks.filter((task) => task.projectId === projectId).flatMap((task) => task.labels ?? []),
+  ];
+  return canonicalTicketLabels(normalizeTicketLabels(labels), known);
+}
+
+function sameLabels(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
 function stableKanbanId(namespace: string, requestId: string): string {
   const hex = createHash("sha256").update(namespace).update("\0").update(requestId).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
-
-export type StorageLayerTypes = [
-  AgentInteractionOrigin,
-  AgentInteractionPolicy,
-  AgentInteractionResolutionJournal,
-  StoredDesktopConnections,
-  FeaturePlanningRecord,
-  BuildPipelineAgent,
-  PaneLayoutMergeInput,
-  PaneLayoutSelectionIntent,
-  ConditionalResourceSnapshot<unknown>,
-  ResourceChange,
-  ResourceKind,
-  ResourceManifestKind,
-  ResourceRevisionManifest,
-  ResourceRevisionMap,
-  ResourceSnapshotRevision,
-  AgentModel,
-  AgentActivityState,
-  AgentActivitySource,
-  AgentModelCatalogCache,
-  AppConfig,
-  ClaudeModelCatalogSnapshot,
-  ClaudeModelCatalogEntry,
-  CodexModelCatalogEntry,
-  CodexReasoningEffort,
-  Environment,
-  EnvironmentStatus,
-  EnvironmentType,
-  OpenCodeModelCatalogEntry,
-  OpenCodeModelCatalogSnapshot,
-  PortMapping,
-  PrState,
-  Project,
-  PersistedPaneLayout,
-  PersistedMultiReviewWorkflow,
-  PersistedBuildPipeline,
-  PersistedNativeAgentSession,
-  PersistedNativeAgentPendingDispatch,
-  PersistedComposeDraft,
-  PersistedFileDraft,
-  PersistedPromptQueue,
-  PersistedAgentHandoff,
-  RepositoryConfig,
-  Session,
-  SessionType,
-  JsonRecord,
-  KanbanComment,
-  KanbanImage,
-  KanbanStatus,
-  MutablePaneLayoutLeaf,
-  KanbanTask,
-  ProjectNotes,
-  FeaturePlanStatus,
-  FeaturePlanMessage,
-  FeatureStoryCard,
-  FeaturePlan,
-  LinearAuth,
-  LinearCompletionComment,
-  GitHubCompletionComment,
-  LoadedNativeAgentSessions,
-  PersistedOpenCodeModelCatalogStore,
-  ResourceChangeListener,
-];
 
 export type KanbanDeliveryPolicyListener = (
   taskId: string,
@@ -219,11 +141,14 @@ export type KanbanDeliveryPolicyListener = (
 
 export class KanbanRepository {
   private deliveryPolicyListener?: KanbanDeliveryPolicyListener;
+  private readonly labelCatalogue: KanbanLabelCatalogueStore;
 
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
-  ) {}
+  ) {
+    this.labelCatalogue = new KanbanLabelCatalogueStore(context, files);
+  }
 
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
     // Indexed by project: reads one board without parsing every project's.
@@ -319,6 +244,7 @@ export class KanbanRepository {
       status?: KanbanStatus;
       requestId?: string;
       featureBuildRequestHash?: string;
+      labels?: readonly string[];
     } & KanbanTaskContentInput = {},
   ): Promise<KanbanTask> {
     const status = initial.status ?? "backlog";
@@ -339,8 +265,13 @@ export class KanbanRepository {
       },
       { now: createdAt },
     );
+    if (initial.labels !== undefined) normalizeTicketLabels(initial.labels);
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+      const labels =
+        initial.labels === undefined
+          ? []
+          : boardLabels(initial.labels, this.labelCatalogue.list(projectId), tasks, projectId);
       const id = initial.requestId
         ? stableKanbanId(`ticket:${projectId}`, initial.requestId)
         : randomUUID();
@@ -353,7 +284,8 @@ export class KanbanRepository {
           existing.acceptanceCriteria !== content.acceptanceCriteria ||
           normalizeKanbanTask(existing).kind !== content.kind ||
           existing.status !== status ||
-          existing.featureBuildRequestHash !== initial.featureBuildRequestHash
+          existing.featureBuildRequestHash !== initial.featureBuildRequestHash ||
+          (initial.labels !== undefined && !sameLabels(existing.labels, labels))
         ) {
           throw new Error("Kanban ticket requestId was already used with different arguments");
         }
@@ -364,6 +296,7 @@ export class KanbanRepository {
         projectId,
         title,
         ...content,
+        ...(labels.length ? { labels } : {}),
         status,
         comments: [],
         images: [],
@@ -451,9 +384,20 @@ export class KanbanRepository {
       const before = normalizeKanbanTask(structuredClone(task));
       const oldStatus = task.status;
       const oldDeliveryPolicy = before.sections?.delivery?.policy;
-      const { kind, markdown, sections, description, acceptanceCriteria, ...rest } = updates;
+      const { kind, markdown, sections, description, acceptanceCriteria, labels, ...rest } =
+        updates;
       // Sync bookkeeping is the stamp's alone, whatever a caller sends.
       const { sync: _sync, ...plain } = rest as typeof rest & { sync?: unknown };
+      if (labels !== undefined) {
+        const next = boardLabels(
+          labels,
+          this.labelCatalogue.list(task.projectId),
+          tasks,
+          task.projectId,
+        );
+        if (next.length) task.labels = next;
+        else delete task.labels;
+      }
       const contentUpdate: TicketContentUpdate = {
         ...(kind !== undefined ? { kind } : {}),
         ...(markdown !== undefined ? { markdown } : {}),
@@ -526,6 +470,70 @@ export class KanbanRepository {
       this.context.changes.announce("kanban", task.projectId);
       return tasks[index]!;
     });
+  }
+
+  /**
+   * Adds one label to a ticket (`present`), or removes it, matching names
+   * ignoring case. A name the project already uses keeps its spelling.
+   * Adding a label the ticket has, or removing one it lacks, changes nothing.
+   */
+  async setKanbanTaskLabel(
+    taskId: string,
+    name: string,
+    present: boolean,
+    expectedProjectId?: string,
+  ): Promise<KanbanTask> {
+    const label = normalizeTicketLabelName(name);
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
+        throw new Error(`Kanban task not found: ${taskId}`);
+      }
+      const current = task.labels ?? [];
+      const key = ticketLabelKey(label);
+      const has = current.some((candidate) => ticketLabelKey(candidate) === key);
+      if (has === present) return normalizeKanbanTask(task);
+      if (present && current.length >= TICKET_LABEL_LIMITS.maxPerTicket) {
+        throw new Error(`A ticket can have at most ${TICKET_LABEL_LIMITS.maxPerTicket} labels`);
+      }
+      const before = normalizeKanbanTask(structuredClone(task));
+      const next = present
+        ? boardLabels(
+            [...current, label],
+            this.labelCatalogue.list(task.projectId),
+            tasks,
+            task.projectId,
+          )
+        : current.filter((candidate) => ticketLabelKey(candidate) !== key);
+      if (next.length) task.labels = next;
+      else delete task.labels;
+      await this.commitKanban(tasks, [{ before, stored: task }]);
+      this.context.changes.announce("kanban", task.projectId);
+      return normalizeKanbanTask(task);
+    });
+  }
+
+  /**
+   * The labels a project offers: its catalogue, then every other name its
+   * tickets carry, each with how many tickets carry it.
+   */
+  async getKanbanLabels(projectId: string): Promise<TicketLabelSummary[]> {
+    return summarizeTicketLabels(
+      this.labelCatalogue.list(projectId),
+      await this.getKanbanTasks(projectId),
+    );
+  }
+
+  /** Adds a label to the project's catalogue; see `KanbanLabelCatalogueStore.create`. */
+  async createKanbanLabel(
+    projectId: string,
+    input: KanbanLabelInput,
+  ): Promise<KanbanLabelCreateResult> {
+    // A name a ticket already carries keeps that spelling in the catalogue.
+    const used = (await this.getKanbanTasks(projectId)).flatMap((task) => task.labels ?? []);
+    const [name] = canonicalTicketLabels([input.name], used);
+    return this.labelCatalogue.create(projectId, { ...input, name: name! });
   }
 
   // A deletion retains only the last publication restriction, not ticket content.
@@ -852,6 +860,7 @@ export class KanbanRepository {
           ...(item.kind !== undefined ? { kind: item.kind } : {}),
           ...(item.sections !== undefined ? { sections: item.sections } : {}),
           ...(item.sectionsBasis !== undefined ? { sectionsBasis: item.sectionsBasis } : {}),
+          ...(item.labels !== undefined ? { labels: item.labels } : {}),
         };
         if (!row) {
           next = [
@@ -860,7 +869,7 @@ export class KanbanRepository {
               id: item.id,
               projectId: input.projectId,
               title: item.title,
-              ...content,
+              ...storedTicketContent(content),
               status: item.status,
               comments: item.comments,
               images: [],
@@ -881,10 +890,7 @@ export class KanbanRepository {
         const updated: KanbanTask = { ...row };
         if (!pending.fields.has("title")) updated.title = item.title;
         if (!pending.fields.has("content")) {
-          delete updated.kind;
-          delete updated.sections;
-          delete updated.sectionsBasis;
-          Object.assign(updated, content);
+          assignTicketContent(updated, content);
         }
         if (!pending.fields.has("status") && updated.status !== item.status) {
           updated.status = item.status;
@@ -1116,7 +1122,7 @@ export class KanbanRepository {
             id: item.ticketId,
             projectId: item.sourceProjectId,
             title: op.ticket.title,
-            ...ticketContentValue({ ...op.ticket } as KanbanTask),
+            ...storedTicketContent(ticketContentValue({ ...op.ticket } as KanbanTask)),
             status: op.ticket.status,
             comments: op.ticket.comments,
             images: [],
@@ -1146,6 +1152,10 @@ export class KanbanRepository {
                   ? row.status
                   : ticketContentValue(normalizeKanbanTask(row));
             const incoming = op.value;
+            // A leaf that predates labels sends none; its change leaves them alone.
+            if (op.kind === "set-content" && op.value.labels === undefined) {
+              delete (current as { labels?: string[] }).labels;
+            }
             if (JSON.stringify(current) === JSON.stringify(incoming)) break;
             if (!acceptsFieldChange(row.sync, field, op.baseRev, input.nodeId)) {
               conflict(
@@ -1164,10 +1174,7 @@ export class KanbanRepository {
               row.order = orderIn(row.projectId, op.value, row.id);
             }
             if (op.kind === "set-content") {
-              delete row.kind;
-              delete row.sections;
-              delete row.sectionsBasis;
-              Object.assign(row, op.value);
+              assignTicketContent(row, op.value);
             }
             attribute(row.id, field);
             break;
@@ -1185,7 +1192,7 @@ export class KanbanRepository {
             });
             if (!changed) break;
             track(row);
-            Object.assign(row, ticketContentValue(normalized));
+            assignTicketContent(row, ticketContentValue(normalized));
             row.sections = { ...normalized.sections, acceptanceCriteria: criteria };
             break;
           }
@@ -1871,6 +1878,9 @@ export type KanbanStorage = Pick<
   | "findKanbanTaskByRequestId"
   | "updateKanbanTask"
   | "recordKanbanCriteriaChecks"
+  | "setKanbanTaskLabel"
+  | "getKanbanLabels"
+  | "createKanbanLabel"
   | "deleteKanbanTask"
   | "getDeletedKanbanDeliveryPolicy"
   | "onDeliveryPolicyChange"

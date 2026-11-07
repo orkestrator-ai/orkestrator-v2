@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -25,6 +26,10 @@ export const ENVIRONMENT_LIST_RESYNC_INTERVAL_MS = 5 * 60_000;
  * only that record through `refreshEnvironment`, which resolves `false` when
  * the backend cannot serve it. Several changes waiting at once read the list,
  * as does anything without a project, so a burst stays one read.
+ *
+ * It hears the change feed of the node scope it renders in: a leaf's
+ * `NodeWorkspaceHost` keeps that leaf's environments current, which the
+ * window's sidebar draws from while the leaf is warm or live (5007).
  */
 export function useEnvironmentListSync(
   projectIds: string[],
@@ -38,6 +43,7 @@ export function useEnvironmentListSync(
   const rerunProjectIdsRef = useRef(new Set<string>());
   const pendingEnvironmentIdsRef = useRef(new Map<string, Set<string>>());
   const singleReadsUnavailableRef = useRef(false);
+  const scope = useNodeScope();
 
   // Latest inputs for the long-lived subscription below, published at commit.
   useLayoutEffect(() => {
@@ -108,16 +114,20 @@ export function useEnvironmentListSync(
       );
     };
 
-    const unsubscribe = onResourceChanged("environment", (change) => {
-      if (change.projectId) {
-        if (projectIdsRef.current.includes(change.projectId)) {
-          void refreshProjectOnce(change.projectId, change.id);
+    const unsubscribe = onResourceChanged(
+      "environment",
+      (change) => {
+        if (change.projectId) {
+          if (projectIdsRef.current.includes(change.projectId)) {
+            void refreshProjectOnce(change.projectId, change.id);
+          }
+          return;
         }
-        return;
-      }
-      // Rolling-upgrade fallback for older backends without project attribution.
-      void refreshAll();
-    });
+        // Rolling-upgrade fallback for older backends without project attribution.
+        void refreshAll();
+      },
+      scope,
+    );
     // Keep the explicit/rolling-upgrade recovery route without duplicating the
     // global manifest hydration owned by store-resource-sync.
     const unsubscribeResync = onResourceResync((request) => {
@@ -128,12 +138,12 @@ export function useEnvironmentListSync(
       // Possibly a different backend now: let the next lone change try again.
       singleReadsUnavailableRef.current = false;
       return refreshAll();
-    });
+    }, scope);
 
     return () => {
       disposed = true;
       unsubscribe();
       unsubscribeResync();
     };
-  }, []);
+  }, [scope]);
 }

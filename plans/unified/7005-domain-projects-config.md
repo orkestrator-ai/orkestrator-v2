@@ -3,7 +3,7 @@ id: 7005
 title: "Convert projects, config and settings"
 phase: 7
 plan: "§12 Phase 7 and Appendix E"
-status: in-progress
+status: done
 depends_on: [1008, 1010, 1011]
 blocked_by: ""
 owner: claude-worker
@@ -64,7 +64,7 @@ Apply the conversion checklist from [1011](1011-contract-policy-and-docs.md)'s "
 
 ## Done when
 
-- [ ] Every command in these domains is defined, the untyped count for them is zero, and the web uses domain clients for them.
+- [x] Every command in these domains is defined, the untyped count for them is zero, and the web uses domain clients for them. (57 defined, 0 untyped in the committed manifest and baseline; the web's `lib/backend`, config layering, host path picker and remote arrangement go through the clients. Left raw on purpose: the desktop startup transport probe and the scope-proof harness, see Notes. Aggregate suite left to review preparation.)
 
 ## Notes
 

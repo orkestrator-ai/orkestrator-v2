@@ -9,7 +9,7 @@
  */
 import { previewsClient } from "@orkestrator/protocol/contract/domains/previews";
 import { defineScenario } from "../scenario.ts";
-import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
+import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client-7004.ts";
 
 const COMMANDS = [
   "get_preview_capabilities",

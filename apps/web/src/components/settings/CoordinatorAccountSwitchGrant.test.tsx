@@ -5,6 +5,7 @@ import type {
   CoordinatorAccountSwitchGrantState,
   CoordinatorAccountSwitchRecord,
 } from "@orkestrator/protocol/coordinator-account-switch-grant";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let state: CoordinatorAccountSwitchGrantState;
@@ -95,7 +96,7 @@ function answer(command: string, args: Record<string, unknown> = {}): Promise<un
   switch (command) {
     case "get_coordinator_account_switch_grant":
       return unknown
-        ? Promise.reject(new Error(`Unknown command: ${command}`))
+        ? Promise.reject(new Error(unknownBackendCommandMessage(command)))
         : Promise.resolve(state);
     case "set_coordinator_account_switch_grant":
       state = { ...state, grants: { ...state.grants, claude: args.enabled === true } };

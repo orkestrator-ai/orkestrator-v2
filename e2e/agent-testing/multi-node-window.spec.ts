@@ -619,6 +619,22 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
       { timeout: 30_000 },
     )
     .not.toBe("");
+  if (s().kind === "desktop") {
+    // A remote gateway opens only an environment's registered preview targets
+    // (security report M2), on the leaf as on the command node: register the
+    // fixture server as a service of the leaf's environment.
+    await leaf.invoke("register_preview_service", {
+      service: {
+        environmentId: leaf.environment.id,
+        label: "uf4006-fixture",
+        targetKind: "worktree",
+        applicationPort: Number(port),
+        addressFamily: "ipv4",
+        readinessPath: "/health",
+      },
+      operationId: `register-uf4006-${port}`,
+    });
+  }
   await seedLayout(
     leaf,
     [{ id: "tab-preview", type: "browser", browserData: { url: `http://127.0.0.1:${port}/` } }],
@@ -652,26 +668,38 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
     await seedLayout(topology.command);
     await openNode(leaf);
   } else {
-    // Soft: the rest of the flow still runs. Found 2026-11-07: the desktop
-    // node client has no `resolvePreviewUrl`, so the preview store resolves a
-    // leaf's loopback page through the command node's gateway.
+    // Soft: the rest of the flow still runs. Found 2026-11-07 (fixed): the
+    // desktop resolved a leaf's loopback page through the command node's
+    // gateway. The registered port may also open as a service preview over the
+    // leaf's tunnel (the tab migrates), so any view showing the page counts;
+    // its origin says which route it took.
     const leafPreview = () =>
-      s().app!.evaluate(async ({ webContents }, port) => {
-        const view = webContents
-          .getAllWebContents()
-          .find(
-            (contents) =>
-              contents.getURL().startsWith(`http://127.0.0.1:${port}/`) ||
-              contents.getURL().includes(`/__orkestrator/browser/loopback/${port}/`),
-          );
-        if (!view) return null;
-        return {
-          origin: new URL(view.getURL()).origin,
-          h1: (await view.executeJavaScript(
-            "document.querySelector('h1')?.textContent ?? null",
-          )) as string | null,
-        };
-      }, port);
+      s().app!.evaluate(
+        async ({ webContents }, { port, renderer }) => {
+          const candidates = webContents
+            .getAllWebContents()
+            .filter(
+              (contents) =>
+                new URL(contents.getURL() || "about:blank").origin !== renderer &&
+                (contents.getURL().startsWith(`http://127.0.0.1:${port}/`) ||
+                  contents.getURL().includes(`/__orkestrator/browser/loopback/${port}/`) ||
+                  /^http:\/\/(127\.0\.0\.1|localhost):\d+\/$/.test(contents.getURL())),
+            );
+          let fallback: { origin: string; h1: string | null } | null = null;
+          for (const view of candidates) {
+            const shown = {
+              origin: new URL(view.getURL()).origin,
+              h1: (await view
+                .executeJavaScript("document.querySelector('h1')?.textContent ?? null")
+                .catch(() => null)) as string | null,
+            };
+            if (shown.h1 === "Orkestrator test project") return shown;
+            fallback ??= shown;
+          }
+          return fallback;
+        },
+        { port, renderer: new URL(page.url()).origin },
+      );
     let shown = await leafPreview();
     for (let tries = 0; tries < 30 && shown?.h1 !== "Orkestrator test project"; tries += 1) {
       await page.waitForTimeout(2_000);
@@ -683,7 +711,7 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
           ? "command"
           : shown.origin === leaf.origin
             ? "leaf"
-            : "other",
+            : "local-service-tunnel",
       h1: shown.h1,
     };
     expect
@@ -997,7 +1025,18 @@ test("previews from two nodes in one window keep their z-order and focus", async
       }, urls);
     const show = async (node: TopologyNode) => {
       await dismissDialogs(page);
+      // A pointer resting on a row opens its hover card, which covers the next
+      // row and, as an overlay, hides the native previews (seen 2026-11-07):
+      // move it off the sidebar before and after the click.
+      const away = async () => {
+        await page.mouse.move(700, 4);
+        await expect(page.locator("[data-radix-popper-content-wrapper]")).toHaveCount(0, {
+          timeout: 5_000,
+        });
+      };
+      await away();
       await environmentButton(page, node).click();
+      await away();
       if (node !== topology.command) await expect(inTreeRegion(page, node.nodeId)).toBeVisible();
     };
     await show(topology.command);

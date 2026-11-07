@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/portal-layout";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
+import { eventSink } from "./backend-emit.js";
 
 function setup() {
   const handlers = new Map<string, CommandHandler>();
@@ -17,7 +18,7 @@ function setup() {
   const layout = { ...emptyPortalLayout(), revision: 1, machineOrder: ["bk_a"] };
   const updatePortalLayout = mock(async () => layout);
   const getPortalLayout = mock(async () => layout);
-  const emit = mock(() => {});
+  const emit = mock((_event: string, _payload: unknown) => {});
   const context = {
     storage: {
       nodes: {
@@ -25,7 +26,7 @@ function setup() {
         getPortalLayout,
       },
     },
-    emit,
+    emit: eventSink(emit),
   } as unknown as CommandContext;
   return { handlers, context, layout, updatePortalLayout, getPortalLayout, emit };
 }

@@ -801,6 +801,9 @@ test("4. ⌘⇧-click on a loopback link in an agent's reply opens a preview tab
         const { default: ReactDOM } = await import(rootPath);
         const { MessageMarkdown } = await import(markdownPath);
         const { PreviewLinkSourceContext } = await import(contextPath);
+        // Outside the app's tree, so give the reply the app's window and command scope.
+        const providersPath = "/src/lib/node-scope/providers.tsx";
+        const { WindowScopeProvider, CommandNodeScopeProvider } = await import(providersPath);
         const mount = document.createElement("div");
         mount.id = "seeded-agent-reply";
         Object.assign(mount.style, {
@@ -815,11 +818,19 @@ test("4. ⌘⇧-click on a loopback link in an agent's reply opens a preview tab
         const root = ReactDOM.createRoot(mount);
         root.render(
           React.createElement(
-            PreviewLinkSourceContext.Provider,
-            { value: { environmentId, tabId } },
-            React.createElement(MessageMarkdown, {
-              content: `The server is up at [the app](${url}).`,
-            }),
+            WindowScopeProvider,
+            null,
+            React.createElement(
+              CommandNodeScopeProvider,
+              null,
+              React.createElement(
+                PreviewLinkSourceContext.Provider,
+                { value: { environmentId, tabId } },
+                React.createElement(MessageMarkdown, {
+                  content: `The server is up at [the app](${url}).`,
+                }),
+              ),
+            ),
           ),
         );
         window.addEventListener(

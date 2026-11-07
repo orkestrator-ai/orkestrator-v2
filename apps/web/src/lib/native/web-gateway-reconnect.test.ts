@@ -1667,4 +1667,51 @@ describe("the credential probe and session detection of a relayed node transport
     expect(requested.some((path) => path.endsWith("/session"))).toBe(false);
     stop();
   });
+
+  test("an installed realm on a relay base asks /status when its stream ends; a direct construction does not", async () => {
+    const happyWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
+    const previousUrl = window.location.href;
+    happyWindow.happyDOM.setURL("http://localhost:1420/");
+    const requested: string[] = [];
+    globalThis.fetch = mock(async (input: unknown) => {
+      const path = new URL(String(input)).pathname;
+      requested.push(path);
+      // Every stream opens and ends at once; the forwarded grant is revoked.
+      return path.endsWith("/events") ? streamOnce([]) : new Response("{}", { status: 401 });
+    }) as unknown as typeof fetch;
+    const relayBase = "http://localhost:1420/__orkestrator/nodes/bk_leaf";
+    const target = {
+      location: { protocol: "http:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    } as unknown as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+    try {
+      installBrowserGatewayApi(target, { baseUrl: relayBase, eventReconnectDelayMs: 60_000 });
+      const realm = target.orkestrator!;
+      const stop = realm.listen("changed", () => undefined);
+      await waitForReal(
+        () => requested.includes("/__orkestrator/nodes/bk_leaf/__orkestrator/status"),
+        "The realm did not ask /status",
+      );
+      await waitForReal(
+        () => realm.eventStreamConnection!.state() === "connecting",
+        "The revoked grant was not taken for a refusal",
+      );
+      stop();
+      installBrowserGatewayApi(target, { browserSessionActivity: false, replaceExisting: true });
+
+      requested.length = 0;
+      const direct = createBrowserGatewayApi({ baseUrl: relayBase, eventReconnectDelayMs: 60_000 });
+      const stopDirect = direct.listen("changed", () => undefined);
+      await waitForReal(
+        () => direct.eventStreamConnection.state() === "disconnected",
+        "The stream never ended",
+      );
+      await new Promise((resolve) => originalSetTimeout(resolve, 10));
+      expect(requested.some((path) => path.endsWith("/status"))).toBe(false);
+      stopDirect();
+    } finally {
+      happyWindow.happyDOM.setURL(previousUrl);
+    }
+  });
 });

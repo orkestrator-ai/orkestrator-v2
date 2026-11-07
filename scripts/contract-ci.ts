@@ -5,7 +5,7 @@
  * support window, and still has a client adapter for every backend in it.
  *
  *   bun scripts/contract-ci.ts                 # stage 1 (mise run contract:ci, every PR)
- *   bun scripts/contract-ci.ts --stage2        # also stage 2 while it is off by default
+ *   bun scripts/contract-ci.ts --stage2        # stage 2 (on by default since plan item 7001)
  *   bun scripts/contract-ci.ts --now <iso>     # as on another day
  *
  * The support floor is the newest Stable release published at least 60 days
@@ -40,7 +40,7 @@
  *    manifest and in-window releases) is stored (`scripts/contract-ci-schemas.ts`),
  *    so stage 2 has the older schemas when it is turned on.
  *
- * Stage 2 ({@link CONTRACT_CI_STAGE_2}, off until plan item 7001 turns it on):
+ * Stage 2 ({@link CONTRACT_CI_STAGE_2}, on since plan item 7001):
  *
  * 6. **New required fields:** a defined command whose argument schema
  *    requires a field an in-window release's schema did not, while its domain
@@ -91,10 +91,10 @@ import {
 const repoRoot = join(import.meta.dir, "..");
 
 /**
- * Stage 2 (argument fixtures and new required fields). Off until the first
- * domain other than the pilot converts; plan item 7001 sets it to `true`.
+ * Stage 2 (argument fixtures and new required fields). On since the first
+ * domain other than the pilot converted (plan item 7001, `native-sessions`).
  */
-export const CONTRACT_CI_STAGE_2 = false;
+export const CONTRACT_CI_STAGE_2 = true;
 
 /** A Stable release becomes the floor this long after it is published. */
 export const SUPPORT_WINDOW_DAYS = 60;

@@ -531,12 +531,12 @@ describe("storage-backed command delegation", () => {
         ...update,
       })),
       removeSession: mock(async () => undefined),
-      removeSessionsByEnvironment: mock(async () => undefined),
+      removeSessionsByEnvironment: mock(async () => ["session-1"]),
       disconnectEnvironmentSessions: mock(async () => disconnected),
       saveSessionBuffer: mock(async () => undefined),
       loadSessionBuffer: mock(async () => "saved output"),
       reorderSessions: mock(async () => sessions),
-      cleanupOrphanedBuffers: mock(async () => 3),
+      cleanupOrphanedBuffers: mock(async () => ["orphan-1", "orphan-2", "orphan-3"]),
       // The session names the environment's own container, which the registry
       // accepts as an exact persisted association without probing Docker.
       getDataDir: () => "/tmp/orkestrator-session-delegation",
@@ -607,7 +607,11 @@ describe("storage-backed command delegation", () => {
       context,
     );
     expect(storage.reorderSessions).toHaveBeenCalledWith("env-1", ["session-2", "session-1"]);
-    await expect(commands.get("cleanup_orphaned_buffers")?.({}, context)).resolves.toBe(3);
+    await expect(commands.get("cleanup_orphaned_buffers")?.({}, context)).resolves.toEqual([
+      "orphan-1",
+      "orphan-2",
+      "orphan-3",
+    ]);
     await commands.get("delete_session")?.({ sessionId: "session-1" }, context);
     expect(storage.removeSession).toHaveBeenCalledWith("session-1");
     await commands.get("delete_sessions_by_environment")?.({ environmentId: "env-1" }, context);
@@ -725,7 +729,11 @@ describe("storage-backed command delegation", () => {
     const feature = { id: "feature-1", projectId: "project-1" };
     const storage = {
       getLogDirectory: mock(() => "/data/logs"),
-      reorderEnvironments: mock(async () => [{ id: "env-2" }, { id: "env-1" }]),
+      // Whole records: a defined command's result is validated in tests (plan item 7003).
+      reorderEnvironments: mock(async () => [
+        createEnvironment({ id: "env-2" }),
+        createEnvironment({ id: "env-1" }),
+      ]),
       kanban: {
         deleteKanbanTask: mock(async () => undefined),
         addKanbanComment: mock(async () => ({ ...task, comments: [{ id: "comment-1" }] })),
@@ -752,7 +760,7 @@ describe("storage-backed command delegation", () => {
         },
         context,
       ),
-    ).resolves.toEqual([
+    ).resolves.toMatchObject([
       { id: "env-2", hasInitialPromptAttachments: false },
       { id: "env-1", hasInitialPromptAttachments: false },
     ]);

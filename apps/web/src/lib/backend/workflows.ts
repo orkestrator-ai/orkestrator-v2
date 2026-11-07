@@ -1,3 +1,5 @@
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
+import { terminals } from "@/lib/node-scope/domains/terminals";
 import { hydrationRequests } from "@/lib/hydration-request-limiter";
 import {
   LIST_ENVIRONMENT_HYDRATION_COMMAND,
@@ -203,6 +205,9 @@ export type ConditionalBuildPipeline<T> =
  */
 export function createWorkflowsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  const native = () => nativeSessions(client);
+  // The `terminals` domain client for local terminals (plan item 7002).
+  const terminalsDomain = () => terminals(client);
 
   /**
    * Bounded validation output. With `known` (the size and anchor of the tail the
@@ -561,9 +566,9 @@ export function createWorkflowsApi(client: BackendClient) {
     executionProfileId?: string;
     parameterValues?: Record<string, string | boolean>;
   }): Promise<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }> {
-    return invoke<
+    return asWebModel<
       PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }
-    >("ensure_native_agent_session", input);
+    >(native().ensure_native_agent_session(input));
   }
 
   async function adoptNativeAgentSession(input: {
@@ -581,7 +586,7 @@ export function createWorkflowsApi(client: BackendClient) {
     executionProfileId?: string;
     controls?: NativeAgentControlUpdate;
   }): Promise<PersistedNativeAgentSession> {
-    return invoke<PersistedNativeAgentSession>("adopt_native_agent_session", input);
+    return asWebModel<PersistedNativeAgentSession>(native().adopt_native_agent_session(input));
   }
 
   async function getNativeAgentSession(input: {
@@ -589,7 +594,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<PersistedNativeAgentSession | null> {
-    return invoke<PersistedNativeAgentSession | null>("get_native_agent_session", input);
+    return asWebModel<PersistedNativeAgentSession | null>(native().get_native_agent_session(input));
   }
 
   async function getNativeAgentProjection<TMessage = unknown>(input: {
@@ -601,7 +606,7 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Request the provider's detailed billing/quota snapshot. */
     refreshUsage?: boolean;
   }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke("get_native_agent_projection", input);
+    return asWebModel(native().get_native_agent_projection(input));
   }
 
   async function getNativeAgentSyncCapabilities(): Promise<{
@@ -615,7 +620,8 @@ export function createWorkflowsApi(client: BackendClient) {
     /** One request for transcript and state (`get_native_agent_live_update`). */
     liveUpdateVersions?: number[];
   }> {
-    const response = await invoke<unknown>("get_native_agent_sync_capabilities");
+    // Folded into native-sessions version 1: such a node answers without a round trip.
+    const response = await native().syncCapabilities();
     if (!response || typeof response !== "object" || Array.isArray(response)) {
       throw new Error("Invalid native agent sync capabilities response");
     }
@@ -667,7 +673,7 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Ask for part-level patches; only when the backend advertised them. */
     patchVersion?: 2;
   }): Promise<NativeAgentTranscriptUpdate<TMessage>> {
-    const response = await invoke<unknown>("get_native_agent_transcript_update", input);
+    const response = await native().get_native_agent_transcript_update(input);
     if (
       new TextEncoder().encode(JSON.stringify(response)).byteLength >
       NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
@@ -688,7 +694,7 @@ export function createWorkflowsApi(client: BackendClient) {
     knownToken?: string;
     forceSnapshot?: boolean;
   }): Promise<NativeAgentSessionStateUpdate> {
-    const response = await invoke<unknown>("get_native_agent_session_state_update", input);
+    const response = await native().get_native_agent_session_state_update(input);
     if (!isNativeAgentSessionStateUpdate(response)) {
       throw new Error("Invalid native agent session-state update response");
     }
@@ -706,7 +712,7 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Ask for part-level patches; only when the backend advertised them. */
     patchVersion?: 2;
   }): Promise<NativeAgentLiveUpdate<TMessage>> {
-    const response = await invoke<unknown>("get_native_agent_live_update", input);
+    const response = await native().get_native_agent_live_update(input);
     if (
       new TextEncoder().encode(JSON.stringify(response)).byteLength >
       NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
@@ -728,7 +734,7 @@ export function createWorkflowsApi(client: BackendClient) {
     knownToken?: string;
     forceSnapshot?: boolean;
   }): Promise<NativeAgentDiscoveryUpdate> {
-    const response = await invoke<unknown>("get_native_agent_discovery_update", input);
+    const response = await native().get_native_agent_discovery_update(input);
     if (!isNativeAgentDiscoveryUpdate(response)) {
       throw new Error("Invalid native agent discovery update response");
     }
@@ -744,7 +750,7 @@ export function createWorkflowsApi(client: BackendClient) {
     knownToken?: string;
     forceSnapshot?: boolean;
   }): Promise<NativeAgentProjectionUpdate<TMessage>> {
-    const response = await invoke<unknown>("get_native_agent_projection_update", input);
+    const response = await native().get_native_agent_projection_update(input);
     if (
       new TextEncoder().encode(JSON.stringify(response)).byteLength >
       NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
@@ -766,7 +772,7 @@ export function createWorkflowsApi(client: BackendClient) {
     limit?: number;
     targetBytes?: number;
   }): Promise<NativeAgentMessagePage<TMessage>> {
-    const response = await invoke<unknown>("get_native_agent_message_page", input);
+    const response = await native().get_native_agent_message_page(input);
     if (
       new TextEncoder().encode(JSON.stringify(response)).byteLength >
       NATIVE_AGENT_SYNC_MAX_PAGE_BYTES
@@ -785,7 +791,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     detailRef: string;
   }): Promise<NativeAgentToolDetails> {
-    return invoke("get_native_agent_tool_details", input);
+    return asWebModel(native().get_native_agent_tool_details(input));
   }
 
   async function refreshNativeAgentModels<TMessage = unknown>(input: {
@@ -793,7 +799,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke("refresh_native_agent_models", input);
+    return asWebModel(native().refresh_native_agent_models(input));
   }
 
   async function refreshNativeAgentCommands<TMessage = unknown>(input: {
@@ -801,7 +807,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<NativeAgentCommandRefreshResult<TMessage>> {
-    return invoke("refresh_native_agent_commands", input);
+    return asWebModel(native().refresh_native_agent_commands(input));
   }
 
   async function stopNativeAgentSession<TMessage = unknown>(input: {
@@ -809,7 +815,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke("stop_native_agent_session", input);
+    return asWebModel(native().stop_native_agent_session(input));
   }
 
   /**
@@ -823,7 +829,7 @@ export function createWorkflowsApi(client: BackendClient) {
     text: string;
     model?: string;
   }): Promise<NativeAgentGoalCommandResult> {
-    return invoke("native_agent_goal_command", input);
+    return asWebModel(native().native_agent_goal_command(input));
   }
 
   async function getNativeAgentGoal(input: {
@@ -831,7 +837,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<NativeAgentGoalDetail> {
-    return invoke("get_native_agent_goal", input);
+    return asWebModel(native().get_native_agent_goal(input));
   }
 
   /** Stops a session's running suborks: one call's, or every call's when `batchId` is absent. */
@@ -841,7 +847,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     batchId?: string;
   }): Promise<void> {
-    await invoke("stop_native_agent_suborks", input);
+    await native().stop_native_agent_suborks(input);
   }
 
   async function getNativeAgentSuborkTranscript(input: {
@@ -850,7 +856,7 @@ export function createWorkflowsApi(client: BackendClient) {
     suborkId: string;
     fromIndex?: number;
   }): Promise<NativeAgentSuborkTranscript> {
-    return invoke("native_agent_subork_transcript", input);
+    return asWebModel(native().native_agent_subork_transcript(input));
   }
 
   async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
@@ -859,7 +865,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     taskId: string;
   }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke("stop_native_agent_background_task", input);
+    return asWebModel(native().stop_native_agent_background_task(input));
   }
 
   async function dismissNativeAgentSuggestedPrompt<TMessage = unknown>(input: {
@@ -867,7 +873,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke("dismiss_native_agent_suggested_prompt", input);
+    return asWebModel(native().dismiss_native_agent_suggested_prompt(input));
   }
 
   async function listNativeAgentResumableSessions(input: {
@@ -877,7 +883,7 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Also lists conversations taken out of the list, flagged `archived`. */
     includeArchived?: boolean;
   }): Promise<NativeAgentResumeEntry[]> {
-    return invoke("list_native_agent_resumable_sessions", input);
+    return asWebModel(native().list_native_agent_resumable_sessions(input));
   }
 
   /** Takes a conversation out of the resume list, or puts it back. Never a delete. */
@@ -888,7 +894,7 @@ export function createWorkflowsApi(client: BackendClient) {
     resumableSessionId: string;
     archived: boolean;
   }): Promise<{ archived: boolean }> {
-    return invoke("set_native_agent_resumable_session_archived", input);
+    return native().set_native_agent_resumable_session_archived(input);
   }
 
   async function resumeNativeAgentSession<TMessage = unknown>(input: {
@@ -898,7 +904,7 @@ export function createWorkflowsApi(client: BackendClient) {
     providerSessionId: string;
     controls?: NativeAgentControlUpdate;
   }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke("resume_native_agent_session", input);
+    return asWebModel(native().resume_native_agent_session(input));
   }
 
   async function forkNativeAgentSession(input: {
@@ -907,7 +913,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     messageId?: string;
   }): Promise<NativeAgentForkOutcome> {
-    return invoke("fork_native_agent_session", input);
+    return asWebModel(native().fork_native_agent_session(input));
   }
 
   async function updateNativeAgentControls<TMessage = unknown>(input: {
@@ -916,7 +922,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     update: NativeAgentControlUpdate;
   }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke("update_native_agent_controls", input);
+    return asWebModel(native().update_native_agent_controls(input));
   }
 
   async function steerNativeAgentQueuedPrompt(input: {
@@ -925,7 +931,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     messageId: string;
   }): Promise<NativeAgentSessionActionOutcome | null> {
-    return invoke("steer_native_agent_queued_prompt", input);
+    return asWebModel(native().steer_native_agent_queued_prompt(input));
   }
 
   async function performNativeAgentSessionAction(input: {
@@ -934,7 +940,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     action: NativeAgentSessionAction;
   }): Promise<NativeAgentSessionActionOutcome> {
-    return invoke("perform_native_agent_session_action", input);
+    return asWebModel(native().perform_native_agent_session_action(input));
   }
 
   async function performNativeAgentMcpAction(input: {
@@ -944,7 +950,7 @@ export function createWorkflowsApi(client: BackendClient) {
     serverId: string;
     action: NativeAgentMcpServerAction;
   }): Promise<{ url?: string }> {
-    return invoke("perform_native_agent_mcp_action", input);
+    return native().perform_native_agent_mcp_action(input);
   }
 
   /**
@@ -956,7 +962,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<NativeAgentAuthStatus | null> {
-    return invoke("get_native_agent_auth_status", input);
+    return asWebModel(native().get_native_agent_auth_status(input));
   }
 
   async function beginNativeAgentSignIn(input: {
@@ -966,7 +972,7 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Ask for a device code: the browser cannot reach the agent's loopback. */
     deviceCode?: boolean;
   }): Promise<{ url?: string; code?: string }> {
-    return invoke("begin_native_agent_sign_in", input);
+    return native().begin_native_agent_sign_in(input);
   }
 
   /** Abandon an in-tab sign-in so the provider stops waiting for it. */
@@ -975,7 +981,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<{ cancelled: boolean }> {
-    return invoke("cancel_native_agent_sign_in", input);
+    return native().cancel_native_agent_sign_in(input);
   }
 
   async function signOutNativeAgent(input: {
@@ -983,7 +989,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
   }): Promise<void> {
-    await invoke("sign_out_native_agent", input);
+    await native().sign_out_native_agent(input);
   }
 
   async function resolveNativeAgentInteraction(input: {
@@ -993,7 +999,7 @@ export function createWorkflowsApi(client: BackendClient) {
     interactionId: string;
     resolution: AgentInteractionResolution;
   }): Promise<AgentInteractionApplyOutcome> {
-    return invoke("resolve_native_agent_interaction", input);
+    return asWebModel(native().resolve_native_agent_interaction(input));
   }
 
   /** Pause (`held`) or resume an interaction's countdown where the agent enforces it. */
@@ -1004,7 +1010,7 @@ export function createWorkflowsApi(client: BackendClient) {
     interactionId: string;
     held: boolean;
   }): Promise<AgentInteractionApplyOutcome> {
-    return invoke("hold_native_agent_interaction", input);
+    return asWebModel(native().hold_native_agent_interaction(input));
   }
 
   async function dispatchNativeAgentPrompt(input: {
@@ -1026,7 +1032,7 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Absent is legacy behaviour: the backend treats the text as typed. */
     command?: NativeAgentCommandIntent;
   }): Promise<PersistedNativeAgentSession> {
-    return invoke<PersistedNativeAgentSession>("dispatch_native_agent_prompt", input);
+    return asWebModel<PersistedNativeAgentSession>(native().dispatch_native_agent_prompt(input));
   }
 
   async function dispatchNativeAgentIntent(input: {
@@ -1070,10 +1076,12 @@ export function createWorkflowsApi(client: BackendClient) {
     /** Defaults to this device's zone; a coordinator reads its user's zone from it. */
     clientTimeZone?: string;
   }): Promise<NativeAgentDispatchOutcome> {
-    return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", {
-      ...input,
-      clientTimeZone: input.clientTimeZone ?? hostTimeZone(),
-    });
+    return asWebModel<NativeAgentDispatchOutcome>(
+      native().dispatch_native_agent_intent({
+        ...input,
+        clientTimeZone: input.clientTimeZone ?? hostTimeZone(),
+      }),
+    );
   }
 
   async function retryNativeAgentDispatch(input: {
@@ -1082,7 +1090,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     requestId: string;
   }): Promise<NativeAgentDispatchOutcome> {
-    return invoke<NativeAgentDispatchOutcome>("retry_native_agent_dispatch", input);
+    return asWebModel<NativeAgentDispatchOutcome>(native().retry_native_agent_dispatch(input));
   }
 
   async function discardNativeAgentDispatch(input: {
@@ -1091,7 +1099,7 @@ export function createWorkflowsApi(client: BackendClient) {
     logicalSessionKey: string;
     requestId: string;
   }): Promise<{ discarded: boolean }> {
-    return invoke<{ discarded: boolean }>("discard_native_agent_dispatch", input);
+    return native().discard_native_agent_dispatch(input);
   }
 
   async function startBuildPipeline(input: StartBuildPipelineInput): Promise<BackendBuildPipeline> {
@@ -1501,14 +1509,14 @@ export function createWorkflowsApi(client: BackendClient) {
   async function getPromptQueue<T = unknown>(
     queueKey: string,
   ): Promise<PersistedPromptQueue<T> | null> {
-    return invoke<PersistedPromptQueue<T> | null>("get_prompt_queue", { queueKey });
+    return asWebModel<PersistedPromptQueue<T> | null>(native().get_prompt_queue({ queueKey }));
   }
 
   async function listPromptQueues<T = unknown>(
     environmentId: string,
   ): Promise<Array<PersistedPromptQueue<T>>> {
     return hydrationRequests.run(() =>
-      invoke<Array<PersistedPromptQueue<T>>>("list_prompt_queues", { environmentId }),
+      asWebModel<Array<PersistedPromptQueue<T>>>(native().list_prompt_queues({ environmentId })),
     );
   }
 
@@ -1522,7 +1530,7 @@ export function createWorkflowsApi(client: BackendClient) {
     environmentIds: string[],
   ): Promise<EnvironmentHydrationBatch<PersistedPromptQueue, PersistedWorkflowRecord<unknown>>> {
     const response = await hydrationRequests.run(() =>
-      invoke<unknown>(LIST_ENVIRONMENT_HYDRATION_COMMAND, { environmentIds }),
+      native().list_environment_hydration({ environmentIds }),
     );
     if (!isEnvironmentHydrationBatch(response)) {
       throw new Error(`Invalid ${LIST_ENVIRONMENT_HYDRATION_COMMAND} response`);
@@ -1538,11 +1546,13 @@ export function createWorkflowsApi(client: BackendClient) {
     environmentId: string,
     message: T,
   ): Promise<PersistedPromptQueue<T>> {
-    return invoke<PersistedPromptQueue<T>>("enqueue_prompt_queue_message", {
-      queueKey,
-      environmentId,
-      message,
-    });
+    return asWebModel<PersistedPromptQueue<T>>(
+      native().enqueue_prompt_queue_message({
+        queueKey,
+        environmentId,
+        message,
+      }),
+    );
   }
 
   async function removePromptQueueMessage<T>(
@@ -1553,11 +1563,13 @@ export function createWorkflowsApi(client: BackendClient) {
     removed: T | null;
     queue: PersistedPromptQueue<T> | null;
   }> {
-    return invoke("remove_prompt_queue_message", {
-      queueKey,
-      environmentId,
-      messageId,
-    });
+    return asWebModel(
+      native().remove_prompt_queue_message({
+        queueKey,
+        environmentId,
+        messageId,
+      }),
+    );
   }
 
   async function movePromptQueueMessage<T>(
@@ -1566,34 +1578,40 @@ export function createWorkflowsApi(client: BackendClient) {
     messageId: string,
     direction: "up" | "down",
   ): Promise<PersistedPromptQueue<T> | null> {
-    return invoke<PersistedPromptQueue<T> | null>("move_prompt_queue_message", {
-      queueKey,
-      environmentId,
-      messageId,
-      direction,
-    });
+    return asWebModel<PersistedPromptQueue<T> | null>(
+      native().move_prompt_queue_message({
+        queueKey,
+        environmentId,
+        messageId,
+        direction,
+      }),
+    );
   }
 
   async function retryPromptQueueDispatch<T = unknown>(
     queueKey: string,
   ): Promise<PersistedPromptQueue<T> | null> {
-    return invoke<PersistedPromptQueue<T> | null>("retry_prompt_queue_dispatch", { queueKey });
+    return asWebModel<PersistedPromptQueue<T> | null>(
+      native().retry_prompt_queue_dispatch({ queueKey }),
+    );
   }
 
   async function getComposeDraft<T = unknown>(
     draftKey: string,
   ): Promise<PersistedComposeDraft<T> | null> {
-    return invoke<PersistedComposeDraft<T> | null>("get_compose_draft", { draftKey });
+    return asWebModel<PersistedComposeDraft<T> | null>(native().get_compose_draft({ draftKey }));
   }
 
   async function listComposeDrafts<T = unknown>(
     ownerType: "environment" | "project",
     ownerId: string,
   ): Promise<Array<PersistedComposeDraft<T>>> {
-    return invoke<Array<PersistedComposeDraft<T>>>("list_compose_drafts", {
-      ownerType,
-      ownerId,
-    });
+    return asWebModel<Array<PersistedComposeDraft<T>>>(
+      native().list_compose_drafts({
+        ownerType,
+        ownerId,
+      }),
+    );
   }
 
   async function saveComposeDraft<T>(
@@ -1603,24 +1621,26 @@ export function createWorkflowsApi(client: BackendClient) {
     value: T,
     expectedRevision?: number,
   ): Promise<PersistedComposeDraft<T>> {
-    return invoke<PersistedComposeDraft<T>>("save_compose_draft", {
-      draftKey,
-      ownerType,
-      ownerId,
-      value,
-      ...(expectedRevision === undefined ? {} : { expectedRevision }),
-    });
+    return asWebModel<PersistedComposeDraft<T>>(
+      native().save_compose_draft({
+        draftKey,
+        ownerType,
+        ownerId,
+        value,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    );
   }
 
   async function deleteComposeDraft(draftKey: string, expectedRevision?: number): Promise<void> {
-    return invoke("delete_compose_draft", {
+    return native().delete_compose_draft({
       draftKey,
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
     });
   }
 
   async function getFileDraft(draftKey: string): Promise<PersistedFileDraft | null> {
-    return invoke<PersistedFileDraft | null>("get_file_draft", { draftKey });
+    return asWebModel<PersistedFileDraft | null>(native().get_file_draft({ draftKey }));
   }
 
   async function saveFileDraft(
@@ -1631,18 +1651,20 @@ export function createWorkflowsApi(client: BackendClient) {
     originalContent: string,
     expectedRevision?: number,
   ): Promise<PersistedFileDraft> {
-    return invoke<PersistedFileDraft>("save_file_draft", {
-      draftKey,
-      environmentId,
-      filePath,
-      content,
-      originalContent,
-      ...(expectedRevision === undefined ? {} : { expectedRevision }),
-    });
+    return asWebModel<PersistedFileDraft>(
+      native().save_file_draft({
+        draftKey,
+        environmentId,
+        filePath,
+        content,
+        originalContent,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    );
   }
 
   async function deleteFileDraft(draftKey: string, expectedRevision?: number): Promise<void> {
-    return invoke("delete_file_draft", {
+    return native().delete_file_draft({
       draftKey,
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
     });
@@ -1673,7 +1695,7 @@ export function createWorkflowsApi(client: BackendClient) {
     trackEnvironmentActivity = false,
     terminalKey?: string,
   ): Promise<TerminalSessionCreateResult> {
-    const result = await invoke<unknown>("create_local_terminal_session", {
+    const result = await terminalsDomain().create_local_terminal_session({
       environmentId,
       cols,
       rows,
@@ -1685,7 +1707,7 @@ export function createWorkflowsApi(client: BackendClient) {
 
   /** Start a local terminal session and begin forwarding output */
   async function startLocalTerminalSession(sessionId: string): Promise<void> {
-    return invoke("start_local_terminal_session", { sessionId });
+    await terminalsDomain().start_local_terminal_session({ sessionId });
   }
 
   /**
@@ -1693,17 +1715,19 @@ export function createWorkflowsApi(client: BackendClient) {
    * actually reached a live PTY; see `terminalWriteWasDelivered`.
    */
   async function writeLocalTerminal(sessionId: string, data: string): Promise<boolean> {
-    return terminalWriteWasDelivered(await invoke("local_terminal_write", { sessionId, data }));
+    return terminalWriteWasDelivered(
+      await terminalsDomain().local_terminal_write({ sessionId, data }),
+    );
   }
 
   /** Resize a local terminal session */
   async function resizeLocalTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
-    return invoke("local_terminal_resize", { sessionId, cols, rows });
+    await terminalsDomain().local_terminal_resize({ sessionId, cols, rows });
   }
 
   /** Close a local terminal session */
   async function closeLocalTerminalSession(sessionId: string): Promise<void> {
-    return invoke("close_local_terminal_session", { sessionId });
+    await terminalsDomain().close_local_terminal_session({ sessionId });
   }
 
   return {

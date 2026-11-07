@@ -898,8 +898,8 @@ describe("direct backend command registry coverage", () => {
       getFileDraft: value("getFileDraft", { draftKey: "file-1" }),
       deleteFileDraft: value("deleteFileDraft", undefined),
       getAgentHandoff: value("getAgentHandoff", { handoffId: "handoff-1" }),
-      deleteAgentHandoff: value("deleteAgentHandoff", undefined),
-      pruneAgentHandoffs: value("pruneAgentHandoffs", 2),
+      deleteAgentHandoff: value("deleteAgentHandoff", true),
+      pruneAgentHandoffs: value("pruneAgentHandoffs", ["handoff-2"]),
     });
 
     const cases: Array<{
@@ -1041,13 +1041,13 @@ describe("direct backend command registry coverage", () => {
       {
         command: "delete_agent_handoff",
         args: { handoffId: "handoff-1", environmentId: "env-1" },
-        expected: undefined,
+        expected: true,
         call: { method: "deleteAgentHandoff", args: ["handoff-1", "env-1"] },
       },
       {
         command: "prune_agent_handoffs",
         args: { environmentId: "env-1", referencedHandoffIds: ["keep-1"] },
-        expected: 2,
+        expected: ["handoff-2"],
         call: { method: "pruneAgentHandoffs", args: ["env-1", ["keep-1"]] },
       },
     ];

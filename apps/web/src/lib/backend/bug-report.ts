@@ -1,3 +1,4 @@
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import type {
   BugReportAgent,
   BugReportClientContext,
@@ -13,6 +14,7 @@ import { clientInvoke, commandBackendClient, type BackendClient } from "./client
  */
 export function createBugReportApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  const native = () => nativeSessions(client);
 
   /** The Report a bug sheet's backend commands, on this view's own backend. */
   const getBugReport = (): Promise<BugReportSnapshot> => invoke("get_bug_report");
@@ -49,7 +51,7 @@ export function createBugReportApi(client: BackendClient) {
     invoke("discard_bug_report", { reportId });
 
   const revealBugReportPath = (path: string): Promise<void> =>
-    invoke("reveal_in_file_manager", { path });
+    native().reveal_in_file_manager({ path });
 
   return {
     getBugReport,

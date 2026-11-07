@@ -1,3 +1,5 @@
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
+import { files } from "@/lib/node-scope/domains/files";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { FileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -15,7 +17,6 @@ import type {
 import { toViewSnapshotRequestArgs, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import {
   isWorktreeReadStamp,
-  WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
   type WorktreeReadStamp,
   type WorktreeSnapshotRevisionsOutcome,
   type WorktreeSnapshotRevisionsSnapshot,
@@ -205,8 +206,17 @@ export interface HostImageFile {
  * service passes its own node's client; the named exports below are this
  * over the window's command scope.
  */
+/**
+ * A call that sends no arguments object, as today's `invoke(command)`: the
+ * legacy adapter sends it bare, version 1 sends `{}` with the envelope.
+ */
+const NO_ARGUMENTS = undefined as unknown as Record<string, never>;
+
 export function createFilesSessionsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  const native = () => nativeSessions(client);
+  // The `files` domain client (plan item 7002).
+  const filesDomain = () => files(client);
 
   /** Get git changes comparing current state against a target branch */
   async function getGitStatus(
@@ -239,7 +249,7 @@ export function createFilesSessionsApi(client: BackendClient) {
 
   /** Get workspace file tree from a container */
   async function getFileTree(containerId: string): Promise<FileNode[]> {
-    return invoke<FileNode[]>("get_file_tree", { containerId });
+    return (await filesDomain().get_file_tree({ containerId })) as FileNode[];
   }
 
   async function getFileTreeSnapshot(
@@ -247,7 +257,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     knownDigest?: string,
     options?: SnapshotReadOptions,
   ): Promise<ConditionalSnapshot<FileNode[]>> {
-    const response = await invoke<unknown>("get_file_tree", {
+    const response: unknown = await filesDomain().get_file_tree({
       containerId,
       knownDigest: knownDigest ?? "",
       ...refreshArgs(options),
@@ -261,7 +271,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     directory: string,
     knownDigest?: string,
   ): Promise<ConditionalSnapshot<FileSubtree>> {
-    const response = await invoke<unknown>("get_file_subtree", {
+    const response: unknown = await filesDomain().get_file_subtree({
       containerId,
       directory,
       knownDigest: knownDigest ?? "",
@@ -271,7 +281,7 @@ export function createFilesSessionsApi(client: BackendClient) {
 
   /** Read a file from inside a container */
   async function readContainerFile(containerId: string, filePath: string): Promise<FileContent> {
-    return invoke<FileContent>("read_container_file", { containerId, filePath });
+    return filesDomain().read_container_file({ containerId, filePath });
   }
 
   /** Read a file from a specific git branch inside a container
@@ -282,16 +292,12 @@ export function createFilesSessionsApi(client: BackendClient) {
     filePath: string,
     branch: string,
   ): Promise<FileContent | null> {
-    return invoke<FileContent | null>("read_file_at_branch", {
-      containerId,
-      filePath,
-      branch,
-    });
+    return filesDomain().read_file_at_branch({ containerId, filePath, branch });
   }
 
   /** Read a binary file from inside a container as base64 */
   async function readContainerFileBase64(containerId: string, filePath: string): Promise<string> {
-    return invoke<string>("read_container_file_base64", { containerId, filePath });
+    return filesDomain().read_container_file_base64({ containerId, filePath });
   }
 
   /** Write a file to inside a container from base64-encoded data */
@@ -305,7 +311,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     base64Data: string,
     expected?: FileWritePrecondition,
   ): Promise<string> {
-    return invoke<string>("write_container_file", {
+    return filesDomain().write_container_file({
       containerId,
       filePath,
       base64Data,
@@ -318,10 +324,9 @@ export function createFilesSessionsApi(client: BackendClient) {
     environmentId: string,
     attachments: InitialPromptAttachmentWrite[],
   ): Promise<SavedInitialPromptAttachment[]> {
-    return invoke<SavedInitialPromptAttachment[]>("write_initial_prompt_attachments", {
-      environmentId,
-      attachments,
-    });
+    return [
+      ...(await filesDomain().write_initial_prompt_attachments({ environmentId, attachments })),
+    ];
   }
 
   /** Restore a container file to its state at the target branch or commit. */
@@ -330,12 +335,12 @@ export function createFilesSessionsApi(client: BackendClient) {
     filePath: string,
     targetBranch: string,
   ): Promise<string> {
-    return invoke<string>("revert_container_file", { environmentId, filePath, targetBranch });
+    return filesDomain().revert_container_file({ environmentId, filePath, targetBranch });
   }
 
   /** Delete a container file and stage the deletion when it is tracked by Git. */
   async function deleteContainerFile(environmentId: string, filePath: string): Promise<string> {
-    return invoke<string>("delete_container_file", { environmentId, filePath });
+    return filesDomain().delete_container_file({ environmentId, filePath });
   }
 
   /** Move a container file into an existing workspace directory. */
@@ -344,7 +349,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     sourcePath: string,
     destinationDirectory: string,
   ): Promise<string> {
-    return invoke<string>("move_container_file", {
+    return filesDomain().move_container_file({
       environmentId,
       sourcePath,
       destinationDirectory,
@@ -357,7 +362,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     filePath: string,
     newName: string,
   ): Promise<string> {
-    return invoke<string>("rename_container_file", { environmentId, filePath, newName });
+    return filesDomain().rename_container_file({ environmentId, filePath, newName });
   }
 
   /** Create an empty folder inside an existing container workspace directory. */
@@ -366,7 +371,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     parentDirectory: string,
     folderName: string,
   ): Promise<string> {
-    return invoke<string>("create_container_folder", {
+    return filesDomain().create_container_folder({
       environmentId,
       parentDirectory,
       folderName,
@@ -380,7 +385,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     fileName: string,
     base64Data: string,
   ): Promise<string> {
-    return invoke<string>("copy_external_file", {
+    return filesDomain().copy_external_file({
       environmentId,
       destinationDirectory,
       fileName,
@@ -454,12 +459,11 @@ export function createFilesSessionsApi(client: BackendClient) {
   async function getWorktreeSnapshotRevisions(
     known?: ViewRevisionStamp,
   ): Promise<WorktreeSnapshotRevisionsSnapshot | WorktreeSnapshotRevisionsOutcome> {
-    if (!known)
-      return invoke<WorktreeSnapshotRevisionsSnapshot>(WORKTREE_SNAPSHOT_REVISIONS_COMMAND);
-    return invoke<WorktreeSnapshotRevisionsSnapshot | WorktreeSnapshotRevisionsOutcome>(
-      WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
-      { ...toViewSnapshotRequestArgs(known) },
+    // Without a known position, today's call has no arguments object.
+    const answer = await filesDomain().get_worktree_snapshot_revisions(
+      known ? { ...toViewSnapshotRequestArgs(known) } : NO_ARGUMENTS,
     );
+    return answer as WorktreeSnapshotRevisionsSnapshot | WorktreeSnapshotRevisionsOutcome;
   }
 
   /** Forces an immediate rescan, e.g. after an operation that changed the tree. */
@@ -548,7 +552,7 @@ export function createFilesSessionsApi(client: BackendClient) {
 
   /** Get file tree from a local environment (worktree path) */
   async function getLocalFileTree(worktreePath: string): Promise<FileNode[]> {
-    return invoke<FileNode[]>("get_local_file_tree", { worktreePath });
+    return (await filesDomain().get_local_file_tree({ worktreePath })) as FileNode[];
   }
 
   async function getLocalFileTreeSnapshot(
@@ -556,7 +560,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     knownDigest?: string,
     options?: SnapshotReadOptions,
   ): Promise<ConditionalSnapshot<FileNode[]>> {
-    const response = await invoke<unknown>("get_local_file_tree", {
+    const response: unknown = await filesDomain().get_local_file_tree({
       worktreePath,
       knownDigest: knownDigest ?? "",
       ...refreshArgs(options),
@@ -570,7 +574,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     directory: string,
     knownDigest?: string,
   ): Promise<ConditionalSnapshot<FileSubtree>> {
-    const response = await invoke<unknown>("get_local_file_subtree", {
+    const response: unknown = await filesDomain().get_local_file_subtree({
       worktreePath,
       directory,
       knownDigest: knownDigest ?? "",
@@ -580,7 +584,7 @@ export function createFilesSessionsApi(client: BackendClient) {
 
   /** Read a file from a local environment (worktree path) */
   async function readLocalFile(worktreePath: string, filePath: string): Promise<FileContent> {
-    return invoke<FileContent>("read_local_file", { worktreePath, filePath });
+    return filesDomain().read_local_file({ worktreePath, filePath });
   }
 
   /** Read a file from a specific git branch in a local environment
@@ -591,11 +595,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     filePath: string,
     branch: string,
   ): Promise<FileContent | null> {
-    return invoke<FileContent | null>("read_local_file_at_branch", {
-      worktreePath,
-      filePath,
-      branch,
-    });
+    return filesDomain().read_local_file_at_branch({ worktreePath, filePath, branch });
   }
 
   /** Write a file to a local environment (worktree path) from base64-encoded data */
@@ -606,7 +606,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     base64Data: string,
     expected?: FileWritePrecondition,
   ): Promise<string> {
-    return invoke<string>("write_local_file", {
+    return filesDomain().write_local_file({
       worktreePath,
       filePath,
       base64Data,
@@ -620,12 +620,12 @@ export function createFilesSessionsApi(client: BackendClient) {
     filePath: string,
     targetBranch: string,
   ): Promise<string> {
-    return invoke<string>("revert_local_file", { environmentId, filePath, targetBranch });
+    return filesDomain().revert_local_file({ environmentId, filePath, targetBranch });
   }
 
   /** Delete a local file and stage the deletion when it is tracked by Git. */
   async function deleteLocalFile(environmentId: string, filePath: string): Promise<string> {
-    return invoke<string>("delete_local_file", { environmentId, filePath });
+    return filesDomain().delete_local_file({ environmentId, filePath });
   }
 
   /** Move a local-worktree file into an existing workspace directory. */
@@ -634,7 +634,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     sourcePath: string,
     destinationDirectory: string,
   ): Promise<string> {
-    return invoke<string>("move_local_file", {
+    return filesDomain().move_local_file({
       environmentId,
       sourcePath,
       destinationDirectory,
@@ -647,7 +647,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     filePath: string,
     newName: string,
   ): Promise<string> {
-    return invoke<string>("rename_local_file", { environmentId, filePath, newName });
+    return filesDomain().rename_local_file({ environmentId, filePath, newName });
   }
 
   /** Create an empty folder inside an existing local-worktree directory. */
@@ -656,7 +656,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     parentDirectory: string,
     folderName: string,
   ): Promise<string> {
-    return invoke<string>("create_local_folder", {
+    return filesDomain().create_local_folder({
       environmentId,
       parentDirectory,
       folderName,
@@ -798,62 +798,64 @@ export function createFilesSessionsApi(client: BackendClient) {
     tabId: string,
     sessionType: SessionType,
   ): Promise<Session> {
-    return invoke<Session>("create_session", {
-      environmentId,
-      containerId,
-      tabId,
-      sessionType,
-    });
+    return asWebModel<Session>(
+      native().create_session({
+        environmentId,
+        containerId,
+        tabId,
+        sessionType,
+      }),
+    );
   }
 
   /** Get a single session by ID */
   async function getSession(sessionId: string): Promise<Session | null> {
-    return invoke<Session | null>("get_session", { sessionId });
+    return asWebModel<Session | null>(native().get_session({ sessionId }));
   }
 
   /** Get all sessions for an environment */
   async function getSessionsByEnvironment(environmentId: string): Promise<Session[]> {
-    return invoke<Session[]>("get_sessions_by_environment", { environmentId });
+    return asWebModel<Session[]>(native().get_sessions_by_environment({ environmentId }));
   }
 
   /** Update session status (connected/disconnected) */
   async function updateSessionStatus(sessionId: string, status: SessionStatus): Promise<Session> {
-    return invoke<Session>("update_session_status", { sessionId, status });
+    return asWebModel<Session>(native().update_session_status({ sessionId, status }));
   }
 
   /** Update session's last activity timestamp */
   async function updateSessionActivity(sessionId: string): Promise<Session> {
-    return invoke<Session>("update_session_activity", { sessionId });
+    return asWebModel<Session>(native().update_session_activity({ sessionId }));
   }
 
   /** Delete a session */
   async function deleteSession(sessionId: string): Promise<void> {
-    return invoke("delete_session", { sessionId });
+    return native().delete_session({ sessionId });
   }
 
   /** Delete all sessions for an environment */
   async function deleteSessionsByEnvironment(environmentId: string): Promise<string[]> {
-    return invoke<string[]>("delete_sessions_by_environment", { environmentId });
+    return native().delete_sessions_by_environment({ environmentId });
   }
 
   /** Rename a session */
   async function renameSession(sessionId: string, name: string | null): Promise<Session> {
-    return invoke<Session>("rename_session", { sessionId, name });
+    return asWebModel<Session>(native().rename_session({ sessionId, name }));
   }
 
   /** Mark all sessions for an environment as disconnected */
   async function disconnectEnvironmentSessions(environmentId: string): Promise<Session[]> {
-    return invoke<Session[]>("disconnect_environment_sessions", { environmentId });
+    return asWebModel<Session[]>(native().disconnect_environment_sessions({ environmentId }));
   }
 
   /** Save a session's terminal buffer to a separate file */
   async function saveSessionBuffer(sessionId: string, buffer: string): Promise<void> {
-    return invoke("save_session_buffer", { sessionId, buffer });
+    return native().save_session_buffer({ sessionId, buffer });
   }
 
   /** Load a session's terminal buffer from file */
   async function loadSessionBuffer(sessionId: string): Promise<string | null> {
-    return invoke<string | null>("load_session_buffer", { sessionId });
+    return native().load_session_buffer({ sessionId });
   }
 
   /** Sync sessions for an environment with container state */
@@ -861,24 +863,26 @@ export function createFilesSessionsApi(client: BackendClient) {
     environmentId: string,
     containerRunning: boolean,
   ): Promise<Session[]> {
-    return invoke<Session[]>("sync_sessions_with_container", {
-      environmentId,
-      containerRunning,
-    });
+    return asWebModel<Session[]>(
+      native().sync_sessions_with_container({
+        environmentId,
+        containerRunning,
+      }),
+    );
   }
 
   /** Reorder sessions within an environment */
   async function reorderSessions(environmentId: string, sessionIds: string[]): Promise<Session[]> {
-    return invoke<Session[]>("reorder_sessions", { environmentId, sessionIds });
+    return asWebModel<Session[]>(native().reorder_sessions({ environmentId, sessionIds }));
   }
 
   /** Clean up orphaned buffer files (buffers without corresponding sessions) */
   async function cleanupOrphanedBuffers(): Promise<string[]> {
-    return invoke<string[]>("cleanup_orphaned_buffers", {});
+    return native().cleanup_orphaned_buffers({});
   }
 
   async function getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
-    return invoke<PersistedPaneLayout | null>("get_pane_layout", { environmentId });
+    return asWebModel<PersistedPaneLayout | null>(native().get_pane_layout({ environmentId }));
   }
 
   async function savePaneLayout(
@@ -886,11 +890,13 @@ export function createFilesSessionsApi(client: BackendClient) {
     layout: PersistedPaneLayoutInput,
     expectedRevision: number,
   ): Promise<PersistedPaneLayout> {
-    return invoke<PersistedPaneLayout>("save_pane_layout", {
-      environmentId,
-      layout,
-      expectedRevision,
-    });
+    return asWebModel<PersistedPaneLayout>(
+      native().save_pane_layout({
+        environmentId,
+        layout,
+        expectedRevision,
+      }),
+    );
   }
 
   async function applyPaneLayoutIntent(
@@ -899,16 +905,18 @@ export function createFilesSessionsApi(client: BackendClient) {
     desiredLayout: PersistedPaneLayoutInput,
     selectionIntent?: import("@orkestrator/protocol/pane-layout-merge").PaneLayoutSelectionIntent,
   ): Promise<PersistedPaneLayout> {
-    return invoke<PersistedPaneLayout>("apply_pane_layout_intent", {
-      environmentId,
-      baseLayout,
-      desiredLayout,
-      ...(selectionIntent ? { selectionIntent } : {}),
-    });
+    return asWebModel<PersistedPaneLayout>(
+      native().apply_pane_layout_intent({
+        environmentId,
+        baseLayout,
+        desiredLayout,
+        ...(selectionIntent ? { selectionIntent } : {}),
+      }),
+    );
   }
 
   async function deletePaneLayout(environmentId: string, expectedRevision?: number): Promise<void> {
-    return invoke("delete_pane_layout", {
+    return native().delete_pane_layout({
       environmentId,
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
     });

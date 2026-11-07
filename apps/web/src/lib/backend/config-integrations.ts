@@ -1,3 +1,4 @@
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import type {
   DatabaseStats,
   DiagnosticsBundleChunk,
@@ -310,6 +311,7 @@ export interface MergeEnvironmentPrResult extends MergePrResult {
  */
 export function createConfigIntegrationsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
 
   /**
@@ -637,11 +639,11 @@ export function createConfigIntegrationsApi(client: BackendClient) {
       window.open(url, "_blank", "noopener,noreferrer");
       return;
     }
-    return invoke("open_in_browser", { url });
+    return native().open_in_browser({ url });
   }
 
   async function revealInFileManager(path: string): Promise<void> {
-    return invoke("reveal_in_file_manager", { path });
+    return native().reveal_in_file_manager({ path });
   }
 
   async function getEnvironmentPrUrl(environmentId: string): Promise<string | null> {

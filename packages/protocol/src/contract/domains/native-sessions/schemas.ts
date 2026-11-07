@@ -1,0 +1,458 @@
+/**
+ * Result shapes of the `native-sessions` commands (plan item 7001), derived
+ * from the backend's model types (`apps/backend/src/core/models.ts`) and the
+ * protocol's native-agent types (`native-agent.ts`, `agent-interactions.ts`,
+ * `suborks.ts`, `pane-layout.ts`, `resource-events.ts`). Plan item 7010
+ * converges the models on these.
+ *
+ * Model-shaped records are **open structs** ({@link openStruct}): the fields
+ * listed are checked and typed, and every other key the backend sends is
+ * kept. A domain client decodes results tolerantly, and `Schema.Struct` drops
+ * the keys it does not declare, so a closed struct would silently strip the
+ * many optional fields a projection or a session record carries. The listed
+ * fields are the ones a reader routes on; deeper parts (transcript rows,
+ * composer catalogues, interaction payloads) stay open objects until 7010.
+ *
+ * Values a newer backend may extend (providers, phases, statuses) are
+ * `Schema.String`, not literals, so an older client still reads them.
+ *
+ * A record's fields are optional (`optionalKey`) apart from the
+ * discriminators a reader branches on (`outcome`, `status`) and fields the
+ * registering handler itself always writes: the services behind these
+ * commands are faked in tests with partial records, and results are
+ * validated there. A field's type is still checked whenever it is present.
+ * Which fields are always present is converged with the models in 7010.
+ *
+ * Browser-safe.
+ */
+import * as Schema from "effect/Schema";
+
+/**
+ * A struct that keeps the keys it does not declare. Its static type is the
+ * declared struct's, so a model interface is assignable to it; at run time it
+ * is `StructWithRest` with an `unknown` record, which decodes and encodes the
+ * declared fields and passes every other key through.
+ */
+export function openStruct<const Fields extends Schema.Struct.Fields>(
+  fields: Fields,
+): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
+  return Schema.StructWithRest(Schema.Struct(fields), [
+    Schema.Record(Schema.String, Schema.Unknown),
+  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
+}
+
+/** Any JSON object, every key kept. */
+export const OpenObject = openStruct({});
+
+const optionalString = Schema.optional(Schema.String);
+const optionalBoolean = Schema.optional(Schema.Boolean);
+const optionalNumber = Schema.optional(Schema.Finite);
+const optionalObject = Schema.optional(OpenObject);
+const StringArray = Schema.Array(Schema.String);
+
+/** `string | number`, as `generation` is. */
+export const Generation = Schema.Union([Schema.String, Schema.Finite]);
+
+// --- Terminal sessions, buffers and pane layouts ------------------------------
+
+/** `Session` (models.ts): one terminal tab's session record. */
+export const TerminalSessionSchema = openStruct({
+  id: Schema.optional(Schema.String),
+  environmentId: Schema.optional(Schema.String),
+  containerId: Schema.optional(Schema.String),
+  tabId: Schema.optional(Schema.String),
+  sessionType: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
+  lastActivityAt: Schema.optional(Schema.String),
+  name: optionalString,
+  order: Schema.optional(Schema.Finite),
+});
+
+/** `PersistedPaneLayout` (models.ts). `root` is the renderer's own PaneNode tree. */
+export const PaneLayoutSchema = openStruct({
+  version: Schema.optional(Schema.Finite),
+  environmentId: Schema.optional(Schema.String),
+  containerId: Schema.optional(Schema.NullOr(Schema.String)),
+  activePaneId: Schema.optional(Schema.String),
+  root: Schema.optional(Schema.Unknown),
+  updatedAt: Schema.optional(Schema.String),
+  revision: Schema.optional(Schema.Finite),
+});
+
+/**
+ * `ConditionalResourceSnapshot<T>` (resource-events.ts): the answer to a read
+ * that sent `knownManifestGeneration` and `knownResourceRevision`.
+ */
+export function conditionalSnapshotOf<S extends Schema.Top>(snapshot: S) {
+  return Schema.Union([
+    Schema.Struct({
+      status: Schema.Literal("unchanged"),
+      generation: Schema.String,
+      revision: Schema.String,
+    }),
+    Schema.Struct({
+      status: Schema.Literal("changed"),
+      generation: Schema.String,
+      revision: Schema.String,
+      snapshot,
+    }),
+  ]);
+}
+
+/** One `test_domain_resolution` answer. */
+export const DomainResolutionSchema = Schema.Struct({
+  domain: Schema.String,
+  valid: Schema.Boolean,
+  resolvable: Schema.Boolean,
+  ips: StringArray,
+  error: Schema.NullOr(Schema.String),
+});
+
+// --- Prompt queues, drafts and handoffs ---------------------------------------
+
+/** `PersistedPromptQueue` (models.ts). Queued messages are each agent's own shape. */
+export const PromptQueueSchema = openStruct({
+  queueKey: Schema.optional(Schema.String),
+  environmentId: Schema.optional(Schema.String),
+  messages: Schema.optional(Schema.Array(Schema.Unknown)),
+  inFlight: optionalObject,
+  dispatchError: optionalObject,
+  jobReceipts: Schema.optional(Schema.Array(OpenObject)),
+  removedOrigins: Schema.optional(Schema.Array(OpenObject)),
+  updatedAt: Schema.optional(Schema.String),
+  revision: Schema.optional(Schema.Finite),
+});
+
+/** `remove_prompt_queue_message`: the removed message (or `null`) and the queue after it. */
+export const PromptQueueRemovalSchema = openStruct({
+  removed: Schema.optional(Schema.Unknown),
+  queue: Schema.optional(Schema.NullOr(PromptQueueSchema)),
+});
+
+/** `PersistedComposeDraft` (models.ts). `value` is each composer's own shape. */
+export const ComposeDraftSchema = openStruct({
+  draftKey: Schema.optional(Schema.String),
+  ownerType: Schema.optional(Schema.String),
+  ownerId: Schema.optional(Schema.String),
+  value: Schema.optional(Schema.Unknown),
+  sourcePromptQueue: Schema.optional(
+    Schema.Struct({ queueKey: Schema.String, messageId: Schema.String }),
+  ),
+  /** Set when a legacy browser note was saved as references to annotation threads. */
+  webAnnotationMigration: Schema.optional(
+    Schema.Struct({ references: Schema.Array(Schema.Unknown) }),
+  ),
+  updatedAt: Schema.optional(Schema.String),
+  revision: Schema.optional(Schema.Finite),
+});
+
+/** `PersistedFileDraft` (models.ts). */
+export const FileDraftSchema = openStruct({
+  draftKey: Schema.optional(Schema.String),
+  environmentId: Schema.optional(Schema.String),
+  filePath: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  originalContent: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+  revision: Schema.optional(Schema.Finite),
+});
+
+/** `PersistedAgentHandoff` (models.ts). `snapshot` is the renderer-validated transcript. */
+export const AgentHandoffSchema = openStruct({
+  version: Schema.optional(Schema.Finite),
+  id: Schema.optional(Schema.String),
+  environmentId: Schema.optional(Schema.String),
+  snapshot: Schema.optional(Schema.Unknown),
+  createdAt: Schema.optional(Schema.String),
+});
+
+/** `AGENT_HANDOFF_CAPABILITIES` (backend `agent-handoffs.ts`). */
+export const AgentHandoffCapabilitiesSchema = openStruct({
+  create: optionalBoolean,
+  delivery: optionalBoolean,
+  pruning: optionalBoolean,
+});
+
+/** `EnvironmentHydrationPart<T>` (environment-hydration.ts). */
+const HydrationPartSchema = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("ok"), records: Schema.Array(OpenObject) }),
+  Schema.Struct({ status: Schema.Literal("failed") }),
+]);
+
+/** `EnvironmentHydrationBatch` (environment-hydration.ts). */
+export const EnvironmentHydrationBatchSchema = Schema.Struct({
+  environments: Schema.Array(
+    Schema.Struct({
+      environmentId: Schema.String,
+      promptQueues: HydrationPartSchema,
+      multiReviewWorkflows: HydrationPartSchema,
+    }),
+  ),
+});
+
+// --- Native agent sessions ----------------------------------------------------
+
+/** `PersistedNativeAgentSession` (models.ts): the durable record of one native session. */
+const nativeAgentSessionFields = {
+  version: Schema.optional(Schema.Finite),
+  key: Schema.optional(Schema.String),
+  environmentId: Schema.optional(Schema.String),
+  agent: Schema.optional(Schema.String),
+  logicalSessionKey: Schema.optional(Schema.String),
+  providerSessionId: Schema.optional(Schema.String),
+  origin: Schema.optional(Schema.Unknown),
+  interactionPolicy: Schema.optional(Schema.Unknown),
+  owner: optionalObject,
+  controls: optionalObject,
+  dispatchedRequestIds: Schema.optional(StringArray),
+  pendingDispatch: optionalObject,
+  retiredDispatch: optionalObject,
+  goal: optionalObject,
+  createdAt: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+};
+
+export const NativeAgentSessionSchema = openStruct(nativeAgentSessionFields);
+
+/** `NativeAgentModelSubstitution` (native-agent.ts). */
+export const ModelSubstitutionSchema = Schema.Struct({
+  requestedModelId: Schema.String,
+  modelId: Schema.String,
+  message: Schema.String,
+});
+
+/** `EnsuredNativeAgentSession`: the record plus a substitution reported to the caller only. */
+export const EnsuredNativeAgentSessionSchema = openStruct({
+  ...nativeAgentSessionFields,
+  modelSubstitution: Schema.optional(ModelSubstitutionSchema),
+});
+
+/**
+ * `NativeAgentSessionProjection` (native-agent.ts): the interactive view of
+ * one session. `messages` are the provider-neutral transcript rows, which the
+ * renderer validates itself.
+ */
+export const NativeAgentProjectionSchema = openStruct({
+  platform: Schema.optional(Schema.String),
+  environmentId: Schema.optional(Schema.String),
+  sessionId: optionalString,
+  title: optionalString,
+  shareUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  connection: Schema.optional(Schema.String),
+  turn: Schema.optional(openStruct({ phase: Schema.String })),
+  messages: Schema.optional(Schema.Array(Schema.Unknown)),
+  messageWindow: optionalObject,
+  interactions: Schema.optional(Schema.Array(OpenObject)),
+  composerControls: Schema.optional(Schema.Array(OpenObject)),
+  composer: optionalObject,
+  capabilities: Schema.optional(OpenObject),
+  queue: optionalObject,
+  notices: Schema.optional(Schema.Array(OpenObject)),
+  recoverableDispatch: optionalObject,
+  suggestedPrompt: optionalString,
+  revision: Schema.optional(Schema.Finite),
+  generation: Schema.optional(Generation),
+  cursor: optionalString,
+});
+
+export const NullableProjectionSchema = Schema.NullOr(NativeAgentProjectionSchema);
+
+/** `NativeAgentDispatchOutcome` (native-agent.ts): accepted, rejected or unknown. */
+export const DispatchOutcomeSchema = openStruct({
+  outcome: Schema.String,
+  requestId: optionalString,
+  error: optionalString,
+  instructionsIgnored: optionalBoolean,
+  requestIdRetired: optionalBoolean,
+  origin: optionalString,
+});
+
+/** `NativeAgentSessionActionOutcome` (native-agent.ts), including a verified steer refusal. */
+export const SessionActionOutcomeSchema = openStruct({
+  outcome: Schema.String,
+  instructionsIgnored: optionalBoolean,
+  shareUrl: optionalString,
+  preview: Schema.optional(Schema.Unknown),
+  requestId: optionalString,
+});
+
+/** `AgentInteractionApplyOutcome` (agent-interactions.ts). */
+export const InteractionApplyOutcomeSchema = openStruct({
+  result: Schema.optional(Schema.String),
+  interactionId: Schema.optional(Schema.String),
+  sessionId: Schema.optional(Schema.String),
+  revision: Schema.optional(Schema.Finite),
+});
+
+/** `NativeAgentResumeEntry` (native-agent.ts). */
+export const ResumeEntrySchema = openStruct({
+  sessionId: Schema.optional(Schema.String),
+  title: optionalString,
+  createdAt: optionalString,
+  updatedAt: optionalString,
+  status: optionalString,
+  detail: optionalString,
+  parentId: optionalString,
+  branchLabel: optionalString,
+  archived: optionalBoolean,
+});
+
+/** `NativeAgentForkOutcome` (native-agent.ts). */
+export const ForkOutcomeSchema = openStruct({
+  sessionId: Schema.optional(Schema.String),
+  controls: optionalObject,
+  title: optionalString,
+  draft: optionalString,
+});
+
+/** `NativeAgentAuthStatus` (native-agent.ts). */
+export const AuthStatusSchema = openStruct({
+  state: Schema.optional(Schema.String),
+  pendingSignIn: Schema.optional(
+    Schema.NullOr(
+      openStruct({ url: Schema.String, code: Schema.String, expiresAt: Schema.Finite }),
+    ),
+  ),
+  account: optionalObject,
+  providers: Schema.optional(Schema.Array(OpenObject)),
+  signIn: optionalObject,
+  signOut: optionalBoolean,
+});
+
+/** `NativeAgentToolDetails` (native-agent.ts): heavy tool fields read on expansion. */
+export const ToolDetailsSchema = openStruct({
+  detailRef: Schema.optional(Schema.String),
+  toolOutput: optionalString,
+  toolError: optionalString,
+  fileDataUrl: optionalString,
+});
+
+/** `refresh_native_agent_commands`: the outcome and the projection after it. */
+export const CommandRefreshResultSchema = openStruct({
+  outcome: Schema.String,
+  message: optionalString,
+  projection: Schema.optional(NullableProjectionSchema),
+});
+
+/** `GoalCommandResult` (backend `native-agent-goal-service.ts`). */
+export const GoalCommandResultSchema = openStruct({
+  message: Schema.optional(Schema.String),
+  goal: optionalObject,
+});
+
+/** The goal detail `get_native_agent_goal` reads from the session record. */
+export const GoalDetailSchema = openStruct({
+  goal: optionalObject,
+  history: Schema.optional(Schema.Array(OpenObject)),
+});
+
+/** `NativeAgentSuborkTranscript`: one subork's stored transcript, or why there is none. */
+export const SuborkTranscriptSchema = openStruct({
+  status: Schema.String,
+  messages: Schema.optional(Schema.Array(Schema.Unknown)),
+  agent: optionalString,
+  startIndex: optionalNumber,
+  messageCount: optionalNumber,
+  truncated: optionalBoolean,
+  transcript: Schema.optional(Schema.Unknown),
+});
+
+/** `AgentInteractionObservation` (backend `native-agent-service-shared.ts`). */
+export const InteractionObservationSchema = openStruct({
+  provider: Schema.optional(Schema.String),
+  kind: Schema.optional(Schema.String),
+  workflowSurface: Schema.optional(Schema.Unknown),
+  phase: Schema.optional(Schema.String),
+  firstDetectedAt: Schema.optional(Schema.Finite),
+  lastDetectedAt: Schema.optional(Schema.Finite),
+  count: Schema.optional(Schema.Finite),
+  providerState: Schema.optional(Schema.String),
+  eventualOutcome: optionalString,
+  eventualAt: optionalNumber,
+});
+
+/** `ViewRevisionStamp` (view-sync.ts). */
+export const ViewRevisionStampSchema = Schema.Struct({
+  generation: Schema.String,
+  revision: Schema.Finite,
+});
+
+const VersionList = Schema.Array(Schema.Int);
+
+/**
+ * `get_native_agent_sync_capabilities`: the sync protocols the backend
+ * speaks. Folded into `native-sessions` version 1; kept for pre-contract
+ * clients.
+ */
+export const SyncCapabilitiesSchema = openStruct({
+  projectionSyncVersions: VersionList,
+  historyPagingVersions: VersionList,
+  progressiveViewVersions: Schema.optional(VersionList),
+  observationEventVersions: Schema.optional(VersionList),
+  transcriptPatchVersions: Schema.optional(VersionList),
+  liveUpdateVersions: Schema.optional(VersionList),
+  observation: Schema.optional(ViewRevisionStampSchema),
+});
+
+/** `NativeAgentViewIdentity` (native-agent.ts). */
+export const ViewIdentitySchema = openStruct({
+  backendInstanceId: Schema.optional(Schema.String),
+  environmentId: Schema.optional(Schema.String),
+  platform: Schema.optional(Schema.String),
+  logicalSessionKey: Schema.optional(Schema.String),
+  providerSessionId: Schema.optional(Schema.String),
+  sourceGeneration: Schema.optional(Generation),
+});
+
+/**
+ * One progressive view update (`NativeAgentDomainUpdate<T>` and the
+ * transcript's `delta`, native-agent.ts): `status` says which fields are
+ * present (`snapshot`: `token` and `value`; `unchanged`: `token` and
+ * `identity`; `delta`: `baseToken`, `token`, `identity` and `delta`;
+ * `missing`; `unavailable`: `retryable`), and the renderer's own
+ * `isNativeAgent*Update` guards check the combination.
+ */
+export const ViewUpdateSchema = openStruct({
+  viewVersion: Schema.optional(Schema.Finite),
+  status: Schema.String,
+  token: optionalString,
+  baseToken: optionalString,
+  value: optionalObject,
+  identity: Schema.optional(ViewIdentitySchema),
+  delta: optionalObject,
+  resetReason: optionalString,
+  retryable: optionalBoolean,
+  error: optionalString,
+});
+
+/** `NativeAgentLiveUpdate` (native-agent.ts): transcript and state in one read. */
+export const LiveUpdateSchema = openStruct({
+  viewVersion: Schema.optional(Schema.Finite),
+  transcript: Schema.optional(ViewUpdateSchema),
+  state: Schema.optional(ViewUpdateSchema),
+});
+
+/** `NativeAgentProjectionUpdate` (native-agent.ts), the sync-v1 projection read. */
+export const ProjectionUpdateSchema = openStruct({
+  syncVersion: Schema.optional(Schema.Finite),
+  status: Schema.String,
+  token: optionalString,
+  baseToken: optionalString,
+  projection: Schema.optional(NativeAgentProjectionSchema),
+  delta: optionalObject,
+  historyCursor: optionalString,
+  historyEpoch: optionalString,
+  historyComplete: optionalBoolean,
+  resetReason: optionalString,
+});
+
+/** `NativeAgentMessagePage` (native-agent.ts): one page of older transcript rows. */
+export const MessagePageSchema = openStruct({
+  syncVersion: Schema.optional(Schema.Finite),
+  messages: Schema.optional(Schema.Array(Schema.Unknown)),
+  historyEpoch: Schema.optional(Schema.String),
+  nextCursor: optionalString,
+  complete: Schema.optional(Schema.Boolean),
+  truncated: Schema.optional(Schema.Boolean),
+});

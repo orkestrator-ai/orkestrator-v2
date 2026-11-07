@@ -1,7 +1,7 @@
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { PersistedAgentHandoff } from "@/types";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 // --- Agent Handoffs ("Continue in…") ---
 
@@ -31,24 +31,18 @@ export interface AgentHandoffCapabilities {
   pruning: boolean;
 }
 
-const LEGACY_CAPABILITIES: AgentHandoffCapabilities = {
-  create: false,
-  delivery: false,
-  pruning: false,
-};
-
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
  * service passes its own node's client; the named exports below are this
  * over the window's command scope.
  */
 export function createAgentHandoffsApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const native = () => nativeSessions(client);
 
   async function getAgentHandoff<T = unknown>(
     handoffId: string,
   ): Promise<PersistedAgentHandoff<T> | null> {
-    return invoke<PersistedAgentHandoff<T> | null>("get_agent_handoff", { handoffId });
+    return asWebModel<PersistedAgentHandoff<T> | null>(native().get_agent_handoff({ handoffId }));
   }
 
   /**
@@ -59,7 +53,7 @@ export function createAgentHandoffsApi(client: BackendClient) {
   async function createAgentHandoff(
     input: CreateAgentHandoffInput,
   ): Promise<PersistedAgentHandoff> {
-    return invoke<PersistedAgentHandoff>("create_agent_handoff", { ...input });
+    return asWebModel<PersistedAgentHandoff>(native().create_agent_handoff({ ...input }));
   }
 
   /**
@@ -70,23 +64,9 @@ export function createAgentHandoffsApi(client: BackendClient) {
    * prepend history the backend also prepends.
    */
   async function getAgentHandoffCapabilities(): Promise<AgentHandoffCapabilities> {
-    try {
-      const response = await invoke<unknown>("get_agent_handoff_capabilities");
-      if (!response || typeof response !== "object" || Array.isArray(response)) {
-        throw new Error("Invalid agent handoff capabilities response");
-      }
-      const candidate = response as Record<string, unknown>;
-      return {
-        create: candidate.create === true,
-        delivery: candidate.delivery === true,
-        pruning: candidate.pruning === true,
-      };
-    } catch (error) {
-      if (incompatibility(error, "get_agent_handoff_capabilities")?.code === "unknown-command") {
-        return LEGACY_CAPABILITIES;
-      }
-      throw error;
-    }
+    // Folded into native-sessions version 1; version 0 asks the node and reads
+    // its "Unknown backend command" as a node that does none of it.
+    return native().handoffCapabilities();
   }
 
   /**
@@ -99,7 +79,7 @@ export function createAgentHandoffsApi(client: BackendClient) {
     agent: AgentPlatform;
     logicalSessionKey: string;
   }): Promise<{ pending: boolean }> {
-    return invoke<{ pending: boolean }>("get_native_agent_sign_in_resend", input);
+    return native().get_native_agent_sign_in_resend(input);
   }
 
   /**
@@ -111,7 +91,7 @@ export function createAgentHandoffsApi(client: BackendClient) {
     environmentId: string,
     referencedHandoffIds: string[],
   ): Promise<string[]> {
-    return invoke<string[]>("prune_agent_handoffs", {
+    return native().prune_agent_handoffs({
       environmentId,
       referencedHandoffIds,
     });

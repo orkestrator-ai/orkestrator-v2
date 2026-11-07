@@ -520,8 +520,8 @@ describe("argument schemas", () => {
 });
 
 describe("runContractCi", () => {
-  test("stage 2 is off by default", () => {
-    expect(CONTRACT_CI_STAGE_2).toBe(false);
+  test("stage 2 is on by default (plan item 7001)", () => {
+    expect(CONTRACT_CI_STAGE_2).toBe(true);
     expect(parseArguments([])).toEqual({});
     expect(parseArguments(["--stage2", "--now", "2026-12-16T00:00:00Z"])).toEqual({
       stage2: true,

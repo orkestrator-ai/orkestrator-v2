@@ -1,3 +1,4 @@
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import type { ContainerHostReachability } from "@orkestrator/protocol/container-host-reachability";
 import type { DockerTopology, ImageStatus } from "@orkestrator/protocol/image-manifest";
@@ -298,6 +299,7 @@ export interface GitHubCliLoginProgress {
  */
 export function createDockerSkillsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
 
   async function checkDocker(machine?: AccountMachine): Promise<DockerAvailability> {
@@ -636,7 +638,7 @@ export function createDockerSkillsApi(client: BackendClient) {
   }
 
   async function validateDomains(domains: string[]): Promise<DomainTestResult[]> {
-    return invoke<DomainTestResult[]>("validate_domains", { domains });
+    return asWebModel<DomainTestResult[]>(native().validate_domains({ domains }));
   }
 
   async function addEnvironmentDomains(environmentId: string, domains: string[]): Promise<string> {
@@ -659,12 +661,12 @@ export function createDockerSkillsApi(client: BackendClient) {
 
   /** Open an editor (VS Code or Cursor) attached to a running container */
   async function openInEditor(containerId: string, editor: PreferredEditor): Promise<void> {
-    return invoke("open_in_editor", { containerId, editor });
+    return asWebModel(native().open_in_editor({ containerId, editor }));
   }
 
   /** Open an editor (VS Code or Cursor) for a local directory path */
   async function openLocalInEditor(path: string, editor: PreferredEditor): Promise<void> {
-    return invoke("open_local_in_editor", { path, editor });
+    return asWebModel(native().open_local_in_editor({ path, editor }));
   }
 
   /** Configured environment image: identity and container-contract compatibility. */

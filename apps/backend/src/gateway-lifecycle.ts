@@ -408,6 +408,7 @@ export class GatewayLifecycle {
       client.destroy();
     }
     this.ctx.clients.clear();
+    this.ctx.nodeEventMultiplexer?.closeAll();
     this.ctx.eventReplay.releaseRetained();
     this.ctx.relayedEventReplay.releaseRetained();
     this.ctx.terminalWebSocket.close();

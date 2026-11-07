@@ -553,6 +553,53 @@ describe("two leaves", () => {
     expect(await other.invokeRaw("get_projects")).toEqual({ from: "other.test" });
   });
 
+  test("two relayed leaves warm at once share one main stream request (5005)", async () => {
+    // The real browser NodeClient and transport; both leaves relay (no direct origin).
+    const streams: Array<{ url: URL; signal: AbortSignal | null | undefined }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), window.location.href);
+      if (url.pathname.endsWith("/events")) {
+        streams.push({ url, signal: init?.signal });
+        return new Response(new ReadableStream<Uint8Array>(), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response(JSON.stringify({ result: null }));
+    }) as unknown as typeof fetch;
+    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
+    const href = window.location.href;
+    happyDOM.setURL("https://command.test/");
+    const { registry } = setup({ options: { createClient: undefined } });
+    const [leaf, other] = await Promise.all([registry.acquire(LEAF), registry.acquire(OTHER)]);
+    expect(leaf.route.get().path).toBe("relay");
+    const stopLeaf = leaf.listenRaw("environment-changed", () => {});
+    const stopOther = other.listenRaw("environment-changed", () => {});
+    await waitFor(
+      () => streams.some((stream) => stream.url.pathname === "/__orkestrator/nodes/events"),
+      "the shared request",
+    );
+    const shared = streams.find((stream) => stream.url.pathname === "/__orkestrator/nodes/events")!;
+    const query = shared.url.searchParams;
+    expect(query.get("nodes")?.split(",").sort()).toEqual([LEAF, OTHER].sort());
+    // Each node names the workspace this window opened for it.
+    expect([query.get(`workspace.${LEAF}`), query.get(`workspace.${OTHER}`)].sort()).toEqual([
+      "w1",
+      "w2",
+    ]);
+    // No leaf keeps a stream of its own once they share.
+    await waitFor(
+      () =>
+        streams
+          .filter((stream) => stream.url.pathname.endsWith("/__orkestrator/events"))
+          .every((stream) => stream.signal?.aborted),
+      "per-node streams closed",
+    );
+    stopLeaf();
+    stopOther();
+    registry.dispose();
+    happyDOM.setURL(href);
+  });
+
   test("a leaf opens as a leaf scope of the window, and disposing the scope releases it", async () => {
     const { registry, command } = setup();
     const windowScope = new WindowScope();

@@ -332,6 +332,17 @@ export class NodePortal {
     return { closed: true };
   }
 
+  /**
+   * Whether `workspaceId` is open on this command node for `nodeId` and not
+   * past its grant's expiry: the multiplexed relay stream carries a node only
+   * for a client that opened its workspace (plan item 5005).
+   */
+  workspaceOpenFor(workspaceId: string, nodeId: BackendId): boolean {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace || workspace.nodeId !== nodeId) return false;
+    return workspace.expiresAt > (this.options.now ?? Date.now)();
+  }
+
   private pruneWorkspaces(): void {
     const now = (this.options.now ?? Date.now)();
     for (const [id, workspace] of this.workspaces) {

@@ -803,3 +803,45 @@ describe("contract negotiation over a node transport (plan item 2011)", () => {
     });
   });
 });
+
+describe("a main stream opener (plan item 5005)", () => {
+  test("carries the main stream, and `reconnect` replaces it from its cursor without a failure", async () => {
+    const gateways = fakeGateways(A);
+    const opened: Array<{ url: string; control: { reconnect(): void } }> = [];
+    const node = transport({
+      baseUrl: A,
+      openMainStream: (url, init, control) => {
+        opened.push({ url, control });
+        return fetch(url, init);
+      },
+    });
+    const received: unknown[] = [];
+    node.listen("environment-changed", (payload) => received.push(payload));
+    await waitFor(() => mainStreams(gateways[A]!).length === 1, "the first stream");
+    const first = mainStreams(gateways[A]!)[0]!;
+    first.push(frame("g:1", "gateway.connected", { status: "fresh" }));
+    first.push(frame("g:2", "environment-changed", { id: "one" }));
+    await waitFor(() => received.length === 1, "the first event");
+    expect(node.eventStreamConnection.state()).toBe("connected");
+    const states: string[] = [];
+    node.eventStreamConnection.subscribe((state) => states.push(state));
+
+    opened[0]!.control.reconnect();
+    await waitFor(() => mainStreams(gateways[A]!).length === 2, "the replacement");
+    expect(first.closedByClient()).toBe(true);
+    expect(opened).toHaveLength(2);
+    expect(new URL(opened[1]!.url).searchParams.get("since")).toBe("g:2");
+    mainStreams(gateways[A]!)[1]!.push(frame("g:3", "environment-changed", { id: "two" }));
+    await waitFor(() => received.length === 2, "the event on the replacement");
+    // Never reported as an outage.
+    expect(states).toEqual([]);
+  });
+});
+
+async function waitFor(condition: () => boolean, label: string): Promise<void> {
+  for (let i = 0; i < 200; i += 1) {
+    if (condition()) return;
+    await new Promise((resolve) => originalSetTimeout(resolve, 2));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}

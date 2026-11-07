@@ -24,6 +24,9 @@
  * - **Leaf terminals use the WebSocket transport** (§6.2 "Connection
  *   budget"); the origin-wide opt-in key still decides it for the command
  *   node only.
+ * - **Relayed main streams share one request** once two or more relayed
+ *   leaves are warm at once (plan item 5005, `multiplexed-relay-stream.ts`),
+ *   and fall back to one stream each on a command node without the route.
  *
  * Effect: each grant's lifetime is a child of its node's `Lifetime` (an
  * Effect `Scope`), whose finalizers stop the renewal and revoke the grant, so
@@ -75,6 +78,10 @@ import {
 import { createBrowserNodeClient } from "./browser-node-client";
 import { Lifetime } from "./lifetime";
 import { createListenerFanout } from "./listener-fanout";
+import {
+  createMultiplexedRelayStreams,
+  type MultiplexedRelayStreams,
+} from "./multiplexed-relay-stream";
 import type { NodeScope, NodeScopeTier } from "./node-scope";
 import { createSignal } from "./signal";
 import type { WindowScope } from "./window-scope";
@@ -176,6 +183,11 @@ export interface NodeClientRegistryOptions {
   readonly credentialReopenMinIntervalMs?: number;
   /** Test seam; production clears through `clearProtectedRichContent`. */
   readonly clearRichContent?: (nodeId: BackendId) => void;
+  /**
+   * Carries relayed leaves' main streams on one shared request (plan item
+   * 5005). Defaults to one per registry; `null` keeps one stream per leaf.
+   */
+  readonly relayStreams?: MultiplexedRelayStreams | null;
 }
 
 export interface NodeClientRegistry {
@@ -416,7 +428,12 @@ export function createNodeClientRegistry(
   const credentialReopenMinIntervalMs =
     options.credentialReopenMinIntervalMs ?? CREDENTIAL_REOPEN_MIN_INTERVAL_MS;
 
+  const ownsRelayStreams = options.relayStreams === undefined;
+  const relayStreams =
+    options.relayStreams === undefined ? createMultiplexedRelayStreams() : options.relayStreams;
+
   const root = Lifetime.root("node-clients");
+  if (relayStreams && ownsRelayStreams) root.onClose("relay-streams", () => relayStreams.dispose());
   const entries = new Map<BackendId, Entry>();
   let pageHidden = false;
 
@@ -473,6 +490,16 @@ export function createNodeClientRegistry(
     lifecycle,
     terminalTransport: options.transport?.terminalTransport ?? "websocket",
     onCredentialRejected: () => onCredentialRejected(entry),
+    // A relayed leaf's main stream may share one request with the others'.
+    // The workspace is read on every open, so a reopened grant is sent.
+    ...(workspace.path === "relay" && relayStreams
+      ? {
+          openMainStream: relayStreams.opener(
+            entry.nodeId,
+            () => entry.grant?.workspace.workspaceId ?? null,
+          ),
+        }
+      : {}),
   });
 
   const newTransportClient = (entry: Entry, workspace: LeafWorkspace) =>
@@ -497,6 +524,7 @@ export function createNodeClientRegistry(
         }),
       );
       entry.grant = { workspace, lifetime };
+      if (previous && workspace.path === "relay") relayStreams?.refresh(entry.nodeId);
     }
     previous?.lifetime.close();
   };

@@ -19,6 +19,10 @@ export { routedDomainApi } from "./node-domain-clients.js";
 export { leafSyncsTickets } from "./node-ticket-sync.js";
 export { leafTakesCoordinatorNotices } from "./node-mail-collector.js";
 export { NodePortal } from "./node-portal.js";
+export {
+  NodeEventMultiplexer,
+  type NodeEventMultiplexerOptions,
+} from "./node-event-multiplexer.js";
 export { listProjectCopyCandidates, listProjectCopyFiles } from "./node-project-copy-files.js";
 export { NODE_RELAY_PREFIX, parseRelayPath, relayHttp, relayUpgrade } from "./node-relay.js";
 export { approveSetupCommandsOnNodes } from "./node-setup-approvals.js";

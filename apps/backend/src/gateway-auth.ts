@@ -8,6 +8,7 @@ import {
   relayUpgrade,
 } from "./core/nodes/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { MULTIPLEXED_RELAY_EVENTS_PATH } from "@orkestrator/protocol/multiplexed-relay-events";
 
 const log = createLogger("gateway");
 
@@ -435,6 +436,13 @@ export class GatewayAuth {
     const viaGrant = this.authenticatedByGrant(request);
     if (viaGrant && !GRANT_ALLOWED_PATHS.some((pattern) => pattern.test(url.pathname))) {
       jsonResponse(response, 403, { error: "A workspace grant cannot use this route." });
+      return;
+    }
+
+    // Several relayed leaves' main streams on one request (plan item 5005).
+    // Without the hooks it answers 404 below, as an older command node does.
+    if (url.pathname === MULTIPLEXED_RELAY_EVENTS_PATH && this.ctx.nodeEventMultiplexer) {
+      this.ctx.nodeEventMultiplexer.serve(request, response, url);
       return;
     }
 

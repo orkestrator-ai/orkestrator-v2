@@ -158,6 +158,28 @@ export interface NodeTransportLifecycle {
   onPageHide(listener: (hiding: boolean) => void): () => void;
 }
 
+/** What a main stream opener may ask of the transport whose stream it opens. */
+export interface MainStreamControl {
+  /**
+   * Abandon the open main stream (or its pending retry) and open it again at
+   * once from its cursor, so the opener can carry it another way. Counts no
+   * failure; a transport with no main stream ignores it.
+   */
+  reconnect(): void;
+}
+
+/**
+ * Opens the main stream's request in place of `fetch`, with the same URL and
+ * init (plan item 5005: several relayed nodes' main streams on one shared
+ * request). It answers a `Response` whose body is this node's SSE stream, or
+ * throws as `fetch` would; the transport treats the answer exactly as its own.
+ */
+export type MainStreamOpener = (
+  url: string,
+  init: RequestInit,
+  control: MainStreamControl,
+) => Promise<Response>;
+
 interface NodeTransportSettings {
   /** Bearer credential (a gateway token or a client grant). */
   credential?: string;
@@ -172,6 +194,11 @@ interface NodeTransportSettings {
   metrics?: TransportMetricsHooks;
   /** Without one the transport retries only on its own backoff. */
   lifecycle?: NodeTransportLifecycle;
+  /**
+   * Opens the fetch-read main stream; defaults to `fetch`. The `EventSource`
+   * main stream of the page's own gateway never uses it.
+   */
+  openMainStream?: MainStreamOpener;
   /**
    * Ask `/status` whether the credential still holds when the main fetch
    * stream fails without saying so itself (an HTTP error other than 401, or a
@@ -612,11 +639,15 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
 
     void (async () => {
       try {
-        const response = await fetch(apiUrl(eventStreamPath(undefined, mainStream.cursor)), {
+        const url = apiUrl(eventStreamPath(undefined, mainStream.cursor));
+        const init: RequestInit = {
           credentials,
           headers: requestHeaders(),
           signal: controller.signal,
-        });
+        };
+        const response = await (options.openMainStream
+          ? options.openMainStream(url, init, mainStreamControl)
+          : fetch(url, init));
         // Replaced while connecting (a new credential): the replacement owns
         // the stream state now.
         if (controller.signal.aborted) return;
@@ -765,6 +796,23 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
     relayedEvents.retryUnanswered();
     terminalSocket?.reconnectIfNotReady();
   };
+
+  /**
+   * The opener wants the main stream carried another way: replace it now, from
+   * its cursor, without counting a failure or changing the connection state.
+   */
+  const reconnectMainStream = () => {
+    if (disposed || eventSource || (!streamAbortController && !reconnectTimer)) return;
+    invalidateMainStreamCredentialProbe();
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    streamAbortController?.abort();
+    streamAbortController = null;
+    stopWatchingMainStream();
+    mainStreamBackoff.disconnected();
+    ensureEventStream();
+  };
+  const mainStreamControl: MainStreamControl = { reconnect: () => reconnectMainStream() };
 
   /** Stops the main stream, its retry and its watchdog, and forgets the outage. */
   const closeMainStream = () => {

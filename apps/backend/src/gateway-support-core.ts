@@ -140,6 +140,15 @@ export interface GatewayNodeHooks {
     baseUrl: string;
     headers: Record<string, string>;
   } | null;
+  /**
+   * Whether `workspaceId` is a workspace open on this command node for
+   * `nodeId` (`open_node_workspace`): the multiplexed relay stream carries
+   * only nodes the client holds a workspace grant for (plan item 5005).
+   */
+  relayWorkspaceOpen?(
+    workspaceId: string,
+    nodeId: import("@orkestrator/protocol/federation").BackendId,
+  ): boolean;
 }
 
 export interface OrkestratorGatewayOptions {
@@ -173,6 +182,13 @@ export interface OrkestratorGatewayOptions {
    */
   backendHello?: () => Promise<BackendHelloIdentity>;
   nodeHooks?: GatewayNodeHooks;
+  /** Test seam: timings and bounds of the multiplexed relay stream (plan item 5005). */
+  nodeEventMultiplexer?: Partial<
+    Omit<
+      import("./core/nodes/index.js").NodeEventMultiplexerOptions,
+      "relayTarget" | "workspaceOpen"
+    >
+  >;
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
   allowNonTailscaleBind?: boolean;

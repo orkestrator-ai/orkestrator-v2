@@ -31,8 +31,10 @@ import { filesClient } from "./domains/files/client.js";
 import { nativeSessionsClient } from "./domains/native-sessions/client.js";
 import { nodeFilesClient } from "./domains/node-files/client.js";
 import { nodeMailClient } from "./domains/node-mail/client.js";
+import { previewsClient } from "./domains/previews/client.js";
 import { terminalsClient } from "./domains/terminals/client.js";
 import { ticketSyncClient } from "./domains/ticket-sync/client.js";
+import { transcriptsClient } from "./domains/transcripts/client.js";
 
 /**
  * Every domain client definition. The pilot domains (plan item 1010) were the
@@ -46,8 +48,10 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   nativeSessionsClient,
   nodeFilesClient,
   nodeMailClient,
+  previewsClient,
   terminalsClient,
   ticketSyncClient,
+  transcriptsClient,
 ] as readonly DomainClientDef[]);
 
 /** The committed list, relative to the repository root. */

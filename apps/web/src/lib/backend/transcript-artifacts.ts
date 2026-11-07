@@ -1,79 +1,78 @@
 import {
-  TRANSCRIPT_ARTIFACT_COMMANDS,
-  type ArtifactConversationScope,
-  type ArtifactDraftReadRequest,
-  type ArtifactDraftSummary,
-  type ArtifactLiveSessionResponse,
-  type ArtifactPublicationView,
-  type ArtifactRepresentationRequest,
-  type ArtifactRepresentationResponse,
-  type MermaidRenderRequest,
-  type MermaidRenderResponse,
-  type TranscriptArtifactCapabilities,
-  type TranscriptMediaStreamRequest,
-  type TranscriptMediaStreamResponse,
-  type ArtifactPrepareWorkerResponse,
-  type TranscriptMediaPdfPreviewRequest,
-  type TranscriptMediaPdfPreviewResponse,
+  transcriptsClient,
+  type WorkflowLiveSnapshotResponse,
+} from "@orkestrator/protocol/contract/domains/transcripts";
+import type {
+  ArtifactConversationScope,
+  ArtifactDraftReadRequest,
+  ArtifactDraftSummary,
+  ArtifactLiveSessionResponse,
+  ArtifactPublicationView,
+  ArtifactRepresentationRequest,
+  ArtifactRepresentationResponse,
+  MermaidRenderRequest,
+  MermaidRenderResponse,
+  TranscriptArtifactCapabilities,
+  TranscriptMediaStreamRequest,
+  TranscriptMediaStreamResponse,
+  ArtifactPrepareWorkerResponse,
+  TranscriptMediaPdfPreviewRequest,
+  TranscriptMediaPdfPreviewResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
-import {
-  TRANSCRIPT_MEDIA_PIN_COMMAND,
-  type TranscriptMediaPinRequest,
-  type TranscriptMediaPinResponse,
+import type {
+  TranscriptMediaPinRequest,
+  TranscriptMediaPinResponse,
 } from "@orkestrator/protocol/transcript-media-pins";
-import type { WorkflowSnapshotV1 } from "@orkestrator/protocol/workflow-snapshot";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
+import { backendDomainApi } from "./domain-client";
 
-export type WorkflowLiveSnapshotResponse =
-  | { status: "available"; snapshot: WorkflowSnapshotV1; terminal: boolean }
-  | {
-      status: "unavailable";
-      reason: "deleted" | "not_found" | "unsupported" | "error";
-      message: string;
-    };
+/** The `transcripts` domain's schema type (plan item 7004). */
+export type { WorkflowLiveSnapshotResponse };
 
 /**
- * This file's commands on `client`'s node (plan item 3002). A scoped store or
- * service passes its own node's client; the named exports below are this
- * over the window's command scope.
+ * This file's commands on `client`'s node (plan item 3002), through the
+ * `transcripts` domain client (plan item 7004). A scoped store or service
+ * passes its own node's client; the named exports below are this over the
+ * window's command scope.
  */
 export function createTranscriptArtifactsApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const artifacts = backendDomainApi(client, transcriptsClient);
 
   function getTranscriptArtifactCapabilities(): Promise<TranscriptArtifactCapabilities> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.capabilities);
+    return artifacts().artifactCapabilities({});
   }
 
   function getTranscriptArtifactPublication(
     input: ArtifactConversationScope & { publicationId: string },
   ): Promise<ArtifactPublicationView> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.getPublication, { ...input });
+    return artifacts().getPublication({ ...input });
   }
 
-  function listTranscriptArtifactPublications(
+  async function listTranscriptArtifactPublications(
     input: ArtifactConversationScope & { afterSequence?: number; limit?: number },
   ): Promise<{ publications: ArtifactPublicationView[]; nextSequence: number | null }> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.listPublications, { ...input });
+    const page = await artifacts().listPublications({ ...input });
+    return { publications: [...page.publications], nextSequence: page.nextSequence };
   }
 
   function readTranscriptArtifactRepresentation(
     input: ArtifactRepresentationRequest,
   ): Promise<ArtifactRepresentationResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.readRepresentation, { ...input });
+    return artifacts().readRepresentation({ ...input });
   }
 
   function openTranscriptArtifactLiveSession(
     input: ArtifactConversationScope & { publicationId: string },
   ): Promise<ArtifactLiveSessionResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.openLiveSession, { ...input });
+    return artifacts().openLiveSession({ ...input });
   }
 
-  function closeTranscriptArtifactLiveSession(input: { generation: string }): Promise<void> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession, { ...input });
+  async function closeTranscriptArtifactLiveSession(input: { generation: string }): Promise<void> {
+    await artifacts().closeLiveSession({ ...input });
   }
 
   function renderMermaidDiagram(input: MermaidRenderRequest): Promise<MermaidRenderResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.renderMermaid, { ...input });
+    return artifacts().renderMermaid({ ...input });
   }
 
   function getWorkflowLiveSnapshot(input: {
@@ -81,25 +80,30 @@ export function createTranscriptArtifactsApi(client: BackendClient) {
     workflowId: string;
     runId: string;
   }): Promise<WorkflowLiveSnapshotResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.workflowLiveSnapshot, { ...input });
+    return artifacts().workflowLiveSnapshot({ ...input });
   }
 
   /**
    * The conversation's artifacts as their author left them, published or not.
    * Owner-scoped like publications: another conversation's drafts are
-   * `not_found`.
+   * `not_found`. The backend answers `{ drafts }`; this unwraps it (the
+   * renderer read the answer as an array before the typed result, so it
+   * always listed nothing).
    */
-  function listTranscriptArtifactDrafts(
+  async function listTranscriptArtifactDrafts(
     input: ArtifactConversationScope,
   ): Promise<ArtifactDraftSummary[]> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.listDrafts, { ...input });
+    const answer: unknown = await artifacts().listDrafts({ ...input });
+    if (Array.isArray(answer)) return answer as ArtifactDraftSummary[];
+    const drafts = (answer as { drafts?: unknown } | null)?.drafts;
+    return Array.isArray(drafts) ? (drafts as ArtifactDraftSummary[]) : [];
   }
 
   /** A bounded slice of a draft revision's source, or one failed-preview capture. */
   function readTranscriptArtifactDraft(
     input: ArtifactDraftReadRequest,
   ): Promise<ArtifactRepresentationResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.readDraft, { ...input });
+    return artifacts().readDraft({ ...input });
   }
 
   /**
@@ -110,12 +114,12 @@ export function createTranscriptArtifactsApi(client: BackendClient) {
   function openTranscriptMediaStream(
     input: TranscriptMediaStreamRequest,
   ): Promise<TranscriptMediaStreamResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.openMediaStream, { ...input });
+    return artifacts().openMediaStream({ ...input });
   }
 
   /** Revokes a media stream capability; unknown or already closed ids are ignored. */
-  function closeTranscriptMediaStream(input: { streamId: string }): Promise<void> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.closeMediaStream, { ...input });
+  async function closeTranscriptMediaStream(input: { streamId: string }): Promise<void> {
+    await artifacts().closeMediaStream({ ...input });
   }
 
   /**
@@ -123,21 +127,21 @@ export function createTranscriptArtifactsApi(client: BackendClient) {
    * re-select preview isolation. Long-running (bounded by the backend).
    */
   function prepareTranscriptArtifactWorker(): Promise<ArtifactPrepareWorkerResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.prepareWorker);
+    return artifacts().prepareWorker({});
   }
 
   /** First-page preview of a PDF attachment, read by the backend through its authorized readers. */
   function getTranscriptMediaPdfPreview(
     input: TranscriptMediaPdfPreviewRequest,
   ): Promise<TranscriptMediaPdfPreviewResponse> {
-    return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.mediaPdfPreview, { ...input });
+    return artifacts().mediaPdfPreview({ ...input });
   }
 
   /** A local image as the naming message first showed it (saved on first use). */
   function pinTranscriptMedia(
     input: TranscriptMediaPinRequest,
   ): Promise<TranscriptMediaPinResponse> {
-    return invoke(TRANSCRIPT_MEDIA_PIN_COMMAND, { ...input });
+    return artifacts().pinMedia({ ...input });
   }
 
   return {

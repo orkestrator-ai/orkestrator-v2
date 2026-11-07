@@ -1,8 +1,16 @@
+import {
+  previewsClient,
+  type PreviewDiagnosticsSnapshot,
+  type PreviewMutationResult,
+  type PreviewPublicationDetail,
+  type PreviewSettingsResponse,
+  type PreviewSettingsShape,
+  type PreviewTargetResolution,
+} from "@orkestrator/protocol/contract/domains/previews";
 import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
 import type {
   PreviewCapabilities,
   PreviewRegistrySnapshot,
-  PreviewServiceDefinition,
   PreviewServiceInput,
   PreviewServiceRef,
   PreviewServiceSnapshot,
@@ -10,70 +18,18 @@ import type {
 } from "@orkestrator/protocol/preview-services";
 
 import { type AccountMachine } from "./agent-accounts";
-import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
+import { backendDomainApi, machineBackendClient } from "./domain-client";
 
-export type PreviewMutationResult =
-  | { kind: "definition"; definition: PreviewServiceDefinition; replayed: boolean }
-  | { kind: "removed"; serviceId: string; replayed: boolean };
-
-export type PreviewTargetResolution =
-  | { kind: "service"; service: PreviewServiceSnapshot; path: string }
-  | { kind: "choose"; candidates: PreviewServiceSnapshot[]; path: string }
-  | {
-      kind: "unregistered";
-      path: string;
-      suggestion: Pick<PreviewServiceInput, "targetKind" | "applicationPort" | "scheme">;
-      bindHint: boolean;
-    }
-  | { kind: "manual"; path: string; scheme: "http" | "https"; hostPort: number };
-
-export interface PreviewSettingsResponse {
-  stored: PreviewSettingsShape;
-  effective: PreviewSettingsShape;
-}
-
-export interface PreviewSettingsShape {
-  version: 1;
-  transport: boolean;
-  relay: boolean;
-  publication: {
-    enabled: boolean;
-    domain: string | null;
-    certFile: string | null;
-    keyFile: string | null;
-    upstreamCaFile: string | null;
-    listenAddress: string | null;
-    port: number | null;
-    publicPort: number | null;
-  };
-}
-
-export interface PreviewPublicationDetail {
-  enabled: boolean;
-  available: boolean;
-  reason?: string;
-  /** The preview domain shares a site with the app (absent from older backends). */
-  warning?: string;
-  domain: string | null;
-  listening: { address: string; port: number } | null;
-  certificate: { validTo: string; coversHosts: boolean } | null;
-}
-
-/** Safe operator diagnostics: counts and bounded categories only. */
-export interface PreviewDiagnosticsSnapshot {
-  registry: Record<string, number | string>;
-  access: Record<string, number>;
-  resolver: Record<string, number>;
-  readiness: Record<string, number>;
-  metrics: {
-    counters: Record<string, number>;
-    histograms: Record<string, { count: number; p50: number; p95: number; max: number }>;
-    gauges: Record<string, number>;
-  };
-  settings: { transport: boolean; relay: boolean; publicationEnabled: boolean };
-  publication: PreviewPublicationDetail | null;
-  relay: { available: boolean; reason?: string };
-}
+/** The result and settings types are the `previews` domain's schemas (plan item 7004). */
+export type {
+  PreviewDiagnosticsSnapshot,
+  PreviewMutationResult,
+  PreviewPublicationDetail,
+  PreviewSettingsResponse,
+  PreviewSettingsShape,
+  PreviewTargetResolution,
+};
 
 function operationId(): string {
   return `op-${crypto.randomUUID()}`;
@@ -85,25 +41,29 @@ function operationId(): string {
  * over the window's command scope.
  */
 export function createPreviewsApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
-  const machineInvoke = machineInvoker(client);
+  const previews = backendDomainApi(client, previewsClient);
+  /** `machine`'s previews: this client's node, or another machine through the command node. */
+  const on = (machine?: AccountMachine) =>
+    machine === undefined
+      ? previews()
+      : backendDomainApi(machineBackendClient(client, machine), previewsClient)();
 
   function getPreviewCapabilities(machine?: AccountMachine): Promise<PreviewCapabilities> {
-    return machineInvoke(machine, "get_preview_capabilities");
+    return on(machine).capabilities({});
   }
 
   function getPreviewServices(
     environmentId: string,
     known?: { backendEpoch: string; registryRevision: number },
   ): Promise<PreviewRegistrySnapshot> {
-    return invoke("get_preview_services", {
+    return previews().services({
       environmentId,
       ...(known ? { knownEpoch: known.backendEpoch, knownRevision: known.registryRevision } : {}),
     });
   }
 
   function registerPreviewService(service: PreviewServiceInput): Promise<PreviewMutationResult> {
-    return invoke("register_preview_service", { service, operationId: operationId() });
+    return previews().register({ service, operationId: operationId() });
   }
 
   /**
@@ -122,7 +82,7 @@ export function createPreviewsApi(client: BackendClient) {
     expectedRevision: number,
     patch: Partial<PreviewServiceInput>,
   ): Promise<PreviewMutationResult> {
-    return invoke("update_preview_service", {
+    return previews().update({
       serviceId,
       expectedRevision,
       patch,
@@ -134,7 +94,7 @@ export function createPreviewsApi(client: BackendClient) {
     serviceId: string,
     expectedRevision?: number,
   ): Promise<PreviewMutationResult> {
-    return invoke("remove_preview_service", {
+    return previews().remove({
       serviceId,
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
       operationId: operationId(),
@@ -153,11 +113,11 @@ export function createPreviewsApi(client: BackendClient) {
           };
         },
   ): Promise<PreviewTargetResolution> {
-    return invoke("resolve_preview_target", args);
+    return previews().resolveTarget(args);
   }
 
   function probePreviewService(serviceId: string): Promise<PreviewServiceSnapshot> {
-    return invoke("probe_preview_service", { serviceId });
+    return previews().probe({ serviceId });
   }
 
   function createPreviewAttachment(args: {
@@ -166,15 +126,15 @@ export function createPreviewsApi(client: BackendClient) {
     clientKey?: string;
     path?: string;
   }): Promise<PreviewAttachmentDescriptor> {
-    return invoke("create_preview_attachment", args);
+    return previews().createAttachment(args);
   }
 
   function releasePreviewAttachment(attachmentId: string): Promise<{ released: boolean }> {
-    return invoke("release_preview_attachment", { attachmentId });
+    return previews().releaseAttachment({ attachmentId });
   }
 
   function getPreviewSettings(machine?: AccountMachine): Promise<PreviewSettingsResponse> {
-    return machineInvoke(machine, "get_preview_settings");
+    return on(machine).settings({});
   }
 
   function updatePreviewSettings(
@@ -183,18 +143,18 @@ export function createPreviewsApi(client: BackendClient) {
     },
     machine?: AccountMachine,
   ): Promise<PreviewSettingsResponse> {
-    return machineInvoke(machine, "update_preview_settings", { settings });
+    return on(machine).updateSettings({ settings });
   }
 
   function revokePreviewAccess(
     serviceId?: string,
     machine?: AccountMachine,
   ): Promise<{ revoked: number }> {
-    return machineInvoke(machine, "revoke_preview_access", serviceId ? { serviceId } : {});
+    return on(machine).revokeAccess(serviceId ? { serviceId } : {});
   }
 
   function getPreviewDiagnostics(machine?: AccountMachine): Promise<PreviewDiagnosticsSnapshot> {
-    return machineInvoke(machine, "get_preview_diagnostics");
+    return on(machine).diagnostics({});
   }
 
   /** iOS handoff: the backend consumes the grant and returns a one-use session URL. */
@@ -203,12 +163,12 @@ export function createPreviewsApi(client: BackendClient) {
     path?: string;
     clientKey?: string;
   }): Promise<{ url: string; expiresAt: string }> {
-    return invoke("create_preview_handoff_url", args);
+    return previews().createHandoffUrl(args);
   }
 
   /** The clean private origin of a published service; never a credential. */
   function getPreviewPublicOrigin(serviceId: string): Promise<{ origin: string | null }> {
-    return invoke("get_preview_public_origin", { serviceId });
+    return previews().publicOrigin({ serviceId });
   }
 
   return {

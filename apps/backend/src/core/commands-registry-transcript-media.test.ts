@@ -119,9 +119,11 @@ describe("transcript_media_pin", () => {
       "must be absolute",
     );
     await expect(invoke({ ...scope, path: "/w/a.png" })).rejects.toThrow("messageId is required");
+    // Tolerant since plan item 7004: an unknown key is dropped, never refused,
+    // so the refusal is the path's.
     await expect(
-      invoke({ ...scope, messageId: "m1", path: "/w/a.png", extra: true }),
-    ).rejects.toThrow("Unknown arguments: extra");
+      invoke({ ...scope, messageId: "m1", path: "relative.png", extra: true }),
+    ).rejects.toThrow("must be absolute");
     await expect(
       invoke({ ...scope, environmentId: "env-missing", messageId: "m1", path: "/w/a.png" }),
     ).rejects.toThrow("Environment not found");

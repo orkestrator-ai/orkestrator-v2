@@ -14,7 +14,10 @@
  * `transcript_artifact_prepare_worker` builds or pulls the container worker
  * with fixed arguments and re-selects isolation (preview-worker-prepare.ts).
  */
-import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
+import {
+  transcriptArtifactPrepareWorkerCommand,
+  transcriptMediaPdfPreviewCommand,
+} from "@orkestrator/protocol/contract/domains/transcripts";
 import { ArtifactFailure, artifactError } from "@orkestrator/protocol/transcript-artifacts";
 
 import type { CommandContext, CommandHandler } from "../commands-context.js";
@@ -74,7 +77,7 @@ export function registerTranscriptArtifactPdfCommands(
   register: CommandRegistrar,
   lookup: CommandLookup,
 ): void {
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.prepareWorker, async (_args, context) => {
+  register(transcriptArtifactPrepareWorkerCommand, async (_args, context) => {
     const service = context.transcriptArtifacts;
     if (!service)
       throw artifactCommandError(
@@ -83,7 +86,7 @@ export function registerTranscriptArtifactPdfCommands(
     return service.prepareWorker();
   });
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.mediaPdfPreview, async (args, context) => {
+  register(transcriptMediaPdfPreviewCommand, async (args, context) => {
     const service = context.transcriptArtifacts;
     if (!service)
       throw artifactCommandError(

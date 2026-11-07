@@ -11,7 +11,21 @@
  * because the gateway forwards only `error.message` to the renderer. In
  * process, the same Error also carries `code` and `error` properties.
  */
-import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
+import {
+  transcriptArtifactCapabilitiesCommand,
+  transcriptArtifactCloseLiveSessionCommand,
+  transcriptArtifactGetPublicationCommand,
+  transcriptArtifactListDraftsCommand,
+  transcriptArtifactListPublicationsCommand,
+  transcriptArtifactOpenLiveSessionCommand,
+  transcriptArtifactReadDraftCommand,
+  transcriptArtifactReadRepresentationCommand,
+  transcriptArtifactRenderMermaidCommand,
+  transcriptArtifactStageAssetCommand,
+  transcriptArtifactWorkflowLiveSnapshotCommand,
+  transcriptMediaCloseStreamCommand,
+  transcriptMediaOpenStreamCommand,
+} from "@orkestrator/protocol/contract/domains/transcripts";
 import type {
   ArtifactDraftReadRequest,
   ArtifactRepresentation,
@@ -131,15 +145,15 @@ function mediaStreams(context: CommandContext): TranscriptMediaStreams {
 }
 
 export function registerTranscriptArtifactCommands(register: CommandRegistrar): void {
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.capabilities, async (_args, context) =>
+  register(transcriptArtifactCapabilitiesCommand, async (_args, context) =>
     service(context).capabilities(),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.getPublication, async (args, context) =>
+  register(transcriptArtifactGetPublicationCommand, async (args, context) =>
     guarded(() => service(context).getPublication(scope(args), args.publicationId)),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.listPublications, async (args, context) =>
+  register(transcriptArtifactListPublicationsCommand, async (args, context) =>
     guarded(() =>
       service(context).listPublications(scope(args), {
         afterSequence: optionalInteger(args.afterSequence, "afterSequence"),
@@ -148,7 +162,7 @@ export function registerTranscriptArtifactCommands(register: CommandRegistrar): 
     ),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.readRepresentation, async (args, context) =>
+  register(transcriptArtifactReadRepresentationCommand, async (args, context) =>
     guarded(() => {
       const representation = args.representation;
       if (
@@ -186,16 +200,16 @@ export function registerTranscriptArtifactCommands(register: CommandRegistrar): 
     }),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.openLiveSession, async (args, context) =>
+  register(transcriptArtifactOpenLiveSessionCommand, async (args, context) =>
     guarded(() => service(context).openLiveSession(scope(args), args.publicationId)),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession, async (args, context) => {
+  register(transcriptArtifactCloseLiveSessionCommand, async (args, context) => {
     service(context).closeLiveSession(args.generation);
     return null;
   });
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.renderMermaid, async (args, context) =>
+  register(transcriptArtifactRenderMermaidCommand, async (args, context) =>
     guarded(() =>
       service(context).renderMermaid({
         source: typeof args.source === "string" ? args.source : "",
@@ -204,13 +218,13 @@ export function registerTranscriptArtifactCommands(register: CommandRegistrar): 
     ),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.listDrafts, async (args, context) =>
+  register(transcriptArtifactListDraftsCommand, async (args, context) =>
     guarded(() =>
       service(context).listDrafts(scope(args), { limit: optionalInteger(args.limit, "limit") }),
     ),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.readDraft, async (args, context) =>
+  register(transcriptArtifactReadDraftCommand, async (args, context) =>
     guarded(() => {
       const representation = args.representation;
       if (representation !== "source" && representation !== "diagnostic-capture") {
@@ -241,7 +255,7 @@ export function registerTranscriptArtifactCommands(register: CommandRegistrar): 
     }),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.stageAsset, async (args, context) =>
+  register(transcriptArtifactStageAssetCommand, async (args, context) =>
     guarded(() => {
       const target = scope(args);
       if (
@@ -261,17 +275,17 @@ export function registerTranscriptArtifactCommands(register: CommandRegistrar): 
   );
 
   // Range-capable media playback through the content origin (media-stream.ts).
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.openMediaStream, async (args, context) =>
+  register(transcriptMediaOpenStreamCommand, async (args, context) =>
     guarded(() => mediaStreams(context).open(args)),
   );
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.closeMediaStream, async (args, context) => {
+  register(transcriptMediaCloseStreamCommand, async (args, context) => {
     if (context.transcriptArtifacts)
       mediaStreamManagers.get(context.transcriptArtifacts)?.close(args.streamId);
     return null;
   });
 
-  register(TRANSCRIPT_ARTIFACT_COMMANDS.workflowLiveSnapshot, async (args, context) =>
+  register(transcriptArtifactWorkflowLiveSnapshotCommand, async (args, context) =>
     guarded(() =>
       service(context).workflowLiveSnapshot({
         environmentId: args.environmentId,

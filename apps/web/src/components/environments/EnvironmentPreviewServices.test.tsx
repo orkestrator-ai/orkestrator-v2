@@ -203,6 +203,15 @@ describe("preview operator settings", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("revoke_preview_access", expect.anything());
     fireEvent.click(screen.getByRole("button", { name: "Revoke all active preview access" }));
     fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("revoke_preview_access", {}));
+    // Revoke everything: no service id (sent without arguments through the domain client).
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.some(
+          ([command, args]) =>
+            command === "revoke_preview_access" &&
+            (args === undefined || Object.keys(args as object).length === 0),
+        ),
+      ).toBe(true),
+    );
   });
 });

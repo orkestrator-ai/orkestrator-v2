@@ -27,8 +27,9 @@ export const RENDERER_CONTENT_SECURITY_POLICY = [
   // source cannot name an IPv6 host, so plain `[::1]` needs the whole scheme.
   // `https:` already lets a script that runs send data anywhere.
   "connect-src 'self' data: blob: http: https: ws: wss:",
-  // Previews, realms and artifact content are framed from run-time origins. A
-  // gateway on a plain-HTTP tailnet address publishes its previews beside it.
+  // Previews and artifact content are framed from run-time origins (the design
+  // and static HTML frame documents from 'self'). A gateway on a plain-HTTP
+  // tailnet address publishes its previews beside it.
   "frame-src 'self' http: https: orkestrator-artifact-shell:",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -36,7 +37,12 @@ export const RENDERER_CONTENT_SECURITY_POLICY = [
   "form-action 'self'",
 ].join("; ");
 
-/** A realm iframe embeds the same gateway origin, so `'none'` would break it. */
+/**
+ * `frame-ancestors 'self'` dates from the browser client's workspace realms,
+ * same-origin iframes of this document (deleted in plan item 6002). Nothing
+ * frames the renderer document now; `'self'` still admits only the gateway's
+ * own origin. Tightening it to `'none'` is a separate policy change.
+ */
 export const GATEWAY_RENDERER_CONTENT_SECURITY_POLICY = `${RENDERER_CONTENT_SECURITY_POLICY}; frame-ancestors 'self'`;
 
 /** The login page is one inline `<style>` and a form that posts back to the gateway. */

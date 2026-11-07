@@ -298,7 +298,7 @@ gateway itself instead:
   unfiltered, and a change restarts that stream from its cursor. Opening it again
   announces `terminal-event-stream-connected`, so a relay window reads its exact
   snapshot. Relayed node events are never on that stream: main takes them on a
-  filtered one, for what relay windows and realms listen to
+  filtered one, for what relay windows listen to
   ([command-nodes.md](command-nodes.md)).
 
 Measured on macOS with nothing attached over the DevTools protocol (2026-11-06,

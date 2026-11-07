@@ -8,7 +8,10 @@
 > command-nodes.md.
 >
 > **Since built:** the client-side runtime was removed in favour of command
-> nodes; see [command-nodes-handoff.md](command-nodes-handoff.md).
+> nodes; see [command-nodes-handoff.md](command-nodes-handoff.md). The
+> per-machine realms described below were later replaced by node scopes in
+> the window's own tree and deleted (plan items 6001-6003, 2026-11-07); see
+> [federation.md](../architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree).
 
 Handoff for the plan in `docs/temp/remote.md` (sections 21 and 23). The
 living references are

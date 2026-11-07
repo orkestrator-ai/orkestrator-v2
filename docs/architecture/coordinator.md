@@ -3075,8 +3075,8 @@ backend without the command nothing is shown. A delegation that retention has
 removed takes its marker with it.
 
 A worker on another node has no marker on its tab. Its delegation is kept on the
-command node, while its tab renders in that node's realm and reads that node's
-backend, which holds no such record. The gap is
+command node, while its tab renders in that node's workspace, on its node scope,
+and reads that node's backend, which holds no such record. The gap is
 [6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
 
 ## Complete application actions

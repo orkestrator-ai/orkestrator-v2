@@ -17,7 +17,7 @@ web counterpart of `orkestrator --fix AGENT`
 | Report records (`bug-reports.json`) | [`storage-bug-reports.ts`](../../apps/backend/src/core/storage-bug-reports.ts) |
 | Synthetic runtime `bug-report:<id>` | [`bug-report-runtime.ts`](../../apps/backend/src/core/bug-report-runtime.ts) |
 | Create, assign, draft, screenshot, file, discard | [`bug-report-service.ts`](../../apps/backend/src/core/bug-report-service.ts), commands in [`commands-registry-bug-reports.ts`](../../apps/backend/src/core/commands-registry-bug-reports.ts) |
-| Sheet | [`BugReportSheet.tsx`](../../apps/web/src/components/bug-report/BugReportSheet.tsx), hosted by `AppShell` in the window and in every realm |
+| Sheet | [`BugReportSheet.tsx`](../../apps/web/src/components/bug-report/BugReportSheet.tsx), hosted once per window by `AppShell` (`BugReportSheetHost`) |
 | Machine routing | [`open-bug-report.ts`](../../apps/web/src/lib/bug-report/open-bug-report.ts) |
 | App context and renderer errors | [`client-context.ts`](../../apps/web/src/lib/bug-report/client-context.ts), [`renderer-errors.ts`](../../apps/web/src/lib/bug-report/renderer-errors.ts) |
 | Window capture | `orkestrator:bug-report:capture-window` in [`ipc.ts`](../../apps/desktop/electron/ipc.ts) |
@@ -93,15 +93,21 @@ briefing tells it never to file anything; filing is the sheet's button.
 
 ## Machines
 
-A report's chat talks to the backend of the renderer that shows it. So
-another machine's report is shown by that machine's realm:
+A report's chat talks to the backend of the machine it reports on. Another
+machine's workspace is in the window's own tree, on that machine's node
+scope, so the window opens the sheet there (plan item 5003):
 
-- The window asks for it with a `select` request carrying `bugReport: true`.
-- A realm asks its window with the `bugReport` message.
+- `openBugReport(nodeId)` shows that node if it is not in front
+  (`remoteWorkspaceStore.open`) and opens the window's sheet for it
+  (`bugReportStore.openSheet(nodeId)`, `sheetNodeId`).
+- `BugReportSheetHost` renders the sheet on the node's scope
+  (`BugReportSheet scope`): the report is created, captured, filed and
+  discarded through that node's client, and its agent session renders inside
+  that scope, so it talks to that node.
 
-The Bug button defaults to the machine in front: the realm on show, otherwise
-the command node. The sheet's machine picker hands the report over to
-another machine's sheet.
+The Bug button defaults to the machine in front: the node the central
+region shows, otherwise the command node. The sheet's machine picker hands
+the report over to another machine's sheet.
 
 ## Context sent to the agent
 
@@ -114,8 +120,9 @@ Identifiers and categories only:
 
 The renderer errors are recorded by `installRendererErrorRecorder` from the
 renderer entry, and the briefing tells the agent to redact them.
-**Capture window** captures the requesting page (the realm captures its own
-workspace) into `screenshots/` and attaches it to the next message.
+**Capture window** captures the window, with the sheet stepped aside so it
+shows what the user was looking at, into the report's `screenshots/` on the
+node it reports on, and attaches it to the next message.
 Pasted images use `write_bug_report_attachment` in both the assigned and
 unassigned composers. The command resolves the scratch directory from the
 stored report ID and writes a generated filename through the confined report

@@ -273,7 +273,7 @@ and sends a newer field or command only to a leaf that advertises it (for
 example `node-mail-steer`), or, for a contract domain, by the leaf's domain
 version ([Client adapters](#client-adapters)); the desktop main process runs
 the same check on a saved machine's route. The renderer parses a node's hello only to confirm
-its identity before a direct realm session (`openLeafWorkspace`), and never
+its identity before a direct session with a leaf (`openLeafWorkspace`), and never
 reads its capabilities. For the renderer, add a handshake only when a change
 cannot be detected from the payload (a change of behaviour rather than of
 shape).

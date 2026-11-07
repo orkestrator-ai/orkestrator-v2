@@ -70,16 +70,16 @@ matrix with evidence for every row are in
   - One `FederationProvider` reads the command node's portal over the
     window's command scope (`lib/portal/command-scope.ts`).
   - The window always stays on its command node. Opening another node's
-    environment shows that node's workspace realm in the central region
-    (`lib/federation/workspace-realm.ts`, `stores/remoteWorkspaceStore.ts`,
-    `components/federation/RemoteWorkspaceRegion.tsx`), without reloading.
-    The desktop bound a realm's child view to the node in main
-    (`workspace-views.ts`, `setDesktopWorkspaceTarget`; both deleted in plan
-    item 6003, replaced by the window's node scopes): direct first, then
-    the command node's own route; a browser or iOS window kept each
-    realm's grant in session storage under its workspace ID
-    (`workspaceTargetGatewayOptions` in the frame): direct first, then the
-    relay.
+    environment shows that node's workspace in the central region, without
+    reloading. As built here it was a workspace realm, a separate document
+    per node (`lib/federation/workspace-realm.ts`, desktop
+    `workspace-views.ts` and `setDesktopWorkspaceTarget`, the browser's realm
+    grant in session storage). Those are deleted (plan items 6002 and 6003,
+    2026-11-07): the workspace now renders in the window's own tree on the
+    node's scope (`stores/remoteWorkspaceStore.ts`,
+    `components/federation/RemoteWorkspaceRegion.tsx`, `InTreeWorkspace`;
+    [federation.md](../architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree)),
+    still direct first, then the command node's own route or relay.
   - The info panel shows the connection path.
 - **Removed:**
   - renderer per-machine runtimes and the registry;

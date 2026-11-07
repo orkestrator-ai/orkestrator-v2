@@ -398,17 +398,18 @@ A command node attached to another command node operates in leaf mode:
   remembered per node and project for the rest of the app session
   (`openedLeafCoordinators` in the UI store, not persisted), so the warning
   returns after a restart.
-- A window whose workspace is on a leaf follows its sidebar grouping.
-  Grouped by repository, the window links each repository's projects
-  across machines, so the leaf's coordinator is replaced by the same
-  warning, with a link to the command node's coordinator for that
+- A leaf's workspace shown in a window follows the window's sidebar
+  grouping. Grouped by repository, the window links each repository's
+  projects across machines, so the leaf's coordinator is replaced by the
+  same warning, with a link to the command node's coordinator for that
   repository; if the command node has no copy of it, the leaf's
-  coordinator opens directly. Compact links them the same way and is reported
-  to the realm as repository grouping. Grouped by machine or project, the machines
-  are not linked and the leaf's coordinator opens directly. The window
-  sends its grouping to the realm (`grouping` message,
-  `realmCoordinatorDefers`), since a realm cannot read the window's
-  storage.
+  coordinator opens directly. Compact links them the same way and counts as
+  repository grouping. Grouped by machine, project or activity, the machines
+  are not linked and the leaf's coordinator opens directly. The leaf's
+  workspace is in the window's own tree, so its coordinator gate
+  (`LeafModeCoordinatorGate`) reads the grouping from the window's stores
+  (`useWindowGrouping`, `coordinatorDefersToCommandNode` in
+  `lib/federation/window-grouping.ts`).
 - When the node is no longer attached anywhere, it returns to being a
   command node and its coordinators regain their cross-node tools.
 
@@ -499,7 +500,8 @@ A command node attached to another command node operates in leaf mode:
     subscription, then after any possible gap). The sidebar's change badge
     (`node-change-projections.ts`) and the environment hover card
     (`node-environment-reads.ts`) are built on it; the command node's own
-    environments, shown from its self summary, subscribe directly.
+    environments, shown from the window's full stores, subscribe directly
+    (`subscribeCommandNodeEvents`).
 
 ## Opening an environment on another node
 
@@ -511,20 +513,24 @@ environment, its tabs and panes, and the files panel. Only that region gets
 its data from the other node; it runs this client's own code, served by the
 command node.
 
-That workspace renders in the window's own tree, in the node's own scope
-(plan item 6001; [node scopes](../development/node-scopes.md#a-nodes-workspace-in-the-windows-tree)),
-on desktop, browser and iOS. The separate workspace documents of earlier
-releases (realms: a child view per node on the desktop, a same-origin frame in
-a browser or the iOS app) are deleted (plan items 6002 and 6003), and with them
-the window-to-realm messages and the portal channel.
+That workspace renders in the window's own React tree, on the node's own
+**node scope**, on desktop, browser and iOS: the same workspace components
+the command node's own workspace uses, under a provider that names the
+node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-windows-tree),
+[node-scopes.md](../development/node-scopes.md#a-nodes-workspace-in-the-windows-tree)).
 
-- **A node scope.** The node's stores, events and credentials live in its own
-  scope of the window (`NodeScope`), so they reach only that node by
-  construction. On the desktop main opens the window's scope on the node
+- **A node scope.** The node's client, store instances, services and tier
+  live in its own scope of the window (`NodeScope`, inside the window's
+  `WindowScope`), so its state is never read for another node: ids are
+  node-local, and each node has its own instances rather than shared,
+  re-keyed stores. On the desktop main opens the window's scope on the node
   (`apps/desktop/electron/node-scopes.ts`, `node-ipc.ts`) and the renderer
   reaches it through `window.orkestrator.node(nodeId)`; in a browser or the
-  iOS app the page's node client talks to the node's gateway. A lint
-  boundary keeps multi-machine views off a node's workspace transport.
+  iOS app the page's node-client registry
+  (`lib/node-scope/node-clients.ts`) talks to the node's gateway. The
+  command node is a scope too, the **command scope**, through which the
+  window reaches the portal (registry, grants, layout, outcomes, handover).
+  A lint boundary keeps multi-machine views off a node's workspace transport.
 - **Opening** asks the command node for a workspace grant, direct first, then
   over the command node's own route. The desktop holds it in main for the
   window's node scope; a browser or iOS page holds it in its node client. It is
@@ -550,9 +556,18 @@ the window-to-realm messages and the portal channel.
   leaf frames up to 8 MiB; a response holding more than 16 MiB is closed and
   every node resumes from its own cursor. An older command node answers 404,
   and the browser keeps one stream per leaf.
-- **Switching** never reloads the window. Another environment of a node
-  already held is a selection on that node's scope. The window keeps a few
-  node scopes warm (plan item 4002), so going back to a node is instant too.
+- **Switching** never reloads the window and never stops work on any node.
+  Another environment of a node already held is a selection on that node's
+  scope. A node switched away from stays **warm** (its main stream and light
+  stores), is **suspended** after the host's idle time (15 minutes on the
+  desktop, 5 in a browser, 2 on iOS: streams closed, cursor kept) and goes
+  back to **summary** only under memory pressure, least recently shown first
+  and never the shown node (plan item 4002), so going back to a node is
+  instant or a resume from its cursor. A node opened again from summary, or
+  after a restart, paints at once from a bounded local snapshot of its
+  projects and environments, marked stale and read-only until the node's
+  authoritative reads land (plan item 4003). Heavy data (transcripts,
+  artifacts, images) is held in byte budgets shared by the whole window.
   Selecting one of the command node's own environments returns the central
   region to the window's own workspace, whose selection was cleared while
   another node's was shown.
@@ -575,9 +590,10 @@ the window-to-realm messages and the portal channel.
   coordinates (`apps/desktop/electron/node-previews.ts`, plan item 2009).
 - **The sidebar is symmetric.** The command node is listed from the window's
   full stores with the ordinary rows; every other node is listed from the
-  command node's summaries. Both are drawn with the same row layout, so a row lines
-  up the same whichever node owns it, and the row whose workspace the central
-  region shows is the selected one, whichever node owns it.
+  command node's summaries, whatever its scope's tier. Both are drawn with the
+  same row layout, so a row lines up the same whichever node owns it, and the
+  row whose workspace the central region shows is the selected one, whichever
+  node owns it.
 - **The sidebar order is the command node's.** The command node keeps the
   cross-machine order every client shows (`get_portal_layout`,
   `update_portal_layout`, `portal-layout-changed`;
@@ -961,15 +977,16 @@ command node:
   supervisor (today in Electron main), and the per-node read model (today
   renderer `BackendRuntime`s).
 - **Reworked:** machine panels (a workspace bound to one leaf, talking to it
-  directly) became workspace realms in the window's central region: opening
-  a leaf environment shows the leaf's workspace there while the window stays
-  on its command node (see
+  directly) became a leaf's workspace in the window's central region, on the
+  leaf's node scope: opening a leaf environment shows the leaf's workspace
+  there while the window stays on its command node (see
   [Opening an environment on another node](#opening-an-environment-on-another-node)).
-  They are authorised by scoped grants from the command node instead of
-  credentials the client holds, and fall back to a relay through the command
-  node when the leaf is unreachable. (For a while the whole window moved to
-  the leaf and reloaded; that was replaced by realms, separate documents per
-  node, and those by node scopes in the window's own tree, plan items 6001-6003.)
+  It is authorised by scoped grants from the command node instead of
+  credentials the client holds, and falls back to a relay through the command
+  node when the leaf is unreachable. (History: for a while the whole window
+  moved to the leaf and reloaded; that was replaced by workspace realms,
+  separate documents per node, and those by node scopes in the window's own
+  tree, plan items 6001-6003.)
 - **Removed:** renderer-side multi-backend runtimes and registry, the
   client-owned machine catalogue (clients keep only their list of targets),
   and clients holding other nodes' gateway tokens.

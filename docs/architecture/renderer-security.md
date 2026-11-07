@@ -31,8 +31,14 @@ What to keep in mind when changing it:
   asserts the policy on the packaged `file://` renderer.
 - **A document with both a `<meta>` and a header obeys both**, so widening the
   header alone changes nothing.
-- **`frame-ancestors` is `'self'`, not `'none'`.** A browser client's realm iframe
-  embeds the same gateway origin.
+- **`frame-ancestors` is `'self'`, not `'none'`.** It was chosen for the
+  browser client's workspace realms, same-origin iframes of the app that the
+  renderer framed. Realms are deleted (plan item 6002), and no client frames
+  the renderer document now; `'self'` still admits only the gateway's own
+  origin, so no other site can embed it. Tightening it to `'none'` is a
+  separate policy change, not made here. The design and static HTML frame
+  documents keep `frame-ancestors 'self'` for their own reason: the renderer
+  frames them.
 - **A CSP source cannot name an IPv6 host.** Chromium reports `http://[::1]:*` as
   invalid and ignores it. A plain-HTTP `[::1]` backend is allowed by the desktop
   app, so `connect-src` opens the `http:` and `ws:` schemes. `https:` already lets
@@ -98,6 +104,44 @@ the page, so the first refusal of each kind on a session logs
 `desktop.permissions denied` with the permission's name. Look there first when a
 browser feature stops working in the desktop app. Previews and the artifact host
 have their own, stricter handlers.
+
+## Node scopes
+
+One renderer per window shows every node the window works with: the command
+node's workspace and any other node's, each on its own node scope in the
+same React tree ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-windows-tree)).
+The separate per-node documents of earlier releases (workspace realms: a
+`WebContentsView` per node on the desktop, a same-origin iframe in a browser
+or the iOS app) are deleted (plan items 6002 and 6003). What that changes:
+
+| Property | Realms (earlier releases) | Node scopes |
+| --- | --- | --- |
+| Who can reach which node | A realm's `window.orkestrator` reached only its node, but its portal channel had unrestricted command-node invoke, which reaches every node | The renderer can name any node its command node knows; main (desktop) or the node's client (browser and iOS) routes the call |
+| Credentials in the renderer | Desktop: none. Browser: each realm's grant in the tab's `sessionStorage` | Desktop: none; main holds every grant and attaches the bearer at the network layer per scope (`window-request-authorization.ts`). Browser and iOS: each grant in memory only, in the node-client registry's closures (`lib/node-scope/node-clients.ts`), never in storage or a URL |
+| Process isolation | Desktop: a renderer per realm. Browser and iOS: none | None on any host |
+| Storage isolation | Desktop: a partition per realm. Browser: namespaced keys | Namespaced keys everywhere (`nodeStorageKey`); the desktop realm partitions are removed at startup |
+| Correctness isolation | Separate heaps | Per-node store instances under a provider, node-tagged events, the shrink-only source guards and the runtime shim guard |
+
+**The net change in authority is nil.** The window renderer already held
+full command-node authority and showed the same untrusted transcripts, and
+realms could already reach every node through their portal channel. Script
+injected into the window can name a leaf directly now, but it could reach
+the same leaf through the command node before. The boundary that matters is
+server-side and stays:
+
+- Workspace grants are bound to the controller that asked for them, last at
+  most 15 minutes per issue or renewal, are kept as hashes in memory, are
+  revoked with their controller, and revoking one closes the sockets it
+  authorised (`apps/backend/src/core/nodes/client-grants.ts`).
+- A grant or the relay admits only commands defined with
+  `access: "workspace"`, failing closed (below).
+- On the desktop main refuses machine administration for a leaf scope
+  (`node-admin-refused`, `DesktopNodeIpc.adminScope`), keyed by the node id
+  the renderer names.
+
+What gets worse is failure isolation, not authority: one renderer means one
+out-of-memory takes the whole window, which the window's tier budgets bound
+([federation.md, Budgets](federation.md#budgets)).
 
 ## Decisions
 

@@ -4,10 +4,10 @@ import { createLogger, type LogFields } from "@orkestrator/protocol/logger";
  * Development-only memory sampling for the desktop's processes (plan 0004).
  *
  * When on, it logs one `process-memory` line per interval with the
- * working set of every Electron process type, then one
- * `process-memory.realm` line per workspace realm, labelled by a hash
- * of its node id (the same hash its storage partition uses), never by the
- * node's name, address or credential. Numbers only.
+ * working set of every Electron process type and how many node scopes the
+ * windows hold. Numbers only. A node scope has no process of its own: it runs
+ * in its window's renderer (plan item 6003 removed the per-node realm
+ * renderers this used to report), so its cost is in that renderer's figure.
  *
  * It is off unless the desktop runs in development mode (`ELECTRON_DEV=1` on
  * an unpacked app, `desktopDevMode`) and `ORKESTRATOR_DEV_PROCESS_MEMORY_MS`
@@ -26,28 +26,15 @@ export type ProcessMetricLike = {
   memory: { workingSetSize: number; peakWorkingSetSize?: number; privateBytes?: number };
 };
 
-/** A workspace realm's renderer, as main knows it. */
-export type RealmProcessLike = {
-  pid: number;
-  /** Hash of the realm's node id; see `connectionPartitionKey`. */
-  nodeHash: string;
-  visible: boolean;
-};
-
 export type ProcessMemorySample = {
   processes: number;
   totalWorkingSetKb: number;
   /** Working set per Electron process type (`Browser`, `Tab`, `GPU`, `Utility`, ...). */
   byType: Record<string, { count: number; workingSetKb: number }>;
-  /** Renderers that are windows, not realms. */
+  /** Renderer (`Tab`) processes: windows and their native preview and artifact views. */
   windowRenderers: { count: number; workingSetKb: number };
-  realms: Array<{
-    nodeHash: string;
-    visible: boolean;
-    workingSetKb: number;
-    peakWorkingSetKb: number | null;
-    privateKb: number | null;
-  }>;
+  /** Node scopes open across all windows (`node-scopes.ts`). */
+  nodeScopes: number;
 };
 
 /** The sampling interval, or null when the diagnostic is off. */
@@ -66,7 +53,7 @@ export function processMemoryDiagnosticInterval(
 
 export function summarizeProcessMemory(
   metrics: readonly ProcessMetricLike[],
-  realms: readonly RealmProcessLike[],
+  nodeScopes = 0,
 ): ProcessMemorySample {
   const byType: ProcessMemorySample["byType"] = {};
   let totalWorkingSetKb = 0;
@@ -76,29 +63,18 @@ export function summarizeProcessMemory(
     bucket.workingSetKb += metric.memory.workingSetSize;
     totalWorkingSetKb += metric.memory.workingSetSize;
   }
-  const realmPids = new Set(realms.map((realm) => realm.pid));
   const windowRenderers = { count: 0, workingSetKb: 0 };
   for (const metric of metrics) {
-    if (metric.type !== "Tab" || realmPids.has(metric.pid)) continue;
+    if (metric.type !== "Tab") continue;
     windowRenderers.count += 1;
     windowRenderers.workingSetKb += metric.memory.workingSetSize;
   }
-  const byPid = new Map(metrics.map((metric) => [metric.pid, metric]));
   return {
     processes: metrics.length,
     totalWorkingSetKb,
     byType,
     windowRenderers,
-    realms: realms.map((realm) => {
-      const metric = byPid.get(realm.pid);
-      return {
-        nodeHash: realm.nodeHash,
-        visible: realm.visible,
-        workingSetKb: metric?.memory.workingSetSize ?? 0,
-        peakWorkingSetKb: metric?.memory.peakWorkingSetSize ?? null,
-        privateKb: metric?.memory.privateBytes ?? null,
-      };
-    }),
+    nodeScopes,
   };
 }
 
@@ -109,8 +85,7 @@ export function processMemoryLogFields(sample: ProcessMemorySample): LogFields {
     totalWorkingSetKb: sample.totalWorkingSetKb,
     windowRenderers: sample.windowRenderers.count,
     windowRendererKb: sample.windowRenderers.workingSetKb,
-    realms: sample.realms.length,
-    realmKb: sample.realms.reduce((sum, realm) => sum + realm.workingSetKb, 0),
+    nodeScopes: sample.nodeScopes,
   };
   for (const [type, bucket] of Object.entries(sample.byType)) {
     const key = type.replace(/[^A-Za-z0-9]/gu, "");
@@ -122,15 +97,6 @@ export function processMemoryLogFields(sample: ProcessMemorySample): LogFields {
 
 export function logProcessMemorySample(sample: ProcessMemorySample): void {
   log.info("process-memory", processMemoryLogFields(sample));
-  for (const realm of sample.realms) {
-    log.info("process-memory.realm", {
-      node: realm.nodeHash,
-      visible: realm.visible,
-      workingSetKb: realm.workingSetKb,
-      ...(realm.peakWorkingSetKb === null ? {} : { peakWorkingSetKb: realm.peakWorkingSetKb }),
-      ...(realm.privateKb === null ? {} : { privateKb: realm.privateKb }),
-    });
-  }
 }
 
 /**
@@ -141,7 +107,8 @@ export function logProcessMemorySample(sample: ProcessMemorySample): void {
 export function startProcessMemoryDiagnostic(options: {
   intervalMs: number | null;
   metrics: () => readonly ProcessMetricLike[];
-  realms: () => readonly RealmProcessLike[];
+  /** How many node scopes the windows hold now. */
+  nodeScopes?: () => number;
   report?: (sample: ProcessMemorySample) => void;
   setIntervalImpl?: typeof setInterval;
   clearIntervalImpl?: typeof clearInterval;
@@ -153,7 +120,7 @@ export function startProcessMemoryDiagnostic(options: {
   const clearTimer = options.clearIntervalImpl ?? clearInterval;
   const tick = () => {
     try {
-      report(summarizeProcessMemory(options.metrics(), options.realms()));
+      report(summarizeProcessMemory(options.metrics(), options.nodeScopes?.() ?? 0));
     } catch (error) {
       log.debug("process-memory.failed", {
         reason: error instanceof Error ? error.name : "unknown",

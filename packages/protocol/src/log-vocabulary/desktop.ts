@@ -38,9 +38,13 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "process-memory":
         "Development only: working set per Electron process type, sampled on an interval.",
       "process-memory.failed": "Development only: one process memory sample could not be read.",
-      "process-memory.realm":
-        "Development only: one workspace realm's renderer memory, labelled by node id hash.",
       "quit.stopping-backend": "The app is quitting and has asked the Local backend to stop.",
+      "realm-partitions.list-failed":
+        "The partitions directory could not be read, so retired workspace realm storage stays until the next start.",
+      "realm-partitions.remove-failed":
+        "Some retired workspace realm storage directories could not be removed; count says how many.",
+      "realm-partitions.removed":
+        "Retired workspace realm storage was removed at startup; count says how many directories.",
       "relaunch.schedule-failed":
         "The AppImage relaunch waiter failed; using Electron's relauncher.",
       "relaunch.service-register-failed":
@@ -82,7 +86,7 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
     },
   },
   "desktop.permissions": {
-    description: "Permission requests refused on the renderer and workspace realm sessions.",
+    description: "Permission requests refused on the renderer's session.",
     events: {
       denied: "A renderer asked for a permission the policy does not grant.",
     },
@@ -116,15 +120,13 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
     },
   },
   workspaces: {
-    description: "Workspace realms the desktop holds on other machines.",
+    description: "Node workspaces (node scopes) the desktop holds on other machines.",
     events: {
       "route.moved-direct": "A relayed workspace moved to its direct route.",
       "workspace.opened":
         "The command node issued a node workspace grant; durationMs is the open_node_workspace call.",
       "workspace.route-probed":
         "One route of a node workspace was probed; outcome is fixed, durationMs the probe.",
-      "realm.boot-step":
-        "A workspace realm finished a boot step; durationMs is the step, sinceOpenMs since the realm was opened.",
     },
   },
   toolchain: {

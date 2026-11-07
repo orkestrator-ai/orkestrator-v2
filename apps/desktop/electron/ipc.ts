@@ -491,8 +491,8 @@ export function registerMainIpc({
   handle("orkestrator:shell:open-external", (_event, url: unknown) =>
     shellApi.openExternal(externalBrowserUrl(url)),
   );
-  // Report a bug: the requesting page as the user sees it. A realm captures
-  // its own workspace, the window its sidebar and own workspace.
+  // Report a bug: the requesting page as the user sees it, sidebar and
+  // workspace (another node's workspace renders in the same page).
   handle("orkestrator:bug-report:capture-window", async (event) => {
     const sender = event.sender;
     if (!sender?.capturePage) throw new Error("Window capture is unavailable");

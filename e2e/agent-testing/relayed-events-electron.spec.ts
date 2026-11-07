@@ -25,9 +25,9 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 /**
  * The desktop's relay of another node's events through the real main process,
- * preload and IPC (docs/architecture/command-nodes.md): a window and a realm's
- * portal say which per-node events they listen to, and main opens one filtered
- * stream for those. The leaf is a second backend on loopback.
+ * preload and IPC (docs/architecture/command-nodes.md): each window says which
+ * per-node events it listens to, and main opens one filtered stream for their
+ * union. The leaf is a second backend on loopback.
  */
 
 type Project = { id: string; name: string };
@@ -41,6 +41,7 @@ type RendererGlobals = typeof globalThis & {
     connections: {
       connect(input: { address: string; token: string }): Promise<unknown>;
       use(connectionId: string): Promise<unknown>;
+      openWindow(connectionId: string): Promise<void>;
     };
   };
 };
@@ -74,7 +75,7 @@ test.beforeAll(() => {
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
 });
 
-test("main takes a node's relayed events only for the window and realm listening", async () => {
+test("main takes a node's relayed events only for the windows listening", async () => {
   test.setTimeout(300_000);
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-relayed-"));
   let vite: ChildProcess | null = null;
@@ -253,38 +254,33 @@ test("main takes a node's relayed events only for the window and realm listening
       )
       .toBe(true);
 
-    // Through a realm's portal, on the same one stream.
-    await window.getByRole("button", { name: "Open leaf-app on Leaf", exact: true }).click();
-    const realmPortal = (script: string) =>
-      electronApp.evaluate(async ({ webContents }, source) => {
-        const realm = webContents
-          .getAllWebContents()
-          .find((contents) => contents.getURL().includes("realm=workspace"));
-        return realm ? ((await realm.executeJavaScript(source)) as unknown) : null;
-      }, script);
+    // A second window on the same command node, on the same one stream.
+    const opened = electronApp.waitForEvent("window");
+    await window.evaluate(() =>
+      (globalThis as RendererGlobals).orkestrator.connections.openWindow("local"),
+    );
+    const second = await opened;
+    second.setDefaultTimeout(20_000);
+    await expect(second).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
     await expect
-      .poll(() => realmPortal("Boolean(window.orkestratorPortal)"), { timeout: 60_000 })
+      .poll(() => second.evaluate(() => Boolean((globalThis as RendererGlobals).orkestrator)), {
+        timeout: 60_000,
+      })
       .toBe(true);
-    await realmPortal(`(() => {
-      window.__portalFrames = [];
-      window.orkestratorPortal.listen(${JSON.stringify(leafEvent)}, (frame) => window.__portalFrames.push(frame));
-      return window.orkestratorPortal.eventStreamReady(${JSON.stringify(leafEvent)});
-    })()`);
+    await listenInWindow(second);
     await changeLeaf();
     await expect
-      .poll(
-        async () => hasEventFrame(((await realmPortal("window.__portalFrames")) ?? []) as Frame[]),
-        { timeout: 30_000 },
-      )
+      .poll(async () => hasEventFrame(await framesIn(second)), { timeout: 30_000 })
       .toBe(true);
 
-    // Give only the portal a second name, so closing it must narrow main's
-    // stream even while the parent keeps its original subscription.
-    const portalOnlyEvent = relayedNodeEventName("bk_portal_only" as never);
-    await realmPortal(`(() => {
-      window.orkestratorPortal.listen(${JSON.stringify(portalOnlyEvent)}, () => {});
-      return window.orkestratorPortal.eventStreamReady(${JSON.stringify(portalOnlyEvent)});
-    })()`);
+    // Give only the second window a second name, so closing it must narrow
+    // main's stream even while the first keeps its original subscription.
+    const secondOnlyEvent = relayedNodeEventName("bk_second_only" as never);
+    await second.evaluate((name) => {
+      const renderer = globalThis as RendererGlobals;
+      renderer.orkestrator.listen(name, () => undefined);
+      return renderer.orkestrator.eventStreamReady(name);
+    }, secondOnlyEvent);
     const activeFilters = () =>
       electronApp.evaluate(
         () =>
@@ -294,22 +290,17 @@ test("main takes a node's relayed events only for the window and realm listening
     await expect
       .poll(async () =>
         (await activeFilters()).some((stream) =>
-          stream.filter.split(",").includes(portalOnlyEvent),
+          stream.filter.split(",").includes(secondOnlyEvent),
         ),
       )
       .toBe(true);
-    await electronApp.evaluate(({ webContents }) => {
-      webContents
-        .getAllWebContents()
-        .find((contents) => contents.getURL().includes("realm=workspace"))!
-        .close();
-    });
-    // Runs WorkspaceViews.dispose -> main.unregisterRealm, rather than calling
-    // the window bookkeeping directly as the unit harness does.
+    // Closes the BrowserWindow: main's real close path drops its listens.
+    const secondWindow = await electronApp.browserWindow(second);
+    await secondWindow.evaluate((browserWindow) => browserWindow.close());
     await expect
       .poll(async () =>
         (await activeFilters()).some((stream) =>
-          stream.filter.split(",").includes(portalOnlyEvent),
+          stream.filter.split(",").includes(secondOnlyEvent),
         ),
       )
       .toBe(false);
@@ -345,7 +336,7 @@ test("main takes a node's relayed events only for the window and realm listening
     // Every filter main ever asked for was for what a renderer listens to, and
     // no relayed frame reached this desktop under the old name.
     for (const filter of await relayedStreams()) {
-      for (const name of filter.split(",")) expect([leafEvent, portalOnlyEvent]).toContain(name);
+      for (const name of filter.split(",")) expect([leafEvent, secondOnlyEvent]).toContain(name);
     }
     const usage = await invoke<{ paths: Record<string, unknown> }>("get_compatibility_path_usage");
     expect(usage.paths["relayed-node-event.legacy-stream"]).toBeUndefined();

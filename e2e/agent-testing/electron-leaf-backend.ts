@@ -34,7 +34,7 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
   expect(result.status, `${command} ${args.join(" ")}: ${result.stderr}`).toBe(0);
 }
 
-/** Names for a leaf; the defaults are the single leaf the realm specs attach. */
+/** Names for a leaf; the defaults are the single leaf `relayed-events-electron.spec.ts` attaches. */
 export interface LeafNames {
   /** The leaf's display name (default `Leaf`), and its directory under `root` in lower case. */
   readonly name?: string;

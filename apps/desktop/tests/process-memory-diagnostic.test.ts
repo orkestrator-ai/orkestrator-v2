@@ -51,7 +51,7 @@ describe("processMemoryDiagnosticInterval", () => {
 });
 
 describe("summarizeProcessMemory", () => {
-  test("totals per type and separates realms from window renderers", () => {
+  test("totals per type, counts renderer processes and the node scopes held", () => {
     const sample = summarizeProcessMemory(
       [
         metric(1, "Browser", 100),
@@ -60,10 +60,7 @@ describe("summarizeProcessMemory", () => {
         metric(4, "Tab", 200, 150),
         metric(5, "Tab", 250),
       ],
-      [
-        { pid: 4, nodeHash: "aaaa", visible: true },
-        { pid: 5, nodeHash: "bbbb", visible: false },
-      ],
+      3,
     );
     expect(sample.processes).toBe(5);
     expect(sample.totalWorkingSetKb).toBe(900);
@@ -72,22 +69,12 @@ describe("summarizeProcessMemory", () => {
       GPU: { count: 1, workingSetKb: 50 },
       Tab: { count: 3, workingSetKb: 750 },
     });
-    expect(sample.windowRenderers).toEqual({ count: 1, workingSetKb: 300 });
-    expect(sample.realms).toEqual([
-      { nodeHash: "aaaa", visible: true, workingSetKb: 200, peakWorkingSetKb: 201, privateKb: 150 },
-      {
-        nodeHash: "bbbb",
-        visible: false,
-        workingSetKb: 250,
-        peakWorkingSetKb: 251,
-        privateKb: null,
-      },
-    ]);
+    expect(sample.windowRenderers).toEqual({ count: 3, workingSetKb: 750 });
+    expect(sample.nodeScopes).toBe(3);
   });
 
-  test("a realm whose process is gone reports zero rather than failing", () => {
-    const sample = summarizeProcessMemory([], [{ pid: 9, nodeHash: "cccc", visible: true }]);
-    expect(sample.realms[0]).toMatchObject({ workingSetKb: 0, peakWorkingSetKb: null });
+  test("no node scopes by default", () => {
+    expect(summarizeProcessMemory([]).nodeScopes).toBe(0);
   });
 });
 
@@ -96,21 +83,21 @@ describe("processMemoryLogFields", () => {
     const fields = processMemoryLogFields(
       summarizeProcessMemory(
         [metric(1, "Browser", 100), metric(2, "Tab", 200), metric(3, "Tab", 300)],
-        [{ pid: 3, nodeHash: "aaaa", visible: true }],
+        2,
       ),
     );
     expect(fields).toMatchObject({
       processes: 3,
       totalWorkingSetKb: 600,
-      windowRenderers: 1,
-      windowRendererKb: 200,
-      realms: 1,
-      realmKb: 300,
+      windowRenderers: 2,
+      windowRendererKb: 500,
+      nodeScopes: 2,
       BrowserCount: 1,
       BrowserKb: 100,
       TabCount: 2,
       TabKb: 500,
     });
+    expect(Object.keys(fields).some((key) => key.startsWith("realm"))).toBe(false);
     for (const value of Object.values(fields)) expect(typeof value).toBe("number");
   });
 });
@@ -121,7 +108,6 @@ describe("startProcessMemoryDiagnostic", () => {
     const stop = startProcessMemoryDiagnostic({
       intervalMs: null,
       metrics: () => [],
-      realms: () => [],
       setIntervalImpl: (() => {
         scheduled += 1;
         return 0;
@@ -142,7 +128,6 @@ describe("startProcessMemoryDiagnostic", () => {
         if (fail) throw new Error("gone");
         return [metric(1, "Browser", 10)];
       },
-      realms: () => [],
       report: (sample) => samples.push(sample),
       setIntervalImpl: ((callback: () => void, ms: number) => {
         expect(ms).toBe(5000);

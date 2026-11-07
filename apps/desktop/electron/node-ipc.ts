@@ -71,10 +71,7 @@ export type NodeIpcManager = Pick<
   Partial<Pick<ConnectionManager, "scopeHello">>;
 
 /** A window as node IPC uses it. */
-export interface NodeIpcWindow extends NodeScopeWindow {
-  /** A realm-era window whose own scope is on another node. */
-  target: { nodeName: string } | null;
-}
+export type NodeIpcWindow = NodeScopeWindow;
 
 /**
  * Per-node snapshot for the renderer. Never a credential.
@@ -136,9 +133,9 @@ export class DesktopNodeIpc<W extends NodeIpcWindow> {
 
   constructor(private readonly options: DesktopNodeIpcOptions<W>) {}
 
-  /** The scope holding the window's command node connection. */
+  /** The scope holding the window's command node connection: the window's own. */
   commandScope(context: W): string {
-    return context.portalScope ?? context.scope;
+    return context.scope;
   }
 
   /** Whether `nodeId` is the window's command node (proved identity only). */
@@ -251,15 +248,10 @@ export class DesktopNodeIpc<W extends NodeIpcWindow> {
 
   /**
    * The scope machine administration acts on. A workspace grant cannot
-   * administer its node, so a leaf (a realm's workspace or a named node) is
-   * refused with where that is done instead.
+   * administer its node, so a named leaf is refused with where that is done
+   * instead.
    */
   adminScope(context: W, nodeId?: string): string {
-    if (context.target) {
-      throw new Error(
-        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Machines on the command node.`,
-      );
-    }
     if (nodeId !== undefined && !this.isCommandNode(context, nodeId)) {
       const name = context.nodes.get(nodeId)?.target?.nodeName ?? "That machine";
       throw nodeRefusal(

@@ -16,7 +16,7 @@ export function installRendererFilePolicy(
   } catch {
     /* deny below */
   }
-  // Renderer/realm sessions own this listener; preview and artifact sessions are separate.
+  // Renderer sessions own this listener; preview and artifact sessions are separate.
   webRequest.onBeforeRequest({ urls: ["file://*/*"] }, (details, callback) => {
     let allowed = false;
     try {

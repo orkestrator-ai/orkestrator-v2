@@ -2,10 +2,8 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   createBrowserPreviewCaptureApi,
   createOrkestratorElectronApi,
-  createPortalApi,
   exposeActiveConnectionGateway,
   exposeDesktopApi,
-  exposePortal,
   NODE_EVENT_CHANNEL,
   type IpcRendererLike,
 } from "../electron/preload-api";
@@ -242,7 +240,6 @@ describe("preload API factory", () => {
     await expect(createOrkestratorElectronApi(ipc).invoke("get_projects")).rejects.toThrow(
       new Error(message),
     );
-    await expect(createPortalApi(ipc).invoke("get_projects")).rejects.toThrow(new Error(message));
     await expect(createOrkestratorElectronApi(ipc).clipboard.readText()).rejects.toThrow(
       new Error(message),
     );
@@ -599,19 +596,15 @@ describe("preload API factory", () => {
   });
 });
 
-test("workspace-only snapshots publish trusted gateway and stable machine metadata", () => {
+test("a gateway snapshot publishes the trusted gateway and stable machine metadata only", () => {
   const exposed = new Map<string, unknown>();
+  // The retired realm fields (workspace target, portal identity) are not published.
   const snapshot = {
     baseUrl: "http://127.0.0.1:45001",
-    connectionId: "workspace:uuid",
+    connectionId: "remote-1",
     backendId: "bk_leaf",
     legacyOrigin: null,
-    workspaceTarget: {
-      nodeId: "bk_leaf",
-      nodeName: "Build box",
-      path: "direct",
-      routeKind: "https",
-    },
+    workspaceTarget: { nodeId: "bk_leaf", nodeName: "Build box", path: "direct" },
     portalIdentity: { connectionId: "local", backendId: "bk_desk", legacyOrigin: null },
   };
   expect(
@@ -625,19 +618,21 @@ test("workspace-only snapshots publish trusted gateway and stable machine metada
         sendSync: (channel) =>
           channel.endsWith("gateway-sync")
             ? snapshot
-            : { activeConnectionId: "workspace:uuid", connections: [] },
+            : { activeConnectionId: "remote-1", connections: [] },
       },
     ),
   ).toBe(true);
-  expect(exposed.get("orkestratorDesktopIdentity")).toMatchObject({ backendId: "bk_leaf" });
+  expect(exposed.get("orkestratorDesktopIdentity")).toEqual({
+    connectionId: "remote-1",
+    backendId: "bk_leaf",
+    legacyOrigin: null,
+    localInstallationId: null,
+  });
   expect(exposed.get("orkestratorGateway")).toMatchObject({
     baseUrl: snapshot.baseUrl,
     desktop: true,
   });
-  expect(exposed.get("orkestratorWorkspaceTarget")).toEqual(snapshot.workspaceTarget);
-  expect(exposed.get("orkestratorDesktopIdentity")).toMatchObject({
-    portal: { connectionId: "local", backendId: "bk_desk", legacyOrigin: null },
-  });
+  expect([...exposed.keys()].sort()).toEqual(["orkestratorDesktopIdentity", "orkestratorGateway"]);
 });
 
 test("the gateway says when it leads back to this computer, and only then", () => {
@@ -700,32 +695,10 @@ test("the machine identity carries this computer's installation id, even on a lo
   expect(identityWith(7).localInstallationId).toBeNull();
 });
 
-test("the portal channel is exposed only in a workspace realm", async () => {
-  const exposed = new Map<string, unknown>();
-  const ipc = createIpcMock();
-  const onLeaf = {
-    ...ipc.ipc,
-    sendSync: () => ({
-      connectionId: "workspace:w",
-      workspaceTarget: { nodeId: "bk_leaf", nodeName: "Leaf", path: "relay" },
-    }),
-  };
-  expect(
-    exposePortal({ exposeInMainWorld: (key, value) => void exposed.set(key, value) }, onLeaf),
-  ).toBe(true);
-  const portal = exposed.get("orkestratorPortal") as ReturnType<typeof createPortalApi>;
-  await expect(portal.invoke("list_nodes")).resolves.toEqual<IpcEcho>({
-    channel: "orkestrator:portal:invoke",
-    args: ["list_nodes", {}],
-  });
-  const seen: unknown[] = [];
-  portal.listen("nodes-changed", (payload) => void seen.push(payload));
-  ipc.emit("orkestrator:portal-event", "nodes-changed", { revision: 3 });
-  ipc.emit("orkestrator:event", "nodes-changed", { revision: 4 });
-  expect(seen).toEqual([{ revision: 3 }]);
-
-  const onCommandNode = { ...ipc.ipc, sendSync: () => ({ connectionId: "local" }) };
-  expect(exposePortal({ exposeInMainWorld: () => undefined }, onCommandNode)).toBe(false);
+test("plan item 6003: the desktop API has no workspace realm or portal surface", () => {
+  const api = createOrkestratorElectronApi(createIpcMock().ipc) as Record<string, unknown>;
+  expect("workspaceViews" in api).toBe(false);
+  expect("workspaceRealm" in api).toBe(false);
 });
 
 describe("telling main which per-node relayed events a document listens to", () => {
@@ -744,38 +717,36 @@ describe("telling main which per-node relayed events a document listens to", () 
     return { ipc, order };
   }
 
-  for (const [channel, create] of [
-    ["workspace", createOrkestratorElectronApi],
-    ["portal", createPortalApi],
-  ] as const) {
-    test(`on the ${channel} channel: a new document starts empty, in order`, () => {
+  {
+    const create = createOrkestratorElectronApi;
+    test("a new document starts empty, in order", () => {
       const { ipc, order } = reportingIpc();
       const api = create(ipc);
       const stop = api.listen(LEAF_EVENT, () => undefined);
       stop();
       expect(order).toEqual([
-        ["orkestrator:relayed-events:reset", channel],
-        ["orkestrator:relayed-events:listen", channel, LEAF_EVENT],
-        ["orkestrator:relayed-events:unlisten", channel, LEAF_EVENT],
+        ["orkestrator:relayed-events:reset"],
+        ["orkestrator:relayed-events:listen", LEAF_EVENT],
+        ["orkestrator:relayed-events:unlisten", LEAF_EVENT],
       ]);
     });
 
-    test(`on the ${channel} channel: several callbacks are one listen`, () => {
+    test("several callbacks are one listen", () => {
       const { ipc, order } = reportingIpc();
       const api = create(ipc);
       order.length = 0;
       const first = api.listen(LEAF_EVENT, () => undefined);
       const second = api.listen(LEAF_EVENT, () => undefined);
-      expect(order).toEqual([["orkestrator:relayed-events:listen", channel, LEAF_EVENT]]);
+      expect(order).toEqual([["orkestrator:relayed-events:listen", LEAF_EVENT]]);
       order.length = 0;
       first();
       first();
       expect(order).toEqual([]);
       second();
-      expect(order).toEqual([["orkestrator:relayed-events:unlisten", channel, LEAF_EVENT]]);
+      expect(order).toEqual([["orkestrator:relayed-events:unlisten", LEAF_EVENT]]);
     });
 
-    test(`on the ${channel} channel: any other event is not main's to know`, async () => {
+    test("any other event is not main's to know", async () => {
       const { ipc, order } = reportingIpc();
       const api = create(ipc);
       order.length = 0;
@@ -785,7 +756,7 @@ describe("telling main which per-node relayed events a document listens to", () 
       expect(order).toEqual([]);
     });
 
-    test(`on the ${channel} channel: ready waits for main's stream, and a refusal ends the wait`, async () => {
+    test("ready waits for main's stream, and a refusal ends the wait", async () => {
       let open: (() => void) | undefined;
       const { ipc } = reportingIpc(() => new Promise<void>((resolve) => (open = resolve)));
       const api = create(ipc);

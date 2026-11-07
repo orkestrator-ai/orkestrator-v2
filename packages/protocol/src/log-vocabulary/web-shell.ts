@@ -14,8 +14,6 @@ export const WEB_SHELL_LOG_AREAS = defineLogAreas({
         "The cached model catalogue could not be restored; bundled fallbacks stay in use.",
       "model-catalogue.seed-failed":
         "The background model-catalogue seed failed; cached catalogues stay in use.",
-      "realm.boot-step":
-        "A workspace realm finished a boot step; the desktop writes the same step to its log.",
     },
   },
   "web.window": {

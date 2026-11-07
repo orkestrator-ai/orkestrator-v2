@@ -181,9 +181,9 @@ describe("KeyboardShortcutsController", () => {
 });
 
 describe("keyboard shortcut ownership", () => {
-  test("routes a realm preview and artifact to the realm, even when only the child is focused", () => {
+  test("routes a window's preview and artifact to that window, even when only the child is focused", () => {
     const shell = renderer().contents;
-    const realm = { ...renderer().contents, id: 8, isFocused: () => false };
+    const owning = { ...renderer().contents, id: 8, isFocused: () => false };
     const previewFocus = mock(() => true);
     const artifactFocus = mock(() => true);
     const owners = [
@@ -194,7 +194,7 @@ describe("keyboard shortcut ownership", () => {
         artifactHosts: null,
       },
       {
-        contents: realm,
+        contents: owning,
         window: { isFocused: () => true },
         browserPreviewManager: {
           ownsWebContents: (id: number) => id === 42,
@@ -210,14 +210,14 @@ describe("keyboard shortcut ownership", () => {
       expect(target.renderer.id).toBe(8);
       const controller = new KeyboardShortcutsController();
       controller.request(target, "open");
-      expect(realm.send).toHaveBeenLastCalledWith(
+      expect(owning.send).toHaveBeenLastCalledWith(
         "orkestrator:event",
         "menu-keyboard-shortcuts",
         "open",
       );
       expect(target.restoreFocus?.()).toBe(false); // another surface owns focus
     }
-    realm.isFocused = () => true;
+    owning.isFocused = () => true;
     expect(resolveKeyboardShortcutsTarget(42, owners)?.restoreFocus?.()).toBe(true);
     expect(previewFocus).toHaveBeenCalledWith(42);
     expect(resolveKeyboardShortcutsTarget(43, owners)?.restoreFocus?.()).toBe(true);

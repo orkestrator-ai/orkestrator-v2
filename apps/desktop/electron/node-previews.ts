@@ -7,9 +7,9 @@ import { onNodeScopeRelease, type NodeScopeRecord } from "./node-scopes.js";
  * A window renderer can show a preview tab for any node its command node
  * knows. The first `attach` that names a node creates that node's preview
  * runtime in the window, on the window's node scope (`node-scopes.ts`): its
- * own preview partition (`node:<nodeId>`, the key realms already use, so site
- * data needs no migration), its own service transport over the node scope's
- * connection, and native views in window coordinates (no realm layout).
+ * own preview partition (`node:<nodeId>`, the key the retired workspace realms
+ * used, so their preview site data carried over), its own service transport
+ * over the node scope's connection, and native views in window coordinates.
  *
  * Main keeps `tabId → runtime` per window, and every
  * `orkestrator:browser-preview:*` handler that names a tab resolves the
@@ -23,12 +23,12 @@ import { onNodeScopeRelease, type NodeScopeRecord } from "./node-scopes.js";
  *
  * Z-order and focus (inferred risk, tested in plan item 4006): every runtime
  * adds its views to the same window `contentView`, alongside the window's own
- * previews, artifact hosts and realm views. A view added later is drawn above
+ * previews and artifact hosts. A view added later is drawn above
  * the others, and nothing here orders views across runtimes; the renderer
  * shows one preview tab per region, which keeps overlaps to tabs it hides.
  */
 
-/** A node's preview partition key; realms use the same one. */
+/** A node's preview partition key. */
 export function nodePreviewPartitionKey(nodeId: string): string {
   return `node:${nodeId}`;
 }
@@ -286,8 +286,8 @@ function entryOf<C extends NodePreviewController>(
 
 /**
  * The IPC routing (`BrowserPreviewRouting` in `ipc.ts`) over `runtimes`.
- * `window` is the sender's context (a window or a realm); `nodeWindow` is the
- * sender's window and refuses a realm, which cannot open other nodes' scopes.
+ * `window` is the sender's window context; `nodeWindow` is the same window,
+ * for calls that open one of its node scopes.
  */
 export function routeBrowserPreviews<
   E,

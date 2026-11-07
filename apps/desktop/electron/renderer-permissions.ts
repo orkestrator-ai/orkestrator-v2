@@ -20,7 +20,7 @@ const GRANTED_PERMISSIONS: ReadonlySet<string> = new Set([
 
 /**
  * Electron's default handler grants every request, so a script in the renderer
- * or a realm view could take the camera or microphone without a prompt. Deny
+ * could take the camera or microphone without a prompt. Deny
  * everything the app does not use, and everything asked for by a subframe or
  * any document other than the renderer itself.
  *

@@ -88,9 +88,6 @@ function harness(options: { idleMs?: number | null; now?: () => number } = {}) {
         if (input.onUnavailable) unavailable.set(scope, input.onUnavailable);
       },
     ),
-    restoreScopeFrom: (scope: string, source: string) => {
-      routes.set(scope, routes.get(source)!);
-    },
     release: mock((scope: string) => {
       routes.delete(scope);
     }),
@@ -126,7 +123,6 @@ function harness(options: { idleMs?: number | null; now?: () => number } = {}) {
     const sent: unknown[][] = [];
     const context: NodeScopeWindow = {
       scope,
-      portalScope: null,
       window: { isDestroyed: () => destroyed },
       contents: {
         isDestroyed: () => destroyed,
@@ -223,7 +219,7 @@ describe("opening node scopes", () => {
     expect(h.routes.get("w1")).toBe("command");
     expect(h.routes.get("w1:node:A")).toBe("grant-1-A");
     expect(h.routes.get("w1:node:A:command")).toBe("command");
-    // The opening scope is gone once the open settled; no portal scope exists.
+    // The opening scope is gone once the open settled; the window's own scope is untouched.
     expect([...h.routes.keys()].sort()).toEqual(["w1", "w1:node:A", "w1:node:A:command"]);
     expect(w.sent).toEqual([]);
     // A later ensure reuses the open scope.
@@ -482,10 +478,8 @@ describe("releasing node scopes", () => {
       previewTransport: { disposeAll: async () => undefined },
     });
     const desktop = new DesktopWindowContexts<Context>({
-      realms: new Map(),
       connections: () => h.manager as unknown as DesktopWindowConnections,
       createPreviews: runtime,
-      closeRealms: () => undefined,
       cancelPrompts: () => undefined,
       releaseWorkspaceGrant: (scope) => h.scopes.release(scope),
       releaseNodeScopes: (context) => h.nodeScopes.releaseWindowNodeScopes(context),
@@ -502,7 +496,6 @@ describe("releasing node scopes", () => {
         ...w.context,
         contents: { id, ...w.context.contents },
         slot: id,
-        target: null,
         previewConnectionId: "command",
         browserPreviewManager: previews.manager,
         previewTransport: previews.previewTransport,

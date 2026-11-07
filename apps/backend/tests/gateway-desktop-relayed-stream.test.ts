@@ -18,7 +18,6 @@ import {
 import { registerFederationIpc } from "../../desktop/electron/federation-ipc";
 import {
   createOrkestratorElectronApi,
-  createPortalApi,
   type IpcRendererLike,
 } from "../../desktop/electron/preload-api";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
@@ -120,7 +119,6 @@ async function startDesktop(
   const client = new BackendHttpClient(info.url, info.token, {
     eventReconnectDelayMs: options.reconnectDelayMs ?? 5,
   });
-  const realms = new Map<number, DesktopWindowContextRecord>();
   const manager = new ConnectionManager({
     localBackend: client,
     secureStorage: {
@@ -136,12 +134,10 @@ async function startDesktop(
       windows.relayBackendEvent(connectionId, event, payload),
   });
   const windows: DesktopWindowContexts<DesktopWindowContextRecord> = new DesktopWindowContexts({
-    realms,
     connections: () => manager,
     createPreviews: () => {
       throw new Error("not used");
     },
-    closeRealms: () => undefined,
     cancelPrompts: () => undefined,
     releaseWorkspaceGrant: () => undefined,
     releaseSlot: () => undefined,
@@ -164,12 +160,9 @@ async function startDesktop(
         void notifications.set(channel, listener),
     },
     trustedRendererUrl: TRUSTED_RENDERER_URL,
-    addRelayedListen: (event: never, channel: unknown, name: unknown) =>
-      windows.addRelayedListen(event, channel, name),
-    removeRelayedListen: (event: never, channel: unknown, name: unknown) =>
-      windows.removeRelayedListen(event, channel, name),
-    resetRelayedListens: (event: never, channel: unknown) =>
-      windows.resetRelayedListens(event, channel),
+    addRelayedListen: (event: never, name: unknown) => windows.addRelayedListen(event, name),
+    removeRelayedListen: (event: never, name: unknown) => windows.removeRelayedListen(event, name),
+    resetRelayedListens: (event: never) => windows.resetRelayedListens(event),
   } as never);
 
   let nextRendererId = 1;
@@ -195,9 +188,8 @@ async function startDesktop(
     return { ipc, contents };
   }
 
-  async function record(id: number, scope: string, portalScope: string | null, extra = {}) {
+  async function record(id: number, scope: string, extra = {}) {
     await manager.bind(scope, LOCAL_CONNECTION_ID);
-    if (portalScope) await manager.bind(portalScope, LOCAL_CONNECTION_ID);
     return {
       window: { isDestroyed: () => false },
       scope,
@@ -206,8 +198,6 @@ async function startDesktop(
       browserPreviewManager: { destroyAll: () => undefined },
       previewTransport: { disposeAll: async () => undefined },
       artifactHosts: { dispose: () => undefined },
-      portalScope,
-      target: null,
       ...extra,
     };
   }
@@ -220,7 +210,7 @@ async function startDesktop(
       const id = nextRendererId++;
       const { ipc, contents } = rendererIpc(id);
       const close = windows.register({
-        ...(await record(id, `window-${id}`, null)),
+        ...(await record(id, `window-${id}`)),
         contents,
       } as never);
       return { id, api: createOrkestratorElectronApi(ipc), ipc, close };
@@ -230,29 +220,10 @@ async function startDesktop(
       const id = nextRendererId++;
       const { ipc, contents } = rendererIpc(id);
       windows.register({
-        ...(await record(id, `window-${id}`, null, { localGatewayTransport: true })),
+        ...(await record(id, `window-${id}`, { localGatewayTransport: true })),
         contents,
       } as never);
       return { id, api: createOrkestratorElectronApi(ipc) };
-    },
-    /** A workspace realm whose portal channel is the window's command node. */
-    async openRealm() {
-      const id = nextRendererId++;
-      const { ipc, contents } = rendererIpc(id);
-      const context = {
-        ...(await record(id, `realm-${id}`, `realm-${id}:portal`)),
-        contents,
-      } as never as DesktopWindowContextRecord;
-      realms.set(id, context);
-      return {
-        id,
-        portal: createPortalApi(ipc),
-        workspace: createOrkestratorElectronApi(ipc),
-        close() {
-          realms.delete(id);
-          windows.dropRelayedListens(id);
-        },
-      };
     },
   };
 }
@@ -415,17 +386,6 @@ describe("a renderer going away", () => {
     await waitForFilter(gateway, [], "The last window closing did not close the stream");
   });
 
-  test("a closed realm's listens are dropped", async () => {
-    const { gateway, info } = await startBackend();
-    const desktop = await startDesktop(info);
-    const realm = await desktop.openRealm();
-    await watch(realm.portal, LEAF_EVENT);
-    await waitForFilter(gateway, [LEAF_EVENT], "The realm's listen never reached the filter");
-
-    realm.close();
-    await waitForFilter(gateway, [], "A closed realm's listen outlived it");
-  });
-
   test("a reloaded window's previous document no longer counts", async () => {
     const { gateway, info } = await startBackend();
     const desktop = await startDesktop(info);
@@ -443,59 +403,53 @@ describe("a renderer going away", () => {
   });
 });
 
-describe("a realm's portal and a local window on the relay", () => {
-  test("each receive what they watch, on their own channel", async () => {
+describe("two local windows on the relay", () => {
+  test("each receive what they watch", async () => {
     const { gateway, info } = await startBackend();
     const desktop = await startDesktop(info);
     const window = await desktop.openRelayWindow();
-    const realm = await desktop.openRealm();
+    const second = await desktop.openRelayWindow();
     const onWindow = await watch(window.api, LEAF_EVENT);
-    const onPortal = await watch(realm.portal, OTHER_EVENT);
-    const onRealmWorkspace: unknown[] = [];
-    realm.workspace.listen(OTHER_EVENT, (payload) => void onRealmWorkspace.push(payload));
-    realm.workspace.listen(LEAF_EVENT, (payload) => void onRealmWorkspace.push(payload));
+    const onSecond = await watch(second.api, OTHER_EVENT);
     await waitForFilter(gateway, [LEAF_EVENT, OTHER_EVENT].sort(), "The filter never widened");
 
     emitRelayed(gateway, LEAF, "for-the-window");
-    emitRelayed(gateway, OTHER, "for-the-portal");
+    emitRelayed(gateway, OTHER, "for-the-second");
     await waitUntil(
-      () => eventIds(onWindow.frames).length === 1 && eventIds(onPortal.frames).length === 1,
+      () => eventIds(onWindow.frames).length === 1 && eventIds(onSecond.frames).length === 1,
       "A frame never arrived",
     );
 
     expect(eventIds(onWindow.frames)).toEqual(["for-the-window"]);
-    expect(eventIds(onPortal.frames)).toEqual(["for-the-portal"]);
-    // Its workspace channel belongs to the node it shows, here also Local, so
-    // these are the same frames on the channel that asked for them.
-    expect(eventIds(onRealmWorkspace).sort()).toEqual(["for-the-portal", "for-the-window"]);
+    expect(eventIds(onSecond.frames)).toEqual(["for-the-second"]);
   });
 
   test("a reconnect the ring covers replays exactly once, with no resync", async () => {
     const { gateway, info } = await startBackend();
     const desktop = await startDesktop(info, { reconnectDelayMs: 200 });
     const window = await desktop.openRelayWindow();
-    const realm = await desktop.openRealm();
+    const second = await desktop.openRelayWindow();
     const onWindow = await watch(window.api, LEAF_EVENT);
-    const onPortal = await watch(realm.portal, LEAF_EVENT);
+    const onSecond = await watch(second.api, LEAF_EVENT);
     await waitForFilter(gateway, [LEAF_EVENT], "The stream never opened");
     await waitUntil(() => resyncs(onWindow.frames).length === 1, "No first announcement");
-    // The portal can join after the first announcement has already reached
-    // the window. Reconnect must add no resync to either observer's baseline.
+    // The second window can join after the first announcement has already
+    // reached the first. Reconnect must add no resync to either one's baseline.
     const windowResyncs = resyncs(onWindow.frames).length;
-    const portalResyncs = resyncs(onPortal.frames).length;
+    const secondResyncs = resyncs(onSecond.frames).length;
 
     await dropFilteredStream(gateway);
     emitRelayed(gateway, LEAF, "missed");
     await waitUntil(
-      () => eventIds(onWindow.frames).length === 1 && eventIds(onPortal.frames).length === 1,
+      () => eventIds(onWindow.frames).length === 1 && eventIds(onSecond.frames).length === 1,
       "The missed frame was never replayed",
       5_000,
     );
 
     expect(eventIds(onWindow.frames)).toEqual(["missed"]);
-    expect(eventIds(onPortal.frames)).toEqual(["missed"]);
+    expect(eventIds(onSecond.frames)).toEqual(["missed"]);
     expect(resyncs(onWindow.frames)).toHaveLength(windowResyncs);
-    expect(resyncs(onPortal.frames)).toHaveLength(portalResyncs);
+    expect(resyncs(onSecond.frames)).toHaveLength(secondResyncs);
   });
 
   test("a gap the ring cannot cover reaches both as a resync", async () => {
@@ -504,24 +458,24 @@ describe("a realm's portal and a local window on the relay", () => {
     });
     const desktop = await startDesktop(info, { reconnectDelayMs: 200 });
     const window = await desktop.openRelayWindow();
-    const realm = await desktop.openRealm();
+    const second = await desktop.openRelayWindow();
     const onWindow = await watch(window.api, LEAF_EVENT);
-    const onPortal = await watch(realm.portal, LEAF_EVENT);
+    const onSecond = await watch(second.api, LEAF_EVENT);
     await waitForFilter(gateway, [LEAF_EVENT], "The stream never opened");
     await waitUntil(() => resyncs(onWindow.frames).length === 1, "No first announcement");
     onWindow.frames.length = 0;
-    onPortal.frames.length = 0;
+    onSecond.frames.length = 0;
 
     await dropFilteredStream(gateway);
     for (let index = 0; index < 32; index += 1) emitRelayed(gateway, LEAF, String(index));
     await waitUntil(
-      () => resyncs(onWindow.frames).length === 1 && resyncs(onPortal.frames).length === 1,
+      () => resyncs(onWindow.frames).length === 1 && resyncs(onSecond.frames).length === 1,
       "The gap was never reported",
       5_000,
     );
 
     expect(onWindow.frames).toEqual([{ nodeId: LEAF, kind: "resync" }]);
-    expect(onPortal.frames).toEqual([{ nodeId: LEAF, kind: "resync" }]);
+    expect(onSecond.frames).toEqual([{ nodeId: LEAF, kind: "resync" }]);
     await waitForFilter(gateway, [LEAF_EVENT], "The stream did not come back");
   });
 
@@ -529,26 +483,26 @@ describe("a realm's portal and a local window on the relay", () => {
     const first = await startBackend();
     const second = await startBackend();
     const desktop = await startDesktop(first.info);
-    const realm = await desktop.openRealm();
-    const onPortal = await watch(realm.portal, LEAF_EVENT);
-    await waitUntil(() => resyncs(onPortal.frames).length === 1, "No first announcement");
-    onPortal.frames.length = 0;
+    const window = await desktop.openRelayWindow();
+    const onWindow = await watch(window.api, LEAF_EVENT);
+    await waitUntil(() => resyncs(onWindow.frames).length === 1, "No first announcement");
+    onWindow.frames.length = 0;
 
     desktop.client.retarget(second.info.url, second.info.token, { preserveCursor: false });
     await waitForFilter(second.gateway, [LEAF_EVENT], "The stream did not follow the route");
-    await waitUntil(() => resyncs(onPortal.frames).length === 1, "The new process was not read");
+    await waitUntil(() => resyncs(onWindow.frames).length === 1, "The new process was not read");
     await waitForFilter(first.gateway, [], "The previous route kept its stream");
 
     emitRelayed(second.gateway, LEAF, "after-the-move");
     await waitUntil(
-      () => eventIds(onPortal.frames).length === 1,
+      () => eventIds(onWindow.frames).length === 1,
       "The new route delivered nothing",
     );
   });
 });
 
 describe("a window on the direct gateway transport", () => {
-  test("adds nothing to main's filter, while a realm inside it still does", async () => {
+  test("adds nothing to main's filter, while a relay window beside it still does", async () => {
     const { gateway, info } = await startBackend();
     const desktop = await startDesktop(info);
     const direct = await desktop.openGatewayWindow();
@@ -558,12 +512,19 @@ describe("a window on the direct gateway transport", () => {
     await waitUntil(() => mainStreams(gateway).length === 1, "Main's stream never opened");
     expect(relayedFilters(gateway)).toEqual([]);
 
-    const realm = await desktop.openRealm();
-    const onPortal = await watch(realm.portal, LEAF_EVENT);
-    await waitForFilter(gateway, [LEAF_EVENT], "The realm's listen never reached the filter");
-    emitRelayed(gateway, LEAF, "for-the-realm");
+    const second = await desktop.openRelayWindow();
+    const onSecond = await watch(second.api, LEAF_EVENT);
+    await waitForFilter(
+      gateway,
+      [LEAF_EVENT],
+      "The relay window's listen never reached the filter",
+    );
+    emitRelayed(gateway, LEAF, "for-the-relay-window");
     emitRelayed(gateway, OTHER, "not-through-main");
-    await waitUntil(() => eventIds(onPortal.frames).length === 1, "The realm's frame never came");
+    await waitUntil(
+      () => eventIds(onSecond.frames).length === 1,
+      "The relay window's frame never came",
+    );
     expect(frames).toEqual([]);
   });
 });
@@ -619,18 +580,18 @@ async function startOlderBackend() {
 }
 
 describe("an older backend", () => {
-  test("still reaches a realm's portal and a relay window under the old name", async () => {
+  test("still reaches two relay windows under the old name", async () => {
     const older = await startOlderBackend();
     const desktop = await startDesktop(older.info);
     const window = await desktop.openRelayWindow();
-    const realm = await desktop.openRealm();
+    const second = await desktop.openRelayWindow();
     const onWindow = await watch(window.api, RELAYED_NODE_EVENT);
-    const onPortal = await watch(realm.portal, RELAYED_NODE_EVENT);
+    const onSecond = await watch(second.api, RELAYED_NODE_EVENT);
     await waitUntil(() => older.openStreams() === 1, "Main's stream never opened");
 
     older.send(relayedEvent(LEAF, "old-name"));
     await waitUntil(
-      () => eventIds(onWindow.frames).length === 1 && eventIds(onPortal.frames).length === 1,
+      () => eventIds(onWindow.frames).length === 1 && eventIds(onSecond.frames).length === 1,
       "An old-name frame never arrived",
     );
 
@@ -645,9 +606,9 @@ describe("an older backend", () => {
     const older = await startOlderBackend();
     const desktop = await startDesktop(older.info);
     const window = await desktop.openRelayWindow();
-    const realm = await desktop.openRealm();
+    const second = await desktop.openRelayWindow();
     const onWindow = await watch(window.api, RELAYED_NODE_EVENT);
-    const onPortal = await watch(realm.portal, RELAYED_NODE_EVENT);
+    const onSecond = await watch(second.api, RELAYED_NODE_EVENT);
     await waitUntil(() => older.openStreams() === 1, "Main's stream never opened");
     older.send(relayedEvent(LEAF, "seen"));
     await waitUntil(() => eventIds(onWindow.frames).length === 1, "First frame never arrived");
@@ -659,7 +620,7 @@ describe("an older backend", () => {
     older.send({ nodeId: LEAF, kind: "resync" });
 
     await waitUntil(
-      () => resyncs(onWindow.frames).length === 1 && resyncs(onPortal.frames).length === 1,
+      () => resyncs(onWindow.frames).length === 1 && resyncs(onSecond.frames).length === 1,
       "The resync never arrived",
     );
     expect(older.eventUrls.every((url) => !url.searchParams.has("includeEvents"))).toBe(true);

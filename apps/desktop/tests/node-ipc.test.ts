@@ -24,7 +24,6 @@ const COMMAND_NODE = "bk_cmd";
 
 type Context = DesktopWindowContextRecord & {
   nodes: Map<string, NodeScopeRecord>;
-  target: { nodeId: string; nodeName: string; path: "direct" | "relay" } | null;
 };
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -112,7 +111,6 @@ function harness() {
       routes.set(scope, connectionId);
       workspaces.set(connectionId, input.nodeId ?? "");
     },
-    restoreScopeFrom: (scope: string, source: string) => routes.set(scope, connectionOf(source)),
     release: mock((scope: string) => {
       routes.delete(scope);
     }),
@@ -143,13 +141,11 @@ function harness() {
     scopes: () => scopes,
   });
   const windows: DesktopWindowContexts<Context> = new DesktopWindowContexts<Context>({
-    realms: new Map(),
     connections: () => manager as unknown as DesktopWindowConnections,
     createPreviews: () => ({
       manager: { destroyAll: () => undefined },
       previewTransport: { disposeAll: async () => undefined },
     }),
-    closeRealms: () => undefined,
     cancelPrompts: () => undefined,
     releaseWorkspaceGrant: (scope) => scopes.release(scope),
     releaseNodeScopes: (context) => nodeScopes.releaseWindowNodeScopes(context),
@@ -253,8 +249,6 @@ function harness() {
       browserPreviewManager: { destroyAll: () => undefined },
       previewTransport: { disposeAll: async () => undefined },
       artifactHosts: { dispose: () => undefined },
-      portalScope: null,
-      target: null,
       nodes: new Map(),
     };
     const closed = windows.register(context);
@@ -451,11 +445,6 @@ describe("node-addressed invoke and events through main", () => {
     });
     // Refusing administration never opens a grant.
     expect(h.opens()).toEqual([]);
-    // A realm-era window whose own scope is on a leaf keeps its refusal.
-    w.context.target = { nodeId: "bk_a", nodeName: "Machine bk_a", path: "relay" };
-    await expect(w.api.webClient.getStatus()).rejects.toThrow(
-      "Machine bk_a's web access and gateway token are managed from Settings → Machines",
-    );
   });
 
   test("an older two-argument invoke and a command-node nodeId use the window's own scope", async () => {
@@ -506,7 +495,7 @@ describe("node-addressed invoke and events through main", () => {
       mapNodeConnection: () => () => undefined,
     });
     const backend = await nodeIpc.backendFor(
-      { scope: "scope-1", portalScope: null } as unknown as Context,
+      { scope: "scope-1" } as unknown as Context,
       COMMAND_NODE,
     );
     const envelope = { domain: "projects", version: 1 };

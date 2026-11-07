@@ -94,7 +94,6 @@ type FakeController = ReturnType<typeof fakeController>;
 type Context = DesktopWindowContextRecord & {
   browserPreviewManager: FakeController;
   nodes: Map<string, NodeScopeRecord>;
-  target: { nodeId: string; nodeName: string; path: "direct" | "relay" } | null;
 };
 
 /** A node runtime as main creates one: its partition, the scope it tunnels over. */
@@ -177,7 +176,6 @@ function harness() {
       routes.set(scope, connectionId);
       workspaces.set(connectionId, input.nodeId ?? "");
     },
-    restoreScopeFrom: (scope: string, source: string) => routes.set(scope, connectionOf(source)),
     release: mock((scope: string) => {
       routes.delete(scope);
     }),
@@ -208,13 +206,11 @@ function harness() {
     scopes: () => scopes,
   });
   const windows: DesktopWindowContexts<Context> = new DesktopWindowContexts<Context>({
-    realms: new Map(),
     connections: () => manager as unknown as DesktopWindowConnections,
     createPreviews: () => ({
       manager: fakeController("window"),
       previewTransport: { disposeAll: async () => undefined },
     }),
-    closeRealms: () => undefined,
     cancelPrompts: () => undefined,
     releaseWorkspaceGrant: (scope) => scopes.release(scope),
     releaseNodeScopes: (context) => nodeScopes.releaseWindowNodeScopes(context),
@@ -330,8 +326,6 @@ function harness() {
       browserPreviewManager: fakeController("window"),
       previewTransport: { disposeAll: async () => undefined },
       artifactHosts: { dispose: () => undefined },
-      portalScope: null,
-      target: null,
       nodes: new Map(),
     };
     const closed = windows.register(context);
@@ -409,7 +403,7 @@ describe("preview runtimes per node scope", () => {
     expect(state).toMatchObject({ tabId: "tab-leaf", owner: "node bk_a" });
     expect(h.created).toHaveLength(1);
     const runtime = h.created[0]!;
-    // The node's partition (`node:<nodeId>`, the key realms use), in this window's slot.
+    // The node's partition (`node:<nodeId>`), in this window's slot.
     expect(runtime.partition).toBe(browserPreviewPartitionForWindow(3, "node:bk_a"));
     expect(nodePreviewPartitionKey("bk_a")).toBe("node:bk_a");
     // Its services tunnel over the window's node scope for the leaf.

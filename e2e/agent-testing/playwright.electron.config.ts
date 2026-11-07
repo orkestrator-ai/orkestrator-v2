@@ -27,7 +27,6 @@ export default defineConfig({
     "service-preview-seeded-electron.spec.ts",
     "artifact-host-electron.spec.ts",
     "design-canvas-electron.spec.ts",
-    "workspace-realm-electron.spec.ts",
     "relayed-events-electron.spec.ts",
     "connection-outage-electron.spec.ts",
     "local-gateway-transport-electron.spec.ts",

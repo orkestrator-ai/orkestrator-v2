@@ -15,8 +15,8 @@ import {
  * A window can reach any node its command node knows without moving the
  * window itself: main opens a node scope `${windowScope}:node:${nodeId}` on
  * demand, bound to that node's workspace with its own client grant, renewed
- * and upgraded by `NodeWorkspaceScopes` like a realm's. Two windows on one
- * node hold two grants. Nothing in the renderer uses these yet.
+ * and upgraded by `NodeWorkspaceScopes`. Two windows on one node hold two
+ * grants. The window's renderer opens them through `node-ipc.ts`.
  */
 
 /**
@@ -48,7 +48,6 @@ export type WorkspaceScopeManager = Pick<
   | "getGatewayBaseUrl"
   | "getRendererRequestAuthorization"
   | "retargetScopeToWorkspace"
-  | "restoreScopeFrom"
   | "release"
   | "epochOf"
   | "rebindWorkspace"
@@ -68,8 +67,7 @@ export function workspaceTargetFrom(
 }
 
 /**
- * Point `scope` at `nodeId`'s workspace and track its grant. Shared by realms
- * (`setDesktopWorkspaceTarget`) and node scopes.
+ * Point `scope` at `nodeId`'s workspace and track its grant: a node scope's open.
  *
  * `commandScope` stays bound to the command node: it opens, renews, reopens
  * and revokes the grant. A pending open keeps its own command access until it
@@ -186,10 +184,8 @@ export interface NodeScopeRecord {
 
 /** A window as node scopes use it. */
 export interface NodeScopeWindow {
-  /** The window's own scope. */
+  /** The window's own scope, on its command node. */
   scope: string;
-  /** Set while the window's own scope is on another node (the realm-era leaf switch). */
-  portalScope: string | null;
   window: { isDestroyed(): boolean };
   contents: { isDestroyed(): boolean; send(channel: string, ...args: unknown[]): void };
   nodes: Map<string, NodeScopeRecord>;
@@ -373,7 +369,7 @@ export class DesktopNodeScopes {
       // The command node is captured now: renewals and revokes stay with the
       // node that issued the grant even if the window later moves.
       const commandConnectionId = yield* Effect.try({
-        try: () => manager.getConnectionId(context.portalScope ?? context.scope),
+        try: () => manager.getConnectionId(context.scope),
         catch: (error) => error,
       });
       yield* Effect.acquireRelease(

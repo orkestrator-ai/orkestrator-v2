@@ -35,8 +35,6 @@
     "./node/bridge-launch-environment": "./src/node/bridge-launch-environment.ts",
     "./environment-hydration": "./src/environment-hydration.ts",
     "./logger": "./src/logger.ts",
-    "./realm-boot-timing": "./src/realm-boot-timing.ts",
-    "./realm-request": "./src/realm-request.ts",
     "./log-vocabulary": "./src/log-vocabulary/index.ts",
     "./contract": "./src/contract/index.ts",
     "./contract/client": "./src/contract/client.ts",

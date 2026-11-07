@@ -91,20 +91,6 @@ function withReadableInvokeErrors(ipcRenderer: IpcRendererLike): IpcRendererLike
   };
 }
 
-type WorkspaceTarget = {
-  nodeId: string;
-  nodeName: string;
-  path: "direct" | "relay";
-  routeKind?: "https" | "ssh";
-  via?: string;
-};
-
-type DesktopIdentity = {
-  connectionId: string;
-  backendId: string | null;
-  legacyOrigin: string | null;
-};
-
 /** Main-process snapshot of the window's machine; never contains a credential. */
 type DesktopGatewaySnapshot = {
   baseUrl: string | null;
@@ -115,37 +101,7 @@ type DesktopGatewaySnapshot = {
   /** This computer's own backend installation id; null until known. */
   localInstallationId: string | null;
   localGatewayBaseUrl: string | null;
-  workspaceTarget: WorkspaceTarget | null;
-  portalIdentity: DesktopIdentity | null;
 };
-
-function parseWorkspaceTarget(value: unknown): WorkspaceTarget | null {
-  if (!value || typeof value !== "object") return null;
-  const target = value as Record<string, unknown>;
-  if (typeof target.nodeId !== "string" || typeof target.nodeName !== "string") return null;
-  if (target.path !== "direct" && target.path !== "relay") return null;
-  return {
-    nodeId: target.nodeId,
-    nodeName: target.nodeName,
-    path: target.path,
-    ...(target.routeKind === "https" || target.routeKind === "ssh"
-      ? { routeKind: target.routeKind }
-      : {}),
-    ...(typeof target.via === "string" ? { via: target.via } : {}),
-  };
-}
-
-function parseIdentity(value: unknown): DesktopIdentity | null {
-  if (!value || typeof value !== "object") return null;
-  const identity = value as Record<string, unknown>;
-  if (typeof identity.connectionId !== "string") return null;
-  const text = (field: unknown) => (typeof field === "string" && field ? field : null);
-  return {
-    connectionId: identity.connectionId,
-    backendId: text(identity.backendId),
-    legacyOrigin: text(identity.legacyOrigin),
-  };
-}
 
 function readGatewaySnapshot(ipcRenderer: {
   sendSync(channel: string): unknown;
@@ -165,8 +121,6 @@ function readGatewaySnapshot(ipcRenderer: {
       backendOnThisDevice: value.backendOnThisDevice === true,
       localInstallationId: text(value.localInstallationId),
       localGatewayBaseUrl: text(value.localGatewayBaseUrl),
-      workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
-      portalIdentity: parseIdentity(value.portalIdentity),
     };
   } catch {
     return null;
@@ -193,11 +147,7 @@ export function exposeActiveConnectionGateway(
       legacyOrigin: snapshot.legacyOrigin,
       // `backendOnThisDevice(nodeId)` in the renderer compares against this.
       localInstallationId: snapshot.localInstallationId,
-      ...(snapshot.portalIdentity ? { portal: snapshot.portalIdentity } : {}),
     });
-    if (snapshot.workspaceTarget) {
-      contextBridge.exposeInMainWorld("orkestratorWorkspaceTarget", snapshot.workspaceTarget);
-    }
   }
   const activeConnection = connectionList?.connections.find((connection) => connection.active);
   if (!snapshot?.baseUrl && activeConnection?.kind !== "remote") return false;
@@ -367,133 +317,30 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
 }
 
 /**
- * Tells main which per-node relayed events this document listens to on one
- * channel, because main takes only those from its backend. The listeners stay
- * here; main only learns the names. A new document starts by saying it has none,
- * since a reload leaves main with the previous document's.
+ * Tells main which per-node relayed events this document listens to, because
+ * main takes only those from its backend. The listeners stay here; main only
+ * learns the names. A new document starts by saying it has none, since a
+ * reload leaves main with the previous document's.
  */
-function createRelayedListenReporter(
-  ipcRenderer: IpcRendererLike,
-  channel: "workspace" | "portal",
-) {
+function createRelayedListenReporter(ipcRenderer: IpcRendererLike) {
   const ready = new Map<string, Promise<void>>();
-  ipcRenderer.send?.("orkestrator:relayed-events:reset", channel);
+  ipcRenderer.send?.("orkestrator:relayed-events:reset");
   return {
     started(event: string): void {
       if (!isPerNodeRelayedEvent(event)) return;
       ready.set(
         event,
-        ipcRenderer
-          .invoke<void>("orkestrator:relayed-events:listen", channel, event)
-          .catch(() => undefined),
+        ipcRenderer.invoke<void>("orkestrator:relayed-events:listen", event).catch(() => undefined),
       );
     },
     stopped(event: string): void {
       if (!isPerNodeRelayedEvent(event)) return;
       ready.delete(event);
-      ipcRenderer.send?.("orkestrator:relayed-events:unlisten", channel, event);
+      ipcRenderer.send?.("orkestrator:relayed-events:unlisten", event);
     },
     /** Settles once main's stream carrying this event is open. */
     eventStreamReady(event: string): Promise<void> {
       return ready.get(event) ?? Promise.resolve();
-    },
-  };
-}
-
-/**
- * `window.orkestratorPortal`: the window's own command node while its
- * workspace (`window.orkestrator`) is on another node.
- */
-export function createPortalApi(rawIpcRenderer: IpcRendererLike) {
-  const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
-  const listeners = new Map<string, Set<EventCallback<unknown>>>();
-  const relayedListens = createRelayedListenReporter(ipcRenderer, "portal");
-  ipcRenderer.on("orkestrator:portal-event", (_event, name: string, payload: unknown) => {
-    const callbacks = listeners.get(name);
-    if (!callbacks) return;
-    for (const callback of callbacks) callback(payload);
-  });
-  return {
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
-      return ipcRenderer.invoke("orkestrator:portal:invoke", command, args ?? {});
-    },
-    listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
-      const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
-      if (callbackSet.size === 0) relayedListens.started(event);
-      listeners.set(event, callbackSet);
-      callbackSet.add(callback as EventCallback<unknown>);
-      return () => {
-        if (!callbackSet.delete(callback as EventCallback<unknown>)) return;
-        if (callbackSet.size === 0) {
-          listeners.delete(event);
-          relayedListens.stopped(event);
-        }
-      };
-    },
-    eventStreamReady: relayedListens.eventStreamReady,
-  };
-}
-
-/** Expose the portal channel in a workspace realm: its window's command node. */
-export function exposePortal(
-  contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
-  ipcRenderer: IpcRendererLike & { sendSync(channel: string): unknown },
-): boolean {
-  if (!readGatewaySnapshot(ipcRenderer)?.workspaceTarget) return false;
-  contextBridge.exposeInMainWorld("orkestratorPortal", createPortalApi(ipcRenderer));
-  return true;
-}
-
-type WorkspaceViewEvent =
-  | { viewId: string; type: "message"; message: unknown }
-  | { viewId: string; type: "closed" | "crashed" | "load-failed" };
-
-export function createWorkspaceViewsApi(ipcRenderer: IpcRendererLike) {
-  const listeners = new Set<(event: WorkspaceViewEvent) => void>();
-  ipcRenderer.on("orkestrator:workspace-views:event", (_event, payload: WorkspaceViewEvent) => {
-    for (const listener of listeners) listener(payload);
-  });
-  return {
-    open(input: { nodeId: string; request: Record<string, unknown> }): Promise<{ viewId: string }> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:open", input);
-    },
-    setBounds(
-      viewId: string,
-      bounds: { x: number; y: number; width: number; height: number },
-    ): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:set-bounds", viewId, bounds);
-    },
-    setVisible(viewId: string, visible: boolean): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:set-visible", viewId, visible);
-    },
-    capture(viewId: string): Promise<string | null> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:capture", viewId);
-    },
-    send(viewId: string, message: Record<string, unknown>): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:send", viewId, message);
-    },
-    close(viewId: string): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:close", viewId);
-    },
-    onEvent(callback: (event: WorkspaceViewEvent) => void): () => void {
-      listeners.add(callback);
-      return () => listeners.delete(callback);
-    },
-  };
-}
-
-export function createWorkspaceRealmApi(ipcRenderer: IpcRendererLike) {
-  const listeners = new Set<(message: unknown) => void>();
-  ipcRenderer.on("orkestrator:workspace-realm:message", (_event, message: unknown) => {
-    for (const listener of listeners) listener(message);
-  });
-  return {
-    post(message: Record<string, unknown>): void {
-      void ipcRenderer.invoke("orkestrator:workspace-realm:post", message).catch(() => undefined);
-    },
-    onMessage(callback: (message: unknown) => void): () => void {
-      listeners.add(callback);
-      return () => listeners.delete(callback);
     },
   };
 }
@@ -656,7 +503,7 @@ export function createNodeApis(ipcRenderer: IpcRendererLike) {
 export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
   const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
-  const relayedListens = createRelayedListenReporter(ipcRenderer, "workspace");
+  const relayedListens = createRelayedListenReporter(ipcRenderer);
   const nodeApis = createNodeApis(ipcRenderer);
 
   ipcRenderer.on("orkestrator:event", (_event, name: string, payload: unknown) => {
@@ -863,16 +710,6 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
         ipcRenderer.send?.("orkestrator:ssh-prompt-answer", promptId, answer);
       },
     },
-
-    /**
-     * Other nodes' workspaces in this window's central region. The main
-     * process binds each realm to its node; the window places it and passes
-     * messages, and never learns a route or a credential.
-     */
-    workspaceViews: createWorkspaceViewsApi(ipcRenderer),
-
-    /** In a workspace realm: messages to and from its window. */
-    workspaceRealm: createWorkspaceRealmApi(ipcRenderer),
 
     process: {
       exit(code?: number): Promise<void> {

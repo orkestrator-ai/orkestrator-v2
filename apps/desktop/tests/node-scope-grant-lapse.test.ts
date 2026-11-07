@@ -164,7 +164,6 @@ function topology(options: { dropStreamsOnRevoke: boolean }) {
   const nodeScopes = new DesktopNodeScopes({ manager: () => manager, scopes: () => grants });
   const context: NodeScopeWindow = {
     scope: "window",
-    portalScope: null,
     window: { isDestroyed: () => false },
     contents: { isDestroyed: () => false, send: () => undefined },
     nodes: new Map(),

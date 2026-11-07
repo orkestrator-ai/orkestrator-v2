@@ -19,11 +19,7 @@ import {
 } from "../electron/connection-catalogue-store";
 import { ConnectionManager, type SecureStorage } from "../electron/connection-manager";
 import { NodeWorkspaceScopes, WORKSPACE_DIRECT_RETRY_MS } from "../electron/node-workspaces";
-import {
-  setDesktopWorkspaceTarget,
-  type WorkspaceContext,
-} from "../electron/window-workspace-target";
-import { refreshWorkspaceRealm } from "../electron/realm-contexts";
+import { openWorkspaceScope, type WorkspaceTarget } from "../electron/node-scopes";
 import type { RouteFailure, SshTunnelProvider } from "../electron/connection-routes";
 
 const originalFetch = globalThis.fetch;
@@ -911,24 +907,24 @@ test("useRoute releases a transport if its requesting scope closes while dialing
   }
 });
 
-test("a window points at a leaf workspace and back to its command node", async () => {
+test("a node scope points at a leaf workspace while the window stays on its command node", async () => {
   const gateways = installGateways({ "https://leaf.example": { installationId: "bk_leaf" } });
   const connections = manager(new MemoryStore(catalogue([])));
   try {
     await connections.initialize();
     await connections.bind("window", "local");
-    await connections.bind("window:portal", connections.getConnectionId("window"));
-    connections.retargetScopeToWorkspace("window", {
+    await connections.bind("window:node:bk_leaf", connections.getConnectionId("window"));
+    connections.retargetScopeToWorkspace("window:node:bk_leaf", {
       workspaceId: "w1",
       nodeId: "bk_leaf",
       baseUrl: "https://leaf.example",
       token,
     });
-    expect(connections.getConnectionId("window")).toBe("workspace:w1");
-    expect(connections.getConnectionId("window:portal")).toBe("local");
-    expect(connections.getGatewayBaseUrl("window")).toBe("https://leaf.example");
-    expect(connections.getBackendIdentity("window").backendId).toBe("bk_leaf");
-    await connections.invoke("get_projects", {}, "window");
+    expect(connections.getConnectionId("window:node:bk_leaf")).toBe("workspace:w1");
+    expect(connections.getConnectionId("window")).toBe("local");
+    expect(connections.getGatewayBaseUrl("window:node:bk_leaf")).toBe("https://leaf.example");
+    expect(connections.getBackendIdentity("window:node:bk_leaf").backendId).toBe("bk_leaf");
+    await connections.invoke("get_projects", {}, "window:node:bk_leaf");
     expect(gateways.requests.at(-1)?.origin).toBe("https://leaf.example");
     expect(() =>
       connections.retargetScopeToWorkspace("other", {
@@ -938,9 +934,8 @@ test("a window points at a leaf workspace and back to its command node", async (
       }),
     ).toThrow();
 
-    connections.restoreScopeFrom("window", "window:portal");
+    connections.release("window:node:bk_leaf");
     expect(connections.getConnectionId("window")).toBe("local");
-    expect(connections.getGatewayBaseUrl("window")).toBeNull();
     expect(connections.backendForConnection("workspace:w1")).toBeNull();
   } finally {
     connections.dispose();
@@ -1252,7 +1247,7 @@ describe("handover connection-manager integration", () => {
   });
 });
 
-test("a realm's existing relay-origin preview is replaced by an authorized direct-origin preview", async () => {
+test("a node scope's relay-origin requests are authorized on its direct origin after the upgrade", async () => {
   setSystemTime(new Date("2026-10-25T00:00:00Z"));
   const relay = "https://relay.example";
   const direct = "https://direct.example";
@@ -1285,76 +1280,40 @@ test("a realm's existing relay-origin preview is replaced by an authorized direc
     },
   });
   const scopes = new NodeWorkspaceScopes(async () => ({}));
-  const binding: WorkspaceContext = {
-    scope: "realm",
-    portalScope: null,
-    target: null,
-    window: { isDestroyed: () => false },
-  };
-  let registered:
-    | {
-        target: WorkspaceContext["target"];
-        contents: { isDestroyed(): boolean; reload(): void };
-        previewConnectionId: string;
-        browserPreviewManager: { destroyAll(): void };
-        previewTransport: { disposeAll(): Promise<void> };
-      }
-    | undefined;
-  let previewUrl = "";
-  let oldDocumentClosed = false;
-  let reloaded = false;
+  const scope = "window:node:bk_leaf";
+  const previewUrl = () =>
+    `${connections.getGatewayBaseUrl(scope)}/__orkestrator/browser/loopback/3000/`;
+  let target: WorkspaceTarget | null = null;
   try {
     await connections.initialize();
-    await connections.bind("realm", "local");
-    await setDesktopWorkspaceTarget(
-      binding,
-      { nodeId: "bk_leaf" },
-      {
-        manager: connections,
-        scopes,
-        committed: (updated) => {
-          if (registered)
-            refreshWorkspaceRealm(registered, updated.target, () => ({
-              manager: { destroyAll: () => undefined },
-              previewTransport: { disposeAll: async () => undefined },
-            }));
-        },
+    await connections.bind(scope, "local");
+    await connections.bind(`${scope}:command`, "local");
+    target = await openWorkspaceScope({
+      scope,
+      commandScope: `${scope}:command`,
+      nodeId: "bk_leaf",
+      manager: connections,
+      scopes,
+      closed: () => false,
+      closedMessage: "closed",
+      rebound: (replacement) => {
+        target = replacement;
       },
-    );
-    previewUrl = `${connections.getGatewayBaseUrl("realm")}/__orkestrator/browser/loopback/3000/`;
-    expect(new URL(previewUrl).origin).toBe(relay);
-    expect(connections.getRendererRequestAuthorization(previewUrl, "realm")).toBe(
+    });
+    expect(target.path).toBe("relay");
+    expect(new URL(previewUrl()).origin).toBe(relay);
+    expect(connections.getRendererRequestAuthorization(previewUrl(), scope)).toBe(
       "Bearer client-grant",
     );
-    registered = {
-      target: binding.target,
-      previewConnectionId: connections.getConnectionId("realm"),
-      browserPreviewManager: {
-        destroyAll: () => {
-          oldDocumentClosed = true;
-        },
-      },
-      previewTransport: { disposeAll: async () => undefined },
-      contents: {
-        isDestroyed: () => false,
-        reload: () => {
-          expect(oldDocumentClosed).toBe(true);
-          expect(registered?.target?.path).toBe("direct");
-          // A remount resolves the persisted canonical localhost address again.
-          previewUrl = `${connections.getGatewayBaseUrl("realm")}/__orkestrator/browser/loopback/3000/`;
-          expect(new URL(previewUrl).origin).toBe(direct);
-          expect(connections.getRendererRequestAuthorization(previewUrl, "realm")).toBe(
-            "Bearer client-grant",
-          );
-          reloaded = true;
-        },
-      },
-    };
     setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
-    scopes.noteUse("realm");
-    await until(() => reloaded, "direct realm refresh");
+    scopes.noteUse(scope);
+    await until(() => target?.path === "direct", "direct node scope rebind");
+    // A preview resolves the canonical localhost address against the new route.
+    expect(new URL(previewUrl()).origin).toBe(direct);
+    expect(connections.getRendererRequestAuthorization(previewUrl(), scope)).toBe(
+      "Bearer client-grant",
+    );
     expect(revoked).toContain("grant-1");
-    expect(registered.target?.path).toBe("direct");
   } finally {
     scopes.releaseAll();
     connections.dispose();

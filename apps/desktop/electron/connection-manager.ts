@@ -180,10 +180,10 @@ export type SavedMachineExport = { backend: SavedBackend; token: string | null }
  * A window *binds* to one target: normally this computer's own backend, the
  * desktop's command node, which itself connects to the other nodes and
  * serves the multi-machine views (docs/architecture/command-nodes.md). A
- * saved machine can still be bound directly. A window's scope can be
+ * saved machine can still be bound directly. A window's node scope is
  * pointed at another node's workspace with a client grant
- * (`retargetScopeToWorkspace`) and back (`restoreScopeFrom`). Nothing here
- * starts, stops or moves work.
+ * (`retargetScopeToWorkspace`, `node-scopes.ts`). Nothing here starts, stops
+ * or moves work.
  */
 export class ConnectionManager {
   private readonly localBackend: LocalBackend;
@@ -1260,12 +1260,11 @@ export class ConnectionManager {
   }
 
   /**
-   * Point a window's live scope at another node's workspace, reached with a
-   * client grant the command node obtained (directly, or over the command
-   * node's own route to it): the window becomes that node's client. The
-   * grant is held for this scope only, never saved, and released when the
-   * scope is pointed back or closed. The caller keeps the window's command
-   * connection bound to a portal scope, so pointing back needs no reconnect.
+   * Point a live scope (a window's node scope) at another node's workspace,
+   * reached with a client grant the command node obtained (directly, or over
+   * the command node's own route to it): the scope becomes that node's client.
+   * The grant is held for this scope only, never saved, and released when the
+   * scope is released. The window's own scope stays on its command node.
    */
   retargetScopeToWorkspace(scope: string, input: WorkspaceScopeInput): void {
     this.captureScopeGeneration(scope);
@@ -1277,15 +1276,6 @@ export class ConnectionManager {
     // Late work started for the scope's previous machine must not apply.
     this.scopeGenerations.set(scope, ++this.nextScopeGeneration);
     this.installWorkspace(scope, connectionId, input);
-  }
-
-  /** Point a scope back at the machine another scope is bound to (the window's command node). */
-  restoreScopeFrom(scope: string, sourceScope: string): void {
-    this.captureScopeGeneration(scope);
-    const connectionId = this.connectionIdForScope(sourceScope);
-    this.scopeGenerations.set(scope, ++this.nextScopeGeneration);
-    if (connectionId === LOCAL_CONNECTION_ID) this.setScopeLocal(scope);
-    else this.bindScope(scope, connectionId);
   }
 
   private installWorkspace(scope: string, connectionId: string, input: WorkspaceScopeInput): void {

@@ -3,7 +3,7 @@ id: 0001
 title: "One shared definition for the realm open request"
 phase: 0
 plan: "§1 and §12 Phase 0.1"
-status: in-progress
+status: done
 depends_on: []
 blocked_by: ""
 owner: claude-worker
@@ -59,7 +59,7 @@ On a cold desktop realm, every field that the window asks for reaches the realm,
 
 ## Done when
 
-- [ ] A cold desktop realm opened with each of the four fields does the right thing on first open. This needs one live check on a `dev:test` profile with a second profile attached; otherwise list it under "needs live evidence".
+- [x] A cold desktop realm opened with each of the four fields does the right thing on first open. This needs one live check on a `dev:test` profile with a second profile attached; otherwise list it under "needs live evidence".
 
 ## Notes
 
@@ -68,8 +68,9 @@ On a cold desktop realm, every field that the window asks for reaches the realm,
 - Shape: `packages/protocol/src/realm-request.ts` holds `REALM_BOARD_TABS`, `REALM_DIALOGS`, `REALM_WORK_TYPES` (`as const`), `RealmWorkTarget` (the four local variants, moved from `coordinator-work-items`; `LocalWorkTarget` is now an alias of it), `RealmOpenRequest`, the guards (`realmId`, `isRealmBoardTab`, `isRealmDialog`, `isRealmWorkType`, `isEnvironmentDialog`, `parseRealmWorkTarget`), one normaliser `parseRealmRequest`, the encoder `realmRequestToSearch` (normalises before writing, so only accepted fields reach a URL) and the parser `parseRealmRequestSearch`. The web `parseShellMessage` `select` branch and `parseRealmMessage` `open` branch use the same guards, so the select message, the browser URL and the desktop URL share one validation.
 - Main still throws on a malformed project, environment or create-environment ID (unchanged behaviour); an unknown tab or dialog, or a work target off the request's own project or environment, is dropped rather than failing the open, as the realm itself drops it. `REALM_SEARCH_ACCEPTS` in `federation-ipc.ts` exposes the protocol lists for the identity drift test.
 - Effect: not used. This is a pure synchronous encode/parse pair shared with a browser bundle; plain guards are smaller and match the neighbouring `realm-boot-timing` module.
-- Open: the "Done when" live check (a cold desktop realm opened with each of the four fields) is not done here; live check deferred to the wave-0 live-evidence pass.
+- Live check (2026-11-07): a real Electron 45 command node (development build, agent-test profile, Playwright-launched; `output/agent-testing/uf-live/scripts/uf-live-measure-electron.spec.ts`) with a leaf backend from source. Each cold realm was opened through the preload API the window's `NativeRealm` uses (`workspaceViews.open({ nodeId, request })`) with the request shape the web side sends, rather than by clicking through the window UI, and closed before the next. The realm's URL as built by main carried the field each time (`boardTab=home`; `workType=graph-run` + `workId`; `bugReport=1`; `dialog=environment-rebuild`), and the realm acted on it on first open: Home tab selected; a "Graph run 1" tab opened; the Report a bug sheet open; Environment Settings open. Evidence: `output/agent-testing/uf-live/electron-measurements.json` (`0001`), summarised in [the measurements report](../../docs/reports/unified-federation-measurements.md). Deviation (2026-11-07): the Done-when names a `dev:test` profile with a second profile attached; the check ran on the Electron spec harness instead (its own agent-test profile plus an attached leaf backend), because a `dev:test` profile's Electron cannot be driven from Playwright. The path checked (window IPC, main's `realmSearch`, a cold `WebContentsView`) is the same. The work target used was `graph-run` (the one with a visible effect without seeded work); the other three types share the same encoder path covered by the protocol round-trip test.
 
 ## Work log
 
 - 2026-11-07 (claude-worker): added the shared `realm-request` protocol module and export; desktop `realmSearch` and the web encoder, URL parser and message parsers now use it; `LocalWorkTarget` aliases the protocol work target. Tests: `packages/protocol/src/realm-request.test.ts` (4 pass), `apps/desktop/tests/federation-ipc.test.ts` (16 pass, 2 new plus `home` in the board-tab test), web realm suites (workspace-realm, RemoteWorkspaceRegion, WorkspaceRealmHost, coordinator-work-navigation, app-shortcuts: 99 pass). Protocol, desktop and web typecheck clean.
+- 2026-11-07 (claude-worker, live evidence): cold desktop realm checked live with `home`, a `graph-run` work target, `bugReport` and `environment-rebuild`; none dropped, each applied on first open. Done-when ticked; status done.

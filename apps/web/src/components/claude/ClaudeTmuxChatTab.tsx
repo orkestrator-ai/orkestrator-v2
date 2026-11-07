@@ -17,26 +17,11 @@ import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInt
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
 import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import { createUuid } from "@/lib/uuid";
-import {
-  answerSelectionPrompt,
-  answerPreToolUse,
-  getPendingHooks,
-  getStatus,
-  getTranscriptPage,
-  holdHook,
-  interruptSession,
-  replyHook,
-  startSession,
-  submit as submitToTmux,
-  switchEffort,
-  switchFastMode,
-  switchModel,
-  switchPlanMode,
-  subscribe,
-  type HookEventKind,
-  type TmuxPendingHook,
-  type TmuxEvent,
-  type TranscriptPage,
+import type {
+  HookEventKind,
+  TmuxPendingHook,
+  TmuxEvent,
+  TranscriptPage,
 } from "@/lib/claude-tmux-client";
 import type { AgentInteractionApplyOutcome } from "@orkestrator/protocol/agent-interactions";
 import { buildTmuxPromptWithAttachments } from "@orkestrator/protocol/tmux-prompt";
@@ -137,6 +122,7 @@ import {
   tmuxModelList,
 } from "./ClaudeTmuxChatTab.parts";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useClaudeTmuxClient } from "@/lib/claude-tmux-scope";
 
 export function ClaudeTmuxChatTab({
   tabId,
@@ -150,6 +136,7 @@ export function ClaudeTmuxChatTab({
   initialFastMode,
   refreshRequestId = 0,
 }: Props) {
+  const nodeTmux = useClaudeTmuxClient();
   const nodeBackend = useScopeBackend();
   const { environmentId, containerId } = data;
   const stateKey = useMemo(
@@ -420,15 +407,15 @@ export function ClaudeTmuxChatTab({
           const permissionModeVersion = permissionModeEventVersionRef.current;
           const fastModeMutationVersion = fastModeMutationVersionRef.current;
           const tabStateBeforeAttempt = tmuxTabs.getState().tabs.get(storeKey);
-          const status = await getStatus(tabId, environmentId);
+          const status = await nodeTmux.getStatus(tabId, environmentId);
           if (cancelled) return;
 
           let page: TranscriptPage = { lines: [], earlierCursor: null };
           let hooks: TmuxPendingHook[] = [];
           if (status && status.environment_id === environmentId && status.session_id) {
             [page, hooks] = await Promise.all([
-              getTranscriptPage(tabId, environmentId),
-              getPendingHooks(tabId, environmentId),
+              nodeTmux.getTranscriptPage(tabId, environmentId),
+              nodeTmux.getPendingHooks(tabId, environmentId),
             ]);
             if (cancelled) return;
           }
@@ -480,17 +467,21 @@ export function ClaudeTmuxChatTab({
               );
               for (const hook of hooks) {
                 if (shouldAutoAllowPermissionHook(hook)) {
-                  void autoAllowPermissionHook(tabId, environmentId, hook.id, hook.payload).catch(
-                    (e) => {
-                      if (!cancelled) {
-                        addPendingPermission(
-                          storeKey,
-                          payloadToPermission(hook.id, hook.payload, hookTiming(hook)),
-                        );
-                        setError(String(e));
-                      }
-                    },
-                  );
+                  void autoAllowPermissionHook(
+                    nodeTmux,
+                    tabId,
+                    environmentId,
+                    hook.id,
+                    hook.payload,
+                  ).catch((e) => {
+                    if (!cancelled) {
+                      addPendingPermission(
+                        storeKey,
+                        payloadToPermission(hook.id, hook.payload, hookTiming(hook)),
+                      );
+                      setError(String(e));
+                    }
+                  });
                 }
               }
             } else {
@@ -542,15 +533,16 @@ export function ClaudeTmuxChatTab({
     replaceTranscript,
     applyTailPage,
     replacePendingHooks,
+    nodeTmux,
   ]);
 
   const loadEarlierPage = useCallback(async () => {
     const before = tmuxTabs.getState().tabs.get(storeKey)?.earlierCursor;
     if (typeof before !== "string") return;
-    const page = await getTranscriptPage(tabId, environmentId, before);
+    const page = await nodeTmux.getTranscriptPage(tabId, environmentId, before);
     if (page.expired) {
       // The transcript was replaced under the cursor: start again from its tail.
-      const tail = await getTranscriptPage(
+      const tail = await nodeTmux.getTranscriptPage(
         tabId,
         environmentId,
         undefined,
@@ -565,7 +557,7 @@ export function ClaudeTmuxChatTab({
       return;
     }
     prependTranscriptPage(storeKey, before, page);
-  }, [applyTailPage, environmentId, prependTranscriptPage, storeKey, tabId, tmuxTabs]);
+  }, [applyTailPage, environmentId, prependTranscriptPage, storeKey, tabId, tmuxTabs, nodeTmux]);
   const loadEarlierPlace = useHeldTranscriptPlace(storeKey);
   useRestoreHeldPlace(loadEarlierPlace, displayMessages, scrollToIndex, loadingEarlier);
   const loadEarlierAutomatically = useCallback(
@@ -632,138 +624,149 @@ export function ClaudeTmuxChatTab({
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    subscribe((ev: TmuxEvent) => {
-      // Every event the tmux backend emits is tab-scoped — ignore events for
-      // other tabs even when they happen to live in the same workspace.
-      if (ev.tab_id !== tabId || ev.environment_id !== environmentId) return;
+    nodeTmux
+      .subscribe((ev: TmuxEvent) => {
+        // Every event the tmux backend emits is tab-scoped — ignore events for
+        // other tabs even when they happen to live in the same workspace.
+        if (ev.tab_id !== tabId || ev.environment_id !== environmentId) return;
 
-      switch (ev.kind) {
-        case "started":
-          startedRef.current = true;
-          autoStartAttemptedRef.current = true;
-          setRunning(storeKey, true, {
-            environmentId: ev.environment_id,
-            sessionId: ev.session_id,
-            observationGeneration: ev.observation_generation,
-            resumed: ev.resumed,
-          });
-          applyFastMode(ev.fast_mode);
-          return;
-        case "initial-prompt-sent":
-          if (ev.environment_id === environmentId) {
-            // Initial prompts are submitted by the backend, so they do not go
-            // through the compose submit path that flips busy optimistically.
-            setTabBusy(storeKey, true);
-            clearTabInitialPrompt(tabId, environmentId);
-          }
-          return;
-        case "permission-mode-changed":
-          permissionModeEventVersionRef.current += 1;
-          setPlanMode(ev.permission_mode === "plan");
-          return;
-        case "fast-mode-changed":
-          applyFastMode(ev.fast_mode);
-          return;
-        case "observation":
-          setObservation(storeKey, ev.observation);
-          return;
-        case "stopped":
-          startedRef.current = false;
-          permissionModeEventVersionRef.current += 1;
-          setRunning(storeKey, false, { sessionId: null });
-          setPlanMode(false);
-          // No claude process means no in-flight turn.
-          setTabBusy(storeKey, false);
-          return;
-        case "transcript-line":
-          if (ev.line.type === "permission-mode" && typeof ev.line.permissionMode === "string") {
-            permissionModeEventVersionRef.current += 1;
-            setPlanMode(ev.line.permissionMode === "plan");
-          }
-          applyTranscriptLine(storeKey, ev.line);
-          break;
-        case "hook": {
-          const timing = {
-            requestedAt: ev.requested_at,
-            expiresAt: ev.expires_at,
-            ...(ev.hold ? { hold: ev.hold } : {}),
-          };
-          // Drive the "Claude is thinking…" indicator from the same hook
-          // events Claude Code emits for the agent lifecycle. We rely on
-          // UserPromptSubmit/Stop here rather than transcript content so
-          // tool-call turns (no final text) still clear the spinner.
-          if (ev.event_kind === "UserPromptSubmit") {
-            setTabBusy(storeKey, true);
-          } else if (ev.event_kind === "Stop" || ev.event_kind === "StopFailure") {
-            setTabBusy(storeKey, false);
-          }
-          if (ev.event_kind === "PreToolUse") {
-            const toolName = hookToolName(ev.payload);
-            if (toolName === "AskUserQuestion") {
-              addPendingQuestion(storeKey, payloadToQuestion(ev.event_id, ev.payload, timing));
-            } else if (toolName === "ExitPlanMode") {
-              addPendingPlan(storeKey, payloadToPlan(ev.event_id, ev.payload, timing));
-            } else {
-              addPendingApproval(storeKey, payloadToApproval(ev.event_id, ev.payload, timing));
+        switch (ev.kind) {
+          case "started":
+            startedRef.current = true;
+            autoStartAttemptedRef.current = true;
+            setRunning(storeKey, true, {
+              environmentId: ev.environment_id,
+              sessionId: ev.session_id,
+              observationGeneration: ev.observation_generation,
+              resumed: ev.resumed,
+            });
+            applyFastMode(ev.fast_mode);
+            return;
+          case "initial-prompt-sent":
+            if (ev.environment_id === environmentId) {
+              // Initial prompts are submitted by the backend, so they do not go
+              // through the compose submit path that flips busy optimistically.
+              setTabBusy(storeKey, true);
+              clearTabInitialPrompt(tabId, environmentId);
             }
-          } else if (ev.event_kind === "PermissionRequest") {
-            if (isQuestionPermissionPayload(ev.payload)) {
-              void autoAllowPermissionHook(tabId, environmentId, ev.event_id, ev.payload).catch(
-                (e) => {
+            return;
+          case "permission-mode-changed":
+            permissionModeEventVersionRef.current += 1;
+            setPlanMode(ev.permission_mode === "plan");
+            return;
+          case "fast-mode-changed":
+            applyFastMode(ev.fast_mode);
+            return;
+          case "observation":
+            setObservation(storeKey, ev.observation);
+            return;
+          case "stopped":
+            startedRef.current = false;
+            permissionModeEventVersionRef.current += 1;
+            setRunning(storeKey, false, { sessionId: null });
+            setPlanMode(false);
+            // No claude process means no in-flight turn.
+            setTabBusy(storeKey, false);
+            return;
+          case "transcript-line":
+            if (ev.line.type === "permission-mode" && typeof ev.line.permissionMode === "string") {
+              permissionModeEventVersionRef.current += 1;
+              setPlanMode(ev.line.permissionMode === "plan");
+            }
+            applyTranscriptLine(storeKey, ev.line);
+            break;
+          case "hook": {
+            const timing = {
+              requestedAt: ev.requested_at,
+              expiresAt: ev.expires_at,
+              ...(ev.hold ? { hold: ev.hold } : {}),
+            };
+            // Drive the "Claude is thinking…" indicator from the same hook
+            // events Claude Code emits for the agent lifecycle. We rely on
+            // UserPromptSubmit/Stop here rather than transcript content so
+            // tool-call turns (no final text) still clear the spinner.
+            if (ev.event_kind === "UserPromptSubmit") {
+              setTabBusy(storeKey, true);
+            } else if (ev.event_kind === "Stop" || ev.event_kind === "StopFailure") {
+              setTabBusy(storeKey, false);
+            }
+            if (ev.event_kind === "PreToolUse") {
+              const toolName = hookToolName(ev.payload);
+              if (toolName === "AskUserQuestion") {
+                addPendingQuestion(storeKey, payloadToQuestion(ev.event_id, ev.payload, timing));
+              } else if (toolName === "ExitPlanMode") {
+                addPendingPlan(storeKey, payloadToPlan(ev.event_id, ev.payload, timing));
+              } else {
+                addPendingApproval(storeKey, payloadToApproval(ev.event_id, ev.payload, timing));
+              }
+            } else if (ev.event_kind === "PermissionRequest") {
+              if (isQuestionPermissionPayload(ev.payload)) {
+                void autoAllowPermissionHook(
+                  nodeTmux,
+                  tabId,
+                  environmentId,
+                  ev.event_id,
+                  ev.payload,
+                ).catch((e) => {
                   addPendingPermission(
                     storeKey,
                     payloadToPermission(ev.event_id, ev.payload, timing),
                   );
                   setError(String(e));
-                },
+                });
+                removePendingPermission(storeKey, ev.event_id);
+              } else {
+                addPendingPermission(
+                  storeKey,
+                  payloadToPermission(ev.event_id, ev.payload, timing),
+                );
+              }
+            } else if (ev.event_kind === "Elicitation") {
+              addPendingElicitation(
+                storeKey,
+                payloadToElicitation(ev.event_id, ev.payload, timing),
               );
-              removePendingPermission(storeKey, ev.event_id);
-            } else {
-              addPendingPermission(storeKey, payloadToPermission(ev.event_id, ev.payload, timing));
+            } else if (
+              ev.event_kind === "Notification" ||
+              ev.event_kind === "Stop" ||
+              ev.event_kind === "StopFailure"
+            ) {
+              const payload =
+                ev.payload && typeof ev.payload === "object"
+                  ? (ev.payload as Record<string, unknown>)
+                  : undefined;
+              pushInfoEvent(storeKey, {
+                id: ev.event_id,
+                kind: ev.event_kind,
+                message:
+                  typeof payload?.message === "string"
+                    ? payload.message
+                    : ev.event_kind === "StopFailure"
+                      ? "Claude's turn failed with an error"
+                      : ev.event_kind === "Stop"
+                        ? "Claude finished responding"
+                        : "Claude sent a notification",
+                receivedAt: new Date(ev.requested_at ?? Date.now()).toISOString(),
+              });
             }
-          } else if (ev.event_kind === "Elicitation") {
-            addPendingElicitation(storeKey, payloadToElicitation(ev.event_id, ev.payload, timing));
-          } else if (
-            ev.event_kind === "Notification" ||
-            ev.event_kind === "Stop" ||
-            ev.event_kind === "StopFailure"
-          ) {
-            const payload =
-              ev.payload && typeof ev.payload === "object"
-                ? (ev.payload as Record<string, unknown>)
-                : undefined;
-            pushInfoEvent(storeKey, {
-              id: ev.event_id,
-              kind: ev.event_kind,
-              message:
-                typeof payload?.message === "string"
-                  ? payload.message
-                  : ev.event_kind === "StopFailure"
-                    ? "Claude's turn failed with an error"
-                    : ev.event_kind === "Stop"
-                      ? "Claude finished responding"
-                      : "Claude sent a notification",
-              receivedAt: new Date(ev.requested_at ?? Date.now()).toISOString(),
-            });
+            break;
           }
-          break;
+          case "hook-timed-out":
+            if (ev.event_kind === "PreToolUse") {
+              removePendingApproval(storeKey, ev.event_id);
+              removePendingQuestion(storeKey, ev.event_id);
+              removePendingPlan(storeKey, ev.event_id);
+            } else if (ev.event_kind === "PermissionRequest") {
+              removePendingPermission(storeKey, ev.event_id);
+            } else if (ev.event_kind === "Elicitation") {
+              removePendingElicitation(storeKey, ev.event_id);
+            }
+            break;
+          case "warning":
+            setError(ev.message);
+            break;
         }
-        case "hook-timed-out":
-          if (ev.event_kind === "PreToolUse") {
-            removePendingApproval(storeKey, ev.event_id);
-            removePendingQuestion(storeKey, ev.event_id);
-            removePendingPlan(storeKey, ev.event_id);
-          } else if (ev.event_kind === "PermissionRequest") {
-            removePendingPermission(storeKey, ev.event_id);
-          } else if (ev.event_kind === "Elicitation") {
-            removePendingElicitation(storeKey, ev.event_id);
-          }
-          break;
-        case "warning":
-          setError(ev.message);
-          break;
-      }
-    })
+      })
       .then((u) => {
         if (cancelled) {
           u();
@@ -797,6 +800,7 @@ export function ClaudeTmuxChatTab({
     clearTabInitialPrompt,
     environmentId,
     applyFastMode,
+    nodeTmux,
   ]);
 
   // Common "start the tmux session" path used by both auto-start (initial
@@ -805,24 +809,26 @@ export function ClaudeTmuxChatTab({
     (resumeSessionId?: string, replaceExisting = false) => {
       if (startedRef.current) return;
       startedRef.current = true;
-      startSession(tabId, environmentId, {
-        initialPrompt,
-        model: selectedModel,
-        effort: effortOptions.length > 0 ? effectiveEffort : undefined,
-        // A resumed conversation owns its existing speed. Applying the current
-        // settings default here would rewrite it before the tmux process can
-        // report the restored state.
-        fastMode:
-          resumeSessionId === undefined
-            ? selectedModelObj.supportsFastMode !== false && fastModeEnabled === true
-            : undefined,
-        resumeSessionId,
-        replaceExisting,
-      }).catch((e) => {
-        // Re-arm so the user can retry from the start screen.
-        startedRef.current = false;
-        setError(String(e));
-      });
+      nodeTmux
+        .startSession(tabId, environmentId, {
+          initialPrompt,
+          model: selectedModel,
+          effort: effortOptions.length > 0 ? effectiveEffort : undefined,
+          // A resumed conversation owns its existing speed. Applying the current
+          // settings default here would rewrite it before the tmux process can
+          // report the restored state.
+          fastMode:
+            resumeSessionId === undefined
+              ? selectedModelObj.supportsFastMode !== false && fastModeEnabled === true
+              : undefined,
+          resumeSessionId,
+          replaceExisting,
+        })
+        .catch((e) => {
+          // Re-arm so the user can retry from the start screen.
+          startedRef.current = false;
+          setError(String(e));
+        });
     },
     [
       tabId,
@@ -833,6 +839,7 @@ export function ClaudeTmuxChatTab({
       effectiveEffort,
       selectedModelObj.supportsFastMode,
       fastModeEnabled,
+      nodeTmux,
     ],
   );
 
@@ -870,7 +877,7 @@ export function ClaudeTmuxChatTab({
     setTabBusy(storeKey, true);
     try {
       const prompt = buildTmuxPromptWithAttachments(text, attachments, containerId);
-      await submitToTmux(tabId, prompt, environmentId);
+      await nodeTmux.submit(tabId, prompt, environmentId);
       if (clearDraftOnSuccess) {
         tmuxTabs.getState().setDraftText(storeKey, "");
       }
@@ -953,7 +960,7 @@ export function ClaudeTmuxChatTab({
         switchToBuild: async () => {
           setModeSwitching(true);
           try {
-            const permissionMode = await switchPlanMode(tabId, false, environmentId);
+            const permissionMode = await nodeTmux.switchPlanMode(tabId, false, environmentId);
             permissionModeEventVersionRef.current += 1;
             setPlanMode(permissionMode === "plan");
             return permissionMode;
@@ -975,7 +982,7 @@ export function ClaudeTmuxChatTab({
     if (!running || settingsSwitching) return;
     setError(null);
     try {
-      await interruptSession(tabId, environmentId);
+      await nodeTmux.interruptSession(tabId, environmentId);
       await promoteNextQueuedPromptToDraft().catch((error) => {
         log.error("queue.promote-failed", { tabId, environmentId, error: formatLogError(error) });
       });
@@ -993,7 +1000,7 @@ export function ClaudeTmuxChatTab({
     eventId: string,
     held: boolean,
   ): Promise<AgentInteractionApplyOutcome> => {
-    const outcome = await holdHook(tabId, eventKind, eventId, held, environmentId);
+    const outcome = await nodeTmux.holdHook(tabId, eventKind, eventId, held, environmentId);
     if (outcome.hook) updatePendingPromptTiming(storeKey, eventId, hookTiming(outcome.hook));
     return {
       result:
@@ -1010,7 +1017,7 @@ export function ClaudeTmuxChatTab({
 
   const handleApproval = async (eventId: string, decision: "approve" | "block") => {
     try {
-      await answerPreToolUse(tabId, eventId, decision, undefined, environmentId);
+      await nodeTmux.answerPreToolUse(tabId, eventId, decision, undefined, environmentId);
       removePendingApproval(storeKey, eventId);
     } catch (e) {
       setError(String(e));
@@ -1022,7 +1029,7 @@ export function ClaudeTmuxChatTab({
     answers: string[][],
   ): Promise<boolean> => {
     try {
-      await replyHook(
+      await nodeTmux.replyHook(
         tabId,
         "PreToolUse",
         question.eventId,
@@ -1043,7 +1050,7 @@ export function ClaudeTmuxChatTab({
 
   const handleQuestionReject = async (question: TmuxPendingQuestion) => {
     try {
-      await replyHook(
+      await nodeTmux.replyHook(
         tabId,
         "PreToolUse",
         question.eventId,
@@ -1062,7 +1069,7 @@ export function ClaudeTmuxChatTab({
     feedback?: string,
   ) => {
     try {
-      await replyHook(
+      await nodeTmux.replyHook(
         tabId,
         "PreToolUse",
         plan.eventId,
@@ -1083,7 +1090,7 @@ export function ClaudeTmuxChatTab({
     updatedPermissions?: unknown[],
   ) => {
     try {
-      await replyHook(
+      await nodeTmux.replyHook(
         tabId,
         "PermissionRequest",
         permission.eventId,
@@ -1102,7 +1109,7 @@ export function ClaudeTmuxChatTab({
     content?: Record<string, string>,
   ) => {
     try {
-      await replyHook(
+      await nodeTmux.replyHook(
         tabId,
         "Elicitation",
         elicitation.eventId,
@@ -1128,7 +1135,7 @@ export function ClaudeTmuxChatTab({
     promptControlBusyRef.current = true;
     setError(null);
     try {
-      await answerSelectionPrompt(tabId, environmentId, {
+      await nodeTmux.answerSelectionPrompt(tabId, environmentId, {
         expectedGeneration: observation.generation,
         expectedRevision: observation.revision,
         expectedPromptFingerprint: tmuxSelectionPromptFingerprint(prompt),
@@ -1194,10 +1201,10 @@ export function ClaudeTmuxChatTab({
     setError(null);
     try {
       if (fastModeEnabled === true && !nextSupportsFastMode) {
-        await switchFastMode(tabId, false, environmentId);
+        await nodeTmux.switchFastMode(tabId, false, environmentId);
         applyFastMode(false);
       }
-      await switchModel(tabId, modelId, environmentId);
+      await nodeTmux.switchModel(tabId, modelId, environmentId);
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
     } catch (e) {
@@ -1220,7 +1227,7 @@ export function ClaudeTmuxChatTab({
     setEffortSwitching(true);
     setError(null);
     try {
-      await switchEffort(tabId, effort, environmentId);
+      await nodeTmux.switchEffort(tabId, effort, environmentId);
       setEffortLevel(storeKey, effort);
     } catch (e) {
       setError(String(e));
@@ -1248,7 +1255,7 @@ export function ClaudeTmuxChatTab({
     setFastModeSwitching(true);
     setError(null);
     try {
-      await switchFastMode(tabId, enabled, environmentId);
+      await nodeTmux.switchFastMode(tabId, enabled, environmentId);
       applyFastMode(enabled);
     } catch (e) {
       setError(String(e));
@@ -1274,7 +1281,7 @@ export function ClaudeTmuxChatTab({
     setModeSwitching(true);
     setError(null);
     try {
-      const permissionMode = await switchPlanMode(tabId, enabled, environmentId);
+      const permissionMode = await nodeTmux.switchPlanMode(tabId, enabled, environmentId);
       permissionModeEventVersionRef.current += 1;
       setPlanMode(permissionMode === "plan");
     } catch (e) {

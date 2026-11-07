@@ -40,7 +40,7 @@ import {
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import { createUuid } from "@/lib/uuid";
-import { replyHook, type TmuxPendingHook } from "@/lib/claude-tmux-client";
+import type { ClaudeTmuxClient, TmuxPendingHook } from "@/lib/claude-tmux-client";
 import { escapePathForTerminalInput } from "@orkestrator/protocol/tmux-prompt";
 import {
   type TmuxSelectionOption,
@@ -601,13 +601,14 @@ export function isQuestionPermissionPayload(payload: unknown): boolean {
 }
 
 export async function autoAllowPermissionHook(
+  tmux: Pick<ClaudeTmuxClient, "replyHook">,
   tabId: string,
   environmentId: string,
   eventId: string,
   payload: unknown,
 ): Promise<void> {
   const permission = payloadToPermission(eventId, payload);
-  await replyHook(
+  await tmux.replyHook(
     tabId,
     "PermissionRequest",
     eventId,

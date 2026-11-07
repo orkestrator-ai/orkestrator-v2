@@ -72,6 +72,12 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "node-coordinator-mail.older-node",
   /**
+   * A command node collected a leaf's outbox without `coordinatorMail` (it
+   * predates `node-coordinator-mail`) while the leaf's coordinator had mail
+   * queued for it: the mail stays held on the leaf until that node is updated.
+   */
+  "node-coordinator-mail.older-command-node",
+  /**
    * A leaf kept a coordinator notice on its own coordinator because the command
    * node attached to it has not said it takes `coordinator-notices`.
    */

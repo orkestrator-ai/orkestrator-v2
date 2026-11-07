@@ -14,6 +14,7 @@ import {
   type UpwardCoordinatorNotice,
 } from "@orkestrator/protocol/coordinator-notices";
 
+import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { MailAttachmentBatch } from "../mail-attachments.js";
 
 /**
@@ -523,6 +524,14 @@ export class LeafNodeMail {
    * `notices` is present when the command node takes coordinator notices, and
    * says which repositories it has. A collect without it comes from an older
    * one, including after a downgrade: anything queued for it is handed back.
+   *
+   * Without `coordinatorMail` (a command node that predates
+   * `node-coordinator-mail`) this node's coordinator's own mail is held, not
+   * offered: such a command node would deliver it as a worker's report from a
+   * runtime id it has no environment for, outside the pair budget that stops
+   * two coordinators waking each other. It stays queued until that command node
+   * is updated, and each collect that holds one is counted
+   * (`node-coordinator-mail.older-command-node`, version-compatibility.md).
    */
   async collect(
     controllerId: BackendId,
@@ -543,6 +552,12 @@ export class LeafNodeMail {
           (attachmentMail || !entry.attachments) &&
           (!entry.coordinatorNotice || (notices !== undefined && !entry.handedBack)),
       );
+      if (
+        !coordinatorMail &&
+        (current?.items ?? []).some((entry) => entry.seq > after && entry.fromCoordinator)
+      ) {
+        compatibilityPathUsage.record("node-coordinator-mail.older-command-node");
+      }
       const items = eligible.slice(0, MAX_COLLECT);
       const claimed = new Set(
         items

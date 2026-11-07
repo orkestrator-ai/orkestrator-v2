@@ -28,18 +28,21 @@ import type {
   ReviewValidationOutputStream,
   ReviewValidationRun,
 } from "../../../review-validation.js";
-import { modelRecord, opaqueRecord, type ModelSchema } from "../../model-schema.js";
-import { conditionalSnapshotOf, listOf, UnchangedRevisionSchema } from "../pipelines/schemas.js";
+import type { Mutable } from "effect/Types";
+import {
+  asModel,
+  modelRecord,
+  mutableArray,
+  opaqueRecord,
+  openRecord,
+} from "../../model-schema.js";
+import { conditionalSnapshotOf, UnchangedRevisionSchema } from "../pipelines/schemas.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
-const OpenObject = opaqueRecord<Record<string, unknown>>();
-const Messages = listOf(Schema.Unknown);
-
-/** `schema`, typed as the protocol's own type `T` (literal unions, `?:` fields). */
-function asModel<T>(schema: Schema.Top): ModelSchema<T> {
-  return schema as unknown as ModelSchema<T>;
-}
+/** Any JSON object, nothing checked (`Schema.Record`; not `model-schema.ts`'s `OpenObject`). */
+const OpaqueObject = opaqueRecord<Record<string, unknown>>();
+const Messages = mutableArray(Schema.Unknown);
 
 /**
  * `MultiReviewWorkflow`: the snapshot the lifecycle commands answer, without
@@ -55,32 +58,28 @@ export const MultiReviewWorkflowSchema = modelRecord<MultiReviewWorkflow>()({
   targetBranch: optionalString,
   phase: optionalString,
   engine: optionalString,
-  reviewers: Schema.optional(Schema.Array(OpenObject)),
+  reviewers: Schema.optional(Schema.Array(OpaqueObject)),
 });
 
 /**
  * The stored envelope of one workflow as the reads answer it
- * (`PersistedMultiReviewWorkflow` without `controllerLease`). `snapshot` is
- * the `MultiReviewWorkflow`, typed `unknown` by the model.
+ * (`PersistedMultiReviewWorkflow` without `controllerLease`, which the
+ * backend strips with the snapshot's fence token). The model itself (plan
+ * item 7010): storage writes every field, so they are required; the web's
+ * `PersistedWorkflowRecord` is a view of this type and the backend's stored
+ * record adds the lease to it. `snapshot` is the `MultiReviewWorkflow`,
+ * `unknown` here; absent only on a record stored without one, which is
+ * answered as stored.
  */
-export interface MultiReviewWorkflowRecord {
-  version: number;
-  id: string;
-  environmentId: string;
-  /** Absent only on a record stored without one, which is answered as stored. */
-  snapshot?: unknown;
-  updatedAt: string;
-  revision: number;
-}
-
-export const MultiReviewWorkflowRecordSchema = modelRecord<MultiReviewWorkflowRecord>()({
-  version: Schema.optional(Schema.Finite),
+export const MultiReviewWorkflowRecordSchema = openRecord({
+  version: Schema.Finite,
   id: Schema.String,
-  environmentId: optionalString,
+  environmentId: Schema.String,
   snapshot: Schema.optional(Schema.Unknown),
-  updatedAt: optionalString,
-  revision: Schema.optional(Schema.Finite),
+  updatedAt: Schema.String,
+  revision: Schema.Finite,
 });
+export type MultiReviewWorkflowRecord = Mutable<typeof MultiReviewWorkflowRecordSchema.Type>;
 
 /** `get_multi_review_workflow`: `null`, `unchanged` at `knownRevision`, or the record. */
 export const GetMultiReviewWorkflowResultSchema = Schema.Union([
@@ -91,8 +90,8 @@ export const GetMultiReviewWorkflowResultSchema = Schema.Union([
 
 /** `list_multi_review_workflows`: the records, or a manifest-conditional snapshot of them. */
 export const ListMultiReviewWorkflowsResultSchema = Schema.Union([
-  listOf(MultiReviewWorkflowRecordSchema),
-  conditionalSnapshotOf(listOf(MultiReviewWorkflowRecordSchema)),
+  mutableArray(MultiReviewWorkflowRecordSchema),
+  conditionalSnapshotOf(mutableArray(MultiReviewWorkflowRecordSchema)),
 ]);
 
 /**
@@ -152,12 +151,12 @@ export const MultiReviewReviewerHistoryPageSchema = asModel<MultiReviewReviewerH
 /** `ReviewValidationRun`: an environment-owned validation process's projection. */
 export const ReviewValidationRunSchema = modelRecord<ReviewValidationRun>()({
   id: Schema.String,
-  plan: Schema.optional(OpenObject),
+  plan: Schema.optional(OpaqueObject),
   status: Schema.String,
   startedAt: optionalString,
   completedAt: optionalString,
   error: optionalString,
-  results: Schema.optional(Schema.Array(OpenObject)),
+  results: Schema.optional(Schema.Array(OpaqueObject)),
 });
 
 const OutputStreamSchema = modelRecord<ReviewValidationOutputStream>()({

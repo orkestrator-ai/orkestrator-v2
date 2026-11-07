@@ -21,6 +21,7 @@
  */
 import * as Schema from "effect/Schema";
 import { defineCommand } from "../../command.js";
+import { mutableArray } from "../../model-schema.js";
 import { KanbanTaskSchema } from "../kanban/schemas.js";
 import { ClientEnvironmentSchema } from "../environments/models.js";
 import { NullableProjectionSchema } from "../native-sessions/schemas.js";
@@ -39,7 +40,6 @@ import {
   SteerQueuedBuildPipelineMessageResultSchema,
   WorkflowResultMetricsResultSchema,
   WorkflowResultToolsSettingsSchema,
-  listOf,
 } from "./schemas.js";
 
 const checked = Schema.optionalKey(Schema.Unknown);
@@ -288,7 +288,7 @@ export const importLegacyBuildPipelinesCommand = defineCommand({
   access: "workspace",
   read: false,
   // `Expected snapshots to be an array`, as the handler said; it bounds the count itself.
-  args: Schema.Struct({ projectId: Schema.String, snapshots: listOf(Schema.Unknown) }),
+  args: Schema.Struct({ projectId: Schema.String, snapshots: mutableArray(Schema.Unknown) }),
   result: ImportLegacyBuildPipelinesResultSchema,
   critical: [],
 });
@@ -384,7 +384,10 @@ export const clearTaskBuildStatusCommand = defineCommand({
   access: "workspace",
   read: false,
   args: Schema.Struct({ taskId: Schema.String }),
-  result: Schema.Struct({ task: KanbanTaskSchema, removedPipelineIds: listOf(Schema.String) }),
+  result: Schema.Struct({
+    task: KanbanTaskSchema,
+    removedPipelineIds: mutableArray(Schema.String),
+  }),
   critical: [],
 });
 

@@ -20,6 +20,7 @@ import {
   awaitBridgeReadyCommand,
   cancelGithubCliLoginCommand,
   getAgentModelCatalogCacheCommand,
+  getClaudeModelCatalogCommand,
   getClaudeServerLogCommand,
   getNativeAgentModelCatalogCommand,
   getOpencodeModelCatalogCacheCommand,
@@ -118,10 +119,10 @@ describe("agent-servers definitions", () => {
 
   it("keeps every key of an open record through a tolerant decode", () => {
     const cache = {
-      schemaVersion: 1,
+      schemaVersion: 1 as const,
       pi: {
         updatedAt: "2026-11-07T00:00:00.000Z",
-        models: [{ platform: "pi", id: "m", label: "M", future: { x: 1 } }],
+        models: [{ platform: "pi" as const, id: "m", label: "M", future: { x: 1 } }],
       },
       future: true,
     };
@@ -137,6 +138,28 @@ describe("agent-servers definitions", () => {
     expect(
       decodeCommandResult(getNativeAgentModelCatalogCommand, [{ platform: "pi", id: 1 }])._tag,
     ).toBe("Failure");
+  });
+
+  it("reads the catalogues' vocabularies as the models' literals (plan item 7010)", () => {
+    const catalog = (levels: string[], source = "sdk") => ({
+      environmentId: "e1",
+      models: [{ id: "opus", name: "Opus", supportedEffortLevels: levels }],
+      source,
+      fetchedAt: "2026-11-07T00:00:00.000Z",
+      stale: false,
+    });
+    expect(decodeCommandResult(getClaudeModelCatalogCommand, catalog(["low", "max"]))._tag).toBe(
+      "Success",
+    );
+    expect(decodeCommandResult(getClaudeModelCatalogCommand, catalog(["turbo"]))._tag).toBe(
+      "Failure",
+    );
+    expect(decodeCommandResult(getClaudeModelCatalogCommand, catalog([], "cache"))._tag).toBe(
+      "Failure",
+    );
+    expect(decodeCommandResult(getAgentModelCatalogCacheCommand, { schemaVersion: 2 })._tag).toBe(
+      "Failure",
+    );
   });
 
   it("lists its client in DOMAIN_CLIENTS with adapters 1 and 0", () => {

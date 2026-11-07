@@ -27,7 +27,21 @@
  */
 import * as Schema from "effect/Schema";
 import type { DeepMutable, Mutable } from "effect/Types";
-import { OpenObject, openRecord } from "../../model-schema.js";
+import {
+  AGENT_INTERACTION_ORIGINS,
+  type AgentInteractionPolicy,
+} from "../../../agent-interactions.js";
+import { AGENT_PLATFORMS } from "../../../agent-platforms.js";
+import type { TurnFailureKind } from "../../../agent-usage-limits.js";
+import type { AgentSessionOwner } from "../../../coordinator.js";
+import type {
+  NativeAgentCommandIntent,
+  NativeAgentControlUpdate,
+  NativeAgentExecutionPolicy,
+} from "../../../native-agent.js";
+import type { NativeAgentGoal } from "../../../native-agent-goal.js";
+import type { TrustedUserPromptPresentation } from "../../../review-evidence-frames.js";
+import { asModel, mutableArray, OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
@@ -124,18 +138,127 @@ export type DomainResolution = DeepMutable<typeof DomainResolutionSchema.Type>;
 
 // --- Prompt queues, drafts and handoffs ---------------------------------------
 
-/** `PersistedPromptQueue` (models.ts). Queued messages are each agent's own shape. */
-export const PromptQueueSchema = openRecord({
-  queueKey: Schema.optional(Schema.String),
-  environmentId: Schema.optional(Schema.String),
-  messages: Schema.optional(Schema.Array(Schema.Unknown)),
-  inFlight: optionalObject,
-  dispatchError: optionalObject,
-  jobReceipts: Schema.optional(Schema.Array(OpenObject)),
-  removedOrigins: Schema.optional(Schema.Array(OpenObject)),
-  updatedAt: Schema.optional(Schema.String),
-  revision: Schema.optional(Schema.Finite),
+/**
+ * A part another protocol module declares as an interface, checked as an
+ * object (every key kept) and typed as that interface.
+ */
+function protocolObject<T>() {
+  return asModel<T>(OpenObject);
+}
+
+/**
+ * A field the backend reads through its own validating reader, where a
+ * malformed value reads as absent rather than making the whole record
+ * unreadable (`retiredDispatch`, `signInResend`, `goal`, `backendTitle`, ...):
+ * typed as `T`, not checked in a decode.
+ */
+function selfValidated<T>() {
+  return Schema.optional(asModel<T>(Schema.Unknown));
+}
+
+const ConversationModeSchema = Schema.Literals(["plan", "build"]);
+
+/** A dispatch's attachments: images and files by path, with an inline copy when small. */
+const DispatchAttachmentsField = Schema.optional(
+  mutableArray(
+    openRecord({
+      type: Schema.Literals(["image", "file"]),
+      path: Schema.String,
+      dataUrl: optionalString,
+      filename: optionalString,
+    }),
+  ),
+);
+
+// The prompt queue and the native agent session are the models themselves
+// (plan item 7010): every field the storage always writes is required, the
+// vocabularies are literals (a new value bumps the domain), and
+// `apps/backend/src/core/models.ts` re-exports the types below (the web's
+// queue is a view generic over its messages). Message bodies stay opaque.
+
+/** `NativeAgentJobReceipt`: a job request's binding to the prompt it admitted. */
+export const NativeAgentJobReceiptSchema = openRecord({
+  requestId: Schema.String,
+  /** Coalesced presses follow the original admission, including its eventual settlement. */
+  dispatchRequestId: optionalString,
+  fingerprint: Schema.String,
+  status: Schema.Literals(["accepted", "unknown"]),
+  queued: Schema.optional(Schema.Literal(true)),
 });
+export type NativeAgentJobReceipt = Mutable<typeof NativeAgentJobReceiptSchema.Type>;
+
+/**
+ * `PersistedPromptQueue`: prompts a user has committed to sending but which
+ * have not been dispatched yet, for one agent tab. It lives in the backend
+ * because a queued prompt is a user decision, not a view: it must survive a
+ * reload, be visible to every client, and still drain when the tab that
+ * queued it is closed. Each agent defines its own message shape.
+ */
+export const PromptQueueSchema = openRecord({
+  /** Bounded job request bindings, published before dispatch and kept after queue settlement. */
+  jobReceipts: Schema.optional(mutableArray(NativeAgentJobReceiptSchema)),
+  /** Only older backends write this lease; retain exclusion until settlement or expiry. */
+  outstandingClaim: Schema.optional(
+    openRecord({
+      token: Schema.String,
+      message: Schema.Record(Schema.String, Schema.Unknown),
+      claimedAt: Schema.String,
+      expiresAt: Schema.String,
+    }),
+  ),
+  queueKey: Schema.String,
+  environmentId: Schema.String,
+  messages: mutableArray(Schema.Unknown),
+  /**
+   * A backend-owned dispatch lease. The item remains durable here until the
+   * provider acknowledges its stable request id, so a backend restart cannot
+   * lose a prompt between dequeue and network dispatch.
+   */
+  inFlight: Schema.optional(
+    openRecord({
+      message: Schema.Unknown,
+      requestId: Schema.String,
+      reservedAt: Schema.String,
+      /** Manual steering reservations must never drain as ordinary prompts. */
+      steer: Schema.optional(Schema.Literal(true)),
+      /**
+       * A steer reservation taken from behind the head: the id of the item
+       * that was ahead of it, so a restored steer returns to its slot.
+       */
+      restoreAfterId: optionalString,
+      /** Persisted immediately before crossing the irreversible dispatch boundary. */
+      submittingAt: optionalString,
+      /** Persisted after the provider accepted the prompt, before queue acknowledgement. */
+      submittedAt: optionalString,
+    }),
+  ),
+  /**
+   * Terminal provider rejection. The original message is restored to the head
+   * of `messages`; this marker prevents unattended retries until a caller
+   * explicitly clears it.
+   */
+  dispatchError: Schema.optional(
+    openRecord({
+      requestId: Schema.String,
+      /** Stable identity of the restored queue item that was rejected. */
+      messageId: Schema.String,
+      /** SHA-256 of the rejected message's JSON; saves keep the latch only while it is unchanged. */
+      messageFingerprint: Schema.String,
+      message: Schema.String,
+      failedAt: Schema.String,
+    }),
+  ),
+  /**
+   * Bounded tombstones for backend-authored items that left `messages`
+   * without being reserved (removed or replaced before dispatch).
+   */
+  removedOrigins: Schema.optional(
+    mutableArray(openRecord({ requestId: Schema.String, removedAt: Schema.String })),
+  ),
+  updatedAt: Schema.String,
+  revision: Schema.Finite,
+});
+export type PersistedPromptQueue = Mutable<typeof PromptQueueSchema.Type>;
 
 /** `remove_prompt_queue_message`: the removed message (or `null`) and the queue after it. */
 export const PromptQueueRemovalSchema = openRecord({
@@ -217,27 +340,199 @@ export const EnvironmentHydrationBatchSchema = Schema.Struct({
 
 // --- Native agent sessions ----------------------------------------------------
 
-/** `PersistedNativeAgentSession` (models.ts): the durable record of one native session. */
+/** `NativeAgentProvider`: the platforms a native agent session runs on. */
+export const NativeAgentProviderSchema = Schema.Literals(AGENT_PLATFORMS);
+export type NativeAgentProvider = typeof NativeAgentProviderSchema.Type;
+
+/** `IncompleteTurnNotice`: the content-free outcome of an automatic incomplete-turn recovery. */
+export const IncompleteTurnNoticeSchema = openRecord({
+  kind: Schema.Literals(["failed", "exhausted"]),
+  assistantMessageId: Schema.String,
+  updatedAt: Schema.String,
+});
+export type IncompleteTurnNotice = Mutable<typeof IncompleteTurnNoticeSchema.Type>;
+
+/**
+ * `PersistedNativeAgentPendingDispatch`: exact replay data for a dispatch
+ * whose provider acknowledgement was lost. Projections expose only its
+ * request id and timestamp, never prompt or attachment content.
+ */
+export const PendingDispatchSchema = openRecord({
+  /** The provider proved this mail send was refused; cleanup may be retried safely. */
+  mailRefused: Schema.optional(Schema.Literal(true)),
+  requestId: Schema.String,
+  prompt: Schema.String,
+  images: Schema.optional(
+    mutableArray(openRecord({ filename: Schema.String, data: Schema.String })),
+  ),
+  attachments: DispatchAttachmentsField,
+  schema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  mode: Schema.optional(ConversationModeSchema),
+  fastMode: optionalBoolean,
+  subAgent: optionalString,
+  executionAgent: optionalString,
+  includeLocalSettings: optionalBoolean,
+  promptSuggestions: optionalBoolean,
+  model: optionalString,
+  reasoningEffort: optionalString,
+  /** The resolved command intent; a retry reuses it verbatim. */
+  command: Schema.optional(protocolObject<NativeAgentCommandIntent>()),
+  /** The "Continue in…" handoff this request carries. */
+  agentHandoffId: optionalString,
+  createdAt: Schema.String,
+});
+export type PersistedNativeAgentPendingDispatch = Mutable<typeof PendingDispatchSchema.Type>;
+
+/**
+ * `PersistedNativeAgentSignInResend`: a prompt held for re-sending after a
+ * Claude sign-in; the resend gets its own request id, derived from the
+ * refused one.
+ */
+export const SignInResendSchema = openRecord({
+  /** The refused request. The session's latest dispatch must still be this one. */
+  requestId: Schema.String,
+  providerSessionId: Schema.String,
+  prompt: Schema.String,
+  attachments: DispatchAttachmentsField,
+  model: optionalString,
+  reasoningEffort: optionalString,
+  mode: Schema.optional(ConversationModeSchema),
+  fastMode: optionalBoolean,
+  subAgent: optionalString,
+  includeLocalSettings: optionalBoolean,
+  promptSuggestions: optionalBoolean,
+  recordedAt: Schema.String,
+});
+export type PersistedNativeAgentSignInResend = Mutable<typeof SignInResendSchema.Type>;
+
+/**
+ * `PersistedNativeAgentPendingSteer`: one steering instruction whose
+ * provider admission is still unresolved. The backend owns its request id.
+ */
+export const PendingSteerSchema = openRecord({
+  requestId: Schema.String,
+  text: Schema.String,
+  inputDigest: Schema.String,
+  expectedRunId: Schema.String,
+  state: Schema.Literals(["prepared", "unknown"]),
+  /** Source reservation survives until delivery or definitive non-delivery. */
+  sourceQueue: Schema.optional(Schema.Literal(true)),
+  queueSettlement: Schema.optional(Schema.Literals(["applied", "restore", "discard"])),
+  createdAt: Schema.String,
+});
+export type PersistedNativeAgentPendingSteer = Mutable<typeof PendingSteerSchema.Type>;
+
+/** `PersistedNativeAgentRetiredDispatch`: the last parked dispatch the backend retired. */
+export const RetiredDispatchSchema = openRecord({
+  requestId: Schema.String,
+  retiredAt: Schema.String,
+});
+export type PersistedNativeAgentRetiredDispatch = Mutable<typeof RetiredDispatchSchema.Type>;
+
+/** `PersistedNativeAgentTurnOutcome`: a recent turn's content-free outcome. */
+export const TurnOutcomeSchema = openRecord({
+  requestId: Schema.String,
+  outcome: Schema.Literals(["completed", "failed"]),
+  /** Bounded provider error detail for a failed turn. */
+  error: optionalString,
+  /**
+   * `usage-limit` for a failed turn that stopped on the account's plan
+   * allowance. A string here: an older backend ignores the field, and
+   * readers classify an unknown kind by `error`.
+   */
+  failureKind: Schema.optional(asModel<TurnFailureKind>(Schema.String)),
+  observedAt: Schema.String,
+});
+export type PersistedNativeAgentTurnOutcome = Mutable<typeof TurnOutcomeSchema.Type>;
+
+/** `NativeAgentSessionBackendTitle`: the title the backend chose for a provider session. */
+export const BackendTitleSchema = openRecord({
+  providerSessionId: Schema.String,
+  title: Schema.String,
+  source: Schema.Literals(["generated", "fallback"]),
+  /** The provider confirmed it holds this title. */
+  pushed: optionalBoolean,
+});
+export type NativeAgentSessionBackendTitle = Mutable<typeof BackendTitleSchema.Type>;
+
+/**
+ * `PersistedNativeAgentSession`: the durable mapping between a logical UI tab
+ * and the provider session that owns its transcript. The backend creates it
+ * atomically, so every renderer asking for the same tab receives the same
+ * provider session. The fields the backend reads through its own validating
+ * reader ({@link selfValidated}) are typed but not checked here, so a
+ * malformed value reads as absent there instead of failing the record.
+ */
 const nativeAgentSessionFields = {
-  version: Schema.optional(Schema.Finite),
-  key: Schema.optional(Schema.String),
-  environmentId: Schema.optional(Schema.String),
-  agent: Schema.optional(Schema.String),
-  logicalSessionKey: Schema.optional(Schema.String),
-  providerSessionId: Schema.optional(Schema.String),
-  origin: Schema.optional(Schema.Unknown),
-  interactionPolicy: Schema.optional(Schema.Unknown),
-  owner: optionalObject,
-  controls: optionalObject,
-  dispatchedRequestIds: Schema.optional(StringArray),
-  pendingDispatch: optionalObject,
-  retiredDispatch: optionalObject,
-  goal: optionalObject,
-  createdAt: Schema.optional(Schema.String),
-  updatedAt: Schema.optional(Schema.String),
+  version: Schema.Literal(1),
+  key: Schema.String,
+  environmentId: Schema.String,
+  /** Explicit durable owner. Records written before v2 migrate to environment ownership. */
+  owner: Schema.optional(protocolObject<AgentSessionOwner>()),
+  /** Immutable backend-owned execution policy; renderer inputs never replace it. */
+  executionPolicy: Schema.optional(Schema.Literal("coordinator-read-only")),
+  /** Immutable normalised policy passed to the provider when this session was created. */
+  policy: Schema.optional(protocolObject<NativeAgentExecutionPolicy>()),
+  agent: NativeAgentProviderSchema,
+  logicalSessionKey: Schema.String,
+  providerSessionId: Schema.String,
+  origin: Schema.Literals(AGENT_INTERACTION_ORIGINS),
+  interactionPolicy: protocolObject<AgentInteractionPolicy>(),
+  /** Provider-neutral interactive choices that survive renderer and backend restarts. */
+  controls: Schema.optional(protocolObject<NativeAgentControlUpdate>()),
+  /** Observed OpenCode model, written only when host controls have no `modelId`. */
+  inferredComposerSelection: Schema.optional(
+    openRecord({ modelId: Schema.String, reasoningId: optionalString }),
+  ),
+  /** Exact backend-authored frame that may be hidden on the first matching user echo. */
+  initialPromptPresentation: Schema.optional(protocolObject<TrustedUserPromptPresentation>()),
+  dispatchedRequestIds: Schema.optional(mutableArray(Schema.String)),
+  /** The mode the newest accepted turn was sent in. */
+  lastDispatchedTurn: Schema.optional(
+    openRecord({ requestId: Schema.String, mode: Schema.optional(ConversationModeSchema) }),
+  ),
+  /** Retained only while the provider outcome is ambiguous. */
+  pendingDispatch: Schema.optional(PendingDispatchSchema),
+  /** Retained until an ambiguous steer is reconciled or discarded. */
+  pendingSteer: Schema.optional(PendingSteerSchema),
+  /** The last parked dispatch the backend retired (content-free; read through its reader). */
+  retiredDispatch: selfValidated<PersistedNativeAgentRetiredDispatch>(),
+  /**
+   * Content-free authoritative recovery outcome rehydrated by every tab. The
+   * name is the one it was first persisted under, when OpenCode was the only
+   * platform with turn recovery.
+   */
+  openCodeIncompleteTurnNotice: Schema.optional(IncompleteTurnNoticeSchema),
+  /** Bounded, content-free outcomes of recent turns keyed by their request id. */
+  turnOutcomes: Schema.optional(mutableArray(TurnOutcomeSchema)),
+  /** "Continue in…" handoffs this session's journal delivered. */
+  deliveredAgentHandoffIds: selfValidated<string[]>(),
+  /** A prompt Claude refused before a sign-in, held to be sent again. */
+  signInResend: selfValidated<PersistedNativeAgentSignInResend>(),
+  /** Last applied activity for a request; settled roots may still own background work. */
+  activityTurn: Schema.optional(
+    openRecord({
+      providerSessionId: Schema.String,
+      requestId: optionalString,
+      state: Schema.Literals(["active", "settled"]),
+    }),
+  ),
+  /** The session's goal. */
+  goal: selfValidated<NativeAgentGoal>(),
+  /** The last few ended goals, without their check output. */
+  goalHistory: selfValidated<NativeAgentGoal[]>(),
+  /** Bounded request ids whose turn was still active when a stop was requested. */
+  interruptedRequestIds: Schema.optional(mutableArray(Schema.String)),
+  /** The identity a later resume of this conversation names (Codex's thread id). */
+  resumeIdentity: selfValidated<{ providerSessionId: string; resumableSessionId: string }>(),
+  /** The title the backend chose for `providerSessionId`, and whether the provider holds it. */
+  backendTitle: selfValidated<NativeAgentSessionBackendTitle>(),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
 };
 
 export const NativeAgentSessionSchema = openRecord(nativeAgentSessionFields);
+export type PersistedNativeAgentSession = Mutable<typeof NativeAgentSessionSchema.Type>;
 
 /** `NativeAgentModelSubstitution` (native-agent.ts). */
 export const ModelSubstitutionSchema = Schema.Struct({

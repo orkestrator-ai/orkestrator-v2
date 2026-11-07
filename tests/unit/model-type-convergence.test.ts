@@ -19,10 +19,11 @@
  * - {@link PENDING}: shared names whose protocol schema is not yet the
  *   model's definition, with the item that converges them. A pending name
  *   that has converged (or no longer collides) fails the test until it is
- *   removed, so the list only shrinks. 7010's "Done when" is this list empty.
+ *   removed, so the list only shrinks. 7010's "Done when" is this list empty
+ *   (it is, since 2026-11-07).
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -44,7 +45,7 @@ const LOCAL: Origin = { kind: "local", derivedFrom: [] };
 const HOMONYMS: Readonly<Record<string, { backend: string; web: string }>> = {
   Environment: {
     backend:
-      "the stored environment record, backend-private (pids, lifecycle record, teardown intents); its wire forms are the protocol's ClientEnvironment and EnvironmentDetail",
+      "the stored environment record, backend-private: the protocol's ClientEnvironment (extended, ports kept narrower) plus pids, the durable lifecycle record, activity sources and teardown intents; its wire forms are ClientEnvironment and EnvironmentDetail",
     web: "the protocol's ClientEnvironment without containerLifecycle, plus the detail read's initialPromptAttachments",
   },
   AppConfig: {
@@ -53,18 +54,12 @@ const HOMONYMS: Readonly<Record<string, { backend: string; web: string }>> = {
   },
 };
 
-/** Shared names not converged yet, and the item that converges each. */
-const PENDING: Readonly<Record<string, string>> = {
-  ClaudeModelCatalogEntry:
-    "7009 (agent-servers): the schema types `supportedEffortLevels` and `source` as strings, the models as literal unions",
-  ClaudeModelCatalogSnapshot: "7009 (agent-servers): as ClaudeModelCatalogEntry",
-  PersistedBuildPipeline:
-    "7007 (pipelines): the backend re-exports BuildPipelineRecord; the web's type is generic over its snapshot",
-  PersistedNativeAgentSession:
-    "7010 follow-up (native-sessions): 7001's result schema is a tolerant reader (every field optional, providers as strings); the web's type is a narrower view",
-  PersistedPromptQueue:
-    "7010 follow-up (native-sessions): tolerant result schema; the web's type is generic over its messages",
-};
+/**
+ * Shared names not converged yet, and the item that converges each. Empty
+ * since 7010 converged the catalogues, the workflow envelopes and the native
+ * session and prompt queue records; a new entry needs an owner and a reason.
+ */
+const PENDING: Readonly<Record<string, string>> = {};
 
 interface ExportedTypes {
   readonly names: Map<string, Origin>;
@@ -149,6 +144,22 @@ function exportedTypes(path: string, seen = new Set<string>()): ExportedTypes {
   return { names: result };
 }
 
+/** Every type name the protocol's contract domain modules export (their models and results). */
+function protocolDomainTypeNames(): Set<string> {
+  const names = new Set<string>();
+  const domains = join(ROOT, "packages/protocol/src/contract/domains");
+  const files = readdirSync(domains, { recursive: true, encoding: "utf8" }).filter(
+    (file) => file.endsWith(".ts") && !file.endsWith(".test.ts"),
+  );
+  for (const file of files) {
+    const source = readFileSync(join(domains, file), "utf8");
+    for (const match of source.matchAll(/export\s+(?:type|interface)\s+([A-Za-z_]\w*)/gu)) {
+      names.add(match[1]!);
+    }
+  }
+  return names;
+}
+
 function sameSymbol(a: ProtocolOrigin, b: ProtocolOrigin): boolean {
   return a.module === b.module && a.symbol === b.symbol;
 }
@@ -206,7 +217,30 @@ describe("backend models and web types converge on protocol types", () => {
     expect(stale).toEqual([]);
   });
 
-  test("the converged names include the environment and settings models", () => {
+  test("neither file declares its own copy of a type a protocol domain defines", () => {
+    // A locally declared type (not a re-export, alias or view of a protocol
+    // type) under a name a contract domain exports is a second definition of
+    // a wire model: 7010's "Done when". The documented homonyms are the
+    // exception (the backend's stored `Environment` extends the protocol's
+    // `ClientEnvironment`).
+    const protocolNames = protocolDomainTypeNames();
+    expect(protocolNames.has("ClientEnvironment")).toBe(true);
+    const copies = [
+      ...[...backend].map(([name, origin]) => ({ side: "backend", name, origin })),
+      ...[...web].map(([name, origin]) => ({ side: "web", name, origin })),
+    ]
+      .filter(
+        ({ name, origin }) =>
+          origin.kind === "local" &&
+          origin.derivedFrom.length === 0 &&
+          protocolNames.has(name) &&
+          HOMONYMS[name] === undefined,
+      )
+      .map(({ side, name }) => `${side}: ${name}`);
+    expect(copies).toEqual([]);
+  });
+
+  test("the converged names include the environment, settings, catalogue and session models", () => {
     for (const name of [
       "PortMapping",
       "InitialPromptImageAttachment",
@@ -218,11 +252,19 @@ describe("backend models and web types converge on protocol types", () => {
       "Session",
       "PersistedFileDraft",
       "PersistedPaneLayout",
+      "ClaudeModelCatalogEntry",
+      "ClaudeModelCatalogSnapshot",
+      "PersistedNativeAgentSession",
     ]) {
       expect(sameProtocolType(backend.get(name), web.get(name))).toBe(true);
     }
-    // The web's generic drafts are views of the protocol records.
-    for (const name of ["PersistedComposeDraft", "PersistedAgentHandoff"]) {
+    // The web's generic drafts and envelopes are views of the protocol records.
+    for (const name of [
+      "PersistedComposeDraft",
+      "PersistedAgentHandoff",
+      "PersistedBuildPipeline",
+      "PersistedPromptQueue",
+    ]) {
       expect(derivedView(backend.get(name), web.get(name))).toBe(true);
     }
   });

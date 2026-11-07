@@ -15,7 +15,9 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
-import { OpenObject, openRecord } from "../../model-schema.js";
+import type { DeepMutable, Mutable } from "effect/Types";
+import type { AgentModel } from "../../../native-agent.js";
+import { modelRecord, mutableArray, OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
@@ -97,8 +99,11 @@ export const ContainerBridgePeekSchema = Schema.NullOr(
 
 // --- Model catalogues -----------------------------------------------------
 
-/** `AgentModel` (native-agent.ts): one provider-neutral composer model. */
-export const AgentModelSchema = openRecord({
+/**
+ * `AgentModel` (native-agent.ts): one provider-neutral composer model, typed
+ * as the protocol's interface (its platform, reasoning and parameter types).
+ */
+export const AgentModelSchema = modelRecord<AgentModel>()({
   platform: Schema.String,
   id: Schema.String,
   label: Schema.String,
@@ -117,7 +122,26 @@ export const AgentModelSchema = openRecord({
   sessionDefault: optionalBoolean,
 });
 
-/** `ClaudeModelCatalogEntry` (models.ts). */
+// The Claude, Codex and OpenCode catalogues are the models themselves (plan
+// item 7010): `apps/backend/src/core/models.ts` and the web's types re-export
+// the types below. The effort and source vocabularies are literals because
+// the backend keeps only the values it knows when it reads a catalogue
+// (`commands-containers.ts`, `storage-shared-model-catalogs.ts`,
+// `commands-validation.ts`); a new value bumps the domain.
+
+/** `ClaudeEffortLevel`: an effort level a Claude model can run at. */
+export const ClaudeEffortLevelSchema = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
+export type ClaudeEffortLevel = typeof ClaudeEffortLevelSchema.Type;
+
+/** Where an environment's Claude catalogue came from. */
+export const ClaudeModelCatalogSourceSchema = Schema.Literals([
+  "sdk",
+  "last-known-good",
+  "fallback",
+]);
+export type ClaudeModelCatalogSource = typeof ClaudeModelCatalogSourceSchema.Type;
+
+/** `ClaudeModelCatalogEntry`: one model of a Claude catalogue. */
 export const ClaudeModelCatalogEntrySchema = openRecord({
   id: Schema.String,
   name: Schema.String,
@@ -125,47 +149,95 @@ export const ClaudeModelCatalogEntrySchema = openRecord({
   description: optionalString,
   supportsFastMode: optionalBoolean,
   supportsEffort: optionalBoolean,
-  supportedEffortLevels: Schema.optional(StringArray),
+  supportedEffortLevels: Schema.optional(mutableArray(ClaudeEffortLevelSchema)),
   supportsAdaptiveThinking: optionalBoolean,
   supportsAutoMode: optionalBoolean,
 });
+export type ClaudeModelCatalogEntry = Mutable<typeof ClaudeModelCatalogEntrySchema.Type>;
 
-/** `ClaudeModelCatalogSnapshot` (models.ts): an environment's Claude catalogue. */
+/** `ClaudeModelCatalogSnapshot`: an environment's Claude catalogue. */
 export const ClaudeModelCatalogSnapshotSchema = openRecord({
   environmentId: Schema.String,
-  models: Schema.Array(ClaudeModelCatalogEntrySchema),
-  source: Schema.String,
+  models: mutableArray(ClaudeModelCatalogEntrySchema),
+  source: ClaudeModelCatalogSourceSchema,
   fetchedAt: Schema.String,
   sdkVersion: optionalString,
   cliVersion: optionalString,
   stale: Schema.Boolean,
   error: optionalString,
 });
+export type ClaudeModelCatalogSnapshot = DeepMutable<typeof ClaudeModelCatalogSnapshotSchema.Type>;
 
-/** `CodexModelCatalogEntry` (models.ts). */
+/** `CodexReasoningEffort`: a reasoning effort a Codex model offers. */
+export const CodexReasoningEffortSchema = Schema.Literals([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+export type CodexReasoningEffort = typeof CodexReasoningEffortSchema.Type;
+
+/** `CodexModelCatalogEntry`: one model of the Codex catalogue. */
 export const CodexModelCatalogEntrySchema = openRecord({
   id: Schema.String,
   name: Schema.String,
   description: optionalString,
-  reasoningEfforts: Schema.optional(StringArray),
-  reasoningOptions: Schema.optional(Schema.Array(OpenObject)),
-  defaultReasoningEffort: optionalString,
+  reasoningEfforts: Schema.optional(mutableArray(CodexReasoningEffortSchema)),
+  reasoningOptions: Schema.optional(
+    mutableArray(
+      openRecord({
+        effort: CodexReasoningEffortSchema,
+        label: Schema.String,
+        description: optionalString,
+      }),
+    ),
+  ),
+  defaultReasoningEffort: Schema.optional(CodexReasoningEffortSchema),
 });
+export type CodexModelCatalogEntry = DeepMutable<typeof CodexModelCatalogEntrySchema.Type>;
 
-/** `PersistedAgentModelCatalog<T>` (models.ts). */
+/** `PersistedAgentModelCatalog<T>`: one platform's last-known-good catalogue. */
 function persistedCatalogOf<S extends Schema.Top>(model: S) {
-  return openRecord({ updatedAt: Schema.String, models: Schema.Array(model) });
+  return openRecord({ updatedAt: Schema.String, models: mutableArray(model) });
+}
+export interface PersistedAgentModelCatalog<T> {
+  updatedAt: string;
+  models: T[];
 }
 
-/** `AgentModelCatalogCache` (models.ts): the host-wide last-known-good catalogues. */
+/**
+ * `AgentModelCatalogCache`: the host-wide last-known-good catalogues used
+ * before any environment bridge has started. Cursor, Grok and Pi persist the
+ * provider-neutral models their ACP bridge normalises. OpenCode stays
+ * project-scoped ({@link OpenCodeModelCatalogSnapshotSchema}) because its
+ * provider list can differ between repositories.
+ */
 export const AgentModelCatalogCacheSchema = openRecord({
-  schemaVersion: Schema.Finite,
+  schemaVersion: Schema.Literal(1),
   claude: Schema.optional(persistedCatalogOf(ClaudeModelCatalogEntrySchema)),
   codex: Schema.optional(persistedCatalogOf(CodexModelCatalogEntrySchema)),
   cursor: Schema.optional(persistedCatalogOf(AgentModelSchema)),
   grok: Schema.optional(persistedCatalogOf(AgentModelSchema)),
   pi: Schema.optional(persistedCatalogOf(AgentModelSchema)),
 });
+/**
+ * The cache's type: the schema's, with each platform's catalogue as
+ * {@link PersistedAgentModelCatalog} of its model type (`AgentModel` keeps
+ * its own mutable interface).
+ */
+export type AgentModelCatalogCache = Omit<
+  Mutable<typeof AgentModelCatalogCacheSchema.Type>,
+  "claude" | "codex" | "cursor" | "grok" | "pi"
+> & {
+  claude?: PersistedAgentModelCatalog<ClaudeModelCatalogEntry>;
+  codex?: PersistedAgentModelCatalog<CodexModelCatalogEntry>;
+  cursor?: PersistedAgentModelCatalog<AgentModel>;
+  grok?: PersistedAgentModelCatalog<AgentModel>;
+  pi?: PersistedAgentModelCatalog<AgentModel>;
+};
 
 /**
  * `get_native_agent_model_catalog`: the composer's models, or, when the call
@@ -183,29 +255,47 @@ export const HostModelCatalogRefreshSchema = Schema.Struct({
   modelCount: Schema.Finite,
 });
 
-/** `OpenCodeModelCatalogEntry` (models.ts). */
+/** `OpenCodeModelCatalogEntry`: one model of a project's OpenCode catalogue. */
 export const OpenCodeModelCatalogEntrySchema = openRecord({
   id: Schema.String,
   name: Schema.String,
   provider: Schema.String,
-  variants: Schema.optional(StringArray),
+  variants: Schema.optional(mutableArray(Schema.String)),
   inputCost: optionalNumber,
   outputCost: optionalNumber,
   contextWindow: optionalNumber,
   supportsImageInput: optionalBoolean,
+  /** Whether the provider is connected for this login, when OpenCode reported it. */
   connected: optionalBoolean,
 });
+export type OpenCodeModelCatalogEntry = Mutable<typeof OpenCodeModelCatalogEntrySchema.Type>;
 
-/** `OpenCodeModelCatalogSnapshot` (models.ts): one project's OpenCode catalogue. */
+/**
+ * `OpenCodeModelCatalogSnapshot`: the last-known-good OpenCode catalogue for
+ * one project configuration. `catalogVersion` is a digest of the normalised
+ * model data; keeping it separate from `updatedAt` lets the backend skip
+ * rewriting the cache when a new OpenCode server reports the same catalogue.
+ */
 export const OpenCodeModelCatalogSnapshotSchema = openRecord({
-  schemaVersion: Schema.Finite,
+  schemaVersion: Schema.Literal(2),
   projectId: Schema.String,
   catalogVersion: Schema.String,
   updatedAt: Schema.String,
-  models: Schema.Array(OpenCodeModelCatalogEntrySchema),
-  connectedProviderIds: Schema.optional(StringArray),
+  models: mutableArray(OpenCodeModelCatalogEntrySchema),
+  /**
+   * Providers OpenCode last reported as connected, so a read made before any
+   * bridge is running can tell a model this login can serve from one it
+   * cannot. Absent when OpenCode never reported connectivity for this project.
+   * `models` deliberately stays unfiltered by it: a provider connected later
+   * must still be known once the next bridge reports it.
+   */
+  connectedProviderIds: Schema.optional(mutableArray(Schema.String)),
+  /** When `connectedProviderIds` was last observed to change. */
   connectedProvidersCheckedAt: optionalString,
 });
+export type OpenCodeModelCatalogSnapshot = DeepMutable<
+  typeof OpenCodeModelCatalogSnapshotSchema.Type
+>;
 
 /** A model OpenCode names: `provider/model`, or `{ providerID, modelID }`. */
 export const OpenCodeModelRefSchema = Schema.Union([

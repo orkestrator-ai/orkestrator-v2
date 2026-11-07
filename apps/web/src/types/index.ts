@@ -5,11 +5,6 @@ export type { Project } from "@orkestrator/protocol/contract/domains/projects";
 // Shared with the backend: both sides order the same activity reports, so a
 // second definition of the vocabulary is a drift waiting to happen.
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
-import type {
-  AgentInteractionOrigin,
-  AgentInteractionPolicy,
-} from "@orkestrator/protocol/agent-interactions";
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 // The environment vocabularies are the protocol schemas' types (plan item 7003).
 import type {
   ClientEnvironment,
@@ -56,30 +51,14 @@ export type { AgentPlatform as DefaultAgent } from "@orkestrator/protocol/agent-
 
 export type { AgentActivityState };
 
-export type ClaudeCatalogEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
-
-export interface ClaudeModelCatalogEntry {
-  id: string;
-  resolvedModel?: string;
-  name: string;
-  description?: string;
-  supportsFastMode?: boolean;
-  supportsEffort?: boolean;
-  supportedEffortLevels?: ClaudeCatalogEffortLevel[];
-  supportsAdaptiveThinking?: boolean;
-  supportsAutoMode?: boolean;
-}
-
-export interface ClaudeModelCatalogSnapshot {
-  environmentId: string;
-  models: ClaudeModelCatalogEntry[];
-  source: "sdk" | "last-known-good" | "fallback";
-  fetchedAt: string;
-  sdkVersion?: string;
-  cliVersion?: string;
-  stale: boolean;
-  error?: string;
-}
+// The model catalogues: the `agent-servers` domain's schemas' types (plan
+// items 7009 and 7010).
+export type {
+  ClaudeEffortLevel as ClaudeCatalogEffortLevel,
+  ClaudeModelCatalogEntry,
+  ClaudeModelCatalogSnapshot,
+  CodexReasoningEffort as CodexReasoningEffortPreference,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
 
 /**
  * An environment as the renderer holds it: the protocol's `ClientEnvironment`
@@ -106,84 +85,44 @@ export interface EnsureEnvironmentSetupResult extends StartEnvironmentResult {
   environment: Environment;
 }
 
-export interface PersistedWorkflowRecord<T = unknown> {
-  version: number;
-  id: string;
-  environmentId: string;
+// The stored workflow envelopes: the `multi-review` and `pipelines` domains'
+// records (plan items 7007 and 7010), generic over the snapshot the renderer
+// canonicalises and guards itself.
+import type { MultiReviewWorkflowRecord } from "@orkestrator/protocol/contract/domains/multi-review";
+import type { BuildPipelineRecord } from "@orkestrator/protocol/contract/domains/pipelines";
+
+/** A Multi Review workflow as the backend answers it (no controller lease). */
+export type PersistedWorkflowRecord<T = unknown> = Omit<MultiReviewWorkflowRecord, "snapshot"> & {
   snapshot: T;
-  updatedAt: string;
-  revision: number;
-  controllerLease?: {
-    ownerId: string;
-    expiresAt: string;
-  };
-}
+};
 
 /**
  * A build pipeline as the backend stores it. The backend owns durability and
  * the compare-and-swap `revision`; this application owns the snapshot schema
  * and validates it on the way back in.
  */
-export interface PersistedBuildPipeline<T = unknown> {
-  version: number;
-  id: string;
-  projectId: string;
-  /** Blank between pipeline creation and its environment existing. */
-  environmentId: string;
+export type PersistedBuildPipeline<T = unknown> = Omit<BuildPipelineRecord, "snapshot"> & {
   snapshot: T;
-  updatedAt: string;
-  revision: number;
-}
-
-export interface PersistedNativeAgentSession {
-  version: 1;
-  key: string;
-  environmentId: string;
-  agent: AgentPlatform;
-  logicalSessionKey: string;
-  providerSessionId: string;
-  origin: AgentInteractionOrigin;
-  interactionPolicy: AgentInteractionPolicy;
-  owner?: import("@orkestrator/protocol/coordinator").AgentSessionOwner;
-  executionPolicy?: "coordinator-read-only";
-  controls?: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate;
-  dispatchedRequestIds?: string[];
-  openCodeIncompleteTurnNotice?: {
-    kind: "failed" | "exhausted";
-    assistantMessageId: string;
-    updatedAt: string;
-  };
-  createdAt: string;
-  updatedAt: string;
-}
+};
 
 /**
- * A tab's undispatched prompt queue as the backend stores it. Message bodies
+ * The durable mapping between a tab and its provider session: the
+ * `native-sessions` domain's record (plan item 7010).
+ */
+export type { PersistedNativeAgentSession } from "@orkestrator/protocol/contract/domains/native-sessions";
+
+/**
+ * A tab's undispatched prompt queue as the backend stores it: the
+ * `native-sessions` domain's record, generic over its messages. Message bodies
  * stay opaque to the backend; each agent defines its own shape.
  */
-export interface PersistedPromptQueue<T = unknown> {
-  queueKey: string;
-  environmentId: string;
+export type PersistedPromptQueue<T = unknown> = Omit<
+  ProtocolPromptQueue,
+  "messages" | "inFlight"
+> & {
   messages: T[];
-  inFlight?: {
-    message: T;
-    requestId: string;
-    reservedAt: string;
-    /** Durable fail-closed marker written before an irreversible dispatch. */
-    submittingAt?: string;
-    /** Durable acknowledgement-only marker written after confirmed dispatch. */
-    submittedAt?: string;
-  };
-  dispatchError?: {
-    requestId: string;
-    messageId: string;
-    messageFingerprint: string;
-    message: string;
-    failedAt: string;
-  };
-  updatedAt: string;
-  revision: number;
-}
+  inFlight?: Omit<NonNullable<ProtocolPromptQueue["inFlight"]>, "message"> & { message: T };
+};
 
 /** Unsent user input persisted by the backend; `value` is the composer's own shape. */
 export type PersistedComposeDraft<T = unknown> = Omit<ProtocolComposeDraft, "value"> & {
@@ -207,6 +146,7 @@ export type EnvironmentSetupSession = EnvironmentSetupSessionSnapshot;
 import type {
   PersistedAgentHandoff as ProtocolAgentHandoff,
   PersistedComposeDraft as ProtocolComposeDraft,
+  PersistedPromptQueue as ProtocolPromptQueue,
 } from "@orkestrator/protocol/contract/domains/native-sessions";
 export type {
   PersistedFileDraft,
@@ -221,27 +161,14 @@ export type ContainerResources = ProtocolGlobalConfig["containerResources"];
 /** Preferred editor for opening containers */
 export type PreferredEditor = NonNullable<ProtocolGlobalConfig["preferredEditor"]>;
 
-/** Codex reasoning effort preference */
-export type CodexReasoningEffortPreference =
-  "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
-
 /** Terminal appearance settings */
 export type TerminalAppearance = ProtocolGlobalConfig["terminalAppearance"];
 
-/** Which credential the Cursor SDK bridge is using. */
-export interface CursorSdkAuthStatus {
-  authenticated: boolean;
-  source: "api-key-env" | "api-key-config" | "host-snapshot" | "stored-login" | "none";
-  email?: string;
-  expiresAt?: string;
-}
-
-export interface CursorSdkLoginProgress {
-  state: "pending" | "authenticated" | "failed" | "idle";
-  loginUrl?: string;
-  error?: string;
-  auth: CursorSdkAuthStatus;
-}
+/** The Cursor SDK sign-in: the `accounts` domain's schemas' types (plan item 7010). */
+export type {
+  CursorSdkAuthStatus,
+  CursorSdkLoginProgress,
+} from "@orkestrator/protocol/contract/domains/accounts";
 
 /**
  * Fields of the renderer's settings this renderer reads as optional: the

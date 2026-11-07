@@ -33,21 +33,19 @@ import type {
   StartFeaturePlanBuildResult,
 } from "../../../feature-build.js";
 import type { WorkflowResultToolsSettings } from "../../../workflow-results.js";
-import { modelRecord, opaqueRecord, type ModelSchema } from "../../model-schema.js";
-
-/** A list typed as a mutable array, as the protocol's interfaces declare lists. */
-export function listOf<S extends Schema.Top>(item: S) {
-  return Schema.mutable(Schema.Array(item));
-}
+import type { Mutable } from "effect/Types";
+import {
+  asModel,
+  modelRecord,
+  mutableArray,
+  opaqueRecord,
+  openRecord,
+} from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalNumber = Schema.optional(Schema.Finite);
-const OpenObject = opaqueRecord<Record<string, unknown>>();
-
-/** `schema`, typed as the protocol's own type `T` (literal unions, `?:` fields). */
-function asModel<T>(schema: Schema.Top): ModelSchema<T> {
-  return schema as unknown as ModelSchema<T>;
-}
+/** Any JSON object, nothing checked (`Schema.Record`; not `model-schema.ts`'s `OpenObject`). */
+const OpaqueObject = opaqueRecord<Record<string, unknown>>();
 
 // --------------------------------------------------------------- pipelines
 
@@ -65,7 +63,7 @@ export const BuildPipelineSchema = modelRecord<BuildPipeline>()({
   environmentType: optionalString,
   agentType: optionalString,
   phase: optionalString,
-  sessions: Schema.optional(Schema.Array(OpenObject)),
+  sessions: Schema.optional(Schema.Array(OpaqueObject)),
   currentSessionIndex: optionalNumber,
   iteration: optionalNumber,
   maxIterations: optionalNumber,
@@ -73,35 +71,27 @@ export const BuildPipelineSchema = modelRecord<BuildPipeline>()({
 });
 
 /**
- * The stored envelope of one pipeline (`PersistedBuildPipeline`), as the reads
- * answer it: transcript bodies are never inline. `snapshot` is the
- * `BuildPipeline`, typed `unknown` by the model (a record written by an older
- * build may predate fields the current guard needs). Storage writes every
- * field; past `id` the schema leaves them optional because storage is faked in
- * tests with partial records.
+ * `PersistedBuildPipeline`: the stored envelope of one pipeline, as the reads
+ * answer it (transcript bodies are never inline). The model itself (plan item
+ * 7010): storage writes every field but `activityEndedAt`, so they are
+ * required, and the backend's `PersistedBuildPipeline` and the web's view of
+ * it are this type. `snapshot` is the `BuildPipeline`, `unknown` here (a
+ * record written by an older build may predate fields the current guard
+ * needs); the renderer canonicalises and guards it.
  */
-export interface BuildPipelineRecord {
-  version: number;
-  id: string;
-  projectId: string;
-  environmentId: string;
-  snapshot: unknown;
-  updatedAt: string;
-  /** Entry into the current complete/failed/paused phase; metadata saves keep it. */
-  activityEndedAt?: string;
-  revision: number;
-}
-
-export const BuildPipelineRecordSchema = modelRecord<BuildPipelineRecord>()({
-  version: optionalNumber,
+export const BuildPipelineRecordSchema = openRecord({
+  version: Schema.Finite,
   id: Schema.String,
-  projectId: optionalString,
-  environmentId: optionalString,
-  snapshot: Schema.optional(Schema.Unknown),
-  updatedAt: optionalString,
+  projectId: Schema.String,
+  /** Blank between pipeline creation and its environment existing. */
+  environmentId: Schema.String,
+  snapshot: Schema.Unknown,
+  updatedAt: Schema.String,
+  /** Entry into the current complete/failed/paused phase; metadata saves keep it. */
   activityEndedAt: optionalString,
-  revision: optionalNumber,
+  revision: Schema.Finite,
 });
+export type BuildPipelineRecord = Mutable<typeof BuildPipelineRecordSchema.Type>;
 
 /** `{ unchanged: true, revision }`: the caller's copy is current. */
 export const UnchangedRevisionSchema = Schema.Struct({
@@ -128,7 +118,7 @@ export const BuildPipelineMessagePatchSchema = modelRecord<BuildPipelineMessageP
   baseCount: optionalNumber,
   startIndex: Schema.Finite,
   revision: Schema.Finite,
-  messages: listOf(Schema.Unknown),
+  messages: mutableArray(Schema.Unknown),
   unavailable: Schema.optional(Schema.Literal(true)),
   deferred: Schema.optional(Schema.Literal(true)),
   complete: Schema.optional(Schema.Literal(false)),
@@ -146,7 +136,7 @@ export const GetBuildPipelineResultSchema = Schema.Union([
   Schema.Struct({
     unchanged: Schema.Literal(false),
     record: BuildPipelineRecordSchema,
-    messagePatches: listOf(BuildPipelineMessagePatchSchema),
+    messagePatches: mutableArray(BuildPipelineMessagePatchSchema),
   }),
   BuildPipelineRecordSchema,
 ]);
@@ -170,12 +160,12 @@ export function conditionalSnapshotOf<S extends Schema.Top>(snapshot: S) {
 
 /** `list_build_pipelines` with `knownRevisions`: every id, and the records that changed. */
 export const BuildPipelineDeltaSchema = Schema.Struct({
-  ids: listOf(Schema.String),
-  records: listOf(BuildPipelineRecordSchema),
+  ids: mutableArray(Schema.String),
+  records: mutableArray(BuildPipelineRecordSchema),
 });
 
 const BuildPipelineListSchema = Schema.Union([
-  listOf(BuildPipelineRecordSchema),
+  mutableArray(BuildPipelineRecordSchema),
   BuildPipelineDeltaSchema,
 ]);
 
@@ -184,7 +174,7 @@ const BuildPipelineListSchema = Schema.Union([
  * either inside a manifest-conditional snapshot (`knownManifestGeneration`).
  */
 export const ListBuildPipelinesResultSchema = Schema.Union([
-  listOf(BuildPipelineRecordSchema),
+  mutableArray(BuildPipelineRecordSchema),
   BuildPipelineDeltaSchema,
   conditionalSnapshotOf(BuildPipelineListSchema),
 ]);
@@ -224,17 +214,19 @@ export const CodeRewindPreviewSchema = modelRecord<BuildPipelineCodeRewindPrevie
   iteration: optionalNumber,
   targetCommit: optionalString,
   head: optionalString,
-  commits: Schema.optional(listOf(Schema.Struct({ sha: Schema.String, subject: Schema.String }))),
+  commits: Schema.optional(
+    mutableArray(Schema.Struct({ sha: Schema.String, subject: Schema.String })),
+  ),
   commitCount: optionalNumber,
   upstream: Schema.optional(Schema.Struct({ ref: Schema.String, droppedCommits: Schema.Finite })),
   pullRequest: Schema.optional(Schema.Struct({ url: Schema.String, state: Schema.String })),
-  uncommittedPaths: Schema.optional(listOf(Schema.String)),
+  uncommittedPaths: Schema.optional(mutableArray(Schema.String)),
   blocked: optionalString,
 });
 
 /** `import_legacy_build_pipelines`. */
 export const ImportLegacyBuildPipelinesResultSchema = Schema.Struct({
-  importedIds: listOf(Schema.String),
+  importedIds: mutableArray(Schema.String),
   skipped: Schema.Finite,
 });
 
@@ -275,9 +267,9 @@ export const PipelineWorkerTranscriptSchema = modelRecord<PipelineWorkerTranscri
   tabId: Schema.String,
   pipelineId: optionalString,
   workflowId: optionalString,
-  worker: Schema.optional(OpenObject),
+  worker: Schema.optional(OpaqueObject),
   agent: optionalString,
-  messages: listOf(Schema.Unknown),
+  messages: mutableArray(Schema.Unknown),
   messageWindow: Schema.optional(
     Schema.Struct({
       startIndex: Schema.Finite,
@@ -296,8 +288,8 @@ export const PipelineWorkerTranscriptSchema = modelRecord<PipelineWorkerTranscri
 export const WorkflowResultToolsSettingsSchema = asModel<WorkflowResultToolsSettings>(
   Schema.Struct({
     enabled: Schema.Boolean,
-    providers: listOf(Schema.String),
-    kinds: listOf(Schema.String),
+    providers: mutableArray(Schema.String),
+    kinds: mutableArray(Schema.String),
   }),
 );
 

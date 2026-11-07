@@ -102,23 +102,33 @@ describe("native-sessions definitions", () => {
 
   it("keeps every key of an open record through a tolerant decode", () => {
     const session = {
-      version: 2,
+      version: 1 as const,
       key: "env-1:codex:tab-1",
       environmentId: "env-1",
-      agent: "codex",
+      agent: "codex" as const,
       logicalSessionKey: "tab-1",
       providerSessionId: "p-1",
-      origin: { surface: "manual" },
-      interactionPolicy: { version: 1, mode: "interactive" },
-      lastDispatchedTurn: { requestId: "r1", mode: "build" },
+      origin: "interactive-native" as const,
+      interactionPolicy: { version: 1, mode: "interactive", future: true } as never,
+      lastDispatchedTurn: { requestId: "r1", mode: "build" as const },
       createdAt: "2026-11-07T00:00:00.000Z",
       updatedAt: "2026-11-07T00:00:00.000Z",
+      future: { kept: true },
     };
     const decoded = decodeCommandResult(getNativeAgentSessionCommand, session);
     expect(decoded._tag).toBe("Success");
     if (decoded._tag === "Success") expect(decoded.success).toEqual(session);
-    // A present field is still type-checked.
+    // A present field is still type-checked, and the record's fields are the model's (7010).
     expect(Schema.decodeUnknownResult(NativeAgentSessionSchema)({ key: 1 })._tag).toBe("Failure");
+    expect(
+      decodeCommandResult(getNativeAgentSessionCommand, { ...session, agent: "future-agent" })._tag,
+    ).toBe("Failure");
+    const { providerSessionId: _missing, ...partial } = session;
+    expect(decodeCommandResult(getNativeAgentSessionCommand, partial)._tag).toBe("Failure");
+    // A malformed self-validated field reads as absent in the backend, so it does not fail here.
+    expect(
+      decodeCommandResult(getNativeAgentSessionCommand, { ...session, backendTitle: 7 })._tag,
+    ).toBe("Success");
     const open = openRecord({ id: Schema.String });
     expect(Schema.decodeUnknownSync(open)({ id: "a", deep: { x: [1] } }) as unknown).toEqual({
       id: "a",

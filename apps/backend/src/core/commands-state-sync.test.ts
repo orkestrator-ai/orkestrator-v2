@@ -3798,14 +3798,17 @@ describe("native agent controller commands", () => {
 
   test("maps native session and dispatch arguments to the backend authority", async () => {
     const ensureSession = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
       operation: "ensure",
       input,
     }));
     const dispatchPrompt = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
       operation: "dispatch",
       input,
     }));
     const adoptSession = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
       operation: "adopt",
       input,
     }));
@@ -4065,7 +4068,7 @@ describe("native agent controller commands", () => {
   });
 
   test("rejects malformed dispatch images, attachments and schema", async () => {
-    const dispatchPrompt = mock(async () => ({ operation: "dispatch" }));
+    const dispatchPrompt = mock(async () => ({ ...nativeSessionRecord(), operation: "dispatch" }));
     const nativeAgents = { dispatchPrompt } as unknown as NonNullable<
       CommandContext["nativeAgents"]
     >;
@@ -4122,7 +4125,7 @@ describe("native agent controller commands", () => {
   });
 
   test("forwards an explicit dispatch mode and its per-prompt options", async () => {
-    const dispatchPrompt = mock(async () => ({ operation: "dispatch" }));
+    const dispatchPrompt = mock(async () => ({ ...nativeSessionRecord(), operation: "dispatch" }));
     const nativeAgents = { dispatchPrompt } as unknown as NonNullable<
       CommandContext["nativeAgents"]
     >;
@@ -6555,3 +6558,23 @@ describe("pr monitor commands", () => {
     });
   });
 });
+
+/**
+ * A complete native agent session record, as the session service answers:
+ * the `native-sessions` result schema is the model (plan item 7010), so a
+ * fake's answer carries every field the storage always writes.
+ */
+function nativeSessionRecord() {
+  return {
+    version: 1,
+    key: "e1:codex:tab-1",
+    environmentId: "e1",
+    agent: "codex",
+    logicalSessionKey: "tab-1",
+    providerSessionId: "provider-1",
+    origin: "interactive-native",
+    interactionPolicy: { version: 1, mode: "interactive" },
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+  };
+}

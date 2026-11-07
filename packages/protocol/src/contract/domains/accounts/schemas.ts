@@ -16,6 +16,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import type { DeepMutable, Mutable } from "effect/Types";
 import type {
   AgentAccountIdentity,
   AgentAccountLoginProgress,
@@ -316,19 +317,43 @@ export const OpenCodeProviderLoginProgressSchema = modelRecord<OpenCodeProviderL
 }).annotate({ identifier: "OpenCodeProviderLoginProgress" });
 
 // ---------------------------------------------------------------------------
-// Cursor SDK login (the backend's `CursorSdkAuthStatus`/`CursorSdkLoginProgress`)
+// Cursor SDK login (plan item 7010: the models themselves; the web's
+// `CursorSdkAuthStatus`/`CursorSdkLoginProgress` are these types). The
+// credential source and the login state are literals: the backend writes
+// only these (`cursor-sdk-bridge.ts`), and a new value bumps the domain.
+
+/** Which credential the Cursor SDK bridge is using. */
+export const CursorSdkCredentialSourceSchema = Schema.Literals([
+  "api-key-env",
+  "api-key-config",
+  "host-snapshot",
+  "stored-login",
+  "none",
+]);
+export type CursorSdkCredentialSource = typeof CursorSdkCredentialSourceSchema.Type;
 
 /** Whether the Cursor SDK engine can run a turn, and which credential is in play (never the key). */
 export const CursorSdkAuthStatusSchema = openRecord({
   authenticated: Schema.Boolean,
-  source: Schema.String,
+  source: CursorSdkCredentialSourceSchema,
   email: optionalString,
   expiresAt: optionalString,
 }).annotate({ identifier: "CursorSdkAuthStatus" });
+export type CursorSdkAuthStatus = Mutable<typeof CursorSdkAuthStatusSchema.Type>;
+
+/** The backend's single Cursor login: its state, its URL while pending, and the credential after it. */
+export const CursorSdkLoginStateSchema = Schema.Literals([
+  "pending",
+  "authenticated",
+  "failed",
+  "idle",
+]);
+export type CursorSdkLoginState = typeof CursorSdkLoginStateSchema.Type;
 
 export const CursorSdkLoginProgressSchema = openRecord({
-  state: Schema.String,
+  state: CursorSdkLoginStateSchema,
   loginUrl: optionalString,
   error: optionalString,
   auth: CursorSdkAuthStatusSchema,
 }).annotate({ identifier: "CursorSdkLoginProgress" });
+export type CursorSdkLoginProgress = DeepMutable<typeof CursorSdkLoginProgressSchema.Type>;

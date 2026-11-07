@@ -3,7 +3,7 @@ id: 5001
 title: "Attention, sounds and notifications from one window service"
 phase: 5
 plan: "§9 Attention and §12 Phase 5.1"
-status: in-progress
+status: done
 depends_on: [4001, 0002]
 blocked_by: ""
 owner: claude-worker
@@ -36,7 +36,7 @@ Every node alerts exactly once, whatever its tier, and a click opens that node.
 - [x] One window service: for warm and live scopes, listen on the scope client; for summary-tier nodes, use `subscribeNodeEvents`. Deduplicate by `(nodeId, attentionId)`, and move a node between sources when its tier changes without a gap or a duplicate.
 - [x] A notification click calls `openMachineWorkspace(nodeId, { projectId, environmentId })`.
 - [x] Until [6002](6002-delete-web-realm-code.md) lands, skip realm nodes as [0002](0002-attention-without-realm.md) does.
-- [ ] Remove the per-realm path once [6002](6002-delete-web-realm-code.md) lands (left to 6002: realms still exist on this branch).
+- [x] Remove the per-realm path once [6002](6002-delete-web-realm-code.md) lands. *(Removed in 6002, commit 4312188ab: `realmNodes()` and the `inTreeNodesStore` subscription in `window-attention.ts`, the realm-renderer gate in `useRemoteNodeAttention`, the realm click path in `question-desktop-notification.ts`, and their realm test cases.)*
 
 ## Tests
 
@@ -75,4 +75,4 @@ Every node alerts exactly once, whatever its tier, and a click opens that node.
 ## Work log
 
 - 2026-11-07 (claude-worker): added the window attention service (`lib/federation/window-attention.ts`) and moved `useRemoteNodeAttention` onto it; in-tree leaves on their warm/live scope, everything else on the relay, realm nodes skipped, overlap handover deduplicated by `(nodeId, attentionId)`, `attentionHandoff` for 4002. The sound service treats the shown in-tree environment as on screen and the command node's selection as hidden while another node is shown. Local notification clicks go through `openMachineWorkspace`, so a realm's click moves the window. Tests: `lib/federation/window-attention.test.ts` 13 (sources, tier change mid-stream both ways with no gap and no duplicate, released scope, bounded wait, disposed and reopened scope, handoff, stop, `shownEnvironmentOn`), `hooks/useRemoteNodeAttention.test.tsx` 17 (+2: in-tree leaf alerts once from its scope and its click opens it; the shown in-tree environment is quiet), `lib/question-desktop-notification.test.ts` 9 (+2: realm click posts `open`; provisional id stays local), `useNotificationSoundService.test.tsx` 28 unchanged. Focused web suites `src/hooks src/lib/federation` and `App.test.tsx`: 1173 pass, 3 fail in `in-tree-scopes.test.ts` from 4002's uncommitted edit of `in-tree-scopes.ts`. Web typecheck clean in my files (errors only in other agents' in-progress files), fmt and oxlint clean, source guards clean for my files. Live check passed as in Notes. Commit `0303f0a87`.
-
+- 2026-11-07 (claude-worker, plan item 6002): removed the per-realm path with the web realm code (commit 4312188ab): every node other than the window's own is heard on its warm or live scope or through the relay; nothing is skipped for a realm any more. Last open box ticked; item done.

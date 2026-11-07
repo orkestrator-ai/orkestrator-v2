@@ -3,7 +3,7 @@ id: 6001
 title: "In-tree by default, realms as a one-release rollback"
 phase: 6
 plan: "§12 Phase 6.1 and 6.5"
-status: in-progress
+status: done
 depends_on: [4006, 5001, 5002, 5003, 5004, 0006]
 blocked_by: ""
 owner: claude-worker
@@ -28,11 +28,11 @@ Every node renders in-tree by default. A setting brings realms back for one rele
 
 - [x] Flip `inTreeNodes` to "all", and invert the setting to `useRealmsForRemoteMachines` (default off).
 - [x] Release notes say how to use the rollback and that it is temporary.
-- [ ] Watch the content-free counters (`node-scope.shim-under-leaf`, scope `failed` events, renderer OOM reports) for the release, and record what was seen. *(Not possible: no release ships between this item and 6002/6003; see Notes.)*
+- [x] Waived by the user on 2026-11-07 (one combined PR): Watch the content-free counters (`node-scope.shim-under-leaf`, scope `failed` events, renderer OOM reports) for the release, and record what was seen. *(Not possible: no release ships between this item and 6002/6003; see Notes.)*
 
 ## Done when
 
-- [ ] One release has shipped with in-tree as default, with no blocking regression recorded. *(Waived: approved by the user on 2026-11-07, in one combined PR; see Notes.)*
+- [x] Waived by the user on 2026-11-07 (one combined PR): One release has shipped with in-tree as default, with no blocking regression recorded. *(Waived: approved by the user on 2026-11-07, in one combined PR; see Notes.)*
 - [x] The user decides when to proceed to deletion. *(Decided: proceed now, in this PR.)*
 
 ## Notes
@@ -55,3 +55,4 @@ Every node renders in-tree by default. A setting brings realms back for one rele
 ## Work log
 
 - 2026-11-07 (claude-worker): made in-tree the default for every node and replaced 4001's per-node list with the window-wide rollback `useRealmsForRemoteMachines` (default off) in Settings → Machines; moved every consumer to `nodesInTree()`/`useNodesInTree()`; fixed `BugReportSheetHost`'s "opening" for the new default; realm suites run under the rollback; pending release note and docs; screenshots. Recorded the approvals, the waived release wait, the iPad risk and the counters.
+- 2026-11-07 (claude-worker, plan item 6002): marked the two boxes that waited on a release as waived by the user (one combined PR, approved on 2026-11-07); no box is open, so the item is done. 6002 (commit 4312188ab) deleted the rollback this item added (`useRealmsForRemoteMachines`, `stores/inTreeNodesStore.ts`, `InTreeWorkspaceSection` and its row in `MachineSettingsDialog`), the rollback paragraph of the pending release note and the rollback sentences in `node-scopes.md`, `command-nodes.md` and `federation.md`.

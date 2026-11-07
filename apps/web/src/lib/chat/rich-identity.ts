@@ -141,6 +141,12 @@ export function richScopePrefixes(
   return [`["block",${parts},`, `["artifact",${parts},`];
 }
 
+/** View-state key prefixes of everything derived from one backend (node). */
+export function richBackendPrefixes(backendId: string): string[] {
+  const part = JSON.stringify([backendId]).slice(1, -1);
+  return [`["block",${part},`, `["artifact",${part},`];
+}
+
 /**
  * A small, fast, non-cryptographic content fingerprint (FNV-1a 64 as hex).
  * Used only for client cache identity of inline Markdown content; published

@@ -26,7 +26,9 @@ import { createBrowserGatewayApi, installBrowserGatewayApi } from "@/lib/native/
 import {
   clearProtectedRichContent,
   clearRichConversationContent,
+  noteRichBackendIdentity,
   noteRichContentConnection,
+  registerProtectedRichCache,
   registeredProtectedRichCaches,
   resetRichContentResetTracking,
   richContentResetCounters,
@@ -34,8 +36,12 @@ import {
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
-function scope(environmentId: string, logicalSessionKey = "session-1"): RichTranscriptScope {
-  return { backendId: "backend-A", environmentId, logicalSessionKey, generation: "g1" };
+function scope(
+  environmentId: string,
+  logicalSessionKey = "session-1",
+  backendId = "backend-A",
+): RichTranscriptScope {
+  return { backendId, environmentId, logicalSessionKey, generation: "g1" };
 }
 
 let capabilitiesBackendId = "backend-A";
@@ -250,6 +256,90 @@ describe("protected rich content clearing", () => {
     } as unknown as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
     installBrowserGatewayApi(fakeWindow, { replaceExisting: true });
     expect(richContentResetCounters.all).toBe(2);
+  });
+});
+
+describe("protected rich content per node", () => {
+  /** Render, view state, an artifact read and a ledger for each scope. */
+  async function populate(targets: RichTranscriptScope[]): Promise<void> {
+    for (const target of targets) {
+      renderHook(() => useArtifactPublication(target, "pub-1"));
+      renderHook(() => useArtifactPublications(target, []));
+      await settleRender(renderKey(target));
+      useRichContentViewStore
+        .getState()
+        .update(richBlockViewKey(target, "m1", "p1", "details:0"), { open: true });
+    }
+    await waitFor(() => expect(artifactRequestCacheStats().entries).toBe(targets.length));
+    await waitFor(() => expect(artifactPublicationCacheSize()).toBe(targets.length));
+  }
+
+  test("a clear by node leaves the other node's entries", async () => {
+    const nodeA = scope("env-1", "session-1", "backend-A");
+    const nodeB = scope("env-1", "session-1", "backend-B");
+    await populate([nodeA, nodeB]);
+
+    act(() => clearProtectedRichContent("credentials", { nodeId: "backend-A" }));
+
+    expect(richRenderScheduler.peek(renderKey(nodeA))).toBeNull();
+    expect(richRenderScheduler.peek(renderKey(nodeB))?.ok).toBe(true);
+    expect(Array.from(useRichContentViewStore.getState().entries.keys())).toEqual([
+      richBlockViewKey(nodeB, "m1", "p1", "details:0"),
+    ]);
+    expect(artifactRequestCacheStats().entries).toBe(1);
+    expect(richContentResetCounters).toMatchObject({ all: 0, node: 1 });
+    // B's ledger survived the clear (A's mounted reader may read its own again).
+    expect(artifactPublicationCacheSize()).toBeGreaterThanOrEqual(1);
+  });
+
+  test("a cache without a per-node clear is cleared entirely by a node clear", () => {
+    const cleared: string[] = [];
+    const unregister = registerProtectedRichCache("test-only", {
+      clearAll: (reason) => cleared.push(`all:${reason}`),
+    });
+    try {
+      clearProtectedRichContent("connection", { nodeId: "backend-A" });
+    } finally {
+      unregister();
+    }
+    expect(cleared).toEqual(["all:connection"]);
+  });
+
+  test("identities and connections are tracked per node, so live nodes do not thrash", async () => {
+    const nodeA = scope("env-1", "session-1", "backend-A");
+    const nodeB = scope("env-1", "session-1", "backend-B");
+    await settleRender(renderKey(nodeA));
+    await settleRender(renderKey(nodeB));
+
+    // Two live nodes, each reporting its own identity: nothing is cleared.
+    noteRichBackendIdentity("backend-A", { nodeId: "backend-A" });
+    noteRichBackendIdentity("backend-B", { nodeId: "backend-B" });
+    noteRichBackendIdentity("backend-A", { nodeId: "backend-A" });
+    noteRichContentConnection("route-a", { nodeId: "backend-A" });
+    noteRichContentConnection("route-b", { nodeId: "backend-B" });
+    // The window's own slot is separate from every node's.
+    noteRichBackendIdentity("backend-B");
+    noteRichContentConnection("local");
+    expect(richContentResetCounters).toMatchObject({ all: 0, node: 0 });
+
+    // B's connection moves: only B's content goes.
+    noteRichContentConnection("route-b2", { nodeId: "backend-B" });
+    expect(richContentResetCounters).toMatchObject({ all: 0, node: 1 });
+    expect(richRenderScheduler.peek(renderKey(nodeB))).toBeNull();
+    expect(richRenderScheduler.peek(renderKey(nodeA))?.ok).toBe(true);
+
+    // A node slot now answers as another backend: what the old identity
+    // served goes, nothing else.
+    await settleRender(renderKey(nodeB));
+    noteRichBackendIdentity("backend-C", { nodeId: "backend-A" });
+    expect(richContentResetCounters).toMatchObject({ all: 0, node: 2 });
+    expect(richRenderScheduler.peek(renderKey(nodeA))).toBeNull();
+    expect(richRenderScheduler.peek(renderKey(nodeB))?.ok).toBe(true);
+
+    // The window slot keeps today's behaviour: a new identity clears everything.
+    noteRichBackendIdentity("backend-D");
+    expect(richContentResetCounters.all).toBe(1);
+    expect(richRenderScheduler.stats().settled).toBe(0);
   });
 });
 

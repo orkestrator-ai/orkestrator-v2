@@ -1,6 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { createBrowserGatewayApi } from "./web-gateway";
-import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 
 /**
  * Bearer and cross-origin clients read terminal output with `fetch`, and carry
@@ -13,7 +12,6 @@ const originalEventSource = globalThis.EventSource;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
-  clearDirectGatewayTransport();
 });
 
 async function flush() {

@@ -3,12 +3,14 @@ import {
   createAcpClient,
   createAcpSession,
   getAcpMessageWindow,
+  getAcpModels,
   mergeAcpMessageWindow,
   normalizeAcpComposer,
   type AcpMessage,
   type AcpMessageWindow,
 } from "./acp-client";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import { createNodeTransport } from "./native/node-transport";
 
 const nativeFetch = globalThis.fetch;
 
@@ -113,6 +115,85 @@ describe("ACP bridge authentication", () => {
 
     expect(request?.headers.get("x-orkestrator-acp-token")).toBe("bridge-secret");
     expect(request?.headers.has("authorization")).toBe(false);
+  });
+
+  test("reaches a loopback bridge through its own node's gateway with that node's bearer", async () => {
+    const requests: Request[] = [];
+    globalThis.fetch = (async (input, init) => {
+      requests.push(new Request(input, init));
+      return Response.json({ models: [] });
+    }) as typeof fetch;
+    const leafA = createNodeTransport({ baseUrl: "https://leaf-a.test", credential: "grant-a" });
+    const leafB = createNodeTransport({ baseUrl: "https://leaf-b.test/", credential: "grant-b" });
+    const pageFetch = globalThis.fetch;
+    try {
+      const a = createAcpClient("http://127.0.0.1:4099/acp/", "bridge-a", leafA);
+      const b = createAcpClient("http://localhost:4100", "bridge-b", leafB);
+      await getAcpModels(a);
+      await getAcpModels(b);
+      // A new grant on A reaches A's next request and nothing of B's.
+      leafA.setCredential("grant-a2");
+      await getAcpModels(a);
+      await getAcpModels(b);
+      // Nothing patched the page's fetch on the way.
+      expect(globalThis.fetch).toBe(pageFetch);
+    } finally {
+      leafA.dispose();
+      leafB.dispose();
+      globalThis.fetch = nativeFetch;
+    }
+
+    expect(
+      requests.map((entry) => [
+        entry.url,
+        entry.headers.get("authorization"),
+        entry.headers.get("x-orkestrator-acp-token"),
+      ]),
+    ).toEqual([
+      [
+        "https://leaf-a.test/__orkestrator/proxy/loopback/4099/acp/global/models",
+        "Bearer grant-a",
+        "bridge-a",
+      ],
+      [
+        "https://leaf-b.test/__orkestrator/proxy/loopback/4100/global/models",
+        "Bearer grant-b",
+        "bridge-b",
+      ],
+      [
+        "https://leaf-a.test/__orkestrator/proxy/loopback/4099/acp/global/models",
+        "Bearer grant-a2",
+        "bridge-a",
+      ],
+      [
+        "https://leaf-b.test/__orkestrator/proxy/loopback/4100/global/models",
+        "Bearer grant-b",
+        "bridge-b",
+      ],
+    ]);
+  });
+
+  test("ignores the page's configured gateway", () => {
+    // `window` is this file's message-window builder; the page is `globalThis`.
+    const page = globalThis.window;
+    const previous = page.orkestratorGateway;
+    page.orkestratorGateway = { enabled: true, baseUrl: "https://elsewhere.test" };
+    try {
+      expect(createAcpClient("http://127.0.0.1:4099", "bridge").baseUrl).toBe(
+        "http://127.0.0.1:4099",
+      );
+      const leaf = createNodeTransport({ baseUrl: "https://leaf-a.test", credential: "grant" });
+      try {
+        // A bridge that is not on the node's loopback is called directly.
+        expect(createAcpClient("https://bridge.test", "bridge", leaf).baseUrl).toBe(
+          "https://bridge.test",
+        );
+      } finally {
+        leaf.dispose();
+      }
+    } finally {
+      page.orkestratorGateway = previous;
+    }
   });
 });
 

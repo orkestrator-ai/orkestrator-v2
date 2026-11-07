@@ -9,7 +9,6 @@ import {
   readStoredWorkspace,
 } from "@/lib/portal/workspace-target-storage";
 import { resolveGatewayApiUrl } from "@/lib/gateway-url";
-import { configureDirectGatewayTransport } from "@/lib/native/gateway-auth-transport";
 import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
 import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
 import {
@@ -209,9 +208,8 @@ export function installBrowserGatewayApi(
       // A replaced gateway may be another backend or other credentials.
       clearProtectedRichContent("gateway-replaced");
     }
-    if (baseUrl && options.token) {
-      configureDirectGatewayTransport(baseUrl, options.token.trim());
-    }
+    // The transport sends its own bearer and reads bearer streams with
+    // `fetch`, so nothing patches the page's `fetch` or `EventSource` for it.
     targetWindow.orkestratorGateway = { enabled: true, ...(baseUrl ? { baseUrl } : {}) };
     targetWindow.orkestrator = createBrowserGatewayApi({
       ...options,

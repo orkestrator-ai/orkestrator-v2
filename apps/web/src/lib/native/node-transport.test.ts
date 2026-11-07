@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { relayedNodeEventName } from "@orkestrator/protocol/node-events";
 import {
   createNodeTransport,
   type NodeTransport,
@@ -361,6 +363,128 @@ describe("two node transports in one page", () => {
     lifecycleB.becomeVisible();
     await settle();
     expect(mainStreams(gateways[B]!)).toHaveLength(1);
+  });
+});
+
+describe("a node transport's own credential", () => {
+  const RELAYED = relayedNodeEventName("bk_leaf" as BackendId);
+  const relayedStreams = (gateway: FakeGateway) =>
+    gateway.streams.filter((stream) => stream.url.searchParams.get("includeEvents") === RELAYED);
+  const terminalOnly = (gateway: FakeGateway) =>
+    terminalStreams(gateway).filter(
+      (stream) => stream.url.searchParams.get("includeEvents") !== RELAYED,
+    );
+
+  test("setCredential reopens that transport's streams with the new bearer and no other's", async () => {
+    const gateways = fakeGateways(A, B);
+    const timers = manualTimers();
+    const ladder = { eventReconnectDelayMs: 100, eventReconnectRandom: TOP_OF_RANGE };
+    const a = transport({ baseUrl: A, credential: "token-a", ...ladder });
+    const b = transport({ baseUrl: B, credential: "token-b", ...ladder });
+    const seenA: unknown[] = [];
+    const seenB: unknown[] = [];
+    for (const [node, seen] of [
+      [a, seenA],
+      [b, seenB],
+    ] as const) {
+      node.listen("changed", (payload) => seen.push(payload));
+      node.listen("terminal-output-s1", () => undefined);
+      node.listen(RELAYED, () => undefined);
+    }
+    await until(
+      () => gateways[A]!.streams.length === 3 && gateways[B]!.streams.length === 3,
+      "Each transport should open a main, a terminal and a relayed stream",
+    );
+    for (const [origin, token] of [
+      [A, "Bearer token-a"],
+      [B, "Bearer token-b"],
+    ] as const) {
+      expect(gateways[origin]!.streams.map((stream) => stream.authorization)).toEqual([
+        token,
+        token,
+        token,
+      ]);
+    }
+    await until(() => a.eventStreamConnection.state() === "connected", "A never connected");
+    mainStreams(gateways[A]!)[0]!.push(frame("a:3", "changed", "before"));
+    await until(() => seenA.length === 1, "A's event was not delivered");
+
+    a.setCredential(" token-a2 ");
+    await until(() => gateways[A]!.streams.length === 6, "A's streams were not reopened");
+    expect(gateways[A]!.streams.slice(0, 3).every((stream) => stream.closedByClient())).toBe(true);
+    const [main, terminal, relayed] = [
+      mainStreams(gateways[A]!)[1]!,
+      terminalOnly(gateways[A]!)[1]!,
+      relayedStreams(gateways[A]!)[1]!,
+    ];
+    for (const stream of [main, terminal, relayed]) {
+      expect(stream.authorization).toBe("Bearer token-a2");
+    }
+    // The main stream resumes from its cursor, so nothing between is lost.
+    expect(main.url.searchParams.get("since")).toBe("a:3");
+    // A replacement is not a failure: no backoff was armed.
+    expect(timers.pendingDelays()).toEqual([]);
+    expect(a.eventStreamConnection.state()).toBe("connected");
+    main.push(frame("a:4", "changed", "after"));
+    await until(() => seenA.length === 2, "A's reopened stream did not deliver");
+    expect(seenA).toEqual(["before", "after"]);
+
+    // B kept every stream, on its own bearer.
+    expect(gateways[B]!.streams).toHaveLength(3);
+    expect(gateways[B]!.streams.some((stream) => stream.closedByClient())).toBe(false);
+    await b.invoke("ping");
+    expect(gateways[B]!.invokes).toEqual([{ command: "ping", authorization: "Bearer token-b" }]);
+
+    // The same credential again reopens nothing.
+    a.setCredential("token-a2");
+    await settle();
+    expect(gateways[A]!.streams).toHaveLength(6);
+  });
+
+  test("a new credential after a refusal reopens at once instead of waiting out the backoff", async () => {
+    const gateways = fakeGateways(A);
+    const timers = manualTimers();
+    const rejected = mock(() => undefined);
+    const leaf = transport({
+      baseUrl: A,
+      credential: "lapsed-grant",
+      eventReconnectDelayMs: 100,
+      eventReconnectRandom: TOP_OF_RANGE,
+      onCredentialRejected: rejected,
+    });
+    gateways[A]!.eventsStatus = 401;
+    leaf.listen("changed", () => undefined);
+    await until(() => rejected.mock.calls.length === 1, "The refusal was not reported");
+    await until(() => timers.pendingDelays().includes(100), "No retry was scheduled");
+    expect(leaf.eventStreamConnection.state()).toBe("connecting");
+
+    // The node is reopened with a new grant: no reload, no wait.
+    gateways[A]!.eventsStatus = 200;
+    leaf.setCredential("fresh-grant");
+    await until(() => mainStreams(gateways[A]!).length === 1, "The stream was not reopened");
+    expect(mainStreams(gateways[A]!)[0]!.authorization).toBe("Bearer fresh-grant");
+    expect(timers.pendingDelays()).toEqual([]);
+    await until(
+      () => leaf.eventStreamConnection.state() === "connected",
+      "The reopened stream did not connect",
+    );
+    expect(rejected).toHaveBeenCalledTimes(1);
+  });
+
+  test("creating node transports leaves the page's fetch and EventSource alone", async () => {
+    fakeGateways(A, B);
+    manualTimers();
+    const pageFetch = globalThis.fetch;
+    const pageEventSource = globalThis.EventSource;
+    const a = transport({ baseUrl: A, credential: "token-a" });
+    const b = transport({ baseUrl: B, credential: "token-b" });
+    a.listen("changed", () => undefined);
+    b.listen("terminal-output-s1", () => undefined);
+    a.setCredential("token-a2");
+    await a.invoke("ping");
+    await settle();
+    expect(globalThis.fetch).toBe(pageFetch);
+    expect(globalThis.EventSource).toBe(pageEventSource);
   });
 });
 

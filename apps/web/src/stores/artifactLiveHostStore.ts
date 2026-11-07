@@ -349,6 +349,11 @@ registerProtectedRichCache("artifact-live-host", {
       ...(reason === "backend-identity" ? {} : { ended: null }),
     });
   },
+  clearBackend: (backendId, reason) =>
+    clearProtectedHost(
+      (target) => target.scope.backendId === backendId,
+      reason === "backend-identity" ? LIVE_HOST_INVALIDATION_REASONS.backendChanged : undefined,
+    ),
   clearEnvironment: (id) =>
     clearProtectedHost(
       (target) => target.scope.environmentId === id,

@@ -131,12 +131,18 @@ export function clearArtifactPublicationsForConversation(scope: RichConversation
   );
 }
 
+/** A node's credential, connection or identity changed: drop its ledgers. */
+export function clearArtifactPublicationsForBackend(backendId: string): void {
+  clearWhere((parts) => parts[0] === backendId);
+}
+
 export function artifactPublicationCacheSize(): number {
   return cache.size;
 }
 
 registerProtectedRichCache("artifact-publications", {
   clearAll: clearArtifactPublicationCache,
+  clearBackend: clearArtifactPublicationsForBackend,
   clearEnvironment: clearArtifactPublicationsForEnvironment,
   clearConversation: clearArtifactPublicationsForConversation,
 });

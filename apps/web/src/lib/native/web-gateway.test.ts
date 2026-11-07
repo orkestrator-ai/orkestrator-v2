@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { configureDirectGatewayTransport } from "./gateway-auth-transport";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "./events";
 import {
   gatewayWarnings,
@@ -72,15 +71,17 @@ describe("web gateway browser API", () => {
     expect(fakeWindow.orkestratorGateway).toBeUndefined();
   });
 
-  test("installing a direct client configures scoped bearer transport", async () => {
+  test("installing a direct client patches neither fetch nor EventSource", async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
-    globalThis.fetch = mock(async (input, init) => {
+    const pageFetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push({
         url: String(input),
         authorization: new Headers(init?.headers).get("authorization"),
       });
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return new Response(JSON.stringify({ result: "ok" }), { status: 200 });
     }) as unknown as typeof fetch;
+    globalThis.fetch = pageFetch;
+    const pageEventSource = globalThis.EventSource;
     const fakeWindow: TestGatewayWindow = {
       location: { protocol: "https:" },
       orkestrator: undefined,
@@ -94,18 +95,21 @@ describe("web gateway browser API", () => {
         token: "direct-token-123456",
       },
     );
+    expect(globalThis.fetch).toBe(pageFetch);
+    expect(globalThis.EventSource).toBe(pageEventSource);
+
+    // The transport sends its own bearer; a raw page fetch carries none.
+    await (fakeWindow.orkestrator as Window["orkestrator"])?.invoke("get_projects");
     await globalThis.fetch(
       "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/health",
     );
-    await globalThis.fetch("https://example.com/not-the-gateway");
-
     expect(requests).toEqual([
       {
-        url: "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/health",
+        url: "https://workstation.tailnet.ts.net/__orkestrator/invoke",
         authorization: "Bearer direct-token-123456",
       },
       {
-        url: "https://example.com/not-the-gateway",
+        url: "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/health",
         authorization: null,
       },
     ]);
@@ -154,52 +158,6 @@ describe("web gateway browser API", () => {
     await expect(api.webClient.getStatus()).resolves.toMatchObject({
       url: "https://workstation.tailnet.ts.net/",
     });
-  });
-
-  test("authenticates proxied loopback fetches and named event streams", async () => {
-    const requests: Array<{ url: string; authorization: string | null }> = [];
-    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    globalThis.fetch = mock(async (input, init) => {
-      const headers = new Headers(init?.headers);
-      requests.push({ url: String(input), authorization: headers.get("authorization") });
-      if (String(input).endsWith("/event/subscribe")) {
-        return new Response('event: message.updated\ndata: {"sessionId":"session-1"}\n\n', {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        });
-      }
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    }) as unknown as typeof fetch;
-
-    configureDirectGatewayTransport("https://workstation.tailnet.ts.net", "direct-token-123456");
-
-    await fetch(
-      "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/global/health",
-    );
-    await fetch("https://example.com/not-the-gateway");
-
-    const eventData = await new Promise<string>((resolve) => {
-      const source = new globalThis.EventSource(
-        "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/event/subscribe",
-      );
-      source.addEventListener("message.updated", (event) => {
-        resolve((event as MessageEvent).data as string);
-        source.close();
-      });
-    });
-
-    expect(eventData).toBe('{"sessionId":"session-1"}');
-    expect(requests).toEqual([
-      {
-        url: "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/global/health",
-        authorization: "Bearer direct-token-123456",
-      },
-      { url: "https://example.com/not-the-gateway", authorization: null },
-      {
-        url: "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/event/subscribe",
-        authorization: "Bearer direct-token-123456",
-      },
-    ]);
   });
 
   test("parses direct gateway CRLF event streams and aborts them when idle", async () => {

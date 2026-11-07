@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { clearDirectGatewayTransport } from "@/lib/native/gateway-auth-transport";
 import { PublicApp } from "./PublicApp";
 import { loadSavedConnection, saveConnection } from "./connection";
 
@@ -32,7 +31,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
   window.location.reload = originalReload;

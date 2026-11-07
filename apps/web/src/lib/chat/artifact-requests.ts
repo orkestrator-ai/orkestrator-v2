@@ -181,8 +181,18 @@ export function clearArtifactRequestsForConversation(scope: RichConversationScop
   );
 }
 
+/** A node's credential, connection or identity changed: drop what it served. */
+export function clearArtifactRequestsForBackend(backendId: string): void {
+  clearSearchBodiesWhere((held) => (held.backendId ?? "") === backendId);
+  clearArtifactRequestsWhere(
+    (parts) => parts[1] === backendId,
+    (parts) => parts[0] === backendId,
+  );
+}
+
 registerProtectedRichCache("artifact-requests", {
   clearAll: clearArtifactRequestCache,
+  clearBackend: clearArtifactRequestsForBackend,
   clearEnvironment: clearArtifactRequestsForEnvironment,
   clearConversation: clearArtifactRequestsForConversation,
 });

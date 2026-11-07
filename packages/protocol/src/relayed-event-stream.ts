@@ -101,6 +101,22 @@ export class RelayedEventStream {
     this.refresh();
   }
 
+  /**
+   * Replace the connection now (the client's credential changed): the open
+   * one, or one waiting out its backoff. The replacement resumes from the
+   * cursor, and the swap counts as no failure.
+   */
+  reopen(): void {
+    if (this.disposed) return;
+    if (!this.connection && !this.reconnectTimer) return;
+    this.clearReconnect();
+    if (this.connection) {
+      this.options.backoff.disconnected();
+      this.closeConnection();
+    }
+    this.refresh();
+  }
+
   /** The backend may not be the same process: the next open starts fresh and resyncs. */
   forgetCursor(): void {
     this.state = new GatewayEventStreamState();

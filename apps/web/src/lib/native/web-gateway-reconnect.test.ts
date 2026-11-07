@@ -6,7 +6,6 @@ import {
   detectsBrowserSession,
   installBrowserGatewayApi,
 } from "./web-gateway";
-import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 import { GATEWAY_KEEPALIVE_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 
 /**
@@ -27,7 +26,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
   globalThis.setTimeout = originalSetTimeout;

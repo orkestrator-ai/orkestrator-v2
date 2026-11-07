@@ -147,6 +147,14 @@ registerProtectedRichCache("transcript-artifact-capabilities", {
     resetTranscriptArtifactCapabilities();
     if (listeners.size > 0) load();
   },
+  // This is the window's own connection's answer: only a clear of the node it
+  // came from (or before any answer, when it may be that node's) forgets it.
+  clearBackend: (backendId, reason) => {
+    if (reason === "backend-identity") return;
+    if (snapshot && snapshot.backendId !== backendId) return;
+    resetTranscriptArtifactCapabilities();
+    if (listeners.size > 0) load();
+  },
 });
 
 export function useTranscriptArtifactCapabilities(): TranscriptArtifactCapabilities | null {

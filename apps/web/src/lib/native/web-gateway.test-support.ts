@@ -12,7 +12,6 @@ import {
   installBrowserGatewayApi as installUntrackedBrowserGatewayApi,
   TERMINAL_TRANSPORT_STORAGE_KEY,
 } from "./web-gateway";
-import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 import { decodeTerminalBinaryFrame } from "@orkestrator/protocol/terminal-websocket";
 
 /** Every warning, as the old console spies counted them. */
@@ -261,7 +260,6 @@ export function useGatewayTestGlobals(): void {
   afterEach(() => {
     for (const api of createdGateways) disposeBrowserGatewayApi(api);
     createdGateways.clear();
-    clearDirectGatewayTransport();
     globalThis.fetch = originalFetch;
     globalThis.EventSource = originalEventSource;
     globalThis.WebSocket = originalWebSocket;

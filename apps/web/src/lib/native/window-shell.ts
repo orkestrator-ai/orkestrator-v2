@@ -11,7 +11,6 @@
  */
 import type { GatewayTokenSettings, WebClientStatus } from "@/types";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
-import { updateDirectGatewayToken } from "@/lib/native/gateway-auth-transport";
 import { readClipboardImageDimensions } from "@/lib/clipboard-image";
 import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
 import {
@@ -336,6 +335,13 @@ export function createWindowShell<T extends NodeTransport>(
   const credentials = transport.requestCredentials;
   const apiUrl = transport.url;
 
+  /**
+   * The window's own connection got a new token. Its transport sends it and
+   * reopens its streams with it (`setCredential`); nothing patches the page's
+   * `fetch` on its behalf. Everything this window shows came through this
+   * connection, relayed leaves included, so the clear is window-wide; a node
+   * transport's owner clears only that node (`{ nodeId }`).
+   */
   const applyGatewayToken = (token: string): void => {
     const normalizedToken = token.trim();
     // New credentials: rich content derived under the old ones is dropped.
@@ -343,7 +349,6 @@ export function createWindowShell<T extends NodeTransport>(
       clearProtectedRichContent("credentials");
     }
     transport.setCredential(normalizedToken);
-    updateDirectGatewayToken(normalizedToken);
   };
 
   const sourceConnections = options.connections;

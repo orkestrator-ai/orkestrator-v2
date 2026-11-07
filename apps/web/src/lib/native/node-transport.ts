@@ -221,9 +221,11 @@ export interface NodeTransport {
   /** The current bearer credential, if any. */
   credential(): string | undefined;
   /**
-   * Swaps the bearer for later requests and the terminal WebSocket. Open
-   * fetch streams keep the credential they were opened with until they
-   * reconnect (2003 reopens them).
+   * Swaps the bearer, without a document reload: later requests carry the new
+   * one, and every open or waiting stream (main, shared terminal, relayed,
+   * terminal WebSocket) is reopened with it now, resuming from its cursor. A
+   * refused credential stops counting as refused. The same credential again
+   * changes nothing. Used when a grant lapses and the node is reopened.
    */
   setCredential(token: string): void;
   /** Closes every stream, timer and lifecycle subscription. Idempotent. */
@@ -560,6 +562,9 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
           headers: requestHeaders(),
           signal: controller.signal,
         });
+        // Replaced while connecting (a new credential): the replacement owns
+        // the stream state now.
+        if (controller.signal.aborted) return;
         answered = true;
         if (response.status === 401) credentialRefused = true;
         if (!response.ok || !response.body) {
@@ -1171,6 +1176,41 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
     if (stream.fallbackActive) refreshSharedTerminalConnection();
   };
 
+  /**
+   * A new credential: nothing may keep running on the old one, and a stream
+   * that was refused or is waiting out its backoff can open now. Each stream
+   * is replaced, not failed, so its ladder counts no failure (a refused one
+   * starts afresh) and each resumes from its own cursor; a terminal on the
+   * replaced shared stream reconciles its snapshot as after any reopen.
+   */
+  const reopenStreamsWithNewCredential = () => {
+    if (disposed) return;
+    if (eventSource || streamAbortController || reconnectTimer) {
+      const wasRefused = mainStreamCredentialRefused;
+      invalidateMainStreamCredentialProbe();
+      mainStreamCredentialRefused = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      eventSource?.close();
+      eventSource = null;
+      streamAbortController?.abort();
+      streamAbortController = null;
+      stopWatchingMainStream();
+      if (wasRefused) mainStreamBackoff.reset();
+      else mainStreamBackoff.disconnected();
+      ensureEventStream();
+    }
+    if (sharedTerminalConnection || sharedTerminalReconnectTimer) {
+      clearSharedTerminalReconnectTimer();
+      if (sharedTerminalConnection) {
+        closeSharedTerminalConnection();
+        sharedTerminalBackoff.disconnected();
+      }
+      refreshSharedTerminalConnection();
+    }
+    relayedEvents.reopen();
+  };
+
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
     const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (!response.ok) {
@@ -1330,8 +1370,10 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
     credential: () => bearerToken,
     setCredential(token: string): void {
       const normalizedToken = token.trim();
+      if ((normalizedToken || undefined) === bearerToken) return;
       bearerToken = normalizedToken || undefined;
       terminalSocket?.updateToken(normalizedToken);
+      reopenStreamsWithNewCredential();
     },
 
     dispose(reason: unknown = new Error("Node transport disposed")): void {

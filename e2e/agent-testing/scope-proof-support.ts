@@ -15,6 +15,8 @@ export const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 export const commandProfile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "";
 export const leafProfile = process.env.ORKESTRATOR_AGENT_TEST_LEAF_PROFILE ?? "";
+/** Optional: a third running profile, attached as a second leaf for the two-leaf case. */
+export const secondLeafProfile = process.env.ORKESTRATOR_AGENT_TEST_SECOND_LEAF_PROFILE ?? "";
 export const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? (commandProfile || "scope-proof");
 export const evidenceDir = path.join(
   repositoryRoot,

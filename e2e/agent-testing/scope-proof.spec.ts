@@ -28,6 +28,7 @@ import {
   leafProfile,
   loginUrl,
   scopeProofFailures,
+  secondLeafProfile,
   writeEvidence,
   type ScopeProofReport,
 } from "./scope-proof-support";
@@ -210,3 +211,75 @@ for (const route of ["direct", "relay"] as const) {
     }
   });
 }
+
+test("one page holds the command scope and two leaf scopes at once (direct)", async ({ page }) => {
+  test.skip(
+    !secondLeafProfile,
+    "Set ORKESTRATOR_AGENT_TEST_SECOND_LEAF_PROFILE to a third running profile.",
+  );
+  test.setTimeout(300_000);
+  const command = gateway(commandProfile);
+  const leaves = [gateway(leafProfile), gateway(secondLeafProfile)];
+  const { nodeId: commandNodeId } = await command.invoke<{ nodeId: string }>("get_node_status");
+  const attached = [];
+  for (const leaf of leaves) attached.push((await attachLeaf(command, leaf)).nodeId);
+  const environments = [];
+  for (const [index, leaf] of leaves.entries()) {
+    environments.push(await createLeafEnvironment(leaf, `scope-proof-two-${index}-${Date.now()}`));
+  }
+  try {
+    await signedIn(page);
+    const reports: ScopeProofReport[] = [];
+    for (const [index, leafNodeId] of attached.entries()) {
+      reports.push(
+        (await page.evaluate(
+          (input) =>
+            (
+              window as unknown as {
+                orkestratorScopeProof: { run(input: unknown): Promise<unknown> };
+              }
+            ).orkestratorScopeProof.run(input),
+          { leafNodeId, leafEnvironmentId: environments[index]!.id, keepOpen: true },
+        )) as ScopeProofReport,
+      );
+    }
+    const scopes = (await page.evaluate(() =>
+      (
+        window as unknown as {
+          orkestratorScopeProof: { scopes(): unknown };
+        }
+      ).orkestratorScopeProof.scopes(),
+    )) as Array<{ nodeId: string; role: string; connection: string }>;
+    for (const leafNodeId of attached) {
+      await page.evaluate(
+        (nodeId) =>
+          (
+            window as unknown as { orkestratorScopeProof: { close(nodeId: string): void } }
+          ).orkestratorScopeProof.close(nodeId),
+        leafNodeId,
+      );
+    }
+    writeEvidence("browser-two-leaves", {
+      host: "browser",
+      commandProfile,
+      leafProfiles: [leafProfile, secondLeafProfile],
+      reports: reports.map((report) => ({
+        ...report,
+        route: report.route && { ...report.route, baseUrl: null },
+      })),
+      scopesWhileHeld: scopes,
+    });
+    for (const [index, report] of reports.entries()) {
+      expect(
+        scopeProofFailures(report, { commandNodeId, leafNodeId: attached[index]!, relayed: false }),
+      ).toEqual([]);
+    }
+    // Both leaves were open together, each live on its own scope.
+    expect(scopes.map((scope) => scope.role).sort()).toEqual(["command", "leaf", "leaf"]);
+    expect(scopes.every((scope) => scope.connection === "live")).toBe(true);
+    expect(new Set(scopes.map((scope) => scope.nodeId)).size).toBe(3);
+  } finally {
+    for (const [index, leaf] of leaves.entries())
+      await deleteLeafEnvironment(leaf, environments[index]!.id);
+  }
+});

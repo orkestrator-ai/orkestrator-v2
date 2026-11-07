@@ -61,6 +61,8 @@ let reuseLiveAccounts = true;
  * Served only beside that same account, so a different login never shows
  * another's date. Memory only: the next result after a restart refills it.
  */
+const credentialIdentities = new WeakMap<NativeAgentAuthStatus, string>();
+
 let credentialExpiry: { accountKey: string; expiresAt: string } | undefined;
 
 function withTurnFailure(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
@@ -76,7 +78,8 @@ function withTurnFailure(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
  */
 function withCredentialExpiry(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
   const expiry = credentialExpiry;
-  if (!expiry || !value.account || claudeAccountKey(value) !== expiry.accountKey) return value;
+  if (!expiry || !value.account || claudeCredentialAccountKey(value) !== expiry.accountKey)
+    return value;
   // Claude cannot say whether its date is the server's or its own 30-day
   // guess, and either may be up to three days late, so it is always "about".
   return {
@@ -99,9 +102,10 @@ function served(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
  * account's date is dropped; an unnumbered result says nothing either way.
  */
 export function noteClaudeCredentialExpiry(
-  accountKey: string,
+  accountKey: string | undefined,
   result: { credential_expires_at?: unknown; result_index?: unknown },
 ): void {
+  if (!accountKey) return;
   const expiresAt = normalizeAccountExpiresAt(result.credential_expires_at);
   if (expiresAt) {
     credentialExpiry = { accountKey, expiresAt };
@@ -138,7 +142,7 @@ export function normalizeClaudeAccount(account: AccountInfo): NativeAgentAuthSta
     source || account.subscriptionType || account.organization || externalProvider,
   );
   const label = account.organization || account.subscriptionType || externalProvider;
-  return {
+  const status: NativeAgentAuthStatus = {
     state: signedIn ? "signed-in" : "needs-auth",
     ...(label
       ? {
@@ -151,6 +155,28 @@ export function normalizeClaudeAccount(account: AccountInfo): NativeAgentAuthSta
     signIn: CLAUDE_SIGN_IN,
     signOut: false,
   };
+  // Keep raw identity out of the public status (including JSON serialization).
+  // A display label is shared by many logins; without email and source there
+  // is no evidence that a later probe is describing the same credential.
+  if (account.email && source) {
+    credentialIdentities.set(
+      status,
+      JSON.stringify([
+        account.email,
+        account.apiKeySource,
+        account.tokenSource,
+        account.apiProvider,
+        account.organization,
+        account.subscriptionType,
+      ]),
+    );
+  }
+  return status;
+}
+
+/** Private identity carried by a probe or initialize result; never served. */
+export function claudeCredentialAccountKey(status: NativeAgentAuthStatus): string | undefined {
+  return credentialIdentities.get(status);
 }
 
 /** What identifies an account for anything kept per account. Holds no credential. */

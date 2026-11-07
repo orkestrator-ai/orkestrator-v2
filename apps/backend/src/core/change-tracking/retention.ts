@@ -21,7 +21,7 @@
 
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { readManifest } from "./capture.js";
-import type { ChangeLedger } from "./change-ledger.js";
+import type { ChangeLedger, MeasurementOwnerCursor } from "./change-ledger.js";
 import type { EvidenceBodyStore } from "./evidence-body-store.js";
 import {
   LedgerRetirement,
@@ -38,6 +38,8 @@ const log = createLogger("change-tracking");
 /** Superseded measurements are pruned in batches of at most this many file rows. */
 const MEASUREMENT_PRUNE_BATCH_FILE_ROWS = 256;
 const MEASUREMENT_PRUNE_BATCH = 64;
+/** Owners read per page of the hourly pass's walk for superseded measurements. */
+const MEASUREMENT_OWNERS_PER_PAGE = 512;
 /** Freed database pages are released in steps of this many 4 KiB pages. */
 const RELEASE_PAGES_PER_STEP = 128;
 /** Ledger rows deleted per transaction by a purge or age-based retention. */
@@ -122,7 +124,7 @@ export class ChangeRetentionService {
    * freed pages are reused by the owner's next measurement; the pass releases
    * what is left.
    */
-  drainOwner(owner: { kind: string; id: string; scope: string }): void {
+  drainOwner(owner: MeasurementOwnerCursor): void {
     const key = `${owner.kind}\0${owner.id}\0${owner.scope}`;
     if (this.stopped || this.ownerDrains.has(key)) return;
     const drain = yieldToEventLoop()
@@ -272,6 +274,7 @@ export class ChangeRetentionService {
     const cutoff = new Date(nowMs - windowMs).toISOString();
     const rows = RETIREMENT_ROWS_PER_BATCH;
     let afterOperation = 0;
+    let afterEvidence = 0;
     const steps: Array<() => RetirementBatch> = [
       () => retirement.retireExpiredFrames(cutoff, rows),
       () => {
@@ -284,7 +287,11 @@ export class ChangeRetentionService {
         afterOperation = batch.next;
         return batch;
       },
-      () => retirement.retireExpiredProviderTurns(nowIso, rows),
+      () => {
+        const batch = retirement.retireExpiredProviderTurns(nowIso, afterEvidence, rows);
+        afterEvidence = batch.next;
+        return batch;
+      },
       () => retirement.retireExpiredSegments(cutoff, nowIso, rows),
       () => retirement.retireExpiredRecords(cutoff, rows),
     ];
@@ -355,9 +362,40 @@ export class ChangeRetentionService {
     ledger.optimize();
   }
 
+  /**
+   * Every owner's superseded measurements, or one owner's. The hourly pass
+   * finds owners with more than they keep a page of the owner index at a time,
+   * yielding between pages, then prunes each through its own index range.
+   */
   private async pruneBatches(
     nowMs: number,
-    owner?: { kind: string; id: string; scope: string },
+    owner?: MeasurementOwnerCursor,
+  ): Promise<{ measurements: number; files: number }> {
+    if (owner) return this.pruneOwner(nowMs, owner);
+    const total = { measurements: 0, files: 0 };
+    let after: MeasurementOwnerCursor | null = null;
+    do {
+      if (this.stopped) break;
+      const page: ReturnType<ChangeLedger["supersededOwnersPage"]> =
+        this.deps.ledger.supersededOwnersPage(
+          after,
+          MEASUREMENTS_KEPT_PER_OWNER,
+          MEASUREMENT_OWNERS_PER_PAGE,
+        );
+      for (const superseded of page.owners) {
+        const pruned = await this.pruneOwner(nowMs, superseded);
+        total.measurements += pruned.measurements;
+        total.files += pruned.files;
+      }
+      after = page.next;
+      await yieldToEventLoop();
+    } while (after);
+    return total;
+  }
+
+  private async pruneOwner(
+    nowMs: number,
+    owner: MeasurementOwnerCursor,
   ): Promise<{ measurements: number; files: number }> {
     const total = { measurements: 0, files: 0 };
     while (!this.stopped) {
@@ -366,7 +404,7 @@ export class ChangeRetentionService {
         nowIso: new Date(nowMs).toISOString(),
         maxMeasurements: MEASUREMENT_PRUNE_BATCH,
         maxFileRows: MEASUREMENT_PRUNE_BATCH_FILE_ROWS,
-        ...(owner ? { owner } : {}),
+        owner,
       });
       total.measurements += pruned.measurements;
       total.files += pruned.files;

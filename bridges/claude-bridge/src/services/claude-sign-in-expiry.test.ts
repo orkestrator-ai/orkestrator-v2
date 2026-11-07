@@ -13,7 +13,7 @@ import {
   waitFor,
 } from "./session-manager-test-harness.js";
 import {
-  claudeAccountKey,
+  claudeCredentialAccountKey,
   normalizeClaudeAccount,
   noteClaudeCredentialExpiry,
   readClaudeAuthStatus,
@@ -21,8 +21,18 @@ import {
 } from "./claude-sign-in.js";
 import { expectAuthStatusShape } from "../../../../tests/helpers/auth-secret-canaries.js";
 
-const TEAM_A = { tokenSource: "claude.ai", subscriptionType: "max", organization: "Team A" };
-const TEAM_B = { tokenSource: "claude.ai", subscriptionType: "max", organization: "Team B" };
+const TEAM_A = {
+  email: "a@example.test",
+  tokenSource: "claude.ai",
+  subscriptionType: "max",
+  organization: "Team A",
+};
+const TEAM_B = {
+  email: "b@example.test",
+  tokenSource: "claude.ai",
+  subscriptionType: "max",
+  organization: "Team B",
+};
 const ENDS = "2026-12-03T10:00:00.000Z";
 
 /** The account a CLI launched with, and the one the bridge's probe sees now. */
@@ -67,9 +77,30 @@ describe("Claude login end", () => {
     expect(status.account).toEqual({ label: "Team B", plan: "max" });
   });
 
+  test("different emails sharing the same organization and plan do not share expiry", async () => {
+    accounts(TEAM_A, { ...TEAM_A, email: "other@example.test" });
+    await finishTurnWith({ result_index: 0, credential_expires_at: ENDS });
+    const status = await readClaudeAuthStatus();
+    expectAuthStatusShape(status);
+    expect(status.account).toEqual({ label: "Team A", plan: "max" });
+    expect(JSON.stringify(status)).not.toContain("example.test");
+  });
+
+  test("different credential sources do not share expiry", async () => {
+    accounts(TEAM_A, { ...TEAM_A, tokenSource: "environment" });
+    await finishTurnWith({ result_index: 0, credential_expires_at: ENDS });
+    expect((await readClaudeAuthStatus()).account).toEqual({ label: "Team A", plan: "max" });
+  });
+
+  test("missing private identity never receives an expiry", async () => {
+    accounts({ tokenSource: "claude.ai", organization: "Team A", subscriptionType: "max" });
+    await finishTurnWith({ result_index: 0, credential_expires_at: ENDS });
+    expect((await readClaudeAuthStatus()).account).toEqual({ label: "Team A", plan: "max" });
+  });
+
   test("a numbered result without a date drops the account's date", async () => {
     accounts(TEAM_A);
-    noteClaudeCredentialExpiry(claudeAccountKey(normalizeClaudeAccount(TEAM_A)), {
+    noteClaudeCredentialExpiry(claudeCredentialAccountKey(normalizeClaudeAccount(TEAM_A)), {
       credential_expires_at: ENDS,
     });
     expect((await readClaudeAuthStatus()).account?.expiresAt).toBe(ENDS);
@@ -84,7 +115,7 @@ describe("Claude login end", () => {
 
   test("an unnumbered result without a date keeps it", async () => {
     accounts(TEAM_A);
-    noteClaudeCredentialExpiry(claudeAccountKey(normalizeClaudeAccount(TEAM_A)), {
+    noteClaudeCredentialExpiry(claudeCredentialAccountKey(normalizeClaudeAccount(TEAM_A)), {
       credential_expires_at: ENDS,
     });
     await finishTurnWith({});
@@ -113,7 +144,7 @@ describe("Claude login end", () => {
 
   test("a reset forgets the date", async () => {
     accounts(TEAM_A);
-    noteClaudeCredentialExpiry(claudeAccountKey(normalizeClaudeAccount(TEAM_A)), {
+    noteClaudeCredentialExpiry(claudeCredentialAccountKey(normalizeClaudeAccount(TEAM_A)), {
       credential_expires_at: ENDS,
     });
     resetClaudeSignInForTesting();

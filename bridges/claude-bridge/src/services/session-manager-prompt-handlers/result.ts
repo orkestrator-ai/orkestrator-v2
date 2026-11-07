@@ -7,7 +7,7 @@ import type {
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import type { SdkResultMessage } from "../../types/index.js";
 import {
-  claudeAccountKey,
+  claudeCredentialAccountKey,
   normalizeClaudeAccount,
   noteClaudeCredentialExpiry,
 } from "../claude-sign-in.js";
@@ -130,7 +130,7 @@ export function recordClaudeCredentialExpiry(turn: TurnState, result: SdkResultM
       const status = normalizeClaudeAccount(account as AccountInfo);
       // A CLI that launched without a login has no account to credit.
       if (status.state !== "signed-in" || !status.account) return;
-      noteClaudeCredentialExpiry(claudeAccountKey(status), result);
+      noteClaudeCredentialExpiry(claudeCredentialAccountKey(status), result);
     })
     .catch((error: unknown) => {
       debugLog("[session-manager] Credential expiry not recorded:", error);

@@ -185,6 +185,13 @@ export interface ToolWindowRow {
   reason: string | null;
 }
 
+/** A measurement owner and scope, and a position in the owner walk. */
+export interface MeasurementOwnerCursor {
+  kind: string;
+  id: string;
+  scope: string;
+}
+
 export interface MeasurementFileRecord {
   pathId: string;
   oldPath: string | null;
@@ -1210,44 +1217,82 @@ export class ChangeLedger {
   }
 
   /**
-   * Deletes superseded measurements except selections, live restore records
-   * and active readers. Retired identities disappear before partial file-row
-   * deletion, so new requests cannot start reading an incomplete measurement.
+   * One page of measurement owners (kind, id, scope) in index order, and the
+   * ones among them with more than `keepLatest` measurements. Reads only the
+   * covering owner index, `limit` owners at a time, so a walk over every owner
+   * can yield between pages. `next` is null after the last owner.
+   *
+   * A query over the whole table in one statement (a window function over every
+   * measurement, which also read each row for its id) took 24 s with a cold page
+   * cache at 85,000 measurements (to-do 0741 task 6), and ran once per batch.
+   */
+  supersededOwnersPage(
+    after: MeasurementOwnerCursor | null,
+    keepLatest: number,
+    limit: number,
+  ): { owners: MeasurementOwnerCursor[]; next: MeasurementOwnerCursor | null } {
+    const [kind, id, scope] = after ? [after.kind, after.id, after.scope] : ["", "", ""];
+    const rows = this.db
+      .query(
+        `SELECT owner_kind AS kind, owner_id AS id, scope, COUNT(*) AS n FROM change_measurements
+         WHERE (owner_kind, owner_id, scope) > (?1, ?2, ?3)
+         GROUP BY owner_kind, owner_id, scope
+         ORDER BY owner_kind, owner_id, scope
+         LIMIT ?4`,
+      )
+      .all(kind, id, scope, limit) as Array<MeasurementOwnerCursor & { n: number }>;
+    const last = rows.at(-1);
+    return {
+      owners: rows
+        .filter((row) => row.n > keepLatest)
+        .map((row) => ({ kind: row.kind, id: row.id, scope: row.scope })),
+      next:
+        rows.length < limit || !last ? null : { kind: last.kind, id: last.id, scope: last.scope },
+    };
+  }
+
+  /**
+   * Deletes one owner's superseded measurements except selections, live restore
+   * records and active readers. Retired identities disappear before partial
+   * file-row deletion, so new requests cannot start reading an incomplete
+   * measurement.
    *
    * Every re-measurement stores its whole file list again (an environment's
    * net diff can be thousands of files), so without this the table grows
    * without bound. Bounded work per call: stops after `maxMeasurements` or
-   * once `maxFileRows` file rows are deleted, in one transaction.
+   * once `maxFileRows` file rows are deleted, in one transaction. Every owner
+   * is reached through {@link supersededOwnersPage}.
    */
   pruneSupersededMeasurements(input: {
     keepLatest: number;
     nowIso: string;
     maxMeasurements: number;
     maxFileRows?: number;
-    owner?: { kind: string; id: string; scope: string };
+    owner: MeasurementOwnerCursor;
   }): { measurements: number; files: number } {
     return this.transaction(() => {
-      const ownedBy = input.owner ? "WHERE owner_kind = ?4 AND owner_id = ?5 AND scope = ?6" : "";
+      // A selection is checked per candidate through its measurement index
+      // (`LedgerRetirement.ensureIndexes`): an `IN` list read every selection.
       const candidates = this.db
         .query(
-          `SELECT id FROM (
-             SELECT id, created_seq, ROW_NUMBER() OVER (
-               PARTITION BY owner_kind, owner_id, scope ORDER BY created_seq DESC
-             ) AS newer
-             FROM change_measurements ${ownedBy}
-           )
-           WHERE newer > ?1
-             AND id NOT IN (SELECT measurement_id FROM change_selections WHERE measurement_id IS NOT NULL)
-             AND id NOT IN (SELECT measurement_id FROM change_restore_tokens WHERE expires_at > ?2 AND consumed_at IS NULL)
-             AND id NOT IN (SELECT measurement_id FROM change_restore_operations WHERE state = 'applying')
-           ORDER BY created_seq
+          `SELECT c.id FROM (
+             SELECT id, created_seq, ROW_NUMBER() OVER (ORDER BY created_seq DESC) AS newer
+             FROM change_measurements WHERE owner_kind = ?4 AND owner_id = ?5 AND scope = ?6
+           ) c
+           WHERE c.newer > ?1
+             AND NOT EXISTS (SELECT 1 FROM change_selections s WHERE s.measurement_id = c.id)
+             AND c.id NOT IN (SELECT measurement_id FROM change_restore_tokens WHERE expires_at > ?2 AND consumed_at IS NULL)
+             AND c.id NOT IN (SELECT measurement_id FROM change_restore_operations WHERE state = 'applying')
+           ORDER BY c.created_seq
            LIMIT ?3`,
         )
         .all(
           input.keepLatest,
           input.nowIso,
           input.maxMeasurements,
-          ...(input.owner ? [input.owner.kind, input.owner.id, input.owner.scope] : []),
+          input.owner.kind,
+          input.owner.id,
+          input.owner.scope,
         ) as Array<{ id: string }>;
       const deleteFiles = this.db.query(
         `DELETE FROM change_measurement_files WHERE measurement_id = ?1 AND ordinal IN (

@@ -1,0 +1,283 @@
+# Unified federation: wave 0 measurements
+
+Status: Measured 2026-11-07. Plan items
+[0004](../../plans/unified/0004-measurement-report.md),
+[0001](../../plans/unified/0001-realm-request-drift.md),
+[0002](../../plans/unified/0002-attention-without-realm.md),
+[0003](../../plans/unified/0003-hidden-realm-visibility.md) and
+[0006](../../plans/unified/0006-grant-scope-live-evidence.md). The design these
+numbers feed is [unified-federation.md](unified-federation.md) (§8.2 budgets,
+§15 evidence).
+
+## What ran
+
+- **Date:** 2026-11-07.
+- **Code:** branch `unified-federation-b4c9ee65814d` at `9ee281002`, in a
+  separate detached worktree, plus the development memory diagnostic from
+  `112938cd5` applied on top. 0002 and 0003 were also run with their fix
+  reverted in that worktree (Vite hot reload), to get a before and an after.
+- **Host:** one Mac, `arktech-mini` (macOS 27.2, build 26B123, 18 cores,
+  64 GB). Every node ran on this host and talked over loopback
+  (`127.0.0.1`). No other host was used.
+- **Nodes:**
+  - two `dev:test` profiles, `uf-live-cmd` (command node) and `uf-live-leaf`
+    (attached as a leaf with `add_node`). Both used `--fixture
+    --no-agent-credentials --headless --agent-platforms claude` and
+    `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`;
+  - five more current leaves (Leaf2–Leaf6), backends from source with
+    throwaway data directories, attached to `uf-live-cmd`;
+  - for the desktop numbers, a Playwright-launched Electron 45.0.0 command
+    node (agent-test profile, development mode, renderer from the Vite dev
+    server) with four leaves from source;
+  - for 5740 task 2, the published `orkestrator@2.35.1-beta` npm CLI as a
+    command node, with a throwaway data directory, random loopback ports and
+    `ORKESTRATOR_CONTROL_MCP_PORT=0`. It served the v2.35.1-beta web client,
+    built from the `v2.35.1-beta` tag. One current leaf was attached to it.
+- **Browsers:**
+  - Chrome for Testing 156.0.8078.4 (`--headless=new`), driven over CDP;
+  - Playwright WebKit (build 2370, reports 27.2). This is the nearest thing
+    to Safari available here. It is not Safari.
+- **No billed turns** and no real logins. Scripts and raw JSON are in the
+  ignored `output/agent-testing/uf-live/`. No tokens, prompts, transcripts or
+  file contents were recorded.
+
+**Caveat for every desktop number.** The Electron renderer loaded unbundled
+modules from the Vite dev server, so a development realm is larger than a
+packaged one. Treat the desktop figures as an upper bound until a packaged
+build is measured.
+
+## Memory per realm
+
+### Desktop (Electron, development build)
+
+Sampled with the new development diagnostic (below), cross-checked against
+`app.getAppMetrics()` directly. Working set in MB, after 20 s of settling.
+`privateBytes` is not reported on macOS.
+
+| State | Total | Browser | GPU | Utility | Window renderer | Realm renderers |
+|---|---|---|---|---|---|---|
+| 0 realms | 726 | 236 | 109 | 75 | 306 | — |
+| 1 realm, project board (idle) | 1142 | 246 | 110 | 76 | 307 | 402 |
+| 1 realm, environment with terminal | 1131 | 245 | 114 | 76 | 308 | 388 |
+| 1 realm, empty agent tab (no turn) | 1099 | 247 | 110 | 76 | 308 | 357 (peak 410) |
+| 3 realms (renderer cap `MAX_OPEN_REALMS`), one shown | 1893 | 258 | 116 | 80 | — | 364, 372, 383 |
+| 4 realms (main cap `DEFAULT_MAX_VIEWS`), one shown | 2189 | 258 | 116 | 81 | — | 363, 335, 342, 375 |
+
+- Each realm is one renderer process of about **340–410 MB**. Hidden realms
+  shrink only slightly (343–381 MB).
+- A fifth view is refused by main with "Too many machines are open in this
+  window."
+- "With a transcript open" was measured only as an empty agent tab. A real
+  transcript needs a provider turn, and none was run.
+
+### Browser (iframe realms)
+
+`crossOriginIsolated` is false and `performance.measureUserAgentSpecificMemory`
+is undefined on the hosted page, so neither browser can use that API today.
+
+Chromium was measured with CDP `Runtime.getHeapUsage` after
+`HeapProfiler.collectGarbage`. The window and its same-origin iframes share
+one isolate, so the heap is the page's whole JS heap. RSS is from `ps` for
+the page's renderer process. Six nodes were attached.
+
+| Realms open | JS heap used (MB) | Δ | Renderer RSS (MB) | Δ |
+|---|---|---|---|---|
+| 0 | 49.8 | — | 562 | — |
+| 1 | 82.4 | +32.6 | 620 | +58 |
+| 2 | 104.8 | +22.4 | 706 | +86 |
+| 3 (cap) | 127.9 | +23.1 | 790 | +84 |
+| 4th opened (one evicted, still 3) | 127.8 | −0.1 | 909 | +119 |
+
+- Each iframe realm costs about **22–33 MB of JS heap** and **60–90 MB of
+  RSS**.
+- Evicting a realm and opening another frees the heap, but the renderer
+  keeps the pages: RSS rose another 119 MB.
+- A seventh realm cannot be open at once. The renderer keeps three
+  (`MAX_OPEN_REALMS`), so "6 nodes" here means six attached nodes with three
+  realms open.
+
+WebKit was measured as the RSS of Playwright WebKit's processes, in MB. One
+`WebContent` process holds the window and every iframe realm, which confirms
+the premise of P3.
+
+| Realms open | WebContent | Δ | Networking | GPU |
+|---|---|---|---|---|
+| 0 | 574 | — | 75 | 86 |
+| 1 | 745 | +171 | 89 | 91 |
+| 2 | 801 | +56 | 97 | 97 |
+| 3 (cap) | 845 | +44 | 105 | 98 |
+| 4th opened (one evicted) | 964 | +119 | 114 | 98 |
+
+### iPad
+
+**Not done: no iPad reachable from this host.** WebContent memory with 1, 3
+and 6 realms, and the jetsam point, are still unmeasured.
+
+## Hidden realms
+
+### Request rate from a hidden browser realm (0003)
+
+Measured in Chromium with three realms open:
+
+- Leaf2: hidden by the region (display:none);
+- Leaf3: hidden by the region, and its document also forced to
+  `visibilityState: hidden` by script, which is what a hidden window's
+  realm sees;
+- Leaf4: shown.
+
+Each run counted every `/__orkestrator/` request per frame for 120 s.
+
+| Frame | Before 0003 (fix reverted) | After 0003 |
+|---|---|---|
+| Leaf2, hidden realm | **13.0 /min** (`get_system_usage` 12, `check_docker` 1) | **0 /min** |
+| Leaf3, hidden-window rate | 0 /min | 0 /min |
+| Leaf4, shown realm | 13.0 /min | 13.0 /min |
+| Window | 97 /min | 97 /min |
+
+After 0003, a hidden realm drops to the hidden-window rate. Before it, it
+read at the shown rate.
+
+The window's own 97 /min is mostly `invoke_on_node`, about 72 /min with three
+realms open. The rest is `get_system_usage` 12, `watch_node_events` 12 and
+`check_docker` 1. It is worth a look in Phase 4.
+
+### Does a hidden desktop `WebContentsView` report hidden?
+
+**No.** A realm view hidden with `setVisible(false)` reported
+`visibilityState: "visible"`, and a 100 ms `setInterval` ticked 100 times in
+10 s, so its timers were not throttled. This held in every case:
+
+- with the window in agent-test hidden-windows mode;
+- in a normal shown window;
+- with the whole window minimized.
+
+The window's own document also stayed visible when minimized. That is
+unexpected, so repeat this on a workstation with someone at the display
+before relying on the minimized case. The setVisible case is unambiguous: on
+desktop, the 0003 `visibility` message is the only thing that tells a hidden
+realm it is hidden. **It is not redundant.**
+
+The run deliberately left out the spec suite's
+`--disable-background-timer-throttling` and related switches.
+
+## Transport
+
+### `nextHopProtocol`
+
+| Route | Observed |
+|---|---|
+| Direct, loopback, to a leaf (`http://127.0.0.1:<leaf>`) | `http/1.1` (CDP `response.protocol`). Resource timing shows `""` because the leaf is cross-origin and sends no `Timing-Allow-Origin`. |
+| Relay through the command node (same origin as the page) | `http/1.1` (resource timing `nextHopProtocol` and CDP) |
+| Direct over the LAN | Not measured: one host, and `dev:test` binds loopback only |
+| Tailscale Serve | Not measured: `dev:test` never configures Tailscale Serve, and the production instance was not touched |
+
+Todo 5380 task 2 stays open for the LAN and Tailscale Serve rows.
+
+### Long-lived requests per origin (P5)
+
+Chromium, with the relay forced: every leaf origin was blocked with CDP
+`Network.setBlockedURLs`, with no client-side interception. All realm traffic
+then went to the command node's origin over HTTP/1.1.
+
+| Realms through the relay | Long-lived requests on the command-node origin | Requests waiting with no response after 30 s |
+|---|---|---|
+| 1 | Per realm: 2 × relayed `/nodes/<n>/__orkestrator/events` and 1 × portal `/__orkestrator/events`. A keepalive `client-metrics` POST is also never reported finished by CDP. | 0 |
+| 2 | The second realm got 1 stream, then the pool was full | **50**. 13 were the window's own: `watch_node_events` 6, `invoke_on_node` 6, `get_system_usage` 1. |
+| 3 | The third realm never rendered within 60 s | **55** |
+| Direct, 3 realms (control) | 3 streams per realm, each on its own leaf origin | 0. Realms opened in 551–842 ms. |
+
+**P5 is confirmed, and it is worse than §3 estimated.** A relayed realm holds
+three event streams, not one or two. With **two** relayed realms, Chromium's
+six-connections-per-host limit on HTTP/1.1 is used up. From then on every new
+request on that origin waits, the window's included, and a third realm cannot
+open. The window's own event transport did not appear in the page's CDP
+Network domain (it is probably in a worker), so the sixth connection is
+inferred rather than attributed.
+
+One run was discarded: its harness blocked its own event loop while
+intercepting requests, which stalled every request for about 86 s.
+
+### Recommendation on 5005
+
+**Needed** for the relay over plain HTTP/1.1. Two relayed realms in a
+Chromium browser freeze the window today.
+
+The alternatives are to guarantee HTTP/2 on every relay route, or to cut each
+realm to one stream before Phase 4. Whether Tailscale Serve already
+negotiates `h2` is unmeasured. If it does, the routes it fronts are
+unaffected, but loopback, LAN and SSH-tunnelled HTTP relays are not.
+
+## Cold open to first paint (this host only)
+
+| Client | Measure | Values |
+|---|---|---|
+| Desktop realm (Electron, development build) | `realm.boot-step` `first-render` `sinceOpenMs` | 419–628 ms over 9 cold opens. `fan-out-complete` 597–795 ms. |
+| Browser realm, Chromium | click to realm toolbar rendered | 471–842 ms (direct), 547–733 ms (relay). `first-render` `sinceStartMs` 278–304 ms. |
+| Browser realm, WebKit | click to realm toolbar rendered | 485–715 ms |
+
+Other hosts (Linux, iPad, real LAN or tailnet latency) were not measured.
+
+## §8.2 budgets
+
+Keep §8.2 as a placeholder for now, for three reasons:
+
+- the desktop numbers come from a development renderer;
+- the iPad was not measured;
+- per-realm cost is not per-scope cost, because a scope shares the window's
+  bundle and stores.
+
+Still, these give the order of magnitude:
+
+- a realm is a whole client: about 350–400 MB per realm on a development
+  desktop, and about 25–30 MB of JS heap plus 60–90 MB of RSS per iframe in
+  Chromium;
+- WebKit puts every realm in one WebContent process, at +45–170 MB each.
+
+Measure a packaged desktop build and an iPad before setting defaults.
+
+## Other live evidence from the same run
+
+- **0001.** A cold desktop realm was opened through the same preload API the
+  window uses (`workspaceViews.open`), once with each field. Main's URL
+  carried each field, and the realm acted on it:
+  - `boardTab=home`: Home tab selected;
+  - `workType=graph-run` with `workId`: a "Graph run 1" tab opened;
+  - `bugReport=1`: the Report a bug sheet opened;
+  - `dialog=environment-rebuild`: Environment Settings opened.
+- **0002.** Attention on a leaf with no realm open was raised by a
+  `terminal_finished` badge edge from an activity-tracked terminal, with no
+  agent turn:
+  - before the fix (reverted), the window played nothing;
+  - after it, the window played one cue;
+  - with the leaf's realm open but hidden, the realm played one cue and the
+    window none.
+
+  A question notification could not be produced without a provider turn.
+- **0006 / 5740.**
+  - Through the browser realm, by direct grant and with the relay forced, a
+    terminal command, an agent tab (no turn), the agent and usage popovers,
+    repository settings and the project boards all worked. None of the realm
+    requests returned 403; the only 500s were `read_local_file` for a missing
+    `orkestrator-ai.json`.
+  - `update_global_config` and `request_host_update` returned 403, both
+    with the grant and through the relay.
+  - A v2.35.1-beta realm favourited a model on the current leaf: its
+    `update_global_config` returned 200, and the leaf's
+    `workspace-grant.config-echo` counter went from 0 to 1.
+  - Details and the command list are in the 5740 todo.
+
+## The development memory diagnostic
+
+`apps/desktop/electron/process-memory-diagnostic.ts` (`112938cd5`) is on only
+when both of these hold:
+
+- the desktop runs in development mode (`ELECTRON_DEV=1` on an unpacked app);
+- `ORKESTRATOR_DEV_PROCESS_MEMORY_MS` names an interval (clamped to
+  1 s–10 min).
+
+Each interval it logs one `[desktop] process-memory` line with the working
+set per process type. It then logs one `[desktop] process-memory.realm` line
+per workspace realm, labelled by the SHA-256 prefix of the node id that its
+storage partition already uses.
+
+A packaged app never samples. The lines hold numbers only.

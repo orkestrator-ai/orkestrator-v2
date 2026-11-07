@@ -1353,6 +1353,8 @@ taking it changes this decision and needs the user's approval.
 
 ## 15. Not done / needs live evidence
 
+Wave 0 measurements (2026-11-07, one Mac; no iPad): [unified-federation-measurements.md](unified-federation-measurements.md).
+
 None of the following was observed; each is required before the phase that
 depends on it.
 

@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:ab8c5e6b6bead2f67d35e064b68b045037bbc68e3ee544167da9a99228a3ea62",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "annotationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "capture": {},
+        "deviceScaleFactor": {
+          "type": "number"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "masks": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "rect": {
+                "additionalProperties": true,
+                "properties": {
+                  "height": {
+                    "type": "number"
+                  },
+                  "width": {
+                    "type": "number"
+                  },
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  }
+                },
+                "required": ["height", "width", "x", "y"],
+                "type": "object"
+              },
+              "source": {
+                "enum": ["sensitive-field", "manual"],
+                "type": "string"
+              }
+            },
+            "required": ["rect", "source"],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "operationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "provenance": {
+          "not": {}
+        },
+        "requestId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "scroll": {
+          "additionalProperties": true,
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "required": ["x", "y"],
+          "type": "object"
+        },
+        "stability": {
+          "enum": ["stable", "unstable"],
+          "type": "string"
+        },
+        "targetResolution": {},
+        "zoomFactor": {
+          "type": "number"
+        }
+      },
+      "required": ["capture", "environmentId", "operationId", "requestId"],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:1ec2c5e37954a8494359aa38c67f627dbe0433a6baedf5edb65451df146982df",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "sessionType": {
+          "type": "string"
+        },
+        "tabId": {
+          "type": "string"
+        }
+      },
+      "required": ["containerId", "environmentId", "sessionType", "tabId"],
+      "type": "object"
+    }
+  }
+}

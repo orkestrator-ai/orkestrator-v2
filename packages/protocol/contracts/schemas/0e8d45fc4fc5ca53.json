@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:0e8d45fc4fc5ca53c0a84cff61c83e7c728c3c1194505977390f2f0227e0122b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "captureIndex": {},
+        "environmentId": {},
+        "logicalSessionKey": {},
+        "paper": {},
+        "publicationId": {},
+        "representation": {},
+        "sourceRange": {}
+      },
+      "type": "object"
+    }
+  }
+}

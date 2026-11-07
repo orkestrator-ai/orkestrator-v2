@@ -3,41 +3,55 @@
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
     "commands": 999,
-    "defined": 27,
-    "untyped": 972,
+    "defined": 393,
+    "untyped": 606,
     "events": 44
   },
   "untypedByDomain": {
     "accounts": 33,
     "agent-mail": 23,
     "agent-servers": 77,
-    "claude-tmux": 28,
     "config": 31,
     "coordinator": 102,
-    "design": 35,
-    "docker": 29,
-    "environments": 63,
-    "files": 28,
     "git": 23,
     "graphs": 39,
     "kanban": 29,
     "mcp": 13,
     "multi-review": 30,
-    "native-sessions": 87,
     "node-mail": 3,
     "nodes": 51,
     "pipelines": 35,
-    "previews": 17,
     "projects": 26,
     "public-api": 1,
     "pull-requests": 42,
     "system": 47,
-    "terminals": 26,
-    "ticket-sync": 1,
-    "transcripts": 16,
-    "web-annotations": 37
+    "ticket-sync": 1
   },
   "domains": {
+    "claude-tmux": {
+      "version": 1,
+      "min": 1
+    },
+    "design": {
+      "version": 1,
+      "min": 1
+    },
+    "docker": {
+      "version": 1,
+      "min": 1
+    },
+    "environments": {
+      "version": 1,
+      "min": 1
+    },
+    "files": {
+      "version": 1,
+      "min": 1
+    },
+    "native-sessions": {
+      "version": 1,
+      "min": 1
+    },
     "node-files": {
       "version": 1,
       "min": 1
@@ -46,11 +60,27 @@
       "version": 1,
       "min": 1
     },
+    "previews": {
+      "version": 1,
+      "min": 1
+    },
     "system": {
       "version": 1,
       "min": 1
     },
+    "terminals": {
+      "version": 1,
+      "min": 1
+    },
     "ticket-sync": {
+      "version": 1,
+      "min": 1
+    },
+    "transcripts": {
+      "version": 1,
+      "min": 1
+    },
+    "web-annotations": {
       "version": 1,
       "min": 1
     }
@@ -95,13 +125,21 @@
     },
     "acknowledge_startup_agent_session": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:13b505854c13b8ea36caf530d0ca10c20f84ce3b7e962bef05fed2f0d076d676",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "add_environment_domains": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4dab0ec70a34d22f586073493d4f555ccc4736438424c4da668bdcd612eb33de",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "add_github_issue_comment": {
       "domain": "pull-requests",
@@ -160,8 +198,12 @@
     },
     "adopt_native_agent_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["executionProfileId", "expectedProviderSessionId", "interactionPolicy"],
+      "argsDigest": "sha256:d0b2eb336ad3835362b1321dec8dc8153c4457778c79b7c868222b0817d1cbdb",
+      "resultDigest": "sha256:2dd2f4ceef999be62752a45877d542242bcc8c899021a4fb294151783571d342"
     },
     "allow_controller": {
       "domain": "nodes",
@@ -209,8 +251,12 @@
     },
     "apply_environment_allowed_domains": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:3278a466d8326d281a8faeaab2216231c5dd1881139fbefa26026d82f8148962"
     },
     "apply_mcp_configuration": {
       "domain": "mcp",
@@ -219,8 +265,12 @@
     },
     "apply_pane_layout_intent": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:89ce96b4e4ffe73981c7f178145289e2e2d13d01a9fb86a1651f93841337f1b0",
+      "resultDigest": "sha256:b575befc63635bcee49245a00b8a8b32d910f9623212b70939428c3c4f1b5440"
     },
     "apply_project_root_changes": {
       "domain": "coordinator",
@@ -238,8 +288,12 @@
     },
     "approve_environment_setup": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d452c8b699a94a6d62ab80a143b4db9aacc86afaf6f67cbd959dabae81662723",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "approve_native_agent_interaction_and_remember": {
       "domain": "config",
@@ -248,8 +302,12 @@
     },
     "approve_project_setup_commands": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ef6ab6d500830c76d3e782b28892e06191f4ecea109c7797e17d0e75f1380d20",
+      "resultDigest": "sha256:569716d87285d5f3b7ab931bcc19b8e32c9ebfa79a75e4ae13b173c4e486ce27"
     },
     "approve_setup_commands_on_nodes": {
       "domain": "nodes",
@@ -313,8 +371,12 @@
     },
     "attach_terminal": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d88ecc9c86c1f15d2a8f29995431c92cb2b07acf40adcdcf1b0b0797f8e738a6",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "await_bridge_ready": {
       "domain": "agent-servers",
@@ -323,13 +385,21 @@
     },
     "await_environment_setup_session": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:51354a1bc1b59be82c0189bf4413e5fe03c0091129dfba51b7a73a284ddef82c",
+      "resultDigest": "sha256:fd8abf1a20769639f35720dd02e27a881cc81b6f2202f3d862836c60cd8abaab"
     },
     "begin_native_agent_sign_in": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6d6a98017ee25f1f607a8c63fd6a9cca53d0f539702849161f5dd074ab483c13",
+      "resultDigest": "sha256:b9b26fb689c64b2e5ffcefcfa66a631875c4790ed0a37395a3016efed8fe4ab1"
     },
     "begin_node_file_write": {
       "domain": "node-files",
@@ -342,8 +412,12 @@
     },
     "bootstrap_terminal_session": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
+      "resultDigest": "sha256:d4ed1dc5d626a15908af5dc5e44550a371fc6ee8b0ecdaa437016e0467cda040"
     },
     "cache_agent_model_catalog": {
       "domain": "agent-servers",
@@ -367,8 +441,12 @@
     },
     "cancel_container_operation": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d57d18115cb2311d9cc6a7a75bbdebab6d7ac2d44291d2a354ca4342feacb7fa",
+      "resultDigest": "sha256:4b93a637d0c8d659cbcc56985700775d988195cbcb50357b803138b3c40e0395"
     },
     "cancel_coordinator_graph_run": {
       "domain": "coordinator",
@@ -402,8 +480,12 @@
     },
     "cancel_native_agent_sign_in": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:61f243103e1f023a0fdb68f3c530796c663abf76e8543a919de724dcd47703a5"
     },
     "cancel_opencode_provider_login": {
       "domain": "accounts",
@@ -417,8 +499,12 @@
     },
     "cancel_user_command": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5f7317f3efd10fa0394946643f410c5f83a7a2f8707554c9eae9fce06ef755e1",
+      "resultDigest": "sha256:c54a434fa63a8e20b8bb6ffcfa0a446bf4c7900c8534fa72f58ea77b14c42d5c"
     },
     "change_github_pull_request_label": {
       "domain": "pull-requests",
@@ -502,8 +588,12 @@
     },
     "check_base_image": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
     },
     "check_claude_cli": {
       "domain": "agent-servers",
@@ -522,13 +612,21 @@
     },
     "check_container_host_reachability": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:96641af5c8ea2695289f998330d0b4b7f0265085443d51f8d52f42566354d560"
     },
     "check_container_workspace_paths": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:fe8b579161a28e4fb40438b3b89bd720af9f7a6ce3d2c5c6e94c7d65c032c6aa",
+      "resultDigest": "sha256:a05c6ea11a955f361c01d21c132b744f55665d764e210f0ec1893c944bd3038d"
     },
     "check_coordinator_upstream_merge": {
       "domain": "config",
@@ -542,8 +640,12 @@
     },
     "check_docker": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:49987218226e6f70de5173666f5b2fb88c38f2b3eda62f1d354ea10f51bd9578"
     },
     "check_github_cli": {
       "domain": "agent-servers",
@@ -572,153 +674,273 @@
     },
     "claude_tmux_answer_pre_tool_use": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5b98271acb724cc23534fd41b0bab0f1ab87580cb7380b4d69deb8e85cc9af17",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_answer_selection_prompt": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedGeneration", "expectedPromptFingerprint", "expectedRevision"],
+      "argsDigest": "sha256:91a282014e222052eb0ab305377a783650339a43c6693eb364d6f3a7bc84c3e6",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_create_interactive_terminal": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0250bafd36aa815f589364caf84e9dd8d64a031206a6681691fef73b44b7e2c8",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "claude_tmux_detach_interactive_terminal": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_hold_hook": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:11dcf234438a22d9217239be0cbee57d932e5431b84ec4320663e00b6594ad28",
+      "resultDigest": "sha256:11928d6b1ddb6613529bd914764a68c83832a85f184a29367662ee4e0a5f58c4"
     },
     "claude_tmux_interrupt": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_list_previous_sessions": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:0232320b0bd72f08cec33e2579dc26be6a4aff4bd5eca2bfdb3d7b3255f1def1"
     },
     "claude_tmux_pending_hooks": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:546076374af18f306374eca053a140d063857a0d9ad9586ceeed518c741a8178"
     },
     "claude_tmux_reconcile_orphans": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:691e4c6f1b2858ee182fded4e35f62d0ac3342823392eb7df96eea7c1d942d01"
     },
     "claude_tmux_reply_hook": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:074730405c3af9011ee1531e7108aca1ffa3c6b65c32b1ec851cea178436921f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_resize": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0250bafd36aa815f589364caf84e9dd8d64a031206a6681691fef73b44b7e2c8",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_resize_interactive_terminal": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b5c283dba64ce072b309c85480bb1f429363548ce7a6b8048ec0c398308ba2eb",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_send_keys": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0afa6798442e9bfe01586ec925d346b5a4e5216815c8322e3317749f788135c3",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_send_text": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:80319c3c449e8adf0871943a3ff68329a477983ee3d0dff65cd2a17ed878b030",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_start": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:76094aaab78cfcbbd8a93d66d3a6d7bb8668875663b331100db2051e9a7373cd",
+      "resultDigest": "sha256:9e4f62bd96afcb0ed6254e5bafa9c751a9d11e77edbd94e67fea9dba2d9642b5"
     },
     "claude_tmux_start_interactive_terminal": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_status": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:60d7684068a98f7e15881d4aa9fc3bcb150d93b49943d684dc933be6184cec19",
+      "resultDigest": "sha256:f1841b66426632380a40d9dd2c398ff63b80db582e8b55a47481fc73eafb018f"
     },
     "claude_tmux_stop": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_submit": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:80319c3c449e8adf0871943a3ff68329a477983ee3d0dff65cd2a17ed878b030",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_submit_queued": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:80319c3c449e8adf0871943a3ff68329a477983ee3d0dff65cd2a17ed878b030",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_switch_effort": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:cc1a7cd11bc4f56d5d3f5ff9ba7780d86f90eee248d83cb39c4950bf1e678456",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_switch_fast_mode": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:32962694966d841f5c0117393b523453631d908bf5c6edad9a35f2c58c86bc5d",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_switch_model": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c422d46f850925ac9a055f067060877ce228458c03a34d9b287c2cc6ed7e4db",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "claude_tmux_switch_plan_mode": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1120ff6a91cf661f1f1e5a87781dce5271615974d3b36860d722133d977e259a",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "claude_tmux_tasks": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:44b2d736d390555ab200dc75ec1ba82daff651843e39ab7548ff2cf0d1261b37"
     },
     "claude_tmux_transcript": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:42b6129755161f1c9e531f14ae9d45f7d8631071db2a53e209276db84e2283fe",
+      "resultDigest": "sha256:5e8c672adbccfbb66fca92d86287a00d3f6a128bca9b97cd933dfb239f79de0d"
     },
     "claude_tmux_write_interactive_terminal": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7721dc4d47dbbd4c956d29ebcf49d2e532f80c689f35d5ea7a77168445d3c919",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "cleanup_logs": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:f651de3f6fca02e0228ba13f091df3e423c07a51eb6b70803f379214ae9499d4"
     },
     "cleanup_orphaned_buffers": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
     },
     "cleanup_orphaned_containers": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "cleanup_stale_local_servers_cmd": {
       "domain": "agent-servers",
@@ -732,8 +954,12 @@
     },
     "clear_environment_pr": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "clear_task_build_status": {
       "domain": "pipelines",
@@ -742,8 +968,12 @@
     },
     "close_container_logs": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c373400a5190b3468a7cc83c4e184fa78acacbac6b32a471a174a4284c68ed67",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "close_coordinator_conversation": {
       "domain": "coordinator",
@@ -757,8 +987,12 @@
     },
     "close_local_terminal_session": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "close_node_workspace": {
       "domain": "nodes",
@@ -819,8 +1053,12 @@
     },
     "copy_external_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1d2b126c1590e9b5fae79d21b14251056704c2f8dc3bf5e791713af10ae81f8f",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "copy_project_to_node": {
       "domain": "nodes",
@@ -829,8 +1067,12 @@
     },
     "create_agent_handoff": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:89ea918823de5e7ef81ba2ab9dd58ffdbae39c1a489e2c4aaa0d88221d094366",
+      "resultDigest": "sha256:7f11dc5285412abe77c2d0e5c8abec465a0bacb1846f4f2335c19446c0db6f43"
     },
     "create_bug_report": {
       "domain": "system",
@@ -844,8 +1086,12 @@
     },
     "create_container_folder": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ada62e2086245e85f15f1efd6c1c2edfb0a79ac51fcac1ff132a7cbc811b1401",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "create_control_mcp_credential": {
       "domain": "coordinator",
@@ -874,8 +1120,17 @@
     },
     "create_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [
+        "controlRequestFingerprint",
+        "controlRequestId",
+        "delegationBaseBranch",
+        "delegationBaseCommit"
+      ],
+      "argsDigest": "sha256:bee6bbcf452d3750491fb0fcd6e458ecf6ab094a8a65fed30ee334d09c914017",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "create_feature_build": {
       "domain": "pipelines",
@@ -894,13 +1149,21 @@
     },
     "create_local_folder": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ada62e2086245e85f15f1efd6c1c2edfb0a79ac51fcac1ff132a7cbc811b1401",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "create_local_terminal_session": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7f697ea9b6b5ab138079723844fb4f5c32bbbeef3d69cd61c570492ec2a7a00a",
+      "resultDigest": "sha256:6b32218ef7d9899aa737c99aa88bce7f59e8f62a929c20c8ea6dcea7fafd663d"
     },
     "create_node_action_request": {
       "domain": "node-mail",
@@ -913,13 +1176,21 @@
     },
     "create_preview_attachment": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:997d05fd1faaa4a91dd19a88552dd3a6098acf5a77097706eb0a4be09649997a",
+      "resultDigest": "sha256:5765db41a7781d75dbd390b6210e0834183eeb0c8d58e8c3b51a1fafe7cde1ad"
     },
     "create_preview_handoff_url": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:da03448113e4073c57da5b461fc2df479bfcd51a3eef9e0414b576bf3af70ae1",
+      "resultDigest": "sha256:80eba00366a9d703ade8906d400b38056ceea123fbadbed44b0ad25c5605452f"
     },
     "create_project_from_scratch": {
       "domain": "projects",
@@ -933,13 +1204,21 @@
     },
     "create_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1ec2c5e37954a8494359aa38c67f627dbe0433a6baedf5edb65451df146982df",
+      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
     },
     "create_terminal_session": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b4ef407a70e895837f38973adabe5c2475ac7ba8ebf580981f93aad8d1f8f3cc",
+      "resultDigest": "sha256:6b32218ef7d9899aa737c99aa88bce7f59e8f62a929c20c8ea6dcea7fafd663d"
     },
     "cursor_sdk_login_cancel": {
       "domain": "accounts",
@@ -973,8 +1252,12 @@
     },
     "delete_agent_handoff": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:66804fbff5ec794fbcf2032a689b33674508d1e123b52eba5b802b332e2b9115",
+      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
     },
     "delete_build_pipeline": {
       "domain": "pipelines",
@@ -983,28 +1266,48 @@
     },
     "delete_compose_draft": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:247d379fa8c01ee715a91b664af904f4827ebb2fea453ab0e2191cc4a8db5510",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "delete_container_annotation_evidence": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["digest"],
+      "argsDigest": "sha256:5571f71aa415324f2ee0676352942287b9d78e45ef6a288f2ad249089ae4f916",
+      "resultDigest": "sha256:d15a311816030ea8a506fdbaf6ecc81b6bfe66a2165adae4beee7c703c71f41c"
     },
     "delete_container_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "delete_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "delete_file_draft": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:247d379fa8c01ee715a91b664af904f4827ebb2fea453ab0e2191cc4a8db5510",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "delete_kanban_comment": {
       "domain": "kanban",
@@ -1023,8 +1326,12 @@
     },
     "delete_local_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "delete_multi_review_workflow": {
       "domain": "multi-review",
@@ -1033,8 +1340,12 @@
     },
     "delete_pane_layout": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:9069a2e944338903859d612a64f98a38126ed4bdd48200b2a55f44b12180b6aa",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "delete_permission_rule": {
       "domain": "config",
@@ -1053,13 +1364,21 @@
     },
     "delete_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "delete_sessions_by_environment": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
     },
     "deliver_node_mail": {
       "domain": "node-mail",
@@ -1072,178 +1391,318 @@
     },
     "design_action": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:be1782157e5dd4b5aab13c4f29db07849e254d507bfa467dad13c53b561537c8",
+      "resultDigest": "sha256:5911d3897562c871fbacfc8978adc0db1e7be82d67e27949080f5f4a7e25a145"
     },
     "design_cancel": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6fb32da1c507ddce034fedde7ce1cff17b1031dcddb6f18d1ee5eb305516b03c",
+      "resultDigest": "sha256:b3a8fe34819bb7427572f6bef80f2e37943bea93acfb12236898124fcc6a209b"
     },
     "design_capabilities": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:7677d2d2a6bc3bd63f5a5e16cdd985efdb8381ca5df478cce7de560d97224181"
     },
     "design_capture": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4a9b878579637491c692a52dd0a67b275a10f2dec2dc174197d5a4d4ee940d99",
+      "resultDigest": "sha256:c021817f299d9d5df026925a41a523c179ec7e0e51a5f2f1d3f0b86f7fa5ed1f"
     },
     "design_changes": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bcbda9a9181123c6c11670d505a01c4cba25aa72f2ca9980cbecd2436e14b937",
+      "resultDigest": "sha256:11271096bbd4fa1ef14abda9245df8c0afd3cacea2b9b50c25ba3f760f06815f"
     },
     "design_checkpoint": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6ea2929e415ce0f2f7ff1e85f7a1b33f8ccc1c48d569174d11dbb1ffef88f845",
+      "resultDigest": "sha256:fb46a0cfdc41c58d8f42200e037f39fd94d96d2515f2e9a591fe768ed7de6cc1"
     },
     "design_execute": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c079efaef0dd89cec298b445a2147bf95ff1b1041472546520ebba7b201f93cc",
+      "resultDigest": "sha256:b3a8fe34819bb7427572f6bef80f2e37943bea93acfb12236898124fcc6a209b"
     },
     "design_export_preview": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1c17144dfe765aaabc7dafe3e5fa613bf5fab60458bab2a65ef6a652057ec65f",
+      "resultDigest": "sha256:48f431389f79e4af4b450ee9310ba2b2686102c5339def6525409151e7f03267"
     },
     "design_export_reconcile": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
+      "resultDigest": "sha256:5bcd7830a5b13988eb9ecc8e0b65c87c466ac586a669fb9537fbaf21ba4fea7a"
     },
     "design_export_save": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:74e095a0bb0c885ec975c2290f0bf2a849d9e05dbe8ee224ca388bb30bb45f12",
+      "resultDigest": "sha256:890cca1e8404f9aeee17a0cf9b36b9a6d6e845239d44495a38486eec5e0d80b3"
     },
     "design_hierarchy": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:450263f6a32576ea97acadd90f49b31cd5d610fd6191d42f0754a64878ca9a6f",
+      "resultDigest": "sha256:8a706b5eca410e55624812b435f9095b38b9262566f703ee3ef8016e13e8beae"
     },
     "design_history": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5163d326082eaaea85272d78530011a477ed72ae7d31f5ab12af8634b99b27e1",
+      "resultDigest": "sha256:72341dac054b500b40214fe0411725f2c16ea388a24d6899aa2f1ce11815ffa6"
     },
     "design_import": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e73aa9567fa0b130bd191853530d87d5e67dca66ee922bfe39eab781b8fe0258",
+      "resultDigest": "sha256:5ad1aee7fd214c269a81ba4304c502a2f519334ca5206ddf7fd383cca74fc19f"
     },
     "design_import_host_file": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:17eee791a57f72ad6abcb53464235dfae794f0a39794cceeb52ec10978c4ceb7",
+      "resultDigest": "sha256:5ad1aee7fd214c269a81ba4304c502a2f519334ca5206ddf7fd383cca74fc19f"
     },
     "design_intent_discard": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0ad77277824561cef410492f8b353e6f1b826484b48cfd85015af46e4d3f19f",
+      "resultDigest": "sha256:eee6f883e9fc260660c9c83ef885092a929635b2524154c33ad37de83cc8b3a2"
     },
     "design_intent_import": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:21555afe831a107a2b6af12d563a82e9922a3fdf836ab7fea7eecb9c436a362d",
+      "resultDigest": "sha256:dbe9bde0faee7e5bba7a435c90eb4be7a47ea303c87fff4c8e2d014d8fd193bd"
     },
     "design_intent_resume": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:390f2d5356997021f4e567f2396f216368d33b74df87afc3f1bab18cd4e1f999",
+      "resultDigest": "sha256:ab88b85e5b3c339378d638415b2710594c6a7055823061c7b2e9576f1fb21903"
     },
     "design_intent_run": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e01eaaf4db4692c0f8b7e9578a2689d315c679edb747362385a8332ab25cc028",
+      "resultDigest": "sha256:d9a8d8d49321b92d9217f448ee056d25c6c635b1cb60ba592c7d813acfa3eb7b"
     },
     "design_intent_save": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:eb0beb0cb7d62bc12dc799d2480a28f551ba28f96d964da31ab1e318e8d35def",
+      "resultDigest": "sha256:1f26a4d0fa94c39e423575434a2b74e1caaa83b526f51e5694f8a21a0090c61d"
     },
     "design_intents": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
+      "resultDigest": "sha256:db51c0881a929523302345c04d20f7e3673a34dc65acd946ff4c4f2131b03add"
     },
     "design_library": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:914d237d7d1eaab1951738896d214fec38c56ede8ea7b3ae22e7b1fb74f65b8c",
+      "resultDigest": "sha256:1e786c16d110f467bf1f1446cfe8d010437aba259ec42537505ec8c0ddfb382e"
     },
     "design_open_file": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:470958dc51bcc2438dc4359200859535be9d8c3aade1528ba01b6b94030e515c",
+      "resultDigest": "sha256:59860fceeabda226ef10b310c8e1a286b45246df53c455f6a6a2d07c4308973e"
     },
     "design_operation_status": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6fb32da1c507ddce034fedde7ce1cff17b1031dcddb6f18d1ee5eb305516b03c",
+      "resultDigest": "sha256:b3a8fe34819bb7427572f6bef80f2e37943bea93acfb12236898124fcc6a209b"
     },
     "design_prepare": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:3d53b4fa4698e0ee93274a8c34f079390da9f5b290437d756caaffe5bff81bef",
+      "resultDigest": "sha256:5d871880e127cbe04e5bc612ef8288dfa2943a3805f5447143b33005c48cda1c"
     },
     "design_purge": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
+      "resultDigest": "sha256:20ad5b204b4e68f0e362b5bad0d4386c8fc2d470e47a2638f7d579a505ce9b11"
     },
     "design_readiness": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:143221b072712b551a1e9b3e23c5d57422d4717e5bc89b000a6d1c329d0315b3",
+      "resultDigest": "sha256:1654616d4a17d6656abc2c8027dccf02139730b66e6e2db2e3a10c4d99709d19"
     },
     "design_save": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e8cf7a16890274135ca4da8767bbb446f3f071c984cbd590d4f544fd23629ecb",
+      "resultDigest": "sha256:9669de6ff73e88664cb3ededcf3d407e102a2a00434ffd1956138dbe11bb0a63"
     },
     "design_session_link": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43d144f27f0739e4147e859ceff0ad48dc3e9e62e2980b39f393765074e9443f",
+      "resultDigest": "sha256:c54a45adaa7e13cfba27fc1e424201e9f040511654f4c68cd8109ad0bd2ccc25"
     },
     "design_session_link_states": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
+      "resultDigest": "sha256:e86e0297c16c1fc0071f8b3253c07eca0e9287bb2a0fb8eb7fa820e50c4e1751"
     },
     "design_session_resume": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedTabId"],
+      "argsDigest": "sha256:1dffde9857593328026d368f73a0f5be3506961ce83fc81d4e1aedd24409d34a",
+      "resultDigest": "sha256:1549043105579ae1534c6addfd23191cb843a92ab9ab9d3414d0c26715ab0861"
     },
     "design_session_unlink": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c69776e3326978c5875959ac3abe1ef105900ba05bd80ae555b54d07b660135",
+      "resultDigest": "sha256:711fa1aade045ea59d46bca4b284627176d09f4b9cacf4fb857600be4567bbf4"
     },
     "design_snapshot": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
+      "resultDigest": "sha256:c62c1c0970d3868ab418ffd77800ce56571b2b965c57220edfcba18d885a5e80"
     },
     "design_status": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:4545a8292598a55192a56b424e6da585e0527b62512a6a807f16ac109cbf94bf"
     },
     "design_sync": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d3971880d1e731dbe26c870641ef8b9233d17e8d9c3d70fe905140f5b8f7df3c",
+      "resultDigest": "sha256:d2caa7b574e1e1d869150e3f360003e246801e19149dff800935c37d47adf833"
     },
     "design_validate": {
       "domain": "design",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4729f7e0df933021cb8192164706d082e4beb476a7170cd7d32acf52ca7c02eb",
+      "resultDigest": "sha256:8c8a0bf63110d53fbb941ca955321f466c0253b26660e25efb16efcd4bdd9cd6"
     },
     "detach_controller": {
       "domain": "nodes",
@@ -1257,8 +1716,12 @@
     },
     "detach_terminal": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "detect_pr": {
       "domain": "pull-requests",
@@ -1287,8 +1750,12 @@
     },
     "discard_native_agent_dispatch": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:640c354dcc96ba7e32ecaccec3dcf015e19a8aeb7e7dd24d0cbed8aed5bf2352",
+      "resultDigest": "sha256:5c966714d0e7f342758b89890762557b13484518abc72c48d764bbc9cb8fbf3a"
     },
     "discard_node_detach": {
       "domain": "nodes",
@@ -1297,13 +1764,21 @@
     },
     "discard_recovery_copy": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:d4e9cdfebfee60a3d007d27a8137f3054227f69feacb24d051bcea955db73093",
+      "resultDigest": "sha256:f2ee1e323f9821c2cf4b25433133cdc022d3cb759742b69789fe3e96d1356c3f"
     },
     "disconnect_environment_sessions": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:b7e1622ebb9310e8baf8e7f25492e5d2a1049d4df414abfef37e64ef00f16138"
     },
     "disconnect_linear": {
       "domain": "kanban",
@@ -1312,8 +1787,12 @@
     },
     "dismiss_native_agent_suggested_prompt": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "dismiss_node_outcome": {
       "domain": "nodes",
@@ -1327,53 +1806,111 @@
     },
     "dispatch_native_agent_intent": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [
+        "approvalMode",
+        "attachments",
+        "command",
+        "executionProfileId",
+        "images",
+        "interactionPolicy",
+        "requestId",
+        "schema"
+      ],
+      "argsDigest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
+      "resultDigest": "sha256:865260d8217d85b0087caec844c95d9a49489cad6108a22effb819b6771df13f"
     },
     "dispatch_native_agent_prompt": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [
+        "approvalMode",
+        "attachments",
+        "command",
+        "executionProfileId",
+        "images",
+        "interactionPolicy",
+        "requestId",
+        "schema"
+      ],
+      "argsDigest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
+      "resultDigest": "sha256:2dd2f4ceef999be62752a45877d542242bcc8c899021a4fb294151783571d342"
     },
     "docker_cleanup_execute": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["selectionToken"],
+      "argsDigest": "sha256:7747f6376cb3ecc94f4ff511397dc61b2d9df9b0c52334c6065b91af5456bb50",
+      "resultDigest": "sha256:860e9905e43b4ad6e984de9c1872666f02d9407e4ff1b56112e6af6c366965f6"
     },
     "docker_cleanup_preview": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:ef122d9205390d97c9b79635743ec01fcf871a699cb4a4b09591d698e8e6d7a4"
     },
     "docker_container_status": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:a5febf33ba73a92a8452ccdba1fdb6863b869de29de2e89a072ba969cd16fe9f"
     },
     "docker_remove_container": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "docker_start_container": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "docker_stop_container": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "docker_system_prune": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "docker_version": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "edit_controller_worker_tab": {
       "domain": "coordinator",
@@ -1387,13 +1924,21 @@
     },
     "enqueue_prompt_queue_message": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9ccf26517c3ab46fd3784e51fd1b6170076c8b23942c340644d3714d3fbbb565",
+      "resultDigest": "sha256:3ebb249190bedc2c09d55570e0273781f0e5068de98b81150594b01ee968828c"
     },
     "ensure_environment_setup": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:c0ef996a75366aef7d206f9b234da3ec0b273daa758edc6f4c4fffd5cab81222"
     },
     "ensure_host_pi_model_catalog": {
       "domain": "agent-servers",
@@ -1402,8 +1947,12 @@
     },
     "ensure_native_agent_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["executionProfileId", "interactionPolicy"],
+      "argsDigest": "sha256:3576b4142c833df64f049cd2edf63e9686e4373962904a67a6c61655f4f3b35a",
+      "resultDigest": "sha256:312348b11a06480faf4396e3f018e1497e76a84472fedeb51b0f859542505ec3"
     },
     "ensure_project_coordinator": {
       "domain": "coordinator",
@@ -1412,8 +1961,12 @@
     },
     "ensure_project_home_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "fetch_project_git": {
       "domain": "coordinator",
@@ -1452,13 +2005,21 @@
     },
     "fork_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:90f451dcf4d1e367aee589a140729726159b5bdfe446ddfa26415b2d97bf0524",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "fork_native_agent_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["messageId"],
+      "argsDigest": "sha256:c91ec8e306d712e99c3c0564b24c8a3b7a2f594348dbeddff58600c69a21f07f",
+      "resultDigest": "sha256:0657cf2ce73ad4585a9eca8e428a87114de1d80a8a0c49ad17272776d1507122"
     },
     "generate_review_package": {
       "domain": "pull-requests",
@@ -1477,18 +2038,30 @@
     },
     "get_agent_handoff": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:6e1fbfc7f9a96b504525050cd2e7a31daee9762a60178b2dc6c14e6bbf6b0cfd",
+      "resultDigest": "sha256:df2b0d29625a772e2669c35c65a9d741253f77c0dd826d119e87ec8b395e5bc9"
     },
     "get_agent_handoff_capabilities": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:3e3f7b7727a9bc7319860c06681156be788e8fa9e08edd24b4f0d0d23d2a108d"
     },
     "get_agent_interaction_observations": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:830e1512119d268cb8b9e178fc526a2386f1cc73a81b80c981d9e195c0f6c6ab"
     },
     "get_agent_mail_conversation": {
       "domain": "agent-mail",
@@ -1602,8 +2175,12 @@
     },
     "get_claude_terminal_state": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:26b675706c0e4a025fc126b4e797a21d9e22b3af725759f3bff38dfb7b9ad807"
     },
     "get_client_state_capabilities": {
       "domain": "config",
@@ -1627,8 +2204,12 @@
     },
     "get_compose_draft": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7481d5e3082fa58d15e02fc33e8c7159ad84d5be201b7c0de6cd6aabc3f82f5c",
+      "resultDigest": "sha256:55c0c57992037b83d5a7a75c862d1471c9384165f3aa70680aaaa7e279f7cb94"
     },
     "get_config": {
       "domain": "config",
@@ -1642,28 +2223,48 @@
     },
     "get_container_host_port": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:63df2bf9a9645b1991d1583ecec1c3fdb12e8b822924e599cb5bdf38605f2237",
+      "resultDigest": "sha256:08e0a8ec5673d2c0227b309bc576f75cfaaaabe9b1f3258843ed1979a9560051"
     },
     "get_container_host_reachability": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:96641af5c8ea2695289f998330d0b4b7f0265085443d51f8d52f42566354d560"
     },
     "get_container_lifecycle_snapshot": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:064f1591f6c92df0f1e2e8b2288711e52bcad98a78c5f531388bf7471ce69f2e"
     },
     "get_container_logs": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:fec3d578844a596d8eafe73c31a7f9d79faa87f60cb5a6849fdb51f4c8e053b2",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "get_container_usage": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:a6c491d8c304de72183923626aca1cf839f768f6ac8adeba972b913786599a2d"
     },
     "get_control_mcp_settings": {
       "domain": "coordinator",
@@ -1762,28 +2363,48 @@
     },
     "get_docker_capacity": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cfcf1119dda31479cf9e39ab26e9bde04ce4366a684131a66d683e6ef804c070",
+      "resultDigest": "sha256:878ba3c6733fc3324e2851f1706110c1d7595ee7b9d80d1af56ae22daba536d1"
     },
     "get_docker_image_status": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:b0b5f7fd4242e725c9eec3d77e86de66f36d939b56e687dcacda2757e4f7d6cb"
     },
     "get_docker_system_stats": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:eb914de819bd403fa5c286026f306095a7c079d82cbcf2508df6bf0303034f84"
     },
     "get_docker_topology": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cfcf1119dda31479cf9e39ab26e9bde04ce4366a684131a66d683e6ef804c070",
+      "resultDigest": "sha256:d31ab02079289105570d10f1cf1bd058a4a06d0dcf98a5382d7a0e246f4c3e1b"
     },
     "get_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1ad6150828a7c4a44fe35814ac78ca5f80c7c9ccb19a27fa22631d0422f4a87e",
+      "resultDigest": "sha256:6ebcf8f7033b52074c510bb72b6df72cc5a684e3368fcb2f54efe363efc5b358"
     },
     "get_environment_commit_ancestry": {
       "domain": "git",
@@ -1802,28 +2423,48 @@
     },
     "get_environment_extensions": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:3e64d00aedb82129d3e7fdf2240874636ab137d11d8b4ca7f551a05f43d8e60b",
+      "resultDigest": "sha256:5532e4c6ba9e5795344dbb1e1aa4ff5c4378c84bfed1cb4f1d67d7a817273961"
     },
     "get_environment_inputs": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:6bc946eff20c8a4a63539cadda8be0903b4fada440cbc57ef785bfe379e89088"
     },
     "get_environment_network_policy": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:d58778e36e76e168602ed3de75b5c588c7f964f994827d355467cdff1eb20e2e"
     },
     "get_environment_pr_health": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:36cfd797af18c768a69b89c1e011d433eabf458eac2163429ac2f50bd90555a7",
+      "resultDigest": "sha256:4ccc69d65476e951e82796efb39f9d1a5466dc97db489d206dd5040d9f670514"
     },
     "get_environment_pr_url": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:a3d1c08cd0dc9aecddc72061726a94e7c4ac4218f308a004d1f881374cf97a67"
     },
     "get_environment_process_usage": {
       "domain": "system",
@@ -1832,28 +2473,48 @@
     },
     "get_environment_resources": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:16a1862c2928ddcd7a3cb713169a05cc3b5216a5e38962e4a4377c05e1dbea18"
     },
     "get_environment_setup_approval": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:9cdfca57fd85adcf05634e16c271675113049b3968df624531ec58f3bb6cf8b7"
     },
     "get_environment_snapshot": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:7c9bad994d1ece02b1006ad4cc119340f62de11563c3a62765c0fff2bc087bda"
     },
     "get_environment_snapshots": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:45bf7fed68034907c8a12fe893cf997ff2cb5002d22e11ea6952da5b7bb33578",
+      "resultDigest": "sha256:f5d4a54c7a6021bc64969258c7ebc55280078f79c1e56a1360fdc1508e57d289"
     },
     "get_environment_status": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:a5febf33ba73a92a8452ccdba1fdb6863b869de29de2e89a072ba969cd16fe9f"
     },
     "get_environment_uncommitted_paths": {
       "domain": "git",
@@ -1862,8 +2523,12 @@
     },
     "get_environments": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:e7f297fcd8d5e1f41f5e8d968b85990befd45b337dc29dbee9638bc3132a4163"
     },
     "get_feature_planning_snapshot": {
       "domain": "kanban",
@@ -1877,18 +2542,30 @@
     },
     "get_file_draft": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7481d5e3082fa58d15e02fc33e8c7159ad84d5be201b7c0de6cd6aabc3f82f5c",
+      "resultDigest": "sha256:3880ac5f9e9e468f7d41ce7ff3cd5d91480120dcc8b5a990f8de83c93560b26f"
     },
     "get_file_subtree": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b1cd3e95ad70e98cc0783b8329ceb84c9b17d936acb43f479f1a31dad7598369",
+      "resultDigest": "sha256:ed6d3d7bdb0c55533d8550a4cea8c114e93a5a8f4d0fc81330c23ce53d86e51e"
     },
     "get_file_tree": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cf9a39fdbae5ed44320066ee2b817eaa47ebbd14767f338ed2f930104f05d509",
+      "resultDigest": "sha256:970c3d5fa187aa229de1eaf65466a36c8a188d9c1caab6e0e7940249745a6672"
     },
     "get_fleet_update_policy": {
       "domain": "system",
@@ -2011,13 +2688,21 @@
     },
     "get_local_file_subtree": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:84a1658d4eb47260d7aa21caba6b5f421e14816998389fb0dd96d56ba47fc8af",
+      "resultDigest": "sha256:ed6d3d7bdb0c55533d8550a4cea8c114e93a5a8f4d0fc81330c23ce53d86e51e"
     },
     "get_local_file_tree": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:590134bc3e9d601ee463eecf46115950a3ba9ea043b5b3393dfa5ad123236e25",
+      "resultDigest": "sha256:970c3d5fa187aa229de1eaf65466a36c8a188d9c1caab6e0e7940249745a6672"
     },
     "get_local_git_status": {
       "domain": "git",
@@ -2041,13 +2726,21 @@
     },
     "get_log_directory": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "get_log_storage_stats": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:f651de3f6fca02e0228ba13f091df3e423c07a51eb6b70803f379214ae9499d4"
     },
     "get_machine_load": {
       "domain": "system",
@@ -2111,28 +2804,48 @@
     },
     "get_native_agent_auth_status": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:3b95b1b7b3881cc89eca4ccb4e8e5e3193b57b8c332013bc1ef0472e9f1e9424"
     },
     "get_native_agent_discovery_update": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:e5fe8b582f6f2227a8eadb1e142e824c812ec41cd60b4fbc60ddf9b2509373d0",
+      "resultDigest": "sha256:c77141b5221ccedacfd7df5c4938853e6eeff7ab74e9b0a984b0611cffe1d1c8"
     },
     "get_native_agent_goal": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:51408e83f8fe7c105ef7f36c2746b727f05047536999a307851baf834664a4b3"
     },
     "get_native_agent_live_update": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:eb95ffe470bde8f17f3c0f3681a9ca5fab923100739d76f8a765807a4fac3efe",
+      "resultDigest": "sha256:0992d68039e2fadcfbc7c6639903360e7882edfe964fa5fea7697a88e839aa5a"
     },
     "get_native_agent_message_page": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:ab62cace84790b0e2c30bde4760c0c92d5a7810d5032efe286ad0b576dd212e6",
+      "resultDigest": "sha256:2fb1b9d5b8d29c12fc9bcaec7d6d916426be829ade1a6b799286ebbfff7f7a4b"
     },
     "get_native_agent_model_catalog": {
       "domain": "agent-servers",
@@ -2141,18 +2854,30 @@
     },
     "get_native_agent_projection": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:3d1b8eaa7adcfea0e9d059cb65da92bf064a9b6046692e84da86a009b6618b16",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "get_native_agent_projection_update": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9ba07888f28d25078a14388e9bdd490565bc3ca1c605a16d9a316f0360b8f2f8",
+      "resultDigest": "sha256:5e4bf69a145c5efc51e80b1977723d1bdf42cf7aa265a9fa9e126e98cedcef9b"
     },
     "get_native_agent_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:f7d1bf514fb08f862a9a535907940eb19319e5c96ebecae7ab016e5488b55097"
     },
     "get_native_agent_session_account": {
       "domain": "accounts",
@@ -2161,28 +2886,48 @@
     },
     "get_native_agent_session_state_update": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:ce54228b3e867aa2a391ba4bff4ed8bd359ba5982930be73059b12f0fe2dc1b3",
+      "resultDigest": "sha256:c77141b5221ccedacfd7df5c4938853e6eeff7ab74e9b0a984b0611cffe1d1c8"
     },
     "get_native_agent_sign_in_resend": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:52477e00a8fc0cb868f75707cc7b3033e65da8a4bb739f553d85a888326a9600",
+      "resultDigest": "sha256:de424af749e6f1c0f58ae98dcf783bea943db04a5a082a54beec347d2c5435a3"
     },
     "get_native_agent_sync_capabilities": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:e1bcff9d059839ae9936e74211c75e5044a61f0d02e3f6fcaab05a577a5af5fb"
     },
     "get_native_agent_tool_details": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:e2d9f98d03525b884c8d4102fc37a7fb6bfda9582995a1f5cc05a885a13a3624",
+      "resultDigest": "sha256:9df81e33f17bb4f7502c16bfcf016b5f08b32e15accce5605ef8f551bda5cb17"
     },
     "get_native_agent_transcript_update": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:037b1c7ac11d8243adaabc52bcbf81cca721d0038859d8939e8e5f6eb8f94a9a",
+      "resultDigest": "sha256:c77141b5221ccedacfd7df5c4938853e6eeff7ab74e9b0a984b0611cffe1d1c8"
     },
     "get_node_project_coordinator": {
       "domain": "node-mail",
@@ -2230,13 +2975,21 @@
     },
     "get_orkestrator_containers": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:6c2793a7a8438e5086069504d8adb234672dcb7dd51e3e3701f8bccc317904ec"
     },
     "get_pane_layout": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
+      "resultDigest": "sha256:1b1b01038d42f8a33ffa67ea8ddeff22837ec7e22de66ea2abba4bba9bce2529"
     },
     "get_pi_server_log": {
       "domain": "agent-servers",
@@ -2265,28 +3018,48 @@
     },
     "get_preview_capabilities": {
       "domain": "previews",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:416ed9a8f29882cd3e0c9aeb7d9226ee50d07bf384c090480b244b805c26ae87"
     },
     "get_preview_diagnostics": {
       "domain": "previews",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:d2a4769952af208e5b4d35cc0ed5a7aba7b60844910e2482b63852c1fba8a8d5"
     },
     "get_preview_public_origin": {
       "domain": "previews",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d6dd5d6399e2eb031885e6c9fa9fad22e42e6e5b22516f5c1bb88f3478f9ab46",
+      "resultDigest": "sha256:ad9dfb783ac1373a91323e7b64f332fcf4f4f457bae09bf1ff67b24ca97a7014"
     },
     "get_preview_services": {
       "domain": "previews",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:906a596174cfa3fcae773241866a741cf8ba04374311a5d425476ee156d1cb19",
+      "resultDigest": "sha256:25edff0e8a9db6d0824701659b0691cfe087818c4a98b03b639866a53c387b94"
     },
     "get_preview_settings": {
       "domain": "previews",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:d6a68b66a0cd283075d0a37446190f72235db853da6180039148b14086f3fa6e"
     },
     "get_progressive_read_metrics": {
       "domain": "system",
@@ -2350,13 +3123,21 @@
     },
     "get_prompt_queue": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c70ee0a2c1492907562dc615d9b55359b88a0961e7bdd96ebf93f46ea8ed5fc0",
+      "resultDigest": "sha256:0c3628fe09726a81d2ba105cdfe70b5bf4f88e2cbe740095f645eb0f7b7e0c67"
     },
     "get_rebuild_preview": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:4411dc610e46d0955fd9d14c733caa59fe5126131c9ea87d885a2eae70bffcd2"
     },
     "get_recurring_work_diagnostics": {
       "domain": "system",
@@ -2395,13 +3176,21 @@
     },
     "get_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:18a05a5d7202a6c430789167f7d78e750eb41aafa416a8c25dc16e67d233f723"
     },
     "get_sessions_by_environment": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
+      "resultDigest": "sha256:a81c342d3f7d4e120774e065d9fd2e2e9fcbedfa9ff570dd52168b758234b39c"
     },
     "get_system_usage": {
       "domain": "system",
@@ -2410,28 +3199,48 @@
     },
     "get_terminal_history_page": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:789921442fb062fb12a19987ac4ea7b30dd07d6eec5e6c3af4e2009a592f9ff9",
+      "resultDigest": "sha256:3f7f07669abd21ab1881e1a740f394f284abde2524ac8e866221d5ee567b680c"
     },
     "get_terminal_output_buffer": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "get_terminal_output_snapshot": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:5b5275347be322f95ceb66f0ab2cf52022364f9d379f01472db4227d9cb3ef3b",
+      "resultDigest": "sha256:b43f48b142a6920025154d4f6715ae368357c19513ddcc80456401465bd3fd63"
     },
     "get_terminal_session": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:7160cdfa0359ba08fe0aaa27249cfcab372eb7fb035c87df674754b39e6920f5"
     },
     "get_terminal_state_snapshot": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:34b47a682826672d8717711b04836ab30c0f73a1ae4c7789d9a39b2f6f16f478"
     },
     "get_ticket_sync_cursor": {
       "domain": "ticket-sync",
@@ -2482,8 +3291,12 @@
     },
     "get_worktree_snapshot_revisions": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:41da0c7495e16c728960ca36de33e856febc8babd038f87e62bf73d7d5ee42f0",
+      "resultDigest": "sha256:c0168c65db6ac8cdcdc4185c9f490304388820d55b406020ce8d01723dbe336f"
     },
     "graph_capability_ceiling_get": {
       "domain": "graphs",
@@ -2702,8 +3515,12 @@
     },
     "hold_native_agent_interaction": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:cd9fc5943a85f7af615279bedea848a1418c8d9e9e04ca6d0c3fb37dd323f64a",
+      "resultDigest": "sha256:91fe2cc1513288699c8be9d13a604eb879193c2e09ccdb4f3687282277bee0b0"
     },
     "import_desktop_connections": {
       "domain": "nodes",
@@ -2782,8 +3599,12 @@
     },
     "launch_terminal_job": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:2bd971a704fa0f576e834476e1f09a313a94c46512470288ce539e00c55a542a",
+      "resultDigest": "sha256:6ceff5493e2cf5e4300dfa705445f94df916d3fac571e76246a9fe4d0608b71c"
     },
     "list_agent_accounts": {
       "domain": "accounts",
@@ -2827,8 +3648,12 @@
     },
     "list_compose_drafts": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d2605c8cd83ea20a647a81835a023c1b9cfe47fd59f8b3adf99a0af7621b4576",
+      "resultDigest": "sha256:c521f13524ad5e7099083997587cd62656dfb66b876e7201adbe04869a3b7302"
     },
     "list_controller_worker_commands": {
       "domain": "coordinator",
@@ -2867,8 +3692,12 @@
     },
     "list_docker_containers": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:e5059d246c503dd1ba779511929c1950c2b81903793822f63c26d9a6819fcca4"
     },
     "list_environment_agent_skills": {
       "domain": "agent-servers",
@@ -2887,8 +3716,12 @@
     },
     "list_environment_hydration": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9a2d538ad51bfb9af2769f9d74a1a1cf0df554d5cb9763a3154ab698aad5fedd",
+      "resultDigest": "sha256:a80064221d1b84d247716442060100fb813c37948b650012e587609d688d9950"
     },
     "list_external_permission_rules": {
       "domain": "config",
@@ -2927,8 +3760,12 @@
     },
     "list_human_prompts": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cefa532778bb66f5dae043ab276f6406ec3c8bb1df5c3f14a7bf04292b2fafc5",
+      "resultDigest": "sha256:c03d2956fcba1937a3ec1f53092569069bdee2bdb8cba0fb1d0bbb4952d40cc9"
     },
     "list_machine_agent_accounts": {
       "domain": "accounts",
@@ -2947,8 +3784,12 @@
     },
     "list_native_agent_resumable_sessions": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:fcb3afeb4cbea6bd5515a8d931dad8b53aaa419122f113364888bc876fcd03a3",
+      "resultDigest": "sha256:6ccb4774a0799be68b3d68b7a5211074f446c85685c363b76efbba4d28145a1d"
     },
     "list_node_action_requests": {
       "domain": "node-mail",
@@ -3025,13 +3866,21 @@
     },
     "list_prompt_queues": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
+      "resultDigest": "sha256:ecbaedcc1ffbd8c23f61adc5e34ff0966e2ba18f5beadee55b247ccdedb719f8"
     },
     "list_recovery_copies": {
       "domain": "environments",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c46b25fdd632416a6468ba8d538b6636275615c3276615e08bbbe672599786f2",
+      "resultDigest": "sha256:061d7106f23a0b0aa97bbf0a70037da1533c9a0ce3d2d8416c61c460e05afc55"
     },
     "list_scheduled_jobs": {
       "domain": "system",
@@ -3040,28 +3889,48 @@
     },
     "list_terminal_sessions": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
     },
     "list_user_commands": {
       "domain": "terminals",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:62ed4948defd42d33b8afffd41ed1e191967eb647fcbe7ed442be42ee42f4b9f"
     },
     "load_session_buffer": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:a3d1c08cd0dc9aecddc72061726a94e7c4ac4218f308a004d1f881374cf97a67"
     },
     "local_terminal_resize": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:475ae1bd0856a51b16605745130dfe7f38fa1d662a57b18f3e8671c81c8f4279",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
     },
     "local_terminal_write": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
     },
     "mark_agent_mail_conversation_seen": {
       "domain": "agent-mail",
@@ -3100,23 +3969,39 @@
     },
     "move_container_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a6969b8a1542fe26d0dab893d23391d8159197ee6d4549a8fc8d98bb87249ee2",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "move_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:23c5786232d7494ec42234ee1fcddd373c357df6fb7cc6107bdce2d3655d7b55",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "move_local_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a6969b8a1542fe26d0dab893d23391d8159197ee6d4549a8fc8d98bb87249ee2",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "move_prompt_queue_message": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2b2e20537ce5e5e3ac233142665934b5336bbb01f85df8e9a6cc3d18bb504a37",
+      "resultDigest": "sha256:0c3628fe09726a81d2ba105cdfe70b5bf4f88e2cbe740095f645eb0f7b7e0c67"
     },
     "mutate_mcp_definition": {
       "domain": "mcp",
@@ -3130,13 +4015,21 @@
     },
     "native_agent_goal_command": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a93ef19e0ab27a137e13c64e11be4dbc0857033a330b1ff0f427970f59b9c46f",
+      "resultDigest": "sha256:48a6928e13238371c2670740b7344ea4d64675f10db78c90c9acd4f85a666a09"
     },
     "native_agent_subork_transcript": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:06610c9e417111b3d66f0ad12bdc75acfeb126711cc207c03cc9768edd5e9770",
+      "resultDigest": "sha256:eef3198599fb5e29764d83044fa54b50098929ddc9865e69a2fd6f8dfea0cb63"
     },
     "open_agent_sign_in_terminal": {
       "domain": "accounts",
@@ -3145,8 +4038,12 @@
     },
     "open_container_logs": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:87ddb8b052b0b08aa39687cde494ad79ed3890106458cbf4ade98ff7d12b1a14"
     },
     "open_controller_browser": {
       "domain": "coordinator",
@@ -3180,18 +4077,30 @@
     },
     "open_in_browser": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a8746e91ff3a9a70a377586bc021b9fb6dbc1ddefb0d08020d7013539ee8c473",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "open_in_editor": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:09750f08fc09cb380e25fd637638ec5d09501e0d7cbc5ec3e7355e4e45028ce0",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "open_local_in_editor": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f6cc31c8017f2f6dcb9c42f0e7a2f552b091c81386c2738033f94111fcd8562e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "open_node_workspace": {
       "domain": "nodes",
@@ -3205,8 +4114,12 @@
     },
     "override_environment_setup": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "patch_global_config": {
       "domain": "config",
@@ -3255,13 +4168,21 @@
     },
     "perform_native_agent_mcp_action": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6d16e4592007b4b47c403338482f73596caa747092c2d6204345be62df4a547f",
+      "resultDigest": "sha256:c7454194728da1087c10b5ad35eebc767555c9cd123ce9b2941c1d90a27f87ae"
     },
     "perform_native_agent_session_action": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9fa7b6ff00ba95ffd3d02cd8bf069ebebf5096083e5ab21d4b8ef34e65c9fc70",
+      "resultDigest": "sha256:d78dca4530be61778de23fc391dce0b0570e58a7f7c377c7486cd19a38c19327"
     },
     "place_node_mail_attachments": {
       "domain": "node-mail",
@@ -3310,8 +4231,12 @@
     },
     "prepare_environment_first_prompt": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8793b09b351fecd31ff0172e3619b69b97d6b75712261eeb9bb8af265c69914a",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "prepare_node_mail_attachments": {
       "domain": "node-mail",
@@ -3355,23 +4280,39 @@
     },
     "probe_preview_service": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d6dd5d6399e2eb031885e6c9fa9fad22e42e6e5b22516f5c1bb88f3478f9ab46",
+      "resultDigest": "sha256:19a62c1b34dd42cf6a65a8cd277993eb01967dbd56739d9d42557e533af08cd8"
     },
     "propagate_github_token_to_containers": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:0d921cca13df3d75389cdc4498a0fa4d4bcf3c48c34efe2b158703b9349c5bb9"
     },
     "provision_environment": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:a3d1c08cd0dc9aecddc72061726a94e7c4ac4218f308a004d1f881374cf97a67"
     },
     "prune_agent_handoffs": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bfa1e351835ab24b5f996a8d775897cf855f1cf9fd5809bf0147e0663401ec73",
+      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
     },
     "public_action": {
       "domain": "public-api",
@@ -3385,18 +4326,30 @@
     },
     "read_container_file": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:f248b624948dd4da4c95bdfc5365dd6b82cd879ef3359b5a2114b6c645e2e739",
+      "resultDigest": "sha256:91409892e8dbc67a7f35e03d9ba0f91e41e47bbacc9f46c1c767ec4300656939"
     },
     "read_container_file_base64": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:f248b624948dd4da4c95bdfc5365dd6b82cd879ef3359b5a2114b6c645e2e739",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "read_container_logs": {
       "domain": "docker",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:8712f1ca0075df3472174f9ddb4958f600661a9e6294386ad792f0403fe77e52",
+      "resultDigest": "sha256:a26fe87e188fae80dbfa3128ff5c6ac414358f2c52d0043647e3997f287ebb76"
     },
     "read_diagnostics_bundle": {
       "domain": "system",
@@ -3420,18 +4373,30 @@
     },
     "read_environment_file_base64": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "read_file_at_branch": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:48864524b033ff5f6d619f5fe7a9bb0c31c9ad160aa00eee23bd6d13ae031d5f",
+      "resultDigest": "sha256:52721c51a0f95d965869f2dbe749307b499f2c8877a4ae46f7ce555e476b349f"
     },
     "read_file_base64": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9a2dc87c50b80260e3ee12f536791a512b68a50e231d8a8c4213a34ee7204de7",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "read_host_agent_sign_ins": {
       "domain": "accounts",
@@ -3445,13 +4410,21 @@
     },
     "read_local_file": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:36fcd1ad73d7e2905c6a0abb01c45d09b72c2412be7b35b90430f5689619d9ac",
+      "resultDigest": "sha256:91409892e8dbc67a7f35e03d9ba0f91e41e47bbacc9f46c1c767ec4300656939"
     },
     "read_local_file_at_branch": {
       "domain": "files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4922751534032881ba390e9cd0c5bd672c3057a0847d4af4ad894b6f437441f9",
+      "resultDigest": "sha256:52721c51a0f95d965869f2dbe749307b499f2c8877a4ae46f7ce555e476b349f"
     },
     "read_node_file": {
       "domain": "node-files",
@@ -3469,18 +4442,30 @@
     },
     "reattach_container": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b72f7b34c8d0796f2b87ec9da82c417b80016042853d099bf2b47502a1218f03",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "reconcile_agent_interactions": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:830e1512119d268cb8b9e178fc526a2386f1cc73a81b80c981d9e195c0f6c6ab"
     },
     "reconcile_claude_state_polling": {
       "domain": "claude-tmux",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "reconcile_notice_dismissals": {
       "domain": "config",
@@ -3489,18 +4474,30 @@
     },
     "reconcile_orphaned_tab_resources": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:45d23b30717db46cf5a184ef0fe6452b35167a07b3af2e10e9b6a643377f3507"
     },
     "reconcile_pending_environment_renames": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:39d14c382eecb1e5158c2cf7321a1f3fca16a94d99c842393eefda08ae177697"
     },
     "reconcile_tab_teardowns": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:4f7e71f328c2925c82e754a4ba71b769190415cf84744f50715ef0dae9184956"
     },
     "reconcile_workflow_scheduling": {
       "domain": "system",
@@ -3537,8 +4534,12 @@
     },
     "record_preview_client_metrics": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:79e7aab3f20d1fb21f712aa01d00c45dd08d9de713dc8e17262b840cc7f1828c",
+      "resultDigest": "sha256:55829ee376aa76ab1b0749691775a1eaf5a2e93952d08ebc6f4de10e3ca995c8"
     },
     "record_renderer_errors": {
       "domain": "system",
@@ -3552,8 +4553,12 @@
     },
     "recreate_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedContainerId", "expectedRevision", "keepRecoveryCopy", "operationId"],
+      "argsDigest": "sha256:cac0e9d25111f53afb60b84295c961937f0c05fc91fa6e23aeac95fe72d3733d",
+      "resultDigest": "sha256:d97b74821e34258b1fb5683b9c004246ab93c1685dd71c436bf18d58164d4953"
     },
     "refresh_environment_diff_stats": {
       "domain": "git",
@@ -3572,23 +4577,39 @@
     },
     "refresh_native_agent_commands": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:4fe452be363e5879eab2d6fb49b4dbc5ca5c26ffef9cd97fbb37e7708a775565"
     },
     "refresh_native_agent_models": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "register_preview_service": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["operationId"],
+      "argsDigest": "sha256:e9849fb4cf3953beee3a58d749bd8c26dc8acf11ed631cbb1c741c717a950b90",
+      "resultDigest": "sha256:736b31296d60914eb10371c7d5b9d23be64639b1dfb624ec8329da647e60af88"
     },
     "release_preview_attachment": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:336ee5561eaa88168790a65c5faefce3d14d1e61217e345b67f678970225268b",
+      "resultDigest": "sha256:9b5e99a1ca123b58c9517aff6cd70dc5c9e77ef414bdbd0c5b8d65f63594c9a4"
     },
     "remember_environment_agent_selection": {
       "domain": "projects",
@@ -3602,8 +4623,12 @@
     },
     "remove_environment_domains": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4dab0ec70a34d22f586073493d4f555ccc4736438424c4da668bdcd612eb33de",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "remove_opencode_provider_login": {
       "domain": "accounts",
@@ -3612,8 +4637,12 @@
     },
     "remove_preview_service": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:d77ee1335e97ad51c5006d7bc41f9dbc7787fb0d6c760cd7d819362c76a2b8c8",
+      "resultDigest": "sha256:736b31296d60914eb10371c7d5b9d23be64639b1dfb624ec8329da647e60af88"
     },
     "remove_project": {
       "domain": "projects",
@@ -3622,8 +4651,12 @@
     },
     "remove_prompt_queue_message": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:57e5c76fcdf3a0d8d383473541f83ee98b267cc9fb5a5a0546c5ad4b16d74ed9",
+      "resultDigest": "sha256:bd646a1e7f5ce1218cb12da1a267264812295b20f1296ca444bedf38ec4a184d"
     },
     "remove_queued_build_pipeline_message": {
       "domain": "pipelines",
@@ -3637,28 +4670,48 @@
     },
     "rename_container_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:07759a31691e43ce09fa66202563c89c4da99bdadadb1b848071180970982863",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "rename_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d8a8a29c2ff9ad94fd73232c83ef5acf5deb76890f273ebae0a63328588ced6b",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "rename_environment_from_prompt": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8793b09b351fecd31ff0172e3619b69b97d6b75712261eeb9bb8af265c69914a",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "rename_local_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:07759a31691e43ce09fa66202563c89c4da99bdadadb1b848071180970982863",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "rename_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e32a43e9fcf422b76518fe78903cb064aa5e001d518c41dd04e728ce3e5948f4",
+      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
     },
     "renew_client_grant": {
       "domain": "nodes",
@@ -3672,13 +4725,21 @@
     },
     "renew_preview_attachment": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:336ee5561eaa88168790a65c5faefce3d14d1e61217e345b67f678970225268b",
+      "resultDigest": "sha256:b68c125e841dad539df76d272844975f401ac38082f01795f0f724fb92375eae"
     },
     "reorder_environments": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:36cfd797af18c768a69b89c1e011d433eabf458eac2163429ac2f50bd90555a7",
+      "resultDigest": "sha256:e7f297fcd8d5e1f41f5e8d968b85990befd45b337dc29dbee9638bc3132a4163"
     },
     "reorder_projects": {
       "domain": "projects",
@@ -3687,8 +4748,12 @@
     },
     "reorder_sessions": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4afba85612da7b703ea1ded572331d2cc58e862a5520d10c6a78c4914d78eca9",
+      "resultDigest": "sha256:b7e1622ebb9310e8baf8e7f25492e5d2a1049d4df414abfef37e64ef00f16138"
     },
     "reply_github_pull_request_review_thread": {
       "domain": "pull-requests",
@@ -3722,8 +4787,12 @@
     },
     "resolve_container_operation": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2fd2cb88b090dd7e9d9835d43eb890327b0e1b2e9086c55df8deff76a5e6770d",
+      "resultDigest": "sha256:7c9bad994d1ece02b1006ad4cc119340f62de11563c3a62765c0fff2bc087bda"
     },
     "resolve_controller_conflicts": {
       "domain": "coordinator",
@@ -3742,8 +4811,12 @@
     },
     "resolve_native_agent_interaction": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c65231fde75d99f005f3f0d115cbef0f266768b8a61f5c74dbf6e4d4aee31945",
+      "resultDigest": "sha256:91fe2cc1513288699c8be9d13a604eb879193c2e09ccdb4f3687282277bee0b0"
     },
     "resolve_node_action_request": {
       "domain": "node-mail",
@@ -3756,8 +4829,12 @@
     },
     "resolve_preview_target": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8ed4fa9516c4c9ed6522060659c5466cc8e59776c85f7eba4844cab0628e14ab",
+      "resultDigest": "sha256:836f58720dbb934a2fe5366dc7dd8f546d0d396ec7b66d604642d0d3ca720093"
     },
     "restart_build_pipeline_current_step": {
       "domain": "pipelines",
@@ -3796,13 +4873,21 @@
     },
     "restore_provider_credentials": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:639572650478a4ec4806573643f680bade61f70b8762911854717559a5276a32",
+      "resultDigest": "sha256:a00f8c19b928a8dc2f1cc672af387e2117a2dc96e73cf730a382301e6d4e187f"
     },
     "restore_recovery_copy": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedContainerId", "expectedRevision", "operationId"],
+      "argsDigest": "sha256:ff759f4765ddb88913c9d4437552c1b13dce42c757229dbb64a20e7aaf4f8117",
+      "resultDigest": "sha256:d97b74821e34258b1fb5683b9c004246ab93c1685dd71c436bf18d58164d4953"
     },
     "resume_agent_account_auto_switch": {
       "domain": "accounts",
@@ -3821,8 +4906,12 @@
     },
     "resume_native_agent_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:3ab9b06e80e57440c0872cf92c3a8328672bc0a70b007bdaf98156a54a97515c",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "resume_project_coordinator": {
       "domain": "coordinator",
@@ -3881,13 +4970,21 @@
     },
     "retry_native_agent_dispatch": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:640c354dcc96ba7e32ecaccec3dcf015e19a8aeb7e7dd24d0cbed8aed5bf2352",
+      "resultDigest": "sha256:865260d8217d85b0087caec844c95d9a49489cad6108a22effb819b6771df13f"
     },
     "retry_prompt_queue_dispatch": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c70ee0a2c1492907562dc615d9b55359b88a0961e7bdd96ebf93f46ea8ed5fc0",
+      "resultDigest": "sha256:0c3628fe09726a81d2ba105cdfe70b5bf4f88e2cbe740095f645eb0f7b7e0c67"
     },
     "return_node_outbox_mail": {
       "domain": "node-mail",
@@ -3900,18 +4997,30 @@
     },
     "reveal_in_file_manager": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:59e76172e4d550dd6dd13add126ddd20d7aed5de52f304833f52b4cc5274eaa4",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "revert_container_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e9d94538a3f1606f7e9e74c85d669a315bb8f8f8d90a35921ee74706f4378627",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "revert_local_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e9d94538a3f1606f7e9e74c85d669a315bb8f8f8d90a35921ee74706f4378627",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "revoke_client_grant": {
       "domain": "nodes",
@@ -3925,13 +5034,21 @@
     },
     "revoke_preview_access": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["serviceId"],
+      "argsDigest": "sha256:d6dd5d6399e2eb031885e6c9fa9fad22e42e6e5b22516f5c1bb88f3478f9ab46",
+      "resultDigest": "sha256:7f6e37f8d8a2c07bb5b78da8752a9f70a8b5cf5c7fdebcfd61cf98b20ff68c43"
     },
     "revoke_provider_credentials": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:639572650478a4ec4806573643f680bade61f70b8762911854717559a5276a32",
+      "resultDigest": "sha256:eab9418f42f9f284fc250460c3d2166a2e08438aef668067bbe5007f914e1742"
     },
     "rewind_build_pipeline_code": {
       "domain": "pipelines",
@@ -3965,8 +5082,12 @@
     },
     "run_environment_setup": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "run_granted_agent_account_switch": {
       "domain": "nodes",
@@ -3985,13 +5106,21 @@
     },
     "run_user_command": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:02c13b62081a577f7a57dc4ef1595d17f3620dc34eefd88c8dfe1a0b2880ff04",
+      "resultDigest": "sha256:c54a434fa63a8e20b8bb6ffcfa0a446bf4c7900c8534fa72f58ea77b14c42d5c"
     },
     "save_agent_handoff": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a4658fda618fa51786c10b24f9425cfaec70455f77e5a1470455c417785ffd6e",
+      "resultDigest": "sha256:7f11dc5285412abe77c2d0e5c8abec465a0bacb1846f4f2335c19446c0db6f43"
     },
     "save_bug_report_screenshot": {
       "domain": "system",
@@ -4005,8 +5134,12 @@
     },
     "save_compose_draft": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:efe098b4830a6fac973e4a45cf3b5e209f15464d8338973a27dfeca36a95a8e2",
+      "resultDigest": "sha256:dee73646e06f9fda5fa0e6bb89e017008b17595ee81544d9a631c37ec8be8b16"
     },
     "save_config": {
       "domain": "config",
@@ -4025,13 +5158,21 @@
     },
     "save_file_draft": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:9c6f468907b337089d90fe89d245ff34631fa71b0ac890fb6c90d3d54ca6f8a1",
+      "resultDigest": "sha256:9c671d197e6112f3b71ec2771cc68fbf2365131154a12226de01f8537a4471f0"
     },
     "save_pane_layout": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:62885838c027349cc7716654a3aab4da7f9b3f37a7c9bd55aac41ff0ae9c4a67",
+      "resultDigest": "sha256:b575befc63635bcee49245a00b8a8b32d910f9623212b70939428c3c4f1b5440"
     },
     "save_project_notes": {
       "domain": "kanban",
@@ -4040,8 +5181,12 @@
     },
     "save_session_buffer": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:54ae0a8f7138e0d3505681262ae0a8f2c23049e8f0571167ba786c012bd1e366",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "select_coordinator_conversation": {
       "domain": "coordinator",
@@ -4095,8 +5240,12 @@
     },
     "set_agent_interaction_monitor_adoption": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35",
+      "resultDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35"
     },
     "set_agent_messaging_paused": {
       "domain": "agent-mail",
@@ -4115,8 +5264,12 @@
     },
     "set_container_resource_limits": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2b7014995cd4efb0513548f45c2bf2c543d4fe5cbc57ae1ebe3d8bada3706657",
+      "resultDigest": "sha256:f1abc139eb826ffd2ea528bb0cf6357f6253196f53c28a8faed9ea0473f3d6ff"
     },
     "set_coordinator_account_switch_grant": {
       "domain": "accounts",
@@ -4150,18 +5303,30 @@
     },
     "set_environment_initial_prompt": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aeb7f6e6dc71bbad223b85abec0b195d2faef628a40524566d37db082d03caf8",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "set_environment_pending_agent_launch": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9f134dd36a22fc2ee584b8cecf5af783bf0c26576814de47728ce7444085fdf9",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "set_environment_pr": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:db4d50ea051f2c51d71fb7c3beacfe5bc0f045481e74415d8af04644080b5bba",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "set_environment_unread": {
       "domain": "pipelines",
@@ -4224,8 +5389,12 @@
     },
     "set_native_agent_resumable_session_archived": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:208fbf9d177e9fa7aeeba8b735e0b5632fab5882cf308eaa40a71271910eb050",
+      "resultDigest": "sha256:3d6b7487bd4daeb89b76605846458907ea186034ab20f69aed7f930468f6f8ee"
     },
     "set_opencode_provider_api_key": {
       "domain": "accounts",
@@ -4249,8 +5418,12 @@
     },
     "sign_out_native_agent": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:a07dc8fa82ec1f22de290ac6f9553cad179ae8feb17b3ea199cb8f662ee1da1a"
     },
     "skip_build_pipeline_step": {
       "domain": "pipelines",
@@ -4324,13 +5497,21 @@
     },
     "start_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:c0ef996a75366aef7d206f9b234da3ec0b273daa758edc6f4c4fffd5cab81222"
     },
     "start_environment_background": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "start_feature_plan_build": {
       "domain": "pipelines",
@@ -4394,8 +5575,12 @@
     },
     "start_local_terminal_session": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "start_multi_review": {
       "domain": "multi-review",
@@ -4434,8 +5619,12 @@
     },
     "start_terminal_session": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "stat_node_file": {
       "domain": "node-files",
@@ -4458,8 +5647,12 @@
     },
     "steer_native_agent_queued_prompt": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6f10b67576dbc139a6b61159601852a68a1a20cde55ae8ebc4490745c44d9678",
+      "resultDigest": "sha256:47eec5a40dda45c70b51c70298e61fa560dfb46c145db32a7acb7cb23cf1a385"
     },
     "steer_queued_build_pipeline_message": {
       "domain": "pipelines",
@@ -4498,8 +5691,12 @@
     },
     "stop_environment": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "stop_grok_server": {
       "domain": "agent-servers",
@@ -4548,18 +5745,30 @@
     },
     "stop_native_agent_background_task": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bea935b60ba13227953a1beb6c7266fd8ca9b6920e64de2a834a520808ea7768",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "stop_native_agent_session": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "stop_native_agent_suborks": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["batchId"],
+      "argsDigest": "sha256:d6982886bb3d0b928e0a4524e340f457878a85bcd15fac230b500808f2a38984",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "stop_opencode_server": {
       "domain": "agent-servers",
@@ -4578,8 +5787,12 @@
     },
     "stream_container_logs": {
       "domain": "docker",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:bfba62bf42112daf79fbb4045dd0610cac9a2caeef71723556a7e59adb2d0070"
     },
     "submit_agent_account_login_code": {
       "domain": "accounts",
@@ -4603,8 +5816,12 @@
     },
     "sync_all_environments_with_docker": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
     },
     "sync_controller_settings": {
       "domain": "nodes",
@@ -4613,8 +5830,12 @@
     },
     "sync_environment_status": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "sync_node_tickets": {
       "domain": "ticket-sync",
@@ -4632,118 +5853,210 @@
     },
     "sync_sessions_with_container": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a6c870130e9045680e7a74502e46b2faa62256287afaccd8b386892345ee541b",
+      "resultDigest": "sha256:b7e1622ebb9310e8baf8e7f25492e5d2a1049d4df414abfef37e64ef00f16138"
     },
     "teardown_tab": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9a7f3a085e3fe339f65aa0e438a743872f2d5a86184d90cdb504890c8e5154bf",
+      "resultDigest": "sha256:41694c195a4503903c46e6d7f016964f8520cbfe23a0c0d22a23a5610f624b17"
     },
     "terminal_resize": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:475ae1bd0856a51b16605745130dfe7f38fa1d662a57b18f3e8671c81c8f4279",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
     },
     "terminal_snapshot_applied": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fd41e71572b33029a4567c6d1eedf28a5b740fc414a7bf989445ff078525b3db",
+      "resultDigest": "sha256:f01748fd6a29078bdfaf60322eb56bf57a16895ab234c0b3f10d456bbfe6a82d"
     },
     "terminal_snapshot_failed": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f7743f8abf376a87126ffd98c7541b16897abd1a97e54bb2bc967587a4d223c3",
+      "resultDigest": "sha256:f01748fd6a29078bdfaf60322eb56bf57a16895ab234c0b3f10d456bbfe6a82d"
     },
     "terminal_write": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
     },
     "test_domain_resolution": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:09171c91371568a0ed756db07826473366d3ffa5cfde4efeb6451ce5d9deb803",
+      "resultDigest": "sha256:ef39565831a5008ac4d66688bcc2559f9d23baaf779d7bc82dd7a45fdb1cd332"
     },
     "transcript_artifact_capabilities": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:f1f0450e5657deaf7748f205601ac8250a8fad39018740e477ac40ab37bfbc15"
     },
     "transcript_artifact_close_live_session": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1c562e02547ab7c6593626093e1bf41b940e5ddcb24b3b2979cac45003ac24df",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "transcript_artifact_get_publication": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:39334a2eb0ba2f73a06bb7167a17a7c43b9136eb5d0e6e7ab694de490b555991",
+      "resultDigest": "sha256:22cd751d60c3cd55829413cdf4c0ff183c76131c6f2bb196b524cb48def93074"
     },
     "transcript_artifact_list_drafts": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7e54f91a08db5f961a90d353aaf9209fb4fc1188efc5fa38415f10c1cd703b34",
+      "resultDigest": "sha256:7b0e5f963dd7ca271d868d1aac093980ab5b0a7e8fc49c80d875a5b758fcf196"
     },
     "transcript_artifact_list_publications": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bfb3f577ecd3deac856d3252fabe073a1327b1fc9fdc9cb9e68532a7adbd9e16",
+      "resultDigest": "sha256:ed79516d7644d35e1c7c819d7ca96bf1845f409dfc10192c303e7dda5ce0f28d"
     },
     "transcript_artifact_open_live_session": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:39334a2eb0ba2f73a06bb7167a17a7c43b9136eb5d0e6e7ab694de490b555991",
+      "resultDigest": "sha256:e510babc9aabb96aeeaddf334aa3a26561f334da947f57d5cad15f1d47834ef0"
     },
     "transcript_artifact_prepare_worker": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:14a082b571bb68231a81d29b3f00e82f2fd7b696cd579e264176e45bdcf70bc0"
     },
     "transcript_artifact_read_draft": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b3b528a02fec339a824da4149b6035cb978313264368c3bef167659941543c1c",
+      "resultDigest": "sha256:2092fa9bf7f8ae4ef3043f49d41fe1f95f8b0b63fcd9cef80ffc5ce3c4a6657e"
     },
     "transcript_artifact_read_representation": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0e8d45fc4fc5ca53c0a84cff61c83e7c728c3c1194505977390f2f0227e0122b",
+      "resultDigest": "sha256:2092fa9bf7f8ae4ef3043f49d41fe1f95f8b0b63fcd9cef80ffc5ce3c4a6657e"
     },
     "transcript_artifact_render_mermaid": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:58c753b0e8aafd07c087c9d9b49c5ef79095b5aca5979293963ca3647419b563",
+      "resultDigest": "sha256:fa9704ada6d2a822ccd04b2726aaeeed1d4f878eb6bbfaa40662150726cca74a"
     },
     "transcript_artifact_stage_asset": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c45e88461e5f3b91749475f528f8700c43386f5b7a59956885e2ae79642b7062",
+      "resultDigest": "sha256:bc0254e1b279397cfdb06d7973923555b14b14357b249a32e755ada762337bf2"
     },
     "transcript_artifact_workflow_live_snapshot": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b2ad81f41b235e7192c4e6187801549cfc063f50bd05d6c287d04cdfc1e816e3",
+      "resultDigest": "sha256:1bb2c2f196ff1866bb420e6fe52589ad9d3eee8f648213a9d1868e4906bb9ff2"
     },
     "transcript_media_close_stream": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4dfe23da9ea715a5653051c18a8037e4d1d999f74019554744dd3cffb934ce3f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "transcript_media_open_stream": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["containerId"],
+      "argsDigest": "sha256:eb1915e69aad1c69633daf9227cdc729204ef33a6f338edc1e21c79ca827b85b",
+      "resultDigest": "sha256:8173f61ff45799abaf6d6416b6660310f358f40b044dc5090f4d51f38c1b4a2a"
     },
     "transcript_media_pdf_preview": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1c43fb9bec4d7f90e7eb9bb6aeca0c8ff0f28d58ea5946e2180a005ae0550f4f",
+      "resultDigest": "sha256:6fbcb1d5ed56f7610869e2dac10eea922647c35151b40bc52336b0f6fb5feb0a"
     },
     "transcript_media_pin": {
       "domain": "transcripts",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["containerId"],
+      "argsDigest": "sha256:ea13115dbee87aaf30ea68bcb605e9ec8c1b93210a1a2110a4beb28f80d575a3",
+      "resultDigest": "sha256:1e4c18c7b6f04035bb4bc64b9ae3e6d249927e0ca53d0b4f27d3148d8243d027"
     },
     "transfer_coordinator_attachments": {
       "domain": "coordinator",
@@ -4786,18 +6099,30 @@
     },
     "update_environment_agent_settings": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b25ea5ec6f99407a81468dea51b95d301e2c133c8130a1ea84dcd213102bb519",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "update_environment_allowed_domains": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4dab0ec70a34d22f586073493d4f555ccc4736438424c4da668bdcd612eb33de",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "update_environment_resources": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6cce88b3b64975aed9f6e580cac0fdba81569a16bc48dd4a6b0687c948a54205",
+      "resultDigest": "sha256:16a1862c2928ddcd7a3cb713169a05cc3b5216a5e38962e4a4377c05e1dbea18"
     },
     "update_feature_plan": {
       "domain": "kanban",
@@ -4841,8 +6166,12 @@
     },
     "update_native_agent_controls": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2cdcfde1f2b75ef56edc7e90bb44642662da2d47f6dc2fa9f9bd525f0db02f13",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "update_node": {
       "domain": "nodes",
@@ -4856,8 +6185,12 @@
     },
     "update_port_mappings": {
       "domain": "environments",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b48af2564b9f6228e3907d6a0327f89d6216d96e18fc02b4d43b5c89a10e4d01",
+      "resultDigest": "sha256:31f56f68343788d0ee5aac6cbe7629f967aba4b96f03034c0d36c65cfbe54c19"
     },
     "update_portal_layout": {
       "domain": "nodes",
@@ -4866,13 +6199,21 @@
     },
     "update_preview_service": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["operationId"],
+      "argsDigest": "sha256:7a68880a494b12c05446bb88a902b6da3a956d8cde74af04bc0b2391971f8c5d",
+      "resultDigest": "sha256:736b31296d60914eb10371c7d5b9d23be64639b1dfb624ec8329da647e60af88"
     },
     "update_preview_settings": {
       "domain": "previews",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2ad3430306348be73279c9dd0ad5283c4578ed8c572f59700b407ba75476b466",
+      "resultDigest": "sha256:d6a68b66a0cd283075d0a37446190f72235db853da6180039148b14086f3fa6e"
     },
     "update_project": {
       "domain": "projects",
@@ -4891,13 +6232,21 @@
     },
     "update_session_activity": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
     },
     "update_session_status": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:61147c69218bfd15c96f53275daffb734deca744ef0cdd341241c5d72c02b427",
+      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
     },
     "update_worktree_locations": {
       "domain": "system",
@@ -4906,8 +6255,12 @@
     },
     "validate_domains": {
       "domain": "native-sessions",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:09171c91371568a0ed756db07826473366d3ffa5cfde4efeb6451ce5d9deb803",
+      "resultDigest": "sha256:ef39565831a5008ac4d66688bcc2559f9d23baaf779d7bc82dd7a45fdb1cd332"
     },
     "validate_git_url": {
       "domain": "projects",
@@ -4946,188 +6299,336 @@
     },
     "web_annotation_archive": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:50a3c3c4d10274c43751bcab38e05c904452c8548fa74255048da0638291f067",
+      "resultDigest": "sha256:6eaa859c35ab47fce3849fbf6bc58a1d8b1199bb88d5695dfca4bfa633eca317"
     },
     "web_annotation_asset_get": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4e9060f35b312dbd66677c11b9f65c49b9a6e5c905a3b541e74cbdf3a774fb8a",
+      "resultDigest": "sha256:604ee173c8e3fe2a7ec9e8dfd945c8153a34e21ea335c79d43f7e26686301405"
     },
     "web_annotation_asset_stage": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5cff57b06cda8dfa66dd4ae64f7d9223bfa2537bba99f4696d8aaa9127fcfb89",
+      "resultDigest": "sha256:6d6d1daf74473ac835f03579cf184b16d29593afb5f5d9faf8ce7f9df504a711"
     },
     "web_annotation_capture": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7a8c6fd74ed6fa51d1e86eb504b5e373ff6e16277490222144722db53a3d1a43",
+      "resultDigest": "sha256:cab05b8a16a7e77e7bffbac54f0abad0c6dc932b0a4c47974db753a8941fc864"
     },
     "web_annotation_capture_replace": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:13bd324dfb12cbd7de3c08bb669688c5c5478f66f26fbeb24a3c52b1e1322fe2",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotation_create": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:14fbdd273c6503750016ef1d51593986d13b3b29b5adbed9df5f9fe039983442",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotation_delete": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6a0fe69df4083e927bf212d43a0b7686997212a1721590e17e8c9155d5ab5ab8",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotation_destinations": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c601f615f2f2230a5cdd00f9dc32b0db76599e43ba6706e8834de57e140f29e",
+      "resultDigest": "sha256:de3a9ae48148f28a77520902de323c38ad7f6eb748ddd58a02e9266b99767cc4"
     },
     "web_annotation_draft_delete": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e7c589d456f30551ee600142d1ac1089113327cbdaf4bfbf699a6dda5bcee8cf",
+      "resultDigest": "sha256:7add65bf85bae65a30159bd0b1a90f066759159576ef544ac0700d8c74035906"
     },
     "web_annotation_draft_get": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:458f1643892da5b3ce252f582d01a08a55620c1bd2326aecf93e4f167b28189b",
+      "resultDigest": "sha256:6cd5786d8948b941c068c3b9ce661acc9c27bd5909981e7c87b94fac294224c6"
     },
     "web_annotation_draft_save": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:30beb936cb822c6f5bf69355e283ec88682dd37faeab65ab67f04f24b548c004",
+      "resultDigest": "sha256:89c10b8f812523ebb64d4f861c3f2a1c31321bb2f1007984f5e036f544977e27"
     },
     "web_annotation_entries": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4a8856263206ea7ccf023155d6fa256a8b0ad4df63d6a91454fd08d9f323f3fb",
+      "resultDigest": "sha256:f0a09ebeff679f015cce4869e9992fb13bc37c802f5b7528d3f97327e750b377"
     },
     "web_annotation_entry_append": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:db4287854bd1a8b8637ad89cbdcd52022158e68c696457283ca356002e7830ea",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotation_entry_edit": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aabf425b8d5fbb34811e24fd365d1d52482d01b71e6c49b0dae7b272fde21c5a",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotation_get": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:cdafd54c98eae2d3e40233d8733da1153f86d149916aa93b7e8290df3bcf566c",
+      "resultDigest": "sha256:5571aba5db947f2029850070c8336cf4ec477b5e16ea0a2317c61be4bcef670d"
     },
     "web_annotation_operation_receipt": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:464e99ee0b5db6658f72095c639baeb9fa98b7096820196c4bbbaf0c3e5ca22f",
+      "resultDigest": "sha256:b32d1f1a3b64db864cf4c31014f9f80423e537b8a9aaffe82b5ae9538cc82dda"
     },
     "web_annotation_reopen": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1748632d261fd1dbabafac4a3149d7e6dd1e43f203134fec5081b51167596af2",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotation_request_cancel": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:db343c39cfbffde5d8c7b4d470894558b331ae4cdccc698b06a79c433dfc0ae6",
+      "resultDigest": "sha256:405b0cb58caa7ddbb4915ffc2aac31f449cbe93bc74b2e04ff91113f97a63a79"
     },
     "web_annotation_request_follow_up": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b9e92865e1ca7cb01017a1bf6d4af8b0e786e15d8f0a9753431916f247c30766",
+      "resultDigest": "sha256:cbca79eafa17a66379c999b7ea56159e8f611b573ef50782626a42976324c864"
     },
     "web_annotation_request_get": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b9e92865e1ca7cb01017a1bf6d4af8b0e786e15d8f0a9753431916f247c30766",
+      "resultDigest": "sha256:e2f39314770b6b92c65cc92032ad922e01fd7ce1bf18c9a4db7d82bf5c65387c"
     },
     "web_annotation_request_prepare": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["retargetOf", "textOnly"],
+      "argsDigest": "sha256:12c7659d5dc100529921767bd5c83b8b19c495fe563247b41c00de591d1f4e71",
+      "resultDigest": "sha256:449e90b2c7f051ce5a06a416c6b0f89667c99296a5686cd7007ef221c18c0c64"
     },
     "web_annotation_request_recover": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:326ea9361147175f03cfda186889660be2dd114a38c40375327322f9590fb5f2",
+      "resultDigest": "sha256:9838d931c432741708c81d99695337902bc0d00b72df1ed5d3d44ee9fc101b46"
     },
     "web_annotation_request_response": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b9e92865e1ca7cb01017a1bf6d4af8b0e786e15d8f0a9753431916f247c30766",
+      "resultDigest": "sha256:99483e7c01675d58b6141a118177232e5bf5239a0926e935a765bc514e48ee04"
     },
     "web_annotation_request_send": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0b10563fd18dcd381ad7a221418b5989af34af66abaa7835fc520d620792814",
+      "resultDigest": "sha256:1bf35ed35984afed3c38c8baa12b8d64c8902dae2e87a15eb7632edff3943369"
     },
     "web_annotation_requests": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:420353d6eac4c630eee49fb4274c2d41e742f34bcbf54108256aa476c1bb45d1",
+      "resultDigest": "sha256:64a618c9aa59be137d96c25fcf63754bbbd054aee9839f7fbc760befea809cba"
     },
     "web_annotation_resolve": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedResultRevision"],
+      "argsDigest": "sha256:07bbe9de53b7336f0d89f809539675fb04abe5739ab3f02dcca8528f114842c1",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotation_result_capture": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ab8c5e6b6bead2f67d35e064b68b045037bbc68e3ee544167da9a99228a3ea62",
+      "resultDigest": "sha256:5dee01d06a9537a370d94de81c96fd1e1db7b559bd6dda7715df2c924fa668fb"
     },
     "web_annotation_update": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:25f7400ae7c44fa38655bda0b10f8e818b668b77e0b8a032be6320c1de23752a",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
     },
     "web_annotations_capabilities": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e5a27e4879ae6a85340d4a6401fc8de5e074ad486e19a259f86a81f7c96ea768",
+      "resultDigest": "sha256:c61100310c248dddaf1ab22ede54ab13079eb99534fbd357c19d3464b044acfb"
     },
     "web_annotations_changes": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8f31cbac005c6b335feef4ff0e638e1032572c561f7003087ce8e76fff02f4dc",
+      "resultDigest": "sha256:d9fbf627833c0114346e313ddb55c51dd31f7e8d2bc7f4cfbf3a57523f877851"
     },
     "web_annotations_list": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:37acca3d2290467addba4d71fe045a5e17b0792bf2a7b56e41958a5936d4991d",
+      "resultDigest": "sha256:5f9fad80b060832df96d5dac3c0ff56581edb2e5f5fc4d6382f16fd951930623"
     },
     "web_annotations_metrics": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:20a72553c4c4a173fc321b6fc3e903d9dffcf024df03fc026d4709a14b869b29"
     },
     "web_annotations_migrate": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c601f615f2f2230a5cdd00f9dc32b0db76599e43ba6706e8834de57e140f29e",
+      "resultDigest": "sha256:2e52c734a4fbd3cbb2efae3836f89b1292de660fd0a3d6f37e59050d72c7a740"
     },
     "web_annotations_migration_status": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c601f615f2f2230a5cdd00f9dc32b0db76599e43ba6706e8834de57e140f29e",
+      "resultDigest": "sha256:2e52c734a4fbd3cbb2efae3836f89b1292de660fd0a3d6f37e59050d72c7a740"
     },
     "web_annotations_reconcile_draft": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c29535b151faadb7ed3d4b7b72533e965a6ce4460704540421cf030b06707b1e",
+      "resultDigest": "sha256:5212f002fbe78a1ef8bbbcaef61cf2117f15430b06907d933132897af218ffb1"
     },
     "web_annotations_rollout": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:f8a5819849dd599cfefe4db0a0fadba48b04a016162da47ce3f742e195af3e91"
     },
     "web_annotations_rollout_set": {
       "domain": "web-annotations",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:da08cb7629475cd41de000c1e44e320b6c8f7cde41a2f93ed017dd3c58152c18",
+      "resultDigest": "sha256:f8a5819849dd599cfefe4db0a0fadba48b04a016162da47ce3f742e195af3e91"
     },
     "write_bug_report_attachment": {
       "domain": "system",
@@ -5136,8 +6637,12 @@
     },
     "write_container_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expected"],
+      "argsDigest": "sha256:5b4a77eeef07ca03327696229511f9cfddf8ae54d57e4836243361de3322758e",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "write_coordinator_attachment": {
       "domain": "coordinator",
@@ -5146,18 +6651,30 @@
     },
     "write_initial_prompt_attachments": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1a5624b882162d133f36012362f0238ccfb020b7e3a881cea2cb933136fea342",
+      "resultDigest": "sha256:f0c2e5881f856e723ffadb58cdac777a06f2997c776afd53c9099ee91a237772"
     },
     "write_local_file": {
       "domain": "files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expected"],
+      "argsDigest": "sha256:892f8b820b20dd885060a37f0e7b9efa3d490c423d30ebb8e704197a53d52e31",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "write_user_command_input": {
       "domain": "terminals",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fba21756dc9a5836a234b2d38ecf03df777d5592a87c5b774e9c6a7ea4a0b558",
+      "resultDigest": "sha256:c54a434fa63a8e20b8bb6ffcfa0a446bf4c7900c8534fa72f58ea77b14c42d5c"
     }
   },
   "events": {

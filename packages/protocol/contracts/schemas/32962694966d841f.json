@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:32962694966d841f5c0117393b523453631d908bf5c6edad9a35f2c58c86bc5d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "fastMode": {
+          "type": "boolean"
+        },
+        "tabId": {
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "fastMode", "tabId"],
+      "type": "object"
+    }
+  }
+}

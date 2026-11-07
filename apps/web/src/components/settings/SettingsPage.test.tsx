@@ -106,6 +106,69 @@ test("the machine picked in the header owns its machine settings", () => {
 });
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+
+/** A complete reattached environment, as `reattach_container` answers it. */
+function reattachedEnvironment(id: string, projectId: string) {
+  return {
+    id,
+    projectId,
+    name: "reattached",
+    branch: "reattached",
+    containerId: "container",
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "containerized",
+  };
+}
+
+/** A complete cleanup preview with one eligible container. */
+function cleanupPreview(selectionToken: string, id: string, name: string) {
+  return {
+    selectionToken,
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    truncated: false,
+    rows: [
+      {
+        kind: "container",
+        id,
+        name,
+        environmentId: null,
+        role: null,
+        classification: "eligible",
+        sizeBytes: 100,
+      },
+    ],
+  };
+}
+
+const cleanupResult = {
+  outcomes: [],
+  removed: 1,
+  alreadyAbsent: 0,
+  conflicts: 0,
+  skipped: 0,
+  failed: 0,
+  reclaimedBytes: 100,
+};
+
+/** A complete `get_docker_system_stats` answer: every figure Docker did not report is null. */
+function dockerStats(counts: { containersRunning: number; containersTotal: number }) {
+  return {
+    memoryUsed: null,
+    memoryTotal: null,
+    cpus: null,
+    cpuUsagePercent: null,
+    diskUsed: null,
+    diskTotal: null,
+    imagesTotal: null,
+    ...counts,
+  };
+}
 const initialPortal = portalStore.getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const initialConfig = useConfigStore.getState();
@@ -131,7 +194,8 @@ test("the Docker tab renders while global config is still loading", async () => 
   } as never);
   invokeMock.mockImplementation(async (command: string) => {
     if (command === "get_config") return new Promise(() => {});
-    if (command === "get_docker_system_stats") return { containersRunning: 0, containersTotal: 0 };
+    if (command === "get_docker_system_stats")
+      return dockerStats({ containersRunning: 0, containersTotal: 0 });
     if (command === "get_orkestrator_containers" || command === "get_projects") return [];
     return undefined;
   });
@@ -162,14 +226,18 @@ test("a remote workspace opens Docker in parent Settings and every action target
   function answer(command: string, remote: boolean) {
     if (command === "get_config") return config;
     if (command === "check_docker") return { available: true, reason: null };
-    if (command === "get_docker_system_stats") return { containersRunning: 1, containersTotal: 1 };
+    if (command === "get_docker_system_stats")
+      return dockerStats({ containersRunning: 1, containersTotal: 1 });
     if (command === "get_projects") return [{ id: "remote-project", name: "Remote project" }];
     if (command === "get_orkestrator_containers")
       return [
         {
           id: "remote-container",
           name: remote ? "Remote container" : "Command container",
+          status: "Up",
           state: "running",
+          image: "orkestrator-v2:latest",
+          environmentId: null,
           isAssigned: false,
           cleanupExclusion: null,
           cpuPercent: null,
@@ -181,36 +249,30 @@ test("a remote workspace opens Docker in parent Settings and every action target
       return {
         state: "missing",
         imageRef: "remote-image",
+        imageId: null,
+        registryDigest: null,
+        architecture: null,
         missingCapabilities: [],
         manifest: null,
+        remediation: null,
       };
-    if (command === "get_docker_topology") return { kind: "local-engine" };
+    if (command === "get_docker_topology")
+      return {
+        kind: "local-engine",
+        rootless: false,
+        osType: "linux",
+        architecture: "arm64",
+        serverVersion: "27.0.0",
+        supportsLocalResources: true,
+        remediation: null,
+      };
     if (command === "get_host_maintenance") return { tasks: {} };
     if (command === "start_host_image_update") return { id: "remote-download", state: "running" };
     if (command === "reattach_container")
-      return { id: "remote-environment", projectId: "remote-project" };
+      return reattachedEnvironment("remote-environment", "remote-project");
     if (command === "docker_cleanup_preview")
-      return {
-        selectionToken: "remote-token",
-        rows: [
-          {
-            kind: "container",
-            id: "remote-container",
-            name: "Remote orphan",
-            classification: "eligible",
-            sizeBytes: 100,
-          },
-        ],
-      };
-    if (command === "docker_cleanup_execute")
-      return {
-        removed: 1,
-        alreadyAbsent: 0,
-        conflicts: 0,
-        skipped: 0,
-        failed: 0,
-        reclaimedBytes: 100,
-      };
+      return cleanupPreview("remote-token", "remote-container", "Remote orphan");
+    if (command === "docker_cleanup_execute") return cleanupResult;
     return undefined;
   }
   invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
@@ -344,18 +406,12 @@ for (const scenario of [
     let deferStats = false;
     const routed: Array<{ command: string; args: Record<string, unknown> }> = [];
     const direct: Array<{ command: string; args: Record<string, unknown> }> = [];
-    const preview = (remote: boolean) => ({
-      selectionToken: remote ? "old-token" : "new-token",
-      rows: [
-        {
-          kind: "container",
-          id: remote ? "old-container" : "new-container",
-          name: remote ? "Old orphan" : "New orphan",
-          classification: "eligible",
-          sizeBytes: 100,
-        },
-      ],
-    });
+    const preview = (remote: boolean) =>
+      cleanupPreview(
+        remote ? "old-token" : "new-token",
+        remote ? "old-container" : "new-container",
+        remote ? "Old orphan" : "New orphan",
+      );
     function answer(command: string, remote: boolean): unknown {
       if (command === "get_config") return initialConfig.config;
       if (command === "check_docker")
@@ -363,7 +419,7 @@ for (const scenario of [
       if (command === "get_docker_system_stats")
         return remote && deferStats
           ? pending
-          : { containersRunning: remote ? 1 : 2, containersTotal: 2 };
+          : dockerStats({ containersRunning: remote ? 1 : 2, containersTotal: 2 });
       if (command === "get_projects")
         return [
           {
@@ -376,7 +432,10 @@ for (const scenario of [
           {
             id: remote ? "old-container" : "new-container",
             name: remote ? "Old container" : "New container",
+            status: "Up",
             state: "running",
+            image: "orkestrator-v2:latest",
+            environmentId: null,
             isAssigned: false,
             cleanupExclusion: null,
             cpuPercent: null,
@@ -386,15 +445,7 @@ for (const scenario of [
         ];
       if (command === "docker_cleanup_preview")
         return remote && scenario === "pending cleanup" ? pending : preview(remote);
-      if (command === "docker_cleanup_execute")
-        return {
-          removed: 1,
-          alreadyAbsent: 0,
-          conflicts: 0,
-          skipped: 0,
-          failed: 0,
-          reclaimedBytes: 100,
-        };
+      if (command === "docker_cleanup_execute") return cleanupResult;
       return undefined;
     }
     invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
@@ -448,9 +499,9 @@ for (const scenario of [
     await act(async () =>
       resolveOld(
         scenario === "availability"
-          ? { available: false, reason: null }
+          ? { available: false, reason: "daemon-unavailable" }
           : scenario === "stats with reattach"
-            ? { containersRunning: 99, containersTotal: 99 }
+            ? dockerStats({ containersRunning: 99, containersTotal: 99 })
             : preview(true),
       ),
     );

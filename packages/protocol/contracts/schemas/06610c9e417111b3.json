@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:06610c9e417111b3d66f0ad12bdc75acfeb126711cc207c03cc9768edd5e9770",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "batchId": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "fromIndex": {},
+        "suborkId": {
+          "type": "string"
+        }
+      },
+      "required": ["batchId", "environmentId", "suborkId"],
+      "type": "object"
+    }
+  }
+}

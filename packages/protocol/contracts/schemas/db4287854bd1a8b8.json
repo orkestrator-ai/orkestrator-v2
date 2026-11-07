@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:db4287854bd1a8b8637ad89cbdcd52022158e68c696457283ca356002e7830ea",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "annotationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 16000,
+          "type": "string"
+        },
+        "editorId": {
+          "maxLength": 400,
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "expectedContentRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "provenance": {
+          "not": {}
+        }
+      },
+      "required": [
+        "annotationId",
+        "body",
+        "environmentId",
+        "expectedContentRevision",
+        "operationId"
+      ],
+      "type": "object"
+    }
+  }
+}

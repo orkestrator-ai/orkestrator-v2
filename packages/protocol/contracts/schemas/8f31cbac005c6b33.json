@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8f31cbac005c6b335feef4ff0e638e1032572c561f7003087ce8e76fff02f4dc",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "after": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "generation": {
+          "maxLength": 100,
+          "type": "string"
+        }
+      },
+      "required": ["after", "environmentId"],
+      "type": "object"
+    }
+  }
+}

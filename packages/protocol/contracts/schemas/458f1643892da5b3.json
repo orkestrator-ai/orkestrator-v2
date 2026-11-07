@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:458f1643892da5b3ce252f582d01a08a55620c1bd2326aecf93e4f167b28189b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "editorId": {
+          "maxLength": 400,
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        }
+      },
+      "required": ["editorId", "environmentId"],
+      "type": "object"
+    }
+  }
+}

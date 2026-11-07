@@ -1358,7 +1358,8 @@ describe("backend setup wrappers", () => {
     const result = { updated: ["env-1"], failed: [] };
     invokeMock.mockResolvedValueOnce(result);
 
-    await expect(propagateGithubCredentialsToContainers()).resolves.toBe(result);
+    // Decoded with the command's result schema (plan item 7003): equal, not the same object.
+    await expect(propagateGithubCredentialsToContainers()).resolves.toEqual(result);
     expect(invokeMock.mock.calls).toEqual([["propagate_github_token_to_containers", {}]]);
   });
 

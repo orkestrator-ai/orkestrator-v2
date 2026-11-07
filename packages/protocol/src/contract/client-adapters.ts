@@ -24,6 +24,7 @@
  */
 import type { DomainClientDef } from "./client.js";
 import { MAX_DOMAIN_VERSION, isDomainName, type DomainName } from "./domain.js";
+import { dockerClient } from "./domains/docker/client.js";
 import { nativeSessionsClient } from "./domains/native-sessions/client.js";
 import { nodeFilesClient } from "./domains/node-files/client.js";
 import { nodeMailClient } from "./domains/node-mail/client.js";
@@ -34,6 +35,7 @@ import { ticketSyncClient } from "./domains/ticket-sync/client.js";
  * first; each later domain adds its client here.
  */
 export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
+  dockerClient,
   nativeSessionsClient,
   nodeFilesClient,
   nodeMailClient,

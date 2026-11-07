@@ -183,7 +183,9 @@ describe("Docker settings section", () => {
       calls.push(command);
       const result =
         command === "check_docker"
-          ? { available, reason: null }
+          ? available
+            ? { available, reason: null }
+            : { available, reason: "daemon-unavailable" }
           : command === "get_docker_system_stats"
             ? unknownStats
             : command === "get_orkestrator_containers" || command === "get_projects"
@@ -242,7 +244,9 @@ describe("Docker settings section", () => {
           throw new Error("Link interrupted");
         const result =
           command === "check_docker"
-            ? { available: probeState === "available", reason: null }
+            ? probeState === "available"
+              ? { available: true, reason: null }
+              : { available: false, reason: "daemon-unavailable" }
             : command === "get_docker_system_stats"
               ? { ...unknownStats, containersRunning: ++statsReads }
               : command === "get_orkestrator_containers"

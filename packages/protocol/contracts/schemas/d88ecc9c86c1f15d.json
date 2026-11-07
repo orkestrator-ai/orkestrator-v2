@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d88ecc9c86c1f15d2a8f29995431c92cb2b07acf40adcdcf1b0b0797f8e738a6",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cols": {},
+        "containerId": {
+          "type": "string"
+        },
+        "rows": {},
+        "user": {}
+      },
+      "required": ["containerId"],
+      "type": "object"
+    }
+  }
+}

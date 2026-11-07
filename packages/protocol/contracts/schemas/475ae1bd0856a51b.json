@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:475ae1bd0856a51b16605745130dfe7f38fa1d662a57b18f3e8671c81c8f4279",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cols": {},
+        "rows": {},
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": ["sessionId"],
+      "type": "object"
+    }
+  }
+}

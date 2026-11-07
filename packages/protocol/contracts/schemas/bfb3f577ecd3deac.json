@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:bfb3f577ecd3deac856d3252fabe073a1327b1fc9fdc9cb9e68532a7adbd9e16",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "afterSequence": {},
+        "environmentId": {},
+        "limit": {},
+        "logicalSessionKey": {}
+      },
+      "type": "object"
+    }
+  }
+}

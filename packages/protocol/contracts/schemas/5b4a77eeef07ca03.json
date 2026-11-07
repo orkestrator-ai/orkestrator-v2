@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5b4a77eeef07ca03327696229511f9cfddf8ae54d57e4836243361de3322758e",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "base64Data": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "expected": {},
+        "filePath": {
+          "type": "string"
+        }
+      },
+      "required": ["base64Data", "containerId", "filePath"],
+      "type": "object"
+    }
+  }
+}

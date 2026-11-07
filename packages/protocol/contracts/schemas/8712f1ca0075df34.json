@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8712f1ca0075df3472174f9ddb4958f600661a9e6294386ad792f0403fe77e52",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cursor": {},
+        "sourceId": {
+          "type": "string"
+        },
+        "subscriptionId": {
+          "type": "string"
+        }
+      },
+      "required": ["sourceId", "subscriptionId"],
+      "type": "object"
+    }
+  }
+}

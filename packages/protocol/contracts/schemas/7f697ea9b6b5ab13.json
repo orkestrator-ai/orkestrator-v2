@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:7f697ea9b6b5ab138079723844fb4f5c32bbbeef3d69cd61c570492ec2a7a00a",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cols": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "rows": {},
+        "terminalKey": {},
+        "trackEnvironmentActivity": {}
+      },
+      "required": ["environmentId"],
+      "type": "object"
+    }
+  }
+}

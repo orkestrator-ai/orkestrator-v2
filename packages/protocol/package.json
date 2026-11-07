@@ -48,6 +48,7 @@
     "./contract/domains/node-files": "./src/contract/domains/node-files/index.ts",
     "./contract/domains/node-mail": "./src/contract/domains/node-mail/index.ts",
     "./contract/domains/ticket-sync": "./src/contract/domains/ticket-sync/index.ts",
+    "./contract/domains/docker": "./src/contract/domains/docker/index.ts",
     "./contract/domains/design": "./src/contract/domains/design/index.ts",
     "./contract/domains/previews": "./src/contract/domains/previews/index.ts",
     "./contract/domains/transcripts": "./src/contract/domains/transcripts/index.ts",

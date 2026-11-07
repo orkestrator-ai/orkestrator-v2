@@ -20,7 +20,9 @@ import type {
 } from "@/types";
 import { type AccountMachine } from "./agent-accounts";
 import type { AgentExtensionCatalog } from "./files-sessions";
+import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { backendDomainApi, machineBackendClient } from "./domain-client";
 /** PR detection result containing URL, state, and merge conflict status */
 
 /** Docker system statistics */
@@ -292,6 +294,21 @@ export interface GitHubCliLoginProgress {
 
 /** Represents a file changed in git */
 
+/** `client`, sending `{}` where a call has no arguments (the `machineInvoke` shape). */
+function withArgumentsObject(client: BackendClient): BackendClient {
+  return {
+    ...client,
+    invokeRaw: <T>(
+      command: string,
+      args?: Readonly<Record<string, unknown>>,
+      options?: Parameters<BackendClient["invokeRaw"]>[2],
+    ) =>
+      options === undefined
+        ? client.invokeRaw<T>(command, args ?? {})
+        : client.invokeRaw<T>(command, args ?? {}, options),
+  };
+}
+
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
  * service passes its own node's client; the named exports below are this
@@ -301,64 +318,74 @@ export function createDockerSkillsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
   const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
+  // The `docker` domain (plan item 7003): typed, decoded results.
+  const docker = backendDomainApi(client, dockerClient);
+  // The machine-aware functions sent through `machineInvoke`, which always
+  // passes an arguments object; their calls keep that shape.
+  const ownMachineDocker = backendDomainApi(withArgumentsObject(client), dockerClient);
+  const dockerOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? ownMachineDocker()
+      : backendDomainApi(machineBackendClient(client, machine), dockerClient)();
 
   async function checkDocker(machine?: AccountMachine): Promise<DockerAvailability> {
-    return machineInvoke<DockerAvailability>(machine, "check_docker");
+    return dockerOn(machine).checkDocker();
   }
 
   /** The latest "can containers reach the agent tools server?" result. */
   async function getContainerHostReachability(): Promise<ContainerHostReachability> {
-    return invoke<ContainerHostReachability>("get_container_host_reachability");
+    return docker().hostReachability();
   }
 
   /** Runs the container connectivity check now and returns its result. */
   async function checkContainerHostReachability(): Promise<ContainerHostReachability> {
-    return invoke<ContainerHostReachability>("check_container_host_reachability");
+    return docker().checkHostReachability();
   }
 
   async function dockerVersion(): Promise<string> {
-    return invoke<string>("docker_version");
+    return docker().dockerVersion();
   }
 
-  async function provisionEnvironment(environmentId: string): Promise<string> {
-    return invoke<string>("provision_environment", { environmentId });
+  /** The environment's container id; `null` when the create left none. */
+  async function provisionEnvironment(environmentId: string): Promise<string | null> {
+    return docker().provisionEnvironment({ environmentId });
   }
 
   async function dockerStartContainer(containerId: string): Promise<void> {
-    return invoke("docker_start_container", { containerId });
+    return docker().startContainer({ containerId });
   }
 
   async function dockerStopContainer(containerId: string, machine?: AccountMachine): Promise<void> {
-    return machineInvoke(machine, "docker_stop_container", { containerId });
+    return dockerOn(machine).stopContainer({ containerId });
   }
 
   async function dockerRemoveContainer(
     containerId: string,
     machine?: AccountMachine,
   ): Promise<void> {
-    return machineInvoke(machine, "docker_remove_container", { containerId });
+    return dockerOn(machine).removeContainer({ containerId });
   }
 
   async function dockerContainerStatus(containerId: string): Promise<EnvironmentStatus> {
-    return invoke<EnvironmentStatus>("docker_container_status", { containerId });
+    return docker().containerStatus({ containerId });
   }
 
   async function listDockerContainers(): Promise<[string, string][]> {
-    return invoke<[string, string][]>("list_docker_containers");
+    return docker().listContainers();
   }
 
   async function checkBaseImage(): Promise<boolean> {
-    return invoke<boolean>("check_base_image");
+    return docker().checkBaseImage();
   }
 
   /** Get Docker system statistics (memory, CPU, disk usage) */
   async function getDockerSystemStats(machine?: AccountMachine): Promise<DockerSystemStats> {
-    return machineInvoke<DockerSystemStats>(machine, "get_docker_system_stats");
+    return dockerOn(machine).systemStats();
   }
 
   /** Get all containers using the orkestrator-ai image */
   async function getOrkestratorContainers(machine?: AccountMachine): Promise<ContainerInfo[]> {
-    return machineInvoke<ContainerInfo[]>(machine, "get_orkestrator_containers");
+    return dockerOn(machine).orkestratorContainers();
   }
 
   /** Reattach an orphaned container to a project by creating a new environment entry */
@@ -368,7 +395,7 @@ export function createDockerSkillsApi(client: BackendClient) {
     name?: string,
     machine?: AccountMachine,
   ): Promise<Environment> {
-    return machineInvoke<Environment>(machine, "reattach_container", {
+    return dockerOn(machine).reattachContainer({
       projectId,
       containerId,
       name,
@@ -377,14 +404,14 @@ export function createDockerSkillsApi(client: BackendClient) {
 
   /** Get container logs (non-streaming, returns last N lines) */
   async function getContainerLogs(containerId: string, tail?: string): Promise<string> {
-    return invoke<string>("get_container_logs", { containerId, tail });
+    return docker().containerLogs({ containerId, tail });
   }
 
   /** Follows a container's log: one shared backend follower, a leased subscription. */
   async function openContainerLogs(
     containerId: string,
   ): Promise<{ subscriptionId: string; sourceId: string; cursor: number }> {
-    return invoke("open_container_logs", { containerId });
+    return docker().openContainerLogs({ containerId });
   }
 
   /** Records after `cursor`; renews the subscription's lease. */
@@ -393,12 +420,12 @@ export function createDockerSkillsApi(client: BackendClient) {
     sourceId: string,
     cursor: number,
   ): Promise<ContainerLogRead> {
-    return invoke<ContainerLogRead>("read_container_logs", { subscriptionId, sourceId, cursor });
+    return docker().readContainerLogs({ subscriptionId, sourceId, cursor });
   }
 
   /** Releases the subscription; the container and its processes are untouched. */
   async function closeContainerLogs(subscriptionId: string): Promise<void> {
-    return invoke("close_container_logs", { subscriptionId });
+    return docker().closeContainerLogs({ subscriptionId });
   }
 
   /**
@@ -406,7 +433,7 @@ export function createDockerSkillsApi(client: BackendClient) {
    * read them with `readContainerLogs`.
    */
   async function streamContainerLogs(containerId: string): Promise<void> {
-    return invoke("stream_container_logs", { containerId });
+    await docker().streamContainerLogs({ containerId });
   }
 
   /** Get the host port mapped to a specific container port */
@@ -414,14 +441,14 @@ export function createDockerSkillsApi(client: BackendClient) {
     containerId: string,
     containerPort: number,
   ): Promise<number | null> {
-    return invoke<number | null>("get_container_host_port", { containerId, containerPort });
+    return docker().containerHostPort({ containerId, containerPort });
   }
 
   /** Apply the selected GitHub credential source to all running containers. */
   async function propagateGithubCredentialsToContainers(
     machine?: AccountMachine,
   ): Promise<PropagateTokenResult> {
-    return machineInvoke<PropagateTokenResult>(machine, "propagate_github_token_to_containers");
+    return dockerOn(machine).propagateGithubToken();
   }
 
   /**
@@ -671,7 +698,7 @@ export function createDockerSkillsApi(client: BackendClient) {
 
   /** Configured environment image: identity and container-contract compatibility. */
   async function getDockerImageStatus(machine?: AccountMachine): Promise<ImageStatus> {
-    return machineInvoke<ImageStatus>(machine, "get_docker_image_status");
+    return dockerOn(machine).imageStatus();
   }
 
   /** Effective Docker daemon topology (endpoint kind, rootless, versions). */
@@ -679,7 +706,7 @@ export function createDockerSkillsApi(client: BackendClient) {
     refresh = false,
     machine?: AccountMachine,
   ): Promise<DockerTopology> {
-    return machineInvoke<DockerTopology>(machine, "get_docker_topology", { refresh });
+    return dockerOn(machine).topology({ refresh });
   }
 
   /**
@@ -687,7 +714,7 @@ export function createDockerSkillsApi(client: BackendClient) {
    * each is kept, and binds the removable ones to a short-lived token.
    */
   async function previewDockerCleanup(machine?: AccountMachine): Promise<CleanupPreview> {
-    return machineInvoke<CleanupPreview>(machine, "docker_cleanup_preview");
+    return dockerOn(machine).cleanupPreview();
   }
 
   /** Removes only the selected resources of one preview; the token is consumed. */
@@ -700,7 +727,7 @@ export function createDockerSkillsApi(client: BackendClient) {
     },
     machine?: AccountMachine,
   ): Promise<CleanupExecuteResult> {
-    return machineInvoke<CleanupExecuteResult>(machine, "docker_cleanup_execute", selection);
+    return dockerOn(machine).cleanupExecute(selection);
   }
 
   /** The Docker daemon's capacity (on Docker Desktop, its VM) and disk use. */
@@ -708,12 +735,12 @@ export function createDockerSkillsApi(client: BackendClient) {
     refresh = false,
     machine?: AccountMachine,
   ): Promise<DockerCapacity> {
-    return machineInvoke<DockerCapacity>(machine, "get_docker_capacity", { refresh });
+    return dockerOn(machine).capacity({ refresh });
   }
 
   /** One shared, bounded usage sample of this installation's containers. */
   async function getContainerUsage(): Promise<ContainerUsageSnapshot> {
-    return invoke<ContainerUsageSnapshot>("get_container_usage");
+    return docker().containerUsage();
   }
 
   /** `null` clears the stored budget and selects the built-in default; all-null limits are unrestricted. */

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:2bd971a704fa0f576e834476e1f09a313a94c46512470288ce539e00c55a542a",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "activateTab": {},
+        "data": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "fastMode": {},
+        "initialPrompt": {},
+        "model": {},
+        "reasoningEffort": {},
+        "requestId": {
+          "type": "string"
+        },
+        "tabId": {},
+        "tabType": {
+          "type": "string"
+        },
+        "title": {}
+      },
+      "required": ["environmentId", "requestId", "tabType"],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:9c6f468907b337089d90fe89d245ff34631fa71b0ac890fb6c90d3d54ca6f8a1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "draftKey": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "number"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "originalContent": {
+          "type": "string"
+        }
+      },
+      "required": ["content", "draftKey", "environmentId", "filePath", "originalContent"],
+      "type": "object"
+    }
+  }
+}

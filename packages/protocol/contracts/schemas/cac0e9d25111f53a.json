@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:cac0e9d25111f53afb60b84295c961937f0c05fc91fa6e23aeac95fe72d3733d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "allowUnknownCapacity": {},
+        "environmentId": {},
+        "expectedContainerId": {},
+        "expectedRevision": {},
+        "intent": {},
+        "keepRecoveryCopy": {},
+        "operationId": {}
+      },
+      "type": "object"
+    }
+  }
+}

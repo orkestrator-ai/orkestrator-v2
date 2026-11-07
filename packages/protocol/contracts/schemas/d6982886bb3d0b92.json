@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d6982886bb3d0b928e0a4524e340f457878a85bcd15fac230b500808f2a38984",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {},
+        "batchId": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "logicalSessionKey": {
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

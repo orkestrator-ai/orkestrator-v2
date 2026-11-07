@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:590134bc3e9d601ee463eecf46115950a3ba9ea043b5b3393dfa5ad123236e25",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "knownDigest": {},
+        "refresh": {},
+        "worktreePath": {
+          "type": "string"
+        }
+      },
+      "required": ["worktreePath"],
+      "type": "object"
+    }
+  }
+}

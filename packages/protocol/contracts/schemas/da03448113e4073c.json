@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:da03448113e4073c57da5b461fc2df479bfcd51a3eef9e0414b576bf3af70ae1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "clientKey": {},
+        "path": {},
+        "serviceId": {}
+      },
+      "type": "object"
+    }
+  }
+}

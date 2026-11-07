@@ -35,6 +35,7 @@ function install(update = mock((_args: Record<string, unknown>) => policy)) {
             memoryLimitBytes: null,
             pids: 12,
             oomKilled: false,
+            oomEvents: null,
             exitCode: null,
           },
         ],
@@ -49,6 +50,7 @@ function install(update = mock((_args: Record<string, unknown>) => policy)) {
         rootless: false,
         cgroupVersion: "2",
         support: { cpuQuota: true, memoryLimit: true, pidsLimit: true },
+        logDrivers: [],
         disk: {
           imagesBytes: null,
           containersBytes: null,

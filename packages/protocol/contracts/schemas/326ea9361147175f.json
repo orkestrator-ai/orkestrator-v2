@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:326ea9361147175f03cfda186889660be2dd114a38c40375327322f9590fb5f2",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "enum": ["reconcile", "retry", "discard"],
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "requestId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        }
+      },
+      "required": ["action", "environmentId", "requestId"],
+      "type": "object"
+    }
+  }
+}

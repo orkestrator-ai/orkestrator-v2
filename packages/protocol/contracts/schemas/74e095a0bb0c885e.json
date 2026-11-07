@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:74e095a0bb0c885ec975c2290f0bf2a849d9e05dbe8ee224ca388bb30bb45f12",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "canvasId": {},
+        "environmentId": {},
+        "relativePath": {},
+        "replaceFingerprint": {},
+        "revision": {}
+      },
+      "type": "object"
+    }
+  }
+}

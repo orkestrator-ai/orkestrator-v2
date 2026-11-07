@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:db343c39cfbffde5d8c7b4d470894558b331ae4cdccc698b06a79c433dfc0ae6",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "expectedRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "expectedRevision", "requestId"],
+      "type": "object"
+    }
+  }
+}

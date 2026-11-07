@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:cd9fc5943a85f7af615279bedea848a1418c8d9e9e04ca6d0c3fb37dd323f64a",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "held": {
+          "type": "boolean"
+        },
+        "interactionId": {
+          "type": "string"
+        },
+        "logicalSessionKey": {
+          "type": "string"
+        }
+      },
+      "required": ["agent", "environmentId", "held", "interactionId", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

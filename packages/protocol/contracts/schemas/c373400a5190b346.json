@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c373400a5190b3468a7cc83c4e184fa78acacbac6b32a471a174a4284c68ed67",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        }
+      },
+      "required": ["subscriptionId"],
+      "type": "object"
+    }
+  }
+}

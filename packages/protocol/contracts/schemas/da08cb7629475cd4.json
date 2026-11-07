@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:da08cb7629475cd41de000c1e44e320b6c8f7cde41a2f93ed017dd3c58152c18",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "enum": ["enabled", "read-only", "disabled"],
+          "type": "string"
+        }
+      },
+      "required": ["mode"],
+      "type": "object"
+    }
+  }
+}

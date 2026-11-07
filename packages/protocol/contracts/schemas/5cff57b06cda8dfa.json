@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5cff57b06cda8dfa66dd4ae64f7d9223bfa2537bba99f4696d8aaa9127fcfb89",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "data": {
+          "maxLength": 11184812,
+          "minLength": 1,
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "mediaType": {
+          "enum": ["image/png"],
+          "type": "string"
+        },
+        "operationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        }
+      },
+      "required": ["data", "environmentId", "mediaType", "operationId"],
+      "type": "object"
+    }
+  }
+}

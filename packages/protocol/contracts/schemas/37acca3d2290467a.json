@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:37acca3d2290467addba4d71fe045a5e17b0792bf2a7b56e41958a5936d4991d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cursor": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "filter": {
+          "additionalProperties": true,
+          "properties": {
+            "destinationTabId": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            },
+            "importedOnly": {
+              "type": "boolean"
+            },
+            "includeArchived": {
+              "type": "boolean"
+            },
+            "includeHidden": {
+              "type": "boolean"
+            },
+            "pageKey": {
+              "maxLength": 4200,
+              "type": "string"
+            },
+            "state": {
+              "enum": ["open", "resolved", "all"],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "limit": {
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": ["environmentId"],
+      "type": "object"
+    }
+  }
+}

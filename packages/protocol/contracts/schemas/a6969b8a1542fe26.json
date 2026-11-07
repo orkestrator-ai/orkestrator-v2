@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:a6969b8a1542fe26d0dab893d23391d8159197ee6d4549a8fc8d98bb87249ee2",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "destinationDirectory": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "sourcePath": {
+          "type": "string"
+        }
+      },
+      "required": ["destinationDirectory", "environmentId", "sourcePath"],
+      "type": "object"
+    }
+  }
+}

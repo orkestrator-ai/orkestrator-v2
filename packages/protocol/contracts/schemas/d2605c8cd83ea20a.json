@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d2605c8cd83ea20a647a81835a023c1b9cfe47fd59f8b3adf99a0af7621b4576",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "ownerId": {
+          "type": "string"
+        },
+        "ownerType": {
+          "type": "string"
+        }
+      },
+      "required": ["ownerId", "ownerType"],
+      "type": "object"
+    }
+  }
+}

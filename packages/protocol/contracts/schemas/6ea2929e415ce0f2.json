@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:6ea2929e415ce0f2f7ff1e85f7a1b33f8ccc1c48d569174d11dbb1ffef88f845",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "canvasId": {},
+        "entryId": {},
+        "environmentId": {},
+        "side": {}
+      },
+      "type": "object"
+    }
+  }
+}

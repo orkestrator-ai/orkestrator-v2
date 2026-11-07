@@ -4,6 +4,10 @@
  * Cursor sessions are served exclusively by the bridge that drives
  * `@cursor/sdk` in process.
  */
+import type {
+  CursorSdkAuthStatus,
+  CursorSdkLoginProgress,
+} from "@orkestrator/protocol/contract/domains/accounts";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -27,12 +31,15 @@ export function cursorSdkCredentialPath(context: CommandContext): string {
 /** Inside a container, where the same credential is delivered. */
 export const CONTAINER_CURSOR_SDK_AUTH_FILE = "/tmp/orkestrator-ai/cursor-sdk-auth.json";
 
-export interface CursorSdkAuthStatus {
-  authenticated: boolean;
-  source: "api-key-env" | "api-key-config" | "host-snapshot" | "stored-login" | "none";
-  email?: string;
-  expiresAt?: string;
-}
+/**
+ * The Cursor SDK sign-in records are the `accounts` domain's (plan item 7010):
+ * the command results are validated against these schemas' types.
+ */
+export type {
+  CursorSdkAuthStatus,
+  CursorSdkLoginProgress,
+  CursorSdkLoginState,
+} from "@orkestrator/protocol/contract/domains/accounts";
 
 /**
  * Report whether the SDK engine can run a turn, without disclosing the key.
@@ -282,15 +289,6 @@ export async function beginCursorSdkLogin(
     completion,
     cancel: abortLogin,
   };
-}
-
-export type CursorSdkLoginState = "pending" | "authenticated" | "failed" | "idle";
-
-export interface CursorSdkLoginProgress {
-  state: CursorSdkLoginState;
-  loginUrl?: string;
-  error?: string;
-  auth: CursorSdkAuthStatus;
 }
 
 /** Starts the backend's single Cursor login, or joins the pending one (`CursorSdkLoginSlot`). */

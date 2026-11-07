@@ -45,7 +45,7 @@ import type {
 } from "@/types/github";
 import type { CodexModel } from "@/lib/codex-models";
 import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { AgentModelCatalogCache } from "@orkestrator/protocol/contract/domains/agent-servers";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { accountsOn } from "@/lib/node-scope/domains/accounts";
@@ -72,8 +72,9 @@ import { config as configDomain } from "@/lib/node-scope/domains/config";
  * `machine` reads another machine's, as Settings does for the one it edits.
  */
 /**
- * The Cursor SDK login's web types (`types/index.ts`) name its state and
- * source as literal unions; the protocol keeps them strings (plan item 7008).
+ * The Cursor SDK login's web types (`types/index.ts`) are the `accounts`
+ * schemas' types made mutable (plan item 7010); the client answers the
+ * schemas' readonly form.
  */
 function asCursorModel<T>(result: Promise<unknown>): Promise<T> {
   return result as Promise<T>;
@@ -83,29 +84,8 @@ export async function getConfig(machine?: AccountMachine): Promise<AppConfig> {
   return invokeGlobalConfigCommand("get_config", undefined, machine);
 }
 
-export interface AgentModelCatalogCache {
-  schemaVersion: 1;
-  claude?: {
-    updatedAt: string;
-    models: ClaudeModelCatalogSnapshot["models"];
-  };
-  codex?: {
-    updatedAt: string;
-    models: CodexModel[];
-  };
-  cursor?: {
-    updatedAt: string;
-    models: AgentModel[];
-  };
-  grok?: {
-    updatedAt: string;
-    models: AgentModel[];
-  };
-  pi?: {
-    updatedAt: string;
-    models: AgentModel[];
-  };
-}
+/** The host-wide model catalogues: the `agent-servers` domain's type (plan item 7010). */
+export type { AgentModelCatalogCache } from "@orkestrator/protocol/contract/domains/agent-servers";
 
 /** Force a provider's host catalogue to refresh without creating an environment. */
 type NonOpenCodeAgent = Exclude<

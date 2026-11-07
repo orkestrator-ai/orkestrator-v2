@@ -1,4 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -6,7 +8,6 @@ import {
   isFileWriteConflict,
   type FileWritePrecondition,
 } from "@orkestrator/protocol/file-write-precondition";
-import * as backend from "@/lib/backend";
 import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { useFileDirtyStore } from "@/stores";
 import { fileDirtyStore, fileSaveBaseline } from "@/stores/fileDirtyStore";
@@ -53,6 +54,8 @@ export function useFileSave({
   isLocalEnvironment,
   onReloadFromDisk,
 }: UseFileSaveOptions): { saveFile: SaveFile; isSaving: boolean } {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const [isSaving, setIsSaving] = useState(false);
   const savingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -119,9 +122,19 @@ export function useFileSave({
         const base64Data = encodeUtf8AsBase64(contentToSave);
 
         if (isLocalEnvironment && worktreePath) {
-          await backend.writeLocalFile(worktreePath, filePath, base64Data, expected);
+          await backendForScope(backendScope).writeLocalFile(
+            worktreePath,
+            filePath,
+            base64Data,
+            expected,
+          );
         } else if (containerId) {
-          await backend.writeContainerFile(containerId, filePath, base64Data, expected);
+          await backendForScope(backendScope).writeContainerFile(
+            containerId,
+            filePath,
+            base64Data,
+            expected,
+          );
         }
 
         toast.dismiss(fileWriteConflictToastId(tabId));
@@ -159,6 +172,7 @@ export function useFileSave({
       }
     },
     [
+      backendScope,
       containerId,
       dirtyFiles,
       filePath,

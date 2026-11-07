@@ -1,8 +1,9 @@
 import { startCoordinatedPoll } from "@/lib/coordinated-poll";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { listHumanPrompts, listUserCommands } from "@/lib/backend";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
@@ -22,6 +23,8 @@ export function useUserCommands(
   environmentId: string | undefined,
   tabId: string | undefined,
 ): { commands: UserCommandRecord[]; refresh: () => void } {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const [state, setState] = useState<{ key: string; commands: UserCommandRecord[] } | null>(null);
   const refreshRef = useRef<() => void>(() => undefined);
   const key = environmentId && tabId ? `env-${environmentId}:${tabId}` : null;
@@ -32,7 +35,8 @@ export function useUserCommands(
     let sequence = 0;
     const reread = () => {
       const request = ++sequence;
-      void listUserCommands(environmentId, tabId)
+      void backendForScope(backendScope)
+        .listUserCommands(environmentId, tabId)
         .then((list) => {
           if (!disposed && request === sequence) setState({ key, commands: list.commands });
         })
@@ -58,7 +62,7 @@ export function useUserCommands(
       offChange();
       offResync();
     };
-  }, [environmentId, key, tabId]);
+  }, [backendScope, environmentId, key, tabId]);
 
   const commands = state && state.key === key ? state.commands : EMPTY_COMMANDS;
   const running = commands.some((command) => command.status === "running");
@@ -84,6 +88,8 @@ export function useUserCommands(
  * coordinator's workers), re-read on each `human-prompt` hint for one of them.
  */
 export function useHumanPrompts(environmentIds: readonly string[]): HumanPromptEntry[] {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const [state, setState] = useState<{ key: string; prompts: HumanPromptEntry[] } | null>(null);
   const key = Array.from(new Set(environmentIds)).sort().join("\u0000");
 
@@ -95,7 +101,8 @@ export function useHumanPrompts(environmentIds: readonly string[]): HumanPromptE
     let sequence = 0;
     const reread = () => {
       const request = ++sequence;
-      void listHumanPrompts(ids)
+      void backendForScope(backendScope)
+        .listHumanPrompts(ids)
         .then((list) => {
           if (!disposed && request === sequence) setState({ key, prompts: list.prompts });
         })
@@ -119,7 +126,7 @@ export function useHumanPrompts(environmentIds: readonly string[]): HumanPromptE
       offChange();
       offResync();
     };
-  }, [key]);
+  }, [backendScope, key]);
 
   return state && state.key === key ? state.prompts : EMPTY_PROMPTS;
 }

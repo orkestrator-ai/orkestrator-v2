@@ -1,4 +1,5 @@
 import { detectShortcutPlatform } from "@/lib/keyboard-shortcuts";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useRef, type KeyboardEvent } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -110,6 +111,8 @@ export function DraggableTab({
   canCloseToRight = true,
   canClose,
 }: DraggableTabProps) {
+  // This node's messages panel (plan item 4001); the command node outside a node scope.
+  const mailScope = useScopesWithCommandFallback().scope;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: createDraggableTabId(tab.id, paneId),
   });
@@ -454,7 +457,9 @@ export function DraggableTab({
       <ContextMenuContent>
         {owningEnvironmentId && messagingEnabled && mailCapabilities.canPull && (
           <>
-            <ContextMenuItem onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id)}>
+            <ContextMenuItem
+              onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id, "inbox", mailScope)}
+            >
               Messages…
             </ContextMenuItem>
             <ContextMenuSeparator />

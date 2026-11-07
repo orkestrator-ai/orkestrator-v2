@@ -13,6 +13,7 @@ import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { ensureProjectHomeInStore } from "@/lib/project-home-ensures";
 import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import {
   expandedDirectories,
   expandedTruncatedDirectories,
@@ -449,14 +450,14 @@ export function useFilesPanel() {
               ? changesDigestRef.current.digest
               : undefined;
           if (isLocalEnvironment && worktreePath) {
-            snapshot = await backend.getLocalGitStatusSnapshot(
+            snapshot = await backendForScope(scope).getLocalGitStatusSnapshot(
               worktreePath,
               comparisonRef,
               knownDigest,
               ...readOptionArgs(options),
             );
           } else if (containerId) {
-            snapshot = await backend.getGitStatusSnapshot(
+            snapshot = await backendForScope(scope).getGitStatusSnapshot(
               containerId,
               comparisonRef,
               knownDigest,
@@ -495,6 +496,7 @@ export function useFilesPanel() {
       return request;
     },
     [
+      scope,
       isAvailable,
       isLocalEnvironment,
       worktreePath,
@@ -536,13 +538,13 @@ export function useFilesPanel() {
               ? treeDigestRef.current.digest
               : undefined;
           if (isLocalEnvironment && worktreePath) {
-            snapshot = await backend.getLocalFileTreeSnapshot(
+            snapshot = await backendForScope(scope).getLocalFileTreeSnapshot(
               worktreePath,
               knownDigest,
               ...readOptionArgs(options),
             );
           } else if (containerId) {
-            snapshot = await backend.getFileTreeSnapshot(
+            snapshot = await backendForScope(scope).getFileTreeSnapshot(
               containerId,
               knownDigest,
               ...readOptionArgs(options),
@@ -579,6 +581,7 @@ export function useFilesPanel() {
       return request;
     },
     [
+      scope,
       isAvailable,
       isLocalEnvironment,
       worktreePath,
@@ -594,10 +597,14 @@ export function useFilesPanel() {
     (directory: string, reload: boolean): Promise<void> =>
       loadFileSubtree(scope, environmentSnapshotKey, directory, reload, async (knownDigest) => {
         if (isLocalEnvironment && worktreePath) {
-          return backend.getLocalFileSubtreeSnapshot(worktreePath, directory, knownDigest);
+          return backendForScope(scope).getLocalFileSubtreeSnapshot(
+            worktreePath,
+            directory,
+            knownDigest,
+          );
         }
         return containerId
-          ? backend.getFileSubtreeSnapshot(containerId, directory, knownDigest)
+          ? backendForScope(scope).getFileSubtreeSnapshot(containerId, directory, knownDigest)
           : null;
       }),
     [scope, isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey],
@@ -662,7 +669,7 @@ export function useFilesPanel() {
       if (showLoading) setLoadingChanges(true);
       try {
         const projections = scope.store(changeProjectionStore);
-        const result = await backend.refreshChanges(changeResourceKey);
+        const result = await backendForScope(scope).refreshChanges(changeResourceKey);
         if (result.kind === "settled" && isChangeProjection(result.projection)) {
           projections.getState().applyProjection(result.projection);
         }
@@ -779,9 +786,9 @@ export function useFilesPanel() {
       try {
         const environmentId = await resolveMutationEnvironmentId();
         if (isLocalEnvironment && worktreePath) {
-          await backend.revertLocalFile(environmentId, filePath, comparisonRef);
+          await backendForScope(scope).revertLocalFile(environmentId, filePath, comparisonRef);
         } else if (containerId) {
-          await backend.revertContainerFile(environmentId, filePath, comparisonRef);
+          await backendForScope(scope).revertContainerFile(environmentId, filePath, comparisonRef);
         }
         await refreshAllFilesData();
         toast.success("File reverted", { description: filePath });
@@ -794,6 +801,7 @@ export function useFilesPanel() {
       }
     },
     [
+      scope,
       isAvailable,
       targetId,
       resolveMutationEnvironmentId,
@@ -834,9 +842,9 @@ export function useFilesPanel() {
         for (const path of paths) {
           try {
             if (isLocalEnvironment && worktreePath) {
-              await backend.deleteLocalFile(environmentId, path);
+              await backendForScope(scope).deleteLocalFile(environmentId, path);
             } else if (containerId) {
-              await backend.deleteContainerFile(environmentId, path);
+              await backendForScope(scope).deleteContainerFile(environmentId, path);
             }
             completedPaths.push(path);
           } catch (error) {
@@ -891,6 +899,7 @@ export function useFilesPanel() {
       }
     },
     [
+      scope,
       isAvailable,
       targetId,
       resolveMutationEnvironmentId,
@@ -960,8 +969,16 @@ export function useFilesPanel() {
           try {
             const destination =
               isLocalEnvironment && worktreePath
-                ? await backend.moveLocalFile(environmentId, path, destinationDirectory)
-                : await backend.moveContainerFile(environmentId, path, destinationDirectory);
+                ? await backendForScope(scope).moveLocalFile(
+                    environmentId,
+                    path,
+                    destinationDirectory,
+                  )
+                : await backendForScope(scope).moveContainerFile(
+                    environmentId,
+                    path,
+                    destinationDirectory,
+                  );
             destinations.push(destination);
             completedPaths.push(path);
           } catch (error) {
@@ -1032,8 +1049,8 @@ export function useFilesPanel() {
         try {
           renamed =
             isLocalEnvironment && worktreePath
-              ? await backend.renameLocalFile(environmentId, filePath, newName)
-              : await backend.renameContainerFile(environmentId, filePath, newName);
+              ? await backendForScope(scope).renameLocalFile(environmentId, filePath, newName)
+              : await backendForScope(scope).renameContainerFile(environmentId, filePath, newName);
         } catch (error) {
           // A case-only rename may have staged the file before failing. Refresh
           // both snapshots even on failure so any recovery file is visible.
@@ -1076,8 +1093,16 @@ export function useFilesPanel() {
         const environmentId = await resolveMutationEnvironmentId();
         const created =
           isLocalEnvironment && worktreePath
-            ? await backend.createLocalFolder(environmentId, parentDirectory, folderName)
-            : await backend.createContainerFolder(environmentId, parentDirectory, folderName);
+            ? await backendForScope(scope).createLocalFolder(
+                environmentId,
+                parentDirectory,
+                folderName,
+              )
+            : await backendForScope(scope).createContainerFolder(
+                environmentId,
+                parentDirectory,
+                folderName,
+              );
         await refreshAllFilesData();
         toast.success("Folder created", { description: created });
         return created;
@@ -1090,6 +1115,7 @@ export function useFilesPanel() {
       }
     },
     [
+      scope,
       isAvailable,
       targetId,
       resolveMutationEnvironmentId,
@@ -1136,7 +1162,7 @@ export function useFilesPanel() {
         for (const file of files) {
           try {
             const contents = new Uint8Array(await file.arrayBuffer());
-            const destination = await backend.copyExternalFile(
+            const destination = await backendForScope(scope).copyExternalFile(
               environmentId,
               destinationDirectory,
               file.name,
@@ -1177,7 +1203,7 @@ export function useFilesPanel() {
         setFileActionPending(null);
       }
     },
-    [isAvailable, targetId, resolveMutationEnvironmentId, refreshAllFilesData],
+    [scope, isAvailable, targetId, resolveMutationEnvironmentId, refreshAllFilesData],
   );
 
   // Announced revisions: subscribe (and hydrate) only while the panel is open.

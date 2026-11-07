@@ -1,8 +1,9 @@
 // Tab-level state is a presentation projection of the backend tmux monitor.
 // Environment-level activity and the polling lifecycle remain backend-owned.
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useEffect, useRef } from "react";
-import { getClaudeTerminalState } from "@/lib/backend";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { UnlistenFn } from "@/lib/native/events";
 import { useAgentActivityStore, type AgentActivityState } from "@/stores/agentActivityStore";
@@ -20,6 +21,8 @@ function isTabState(state: string): state is AgentActivityState {
 }
 
 export function useAgentState(containerId: string | null, tabId: string): void {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const setTabState = useAgentActivityStore((state) => state.setTabState);
   const removeTabState = useAgentActivityStore((state) => state.removeTabState);
   const unlistenRef = useRef<UnlistenFn | null>(null);
@@ -54,7 +57,7 @@ export function useAgentState(containerId: string | null, tabId: string): void {
         resyncOnSubscribe: true,
         onResync: async () => {
           if (disposed) return;
-          const snapshot = await getClaudeTerminalState(containerId);
+          const snapshot = await backendForScope(backendScope).getClaudeTerminalState(containerId);
           if (snapshot) apply(snapshot.state, snapshot.occurredAt);
         },
       },
@@ -76,5 +79,5 @@ export function useAgentState(containerId: string | null, tabId: string): void {
       unlistenRef.current = null;
       removeTabState(tabId);
     };
-  }, [containerId, tabId, setTabState, removeTabState]);
+  }, [backendScope, containerId, tabId, setTabState, removeTabState]);
 }

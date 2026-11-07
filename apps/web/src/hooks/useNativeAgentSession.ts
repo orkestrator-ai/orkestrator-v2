@@ -37,40 +37,8 @@ import {
   NATIVE_AGENT_LIVE_UPDATE_VERSION,
   nativeAgentCapabilities,
 } from "@orkestrator/protocol/native-agent";
-import {
-  adoptNativeAgentSession,
-  dispatchNativeAgentIntent,
-  dismissNativeAgentSuggestedPrompt,
-  enqueuePromptQueueMessage,
-  ensureNativeAgentSession,
-  getNativeAgentProjection,
-  getNativeAgentProjectionUpdate,
-  getNativeAgentMessagePage,
-  getNativeAgentTranscriptUpdate,
-  getNativeAgentSessionStateUpdate,
-  getNativeAgentDiscoveryUpdate,
-  getNativeAgentLiveUpdate,
-  getNativeAgentToolDetails,
-  forkNativeAgentSession,
-  listNativeAgentResumableSessions,
-  setNativeAgentResumableSessionArchived,
-  discardNativeAgentDispatch,
-  movePromptQueueMessage,
-  performNativeAgentSessionAction,
-  refreshNativeAgentCommands,
-  refreshNativeAgentModels,
-  removePromptQueueMessage,
-  steerNativeAgentQueuedPrompt,
-  resolveNativeAgentInteraction,
-  holdNativeAgentInteraction,
-  approveNativeAgentInteractionAndRemember,
-  resumeNativeAgentSession,
-  retryPromptQueueDispatch,
-  retryNativeAgentDispatch,
-  stopNativeAgentSession,
-  stopNativeAgentBackgroundTask,
-  updateNativeAgentControls,
-} from "@/lib/backend";
+import { getNativeAgentLiveUpdate } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import {
   disableNativeLiveUpdate,
@@ -329,7 +297,9 @@ async function readLiveUpdate<TMessage>(
   input: Parameters<typeof getNativeAgentLiveUpdate>[0],
 ): Promise<NativeAgentLiveUpdate<TMessage>> {
   try {
-    return await send("live-update", input, () => getNativeAgentLiveUpdate<TMessage>(input));
+    return await send("live-update", input, () =>
+      backendForScope(scope).getNativeAgentLiveUpdate<TMessage>(input),
+    );
   } catch (error) {
     const invalidResponse =
       error instanceof Error &&
@@ -2100,7 +2070,9 @@ export function useNativeAgentSession<TMessage = unknown>({
                   : {}),
               ...(options?.manual === true ? { forceSnapshot: true } : {}),
             };
-            return send("transcript", input, () => getNativeAgentTranscriptUpdate<TMessage>(input));
+            return send("transcript", input, () =>
+              backendForScope(scope).getNativeAgentTranscriptUpdate<TMessage>(input),
+            );
           };
           /*
            * A background round over tokens this view already holds asks for both
@@ -2268,7 +2240,9 @@ export function useNativeAgentSession<TMessage = unknown>({
             ...(options?.manual === true ? { forceSnapshot: true } : {}),
           };
           const requestState = () =>
-            send("session-state", stateInput, () => getNativeAgentSessionStateUpdate(stateInput));
+            send("session-state", stateInput, () =>
+              backendForScope(scope).getNativeAgentSessionStateUpdate(stateInput),
+            );
           const firstState = liveUpdate
             ? liveUpdate.then(({ state }) => (state.status === "pending" ? requestState() : state))
             : requestState();
@@ -2345,7 +2319,7 @@ export function useNativeAgentSession<TMessage = unknown>({
               ...(options?.manual === true ? { forceSnapshot: true } : {}),
             };
             void send("discovery", discoveryInput, () =>
-              getNativeAgentDiscoveryUpdate(discoveryInput),
+              backendForScope(scope).getNativeAgentDiscoveryUpdate(discoveryInput),
             )
               .then((update) => {
                 // Nothing else re-reads a discarded or failed answer soon.
@@ -2415,7 +2389,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             ...(options?.manual === true ? { forceSnapshot: true } : {}),
           };
           let update = await send("projection", projectionInput, () =>
-            getNativeAgentProjectionUpdate<TMessage>(projectionInput),
+            backendForScope(scope).getNativeAgentProjectionUpdate<TMessage>(projectionInput),
           );
           if (update.status === "unchanged") {
             next = projectionRef.current;
@@ -2440,7 +2414,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             const deletedMessageIds =
               update.status === "delta" ? update.delta.deletedMessageIds : [];
             if (!live) {
-              update = await getNativeAgentProjectionUpdate<TMessage>({
+              update = await backendForScope(scope).getNativeAgentProjectionUpdate<TMessage>({
                 ...identity,
                 syncVersion: 1,
                 liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
@@ -2472,7 +2446,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             }
           }
         } else {
-          next = await getNativeAgentProjection<TMessage>({
+          next = await backendForScope(scope).getNativeAgentProjection<TMessage>({
             ...identity,
             ...(messageLimit === undefined ? {} : { messageLimit }),
           });
@@ -2608,7 +2582,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     try {
       if (initialProviderSessionId) {
         try {
-          await adoptNativeAgentSession({
+          await backendForScope(scope).adoptNativeAgentSession({
             ...identity,
             providerSessionId: initialProviderSessionId,
             ...(initialAgentModel ? { model: initialAgentModel } : {}),
@@ -2625,7 +2599,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           // Orkestrator. Only an authoritative provider "missing" result may
           // replace it; transport failures remain retryable and never create a
           // surprise second session.
-          const replacement = await ensureNativeAgentSession({
+          const replacement = await backendForScope(scope).ensureNativeAgentSession({
             ...identity,
             title:
               platform === "cursor"
@@ -2653,7 +2627,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           });
         }
       } else {
-        const ensured = await ensureNativeAgentSession({
+        const ensured = await backendForScope(scope).ensureNativeAgentSession({
           ...identity,
           title:
             platform === "cursor"
@@ -2711,6 +2685,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       flushPendingReconcile();
     }
   }, [
+    scope,
     acknowledgeInitialLaunchOptions,
     defaultAgentModel,
     defaultFastMode,
@@ -2994,7 +2969,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       beginProjectionMutation();
       setIsDispatching(true);
       try {
-        const outcome = await dispatchNativeAgentIntent({
+        const outcome = await backendForScope(scope).dispatchNativeAgentIntent({
           ...identity,
           origin: "interactive-native",
           interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -3041,48 +3016,58 @@ export function useNativeAgentSession<TMessage = unknown>({
         setIsDispatching(false);
       }
     },
-    [beginProjectionMutation, identity, platform, refresh, sessionKey, projectionStore],
+    [scope, beginProjectionMutation, identity, platform, refresh, sessionKey, projectionStore],
   );
 
   const stop = useCallback(async () => {
     const operationEpoch = beginProjectionMutation();
     const stoppedSessionId = projectionRef.current?.sessionId;
-    const next = await stopNativeAgentSession<TMessage>(identity);
+    const next = await backendForScope(scope).stopNativeAgentSession<TMessage>(identity);
     if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     if (stoppedSessionId) {
       projectionStore.getState().markTurnStopped(sessionKey, stoppedSessionId);
     }
     return next;
-  }, [applyMutationProjection, beginProjectionMutation, identity, sessionKey, projectionStore]);
+  }, [
+    scope,
+    applyMutationProjection,
+    beginProjectionMutation,
+    identity,
+    sessionKey,
+    projectionStore,
+  ]);
 
   const stopBackgroundTask = useCallback(
     async (taskId: string) => {
       const operationEpoch = beginProjectionMutation();
-      const next = await stopNativeAgentBackgroundTask<TMessage>({
+      const next = await backendForScope(scope).stopNativeAgentBackgroundTask<TMessage>({
         ...identity,
         taskId,
       });
       if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
       return next;
     },
-    [applyMutationProjection, beginProjectionMutation, identity],
+    [scope, applyMutationProjection, beginProjectionMutation, identity],
   );
 
   const dismissSuggestedPrompt = useCallback(async () => {
     const operationEpoch = beginProjectionMutation();
-    const next = await dismissNativeAgentSuggestedPrompt<TMessage>(identity);
+    const next = await backendForScope(scope).dismissNativeAgentSuggestedPrompt<TMessage>(identity);
     if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     return next;
-  }, [applyMutationProjection, beginProjectionMutation, identity]);
+  }, [scope, applyMutationProjection, beginProjectionMutation, identity]);
 
   const updateControls = useCallback(
     async (update: NativeAgentControlUpdate) => {
       const operationEpoch = beginProjectionMutation();
-      const next = await updateNativeAgentControls<TMessage>({ ...identity, update });
+      const next = await backendForScope(scope).updateNativeAgentControls<TMessage>({
+        ...identity,
+        update,
+      });
       if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
       return next;
     },
-    [applyMutationProjection, beginProjectionMutation, identity],
+    [scope, applyMutationProjection, beginProjectionMutation, identity],
   );
 
   useEffect(() => {
@@ -3103,7 +3088,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       interactionId: string,
       resolution: AgentInteractionResolution,
     ): Promise<AgentInteractionApplyOutcome> => {
-      const outcome = await resolveNativeAgentInteraction({
+      const outcome = await backendForScope(scope).resolveNativeAgentInteraction({
         ...identity,
         interactionId,
         resolution,
@@ -3111,14 +3096,14 @@ export function useNativeAgentSession<TMessage = unknown>({
       await refresh();
       return outcome;
     },
-    [identity, refresh],
+    [scope, identity, refresh],
   );
 
   // A pause moves the deadline where the agent enforces it; the refresh brings
   // the moved deadline back, so every client shows the same state.
   const holdInteraction = useCallback(
     async (interactionId: string, held: boolean): Promise<AgentInteractionApplyOutcome> => {
-      const outcome = await holdNativeAgentInteraction({
+      const outcome = await backendForScope(scope).holdNativeAgentInteraction({
         ...identity,
         interactionId,
         held,
@@ -3126,7 +3111,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       await refresh();
       return outcome;
     },
-    [identity, refresh],
+    [scope, identity, refresh],
   );
 
   // "Approve and remember" (todo 0723): one approval, then the rule is saved
@@ -3136,7 +3121,9 @@ export function useNativeAgentSession<TMessage = unknown>({
       interactionId: string,
       choice: PermissionRuleChoiceInput,
     ): Promise<AgentInteractionApplyOutcome> => {
-      const { outcome, ruleSaveWarning } = await approveNativeAgentInteractionAndRemember({
+      const { outcome, ruleSaveWarning } = await backendForScope(
+        scope,
+      ).approveNativeAgentInteractionAndRemember({
         ...identity,
         interactionId,
         ...choice,
@@ -3145,7 +3132,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       await refresh();
       return outcome;
     },
-    [identity, refresh],
+    [scope, identity, refresh],
   );
 
   const queueKey = useMemo(() => `${platform}\0${sessionKey}`, [platform, sessionKey]);
@@ -3153,7 +3140,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     async (prompt: string, options: NativeAgentSendOptions = {}) => {
       const text = nativeSubmissionText(prompt, options.command);
       if (!text.trim()) throw new Error("Prompt must not be blank");
-      await enqueuePromptQueueMessage(queueKey, environmentId, {
+      await backendForScope(scope).enqueuePromptQueueMessage(queueKey, environmentId, {
         id: options.requestId ?? crypto.randomUUID(),
         text,
         ...(options.model ? { model: options.model } : {}),
@@ -3176,38 +3163,46 @@ export function useNativeAgentSession<TMessage = unknown>({
       });
       return refresh();
     },
-    [environmentId, queueKey, refresh],
+    [scope, environmentId, queueKey, refresh],
   );
   const removeQueued = useCallback(
     async (messageId: string) => {
-      await removePromptQueueMessage(queueKey, environmentId, messageId);
+      await backendForScope(scope).removePromptQueueMessage(queueKey, environmentId, messageId);
       return refresh();
     },
-    [environmentId, queueKey, refresh],
+    [scope, environmentId, queueKey, refresh],
   );
   // Ownership and recovery live in the backend; a lost renderer response must
   // never restore a possibly delivered prompt or abandon its durable source.
   const steerQueued = useCallback(
     async (messageId: string): Promise<NativeAgentSessionActionOutcome | null> => {
       try {
-        return await steerNativeAgentQueuedPrompt({ ...identity, messageId });
+        return await backendForScope(scope).steerNativeAgentQueuedPrompt({
+          ...identity,
+          messageId,
+        });
       } finally {
         await refresh();
       }
     },
-    [identity, refresh],
+    [scope, identity, refresh],
   );
   const moveQueued = useCallback(
     async (messageId: string, direction: "up" | "down") => {
-      await movePromptQueueMessage(queueKey, environmentId, messageId, direction);
+      await backendForScope(scope).movePromptQueueMessage(
+        queueKey,
+        environmentId,
+        messageId,
+        direction,
+      );
       return refresh();
     },
-    [environmentId, queueKey, refresh],
+    [scope, environmentId, queueKey, refresh],
   );
   const retryQueue = useCallback(async () => {
-    await retryPromptQueueDispatch(queueKey);
+    await backendForScope(scope).retryPromptQueueDispatch(queueKey);
     return refresh();
-  }, [queueKey, refresh]);
+  }, [scope, queueKey, refresh]);
   const retryRecoverableDispatch = useCallback(async () => {
     const requestId = projectionRef.current?.recoverableDispatch?.requestId;
     if (!requestId) {
@@ -3216,14 +3211,17 @@ export function useNativeAgentSession<TMessage = unknown>({
     beginProjectionMutation();
     setIsDispatching(true);
     try {
-      const outcome = await retryNativeAgentDispatch({ ...identity, requestId });
+      const outcome = await backendForScope(scope).retryNativeAgentDispatch({
+        ...identity,
+        requestId,
+      });
       if (outcome.outcome !== "unknown") pendingDispatchRef.current = null;
       await refresh();
       return outcome;
     } finally {
       setIsDispatching(false);
     }
-  }, [beginProjectionMutation, identity, refresh]);
+  }, [scope, beginProjectionMutation, identity, refresh]);
   /**
    * Stop a parked dispatch from blocking the session without re-sending it.
    *
@@ -3236,29 +3234,36 @@ export function useNativeAgentSession<TMessage = unknown>({
     beginProjectionMutation();
     setIsDispatching(true);
     try {
-      const outcome = await discardNativeAgentDispatch({ ...identity, requestId });
+      const outcome = await backendForScope(scope).discardNativeAgentDispatch({
+        ...identity,
+        requestId,
+      });
       pendingDispatchRef.current = null;
       await refresh();
       return outcome;
     } finally {
       setIsDispatching(false);
     }
-  }, [beginProjectionMutation, identity, refresh]);
+  }, [scope, beginProjectionMutation, identity, refresh]);
   const listResumable = useCallback(
     (options?: { includeArchived?: boolean }) =>
-      listNativeAgentResumableSessions({ ...identity, ...options }),
-    [identity],
+      backendForScope(scope).listNativeAgentResumableSessions({ ...identity, ...options }),
+    [scope, identity],
   );
   const setResumableArchived = useCallback(
     async (resumableSessionId: string, archived: boolean) => {
-      await setNativeAgentResumableSessionArchived({ ...identity, resumableSessionId, archived });
+      await backendForScope(scope).setNativeAgentResumableSessionArchived({
+        ...identity,
+        resumableSessionId,
+        archived,
+      });
     },
-    [identity],
+    [scope, identity],
   );
   const resume = useCallback(
     async (providerSessionId: string, controls?: NativeAgentControlUpdate) => {
       const operationEpoch = beginProjectionMutation();
-      const next = await resumeNativeAgentSession<TMessage>({
+      const next = await backendForScope(scope).resumeNativeAgentSession<TMessage>({
         ...identity,
         providerSessionId,
         controls,
@@ -3266,26 +3271,30 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
       return next;
     },
-    [applyMutationProjection, beginProjectionMutation, identity],
+    [scope, applyMutationProjection, beginProjectionMutation, identity],
   );
   const fork = useCallback(
-    (messageId?: string) => forkNativeAgentSession({ ...identity, messageId }),
-    [identity],
+    (messageId?: string) =>
+      backendForScope(scope).forkNativeAgentSession({ ...identity, messageId }),
+    [scope, identity],
   );
   const performAction = useCallback(
     async (action: NativeAgentSessionAction) => {
-      const outcome = await performNativeAgentSessionAction({ ...identity, action });
+      const outcome = await backendForScope(scope).performNativeAgentSessionAction({
+        ...identity,
+        action,
+      });
       await refresh();
       return outcome;
     },
-    [identity, refresh],
+    [scope, identity, refresh],
   );
   const refreshModels = useCallback(async () => {
     const operationEpoch = beginProjectionMutation();
-    const next = await refreshNativeAgentModels<TMessage>(identity);
+    const next = await backendForScope(scope).refreshNativeAgentModels<TMessage>(identity);
     if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     return next;
-  }, [applyMutationProjection, beginProjectionMutation, identity]);
+  }, [scope, applyMutationProjection, beginProjectionMutation, identity]);
   /**
    * Ask the backend to re-read (or reload) this session's command list.
    * The outcome says what actually happened; the projection carries the
@@ -3293,16 +3302,16 @@ export function useNativeAgentSession<TMessage = unknown>({
    */
   const refreshCommands = useCallback(async () => {
     const operationEpoch = beginProjectionMutation();
-    const result = await refreshNativeAgentCommands<TMessage>(identity);
+    const result = await backendForScope(scope).refreshNativeAgentCommands<TMessage>(identity);
     if (operationEpoch === projectionOperationEpochRef.current && result.projection) {
       applyMutationProjection(result.projection);
     }
     return result;
-  }, [applyMutationProjection, beginProjectionMutation, identity]);
+  }, [scope, applyMutationProjection, beginProjectionMutation, identity]);
   const loadToolDetails = useCallback(
     (detailRef: string): Promise<NativeAgentToolDetails> =>
-      getNativeAgentToolDetails({ ...identity, detailRef }),
-    [identity],
+      backendForScope(scope).getNativeAgentToolDetails({ ...identity, detailRef }),
+    [scope, identity],
   );
   /**
    * Widen the transcript window, then reconcile.
@@ -3344,7 +3353,7 @@ export function useNativeAgentSession<TMessage = unknown>({
          * live tail reported that it could not page — the joined snapshot is
          * what turns "not shown" into a page. Retirement: version-compatibility.md.
          */
-        const update = await getNativeAgentProjectionUpdate<TMessage>({
+        const update = await backendForScope(scope).getNativeAgentProjectionUpdate<TMessage>({
           ...identity,
           syncVersion: 1,
           liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
@@ -3410,7 +3419,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             return retireLoadEarlierControl();
           }
           const sequence = ++refreshSequenceRef.current;
-          const page = await getNativeAgentMessagePage<TMessage>({
+          const page = await backendForScope(scope).getNativeAgentMessagePage<TMessage>({
             ...identity,
             syncVersion: 1,
             before,
@@ -3562,7 +3571,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           .map((message) => (message as { id?: unknown }).id)
           .filter((id): id is string => typeof id === "string"),
       );
-      const projection = await getNativeAgentProjection<TMessage>({
+      const projection = await backendForScope(scope).getNativeAgentProjection<TMessage>({
         ...identity,
         messageLimit: next,
       });
@@ -3641,7 +3650,9 @@ export function useNativeAgentSession<TMessage = unknown>({
       for (let pages = 0; before && unseen.size > 0 && pages <= held.length; pages++) {
         if (visited.has(before)) break;
         visited.add(before);
-        const page: NativeAgentMessagePage<TMessage> = await getNativeAgentMessagePage<TMessage>({
+        const page: NativeAgentMessagePage<TMessage> = await backendForScope(
+          scope,
+        ).getNativeAgentMessagePage<TMessage>({
           ...identity,
           syncVersion: 1,
           before,
@@ -3714,7 +3725,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         }
       }
     }
-  }, [commitSyncMaterialization, identity, planSyncMaterialization, updateProgressiveCache]);
+  }, [scope, commitSyncMaterialization, identity, planSyncMaterialization, updateProgressiveCache]);
 
   useEffect(() => {
     if (!enabled || !isActive || !heldHistoryReconcileOwedRef.current) return;

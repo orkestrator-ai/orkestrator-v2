@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   NativeAgentPermissionRule,
   PermissionRuleApplication,
 } from "@orkestrator/protocol/permission-rules";
 
-import { listPermissionRules } from "@/lib/backend";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 
 const EMPTY_APPLICATIONS: PermissionRuleApplication[] = [];
@@ -27,6 +28,8 @@ export function usePermissionRuleSession(
   rules: NativeAgentPermissionRule[];
   refresh: () => void;
 } {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const key =
     environmentId && agent && logicalSessionKey
       ? `${environmentId}\0${agent}\0${logicalSessionKey}`
@@ -44,7 +47,8 @@ export function usePermissionRuleSession(
     let sequence = 0;
     const reread = () => {
       const request = ++sequence;
-      void listPermissionRules({ environmentId, agent, logicalSessionKey })
+      void backendForScope(backendScope)
+        .listPermissionRules({ environmentId, agent, logicalSessionKey })
         .then((snapshot) => {
           if (!disposed && request === sequence) {
             setState({ key, applications: snapshot.applications, rules: snapshot.rules });
@@ -64,7 +68,7 @@ export function usePermissionRuleSession(
       offSafety();
       offResync();
     };
-  }, [agent, environmentId, key, logicalSessionKey]);
+  }, [backendScope, agent, environmentId, key, logicalSessionKey]);
 
   const current = state && state.key === key ? state : null;
   return {

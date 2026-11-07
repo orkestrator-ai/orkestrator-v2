@@ -1,4 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useEffect, type RefObject } from "react";
 import { readImage } from "@/lib/native/clipboard";
 import { toast } from "sonner";
@@ -8,7 +10,6 @@ import {
   resizeCanvasIfNeeded,
   resizeCanvasToMaxDimension,
 } from "@/lib/canvas-utils";
-import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 
 const log = createLogger("web.native-agent");
@@ -193,6 +194,8 @@ export function useNativeComposeBarPaste({
   onImageRejected,
   logLabel,
 }: UseNativeComposeBarPasteOptions): void {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   useEffect(() => {
     const handlePaste = async (event: ClipboardEvent) => {
       const activeEl = document.activeElement;
@@ -301,10 +304,18 @@ export function useNativeComposeBarPaste({
           if (writeImage) {
             savedPath = await writeImage(filename, base64Data);
           } else if (containerId) {
-            await writeContainerFile(containerId, filePath, base64Data);
+            await backendForScope(backendScope).writeContainerFile(
+              containerId,
+              filePath,
+              base64Data,
+            );
             savedPath = `/workspace/${filePath}`;
           } else if (worktreePath) {
-            savedPath = await writeLocalFile(worktreePath, filePath, base64Data);
+            savedPath = await backendForScope(backendScope).writeLocalFile(
+              worktreePath,
+              filePath,
+              base64Data,
+            );
           }
 
           if (!isCurrent()) return;
@@ -339,6 +350,7 @@ export function useNativeComposeBarPaste({
       document.removeEventListener("paste", handlePaste, { capture: true });
     };
   }, [
+    backendScope,
     inputContainerRef,
     beginPaste,
     containerId,

@@ -10,6 +10,10 @@ export const WEB_SYNC_LOG_AREAS = defineLogAreas({
         "A snapshot broke the content rules or the per-node byte bound; nothing was written.",
       evicted: "Least recently used snapshots were dropped to keep the total bounds.",
       "clear-failed": "Dropping one or every snapshot failed.",
+      "command-hydrated":
+        "The window's command scope was filled from its snapshot before its services started.",
+      "command-discarded":
+        "The command node proved another id than its snapshot's; the snapshot's data was taken back.",
     },
   },
   "web.resource-sync": {

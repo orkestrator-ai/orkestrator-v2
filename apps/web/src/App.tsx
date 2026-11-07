@@ -14,6 +14,7 @@ import { connectionListDisconnected, setTransportDisconnected } from "@/lib/tran
 import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBanner";
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { COMMAND_SCOPE_SERVICES, startScopeServices } from "@/lib/scope-services";
+import { hydrateCommandScopeFromSnapshot } from "@/lib/node-snapshots";
 import { recordRealmFirstRender } from "@/lib/realm-boot-timing";
 import { migrateLegacyBuildPipelines } from "@/lib/build-pipeline-persistence";
 import { Toaster } from "@/components/ui/sonner";
@@ -88,6 +89,7 @@ import {
   WindowScopeProvider,
 } from "@/lib/node-scope/providers";
 import { NodeErrorBoundary } from "@/components/federation/NodeErrorBoundary";
+import { ScopeSnapshotGate } from "@/components/federation/ScopeSnapshotGate";
 import {
   useNodeBootHydration,
   useNodeWorkspaceServices,
@@ -301,7 +303,12 @@ function ConnectedApp() {
   // anything that reads a backend snapshot; then connectivity, the window's
   // data-saving policy, pane-layout persistence and build completion notes.
   const commandScope = useNodeScope();
-  useEffect(() => startScopeServices(commandScope, COMMAND_SCOPE_SERVICES), [commandScope]);
+  useEffect(() => {
+    // Plan item 4003: the command node's last snapshot, read before the first
+    // render, fills its stores before anything authoritative can land.
+    hydrateCommandScopeFromSnapshot(commandScope);
+    return startScopeServices(commandScope, COMMAND_SCOPE_SERVICES);
+  }, [commandScope]);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
       // Keep the legacy key intact so the next launch can retry after a
@@ -987,11 +994,13 @@ function ConnectedApp() {
                   window's tree renders, in its own scope (report §5.2). */}
               <NodeScopeProvider scope={commandScope}>
                 <NodeErrorBoundary nodeId={commandScope.nodeId} machine="This machine">
-                  <WorkspaceContent
-                    projectHomeActivation={projectHomeActivation}
-                    startAllowed={macOsPermissionsReady}
-                    dockerAvailable={dockerAvailable}
-                  />
+                  <ScopeSnapshotGate machine="This machine">
+                    <WorkspaceContent
+                      projectHomeActivation={projectHomeActivation}
+                      startAllowed={macOsPermissionsReady}
+                      dockerAvailable={dockerAvailable}
+                    />
+                  </ScopeSnapshotGate>
                 </NodeErrorBoundary>
               </NodeScopeProvider>
             </AppShell>

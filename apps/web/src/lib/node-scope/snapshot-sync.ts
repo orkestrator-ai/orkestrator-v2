@@ -48,10 +48,15 @@ const LIVE: ScopeSnapshotSync = Object.freeze({ state: "live" });
 /** How long a mutation waits for `live` before it is refused. */
 export const SNAPSHOT_MUTATION_WAIT_MS = 30_000;
 
-/** A mutation was refused because the scope's data was still being replaced. */
+/**
+ * A mutation was refused because the scope's data was still being replaced:
+ * past the wait (`timeout`), the scope was disposed (`disposed`), or the
+ * snapshot it was taken on turned out to be another node's (`discarded`,
+ * `discardScopeResyncing`).
+ */
 export class ScopeResyncingError extends Data.TaggedError("ScopeResyncingError")<{
   readonly nodeId: string;
-  readonly reason: "timeout" | "disposed";
+  readonly reason: "timeout" | "disposed" | "discarded";
   readonly message: string;
 }> {}
 
@@ -59,8 +64,8 @@ interface SyncEntry {
   readonly signal: WritableSignal<ScopeSnapshotSync>;
   /** Kinds with an authoritative read since the scope opened, hydrated or not. */
   readonly seen: Set<SnapshotGatedKind>;
-  /** Mutations waiting for `live`; told when the scope is disposed. */
-  readonly waiters: Set<() => void>;
+  /** Mutations waiting for `live`; told when the scope is disposed or its snapshot discarded. */
+  readonly waiters: Set<(reason: "disposed" | "discarded") => void>;
   disposeHooked: boolean;
 }
 
@@ -100,7 +105,7 @@ export function markScopeResyncing(
   if (!entry.disposeHooked) {
     entry.disposeHooked = true;
     scope.onDispose("snapshot-sync", () => {
-      for (const waiter of Array.from(entry.waiters)) waiter();
+      for (const waiter of Array.from(entry.waiters)) waiter("disposed");
     });
   }
   entry.signal.set(
@@ -116,6 +121,21 @@ export function noteAuthoritativeRead(scope: NodeScope, kind: SnapshotGatedKind)
   if (current.state !== "resyncing" || !current.pending.includes(kind)) return;
   const pending = current.pending.filter((other) => other !== kind);
   entry.signal.set(pending.length === 0 ? LIVE : Object.freeze({ ...current, pending }));
+}
+
+/**
+ * The snapshot `scope` shows was the wrong one (the window's command node
+ * proved another id than the one it was painted for): the scope is `live`
+ * again without counting any authoritative read, and every mutation waiting
+ * on the snapshot's picture is refused (`discarded`), never sent to the node
+ * it was not meant for. The caller has already emptied what the snapshot
+ * filled.
+ */
+export function discardScopeResyncing(scope: NodeScope): void {
+  const entry = entries.get(scope);
+  if (!entry || entry.signal.get().state === "live") return;
+  for (const waiter of Array.from(entry.waiters)) waiter("discarded");
+  entry.signal.set(LIVE);
 }
 
 /** Whether every kind in `kinds` has had an authoritative read in `scope`. */
@@ -149,7 +169,7 @@ export function whenScopeLive(scope: NodeScope, options: WhenLiveOptions = {}): 
       if (error) reject(error);
       else resolve();
     };
-    const onDisposed = () => finish(resyncingError(scope, "disposed"));
+    const onDisposed = (reason: "disposed" | "discarded") => finish(resyncingError(scope, reason));
     const unsubscribe = entry.signal.subscribe((next) => {
       if (next.state === "live") finish();
     });
@@ -158,14 +178,20 @@ export function whenScopeLive(scope: NodeScope, options: WhenLiveOptions = {}): 
   });
 }
 
-function resyncingError(scope: NodeScope, reason: "timeout" | "disposed"): ScopeResyncingError {
+const RESYNCING_MESSAGES: Record<ScopeResyncingError["reason"], string> = {
+  timeout: "This machine's data is still being refreshed. Try again in a moment.",
+  disposed: "This machine's workspace was closed before its data was refreshed.",
+  discarded: "This window is connected to a different machine now. The action was not sent.",
+};
+
+function resyncingError(
+  scope: NodeScope,
+  reason: ScopeResyncingError["reason"],
+): ScopeResyncingError {
   return new ScopeResyncingError({
     nodeId: scope.nodeId,
     reason,
-    message:
-      reason === "timeout"
-        ? "This machine's data is still being refreshed. Try again in a moment."
-        : "This machine's workspace was closed before its data was refreshed.",
+    message: RESYNCING_MESSAGES[reason],
   });
 }
 

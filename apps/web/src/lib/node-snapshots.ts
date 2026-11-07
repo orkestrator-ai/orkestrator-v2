@@ -20,6 +20,17 @@
  *   environment when its workspace mounts, so its ids are kept for the
  *   preview only and never written into the pane store (that store's
  *   persistence would write them back to the node).
+ * - **The window's command scope** (plan item 4003's last box) writes its
+ *   snapshot like a leaf, under its proven id only, and remembers that id per
+ *   window (`nodeStorageKey`, the command node's key). The next start reads
+ *   the snapshot of the page's proven id, else of the remembered one, before
+ *   the first render (`primeCommandScopeSnapshot`), and `App` hydrates the
+ *   command scope from it just before its services start
+ *   (`hydrateCommandScopeFromSnapshot`); `ScopeSnapshotGate` shows it
+ *   read-only in the main area while it resyncs. A first-ever start has
+ *   nothing to read and changes nothing. A browser command scope opens
+ *   provisional; when its hello proves another id than the remembered one,
+ *   the hydration is undone and any mutation waiting on it is refused.
  * - **Clearing**: a node that leaves the command node's registry loses its
  *   snapshot (the command scope's service watches the portal's node list);
  *   every whole-window clear of protected content (sign-out, new credentials,
@@ -29,10 +40,12 @@
  *   `localStorage` first and finished on the next start.
  */
 
-import type { BackendId } from "@orkestrator/protocol/federation";
+import { isProvisionalBackendId, type BackendId } from "@orkestrator/protocol/federation";
+import type { NodeClient, ReadableSignal } from "@orkestrator/protocol/node-client";
 import { createLogger, logErrorKind } from "@orkestrator/protocol/logger";
 import { registerProtectedRichCache } from "@/lib/chat/rich-content-reset";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import { commandNodeIdFromPage } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import {
@@ -50,11 +63,13 @@ import {
   type SnapshotProject,
 } from "@/lib/node-scope/snapshot-store";
 import {
+  discardScopeResyncing,
   hasAuthoritativeReads,
   markScopeResyncing,
   noteAuthoritativeRead,
   scopeSnapshotSync,
 } from "@/lib/node-scope/snapshot-sync";
+import { COMMAND_STORAGE_NODE, nodeStorageKey } from "@/lib/persistence-keys";
 import { portalStore } from "@/lib/portal/portal-store";
 import type { PortalState } from "@/lib/portal/portal-store";
 import { configStore } from "@/stores/configStore";
@@ -83,7 +98,7 @@ let appStore: NodeSnapshotStore | null | undefined;
 /** Bumped by every clear, so a writer rewrites what a clear removed. */
 let clearGeneration = 0;
 
-function pendingClearStorage(): Storage | null {
+function localStorageOrNull(): Storage | null {
   try {
     return typeof localStorage === "undefined" ? null : localStorage;
   } catch {
@@ -101,7 +116,7 @@ export function nodeSnapshotStore(): NodeSnapshotStore | null {
   const backend = indexedDbSnapshotBackend();
   appStore = backend ? createNodeSnapshotStore(backend) : null;
   // A clear the last page could not finish (a sign-out reloads at once).
-  if (appStore && pendingClearStorage()?.getItem(PENDING_CLEAR_KEY)) clearAllNodeSnapshots();
+  if (appStore && localStorageOrNull()?.getItem(PENDING_CLEAR_KEY)) clearAllNodeSnapshots();
   return appStore;
 }
 
@@ -129,7 +144,7 @@ export function clearAllNodeSnapshots(): Promise<void> {
   clearGeneration += 1;
   const store = nodeSnapshotStore();
   if (!store) return Promise.resolve();
-  const storage = pendingClearStorage();
+  const storage = localStorageOrNull();
   try {
     storage?.setItem(PENDING_CLEAR_KEY, "1");
   } catch {
@@ -412,14 +427,35 @@ function noteWhenLoaded<S>(
   scope.onDispose(`snapshot-watch:${kind}`, stop);
 }
 
+/** What a hydration put into a scope's stores, so it can be shown and undone. */
+interface ScopeHydration {
+  readonly snapshot: NodeSnapshot;
+  /** Whether the environments were filled (they were empty). */
+  readonly environments: boolean;
+  /** The config before the overlay; `null` when untouched. */
+  readonly config: { readonly before: AppConfig } | null;
+}
+
+const hydrations = new WeakMap<NodeScope, ScopeHydration>();
+
 /**
  * Fills `scope`'s empty light stores from `snapshot` and marks it
  * `resyncing`. Does nothing (and returns false) for another node's snapshot,
  * a disposed scope, or a scope whose projects already arrived: authoritative
- * data always wins.
+ * data always wins. `provisional`: a command scope still under its
+ * provisional id takes the snapshot of the id it is expected to prove
+ * (`hydrateCommandScopeFromSnapshot`).
  */
-export function hydrateScopeFromSnapshot(scope: NodeScope, snapshot: NodeSnapshot): boolean {
-  if (scope.disposed || snapshot.nodeId !== scope.nodeId) return false;
+export function hydrateScopeFromSnapshot(
+  scope: NodeScope,
+  snapshot: NodeSnapshot,
+  options: { readonly provisional?: boolean } = {},
+): boolean {
+  if (scope.disposed) return false;
+  const sameNode =
+    snapshot.nodeId === scope.nodeId ||
+    (options.provisional === true && isProvisionalBackendId(scope.nodeId));
+  if (!sameNode) return false;
   const projects = scope.store(projectStore);
   if (projects.getState().hasLoaded || projects.getState().projects.length > 0) return false;
   // `setState`, not `setProjects`: the stores must not claim they loaded.
@@ -427,7 +463,8 @@ export function hydrateScopeFromSnapshot(scope: NodeScope, snapshot: NodeSnapsho
     projects: [...snapshot.projects].sort((a, b) => a.order - b.order) as Project[],
   });
   const environments = scope.store(environmentStore);
-  if (environments.getState().environments.length === 0) {
+  const fillEnvironments = environments.getState().environments.length === 0;
+  if (fillEnvironments) {
     environments.setState({
       environments: [...snapshot.environments].sort(
         (a, b) => a.order - b.order,
@@ -435,12 +472,52 @@ export function hydrateScopeFromSnapshot(scope: NodeScope, snapshot: NodeSnapsho
     });
   }
   const config = scope.store(configStore);
+  let hydratedConfig: ScopeHydration["config"] = null;
   if (!config.getState().hasLoaded && snapshot.config) {
-    config.setState({ config: overlayConfig(config.getState().config, snapshot.config) });
+    const before = config.getState().config;
+    config.setState({ config: overlayConfig(before, snapshot.config) });
+    hydratedConfig = { before };
   }
+  hydrations.set(scope, { snapshot, environments: fillEnvironments, config: hydratedConfig });
   noteWhenLoaded(scope, "project", projects, (state) => state.hasLoaded);
   noteWhenLoaded(scope, "config", config, (state) => state.hasLoaded);
   markScopeResyncing(scope, snapshot.savedAt);
+  return true;
+}
+
+/**
+ * The snapshot `scope` was hydrated from, while it still shows it
+ * (`resyncing`); `null` once it is `live` or when it never was hydrated.
+ */
+export function hydratedScopeSnapshot(scope: NodeScope): NodeSnapshot | null {
+  if (scopeSnapshotSync(scope).get().state !== "resyncing") return null;
+  return hydrations.get(scope)?.snapshot ?? null;
+}
+
+/**
+ * Takes back what `hydrateScopeFromSnapshot` put into `scope`'s stores, where
+ * no authoritative read has replaced it yet, and makes the scope `live`
+ * without counting a read; mutations waiting on the snapshot are refused
+ * (`discardScopeResyncing`). For a snapshot that turned out to be another
+ * node's. Returns whether there was a hydration to undo.
+ */
+export function undoSnapshotHydration(scope: NodeScope): boolean {
+  const hydration = hydrations.get(scope);
+  if (!hydration) return false;
+  hydrations.delete(scope);
+  if (!scope.disposed) {
+    // Until a store's authoritative read, what it holds stands on the snapshot.
+    const projects = scope.store(projectStore);
+    if (!projects.getState().hasLoaded) projects.setState({ projects: [] });
+    if (hydration.environments && !hasAuthoritativeReads(scope, ["environment"])) {
+      scope.store(environmentStore).setState({ environments: [] });
+    }
+    const config = scope.store(configStore);
+    if (hydration.config && !config.getState().hasLoaded) {
+      config.setState({ config: hydration.config.before });
+    }
+  }
+  discardScopeResyncing(scope);
   return true;
 }
 
@@ -498,7 +575,8 @@ export function startNodeSnapshotWriter(
     if (writing) return;
     let snapshot: NodeSnapshot;
     try {
-      if (scope.disposed || !readyToWrite(scope)) return;
+      // A command scope's snapshot is keyed by its proven id only.
+      if (scope.disposed || isProvisionalBackendId(scope.nodeId) || !readyToWrite(scope)) return;
       snapshot = captureNodeSnapshot(scope, now());
     } catch {
       // The scope's stores went away while it stopped.
@@ -571,16 +649,159 @@ export function startSnapshotRegistryWatch(
   return source.subscribe(check);
 }
 
+// --- The window's command scope --------------------------------------------------
+
+const COMMAND_NODE_ID_BASE_KEY = "orkestrator-command-node-snapshot-id";
+
+function commandNodeIdKey(): string {
+  return nodeStorageKey(COMMAND_NODE_ID_BASE_KEY, COMMAND_STORAGE_NODE);
+}
+
+/** The command node id this window last proved, or `null` (a first-ever start). */
+export function rememberedCommandNodeId(): BackendId | null {
+  try {
+    const value = localStorageOrNull()?.getItem(commandNodeIdKey());
+    return value &&
+      value.length <= SNAPSHOT_LIMITS.text &&
+      !isProvisionalBackendId(value as BackendId)
+      ? (value as BackendId)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remembers `nodeId` as this window's command node; a provisional id is never kept. */
+export function rememberCommandNodeId(nodeId: BackendId): void {
+  if (isProvisionalBackendId(nodeId)) return;
+  try {
+    const storage = localStorageOrNull();
+    const key = commandNodeIdKey();
+    if (storage && storage.getItem(key) !== nodeId) storage.setItem(key, nodeId);
+  } catch {
+    // Quota or a locked-down storage: the next start simply paints nothing early.
+  }
+}
+
+/** The command scope's snapshot read, started before the first render. */
+interface CommandSnapshotRead {
+  readonly nodeId: BackendId;
+  settled: boolean;
+  snapshot: NodeSnapshot | null;
+}
+
+let commandRead: CommandSnapshotRead | null = null;
+
+/**
+ * Starts reading the command node's snapshot (the page's proven id, else the
+ * one this window remembers), so it has usually answered by the time `App`
+ * starts the command scope's services. Called once before the first render
+ * (`renderer-entry.tsx`); nothing happens without a snapshot store, in a
+ * realm document, or on a first-ever start (no id to read).
+ */
+export function primeCommandScopeSnapshot(pageNodeId: BackendId = commandNodeIdFromPage()): void {
+  if (commandRead || isWorkspaceRealm()) return;
+  const store = nodeSnapshotStore();
+  if (!store) return;
+  const nodeId = isProvisionalBackendId(pageNodeId) ? rememberedCommandNodeId() : pageNodeId;
+  if (!nodeId) return;
+  const read: CommandSnapshotRead = { nodeId, settled: false, snapshot: null };
+  commandRead = read;
+  void readNodeSnapshot(nodeId, NODE_SNAPSHOT_READ_BUDGET_MS, store).then((snapshot) => {
+    read.settled = true;
+    read.snapshot = snapshot;
+  });
+}
+
+/** Forgets the primed read. For tests. */
+export function resetCommandScopeSnapshotForTests(): void {
+  commandRead = null;
+}
+
+/** A client that learns its proven id (the window client), else nothing. */
+function provenNodeIdSignal(client: NodeClient): ReadableSignal<BackendId | null> | null {
+  const signal = (client as { provenNodeId?: ReadableSignal<BackendId | null> }).provenNodeId;
+  return signal && typeof signal.subscribe === "function" ? signal : null;
+}
+
+/**
+ * Hydrates the window's command scope from the snapshot primed before the
+ * first render, if that read has answered; `App` calls it just before the
+ * command scope's services start, so nothing authoritative has landed yet.
+ * Returns whether it hydrated. Nothing happens when the read is still out
+ * (the start goes on as before), when there was nothing to read, or when the
+ * scope already proved another id. A scope still provisional is hydrated for
+ * the remembered id, and if its hello then proves a different one (this
+ * window now talks to another command node), the hydration is undone.
+ */
+export function hydrateCommandScopeFromSnapshot(scope: NodeScope): boolean {
+  const read = commandRead;
+  if (!read || scope.role !== "command") return false;
+  // Once only, and only before the services start: a read still out is not used later.
+  commandRead = null;
+  if (!read.settled || !read.snapshot) return false;
+  const provisional = isProvisionalBackendId(scope.nodeId);
+  if (!provisional && scope.nodeId !== read.nodeId) return false;
+  if (!hydrateScopeFromSnapshot(scope, read.snapshot, { provisional })) return false;
+  log.info("command-hydrated", { provisional });
+  const proven = provisional ? provenNodeIdSignal(scope.client) : null;
+  if (proven) {
+    let stop: (() => void) | null = null;
+    const check = (nodeId: BackendId | null) => {
+      if (!nodeId || isProvisionalBackendId(nodeId)) return;
+      stop?.();
+      stop = null;
+      if (nodeId === read.nodeId) return;
+      log.info("command-discarded", {});
+      undoSnapshotHydration(scope);
+    };
+    stop = proven.subscribe(check);
+    scope.onDispose("snapshot-proven-id", () => stop?.());
+    check(proven.get());
+  }
+  return true;
+}
+
+/**
+ * The command scope's duty: remember its proven id (now, or once its hello
+ * proves it), write its snapshot like a leaf (`startNodeSnapshotWriter`
+ * skips a provisional id) and prune removed nodes' snapshots. Returns the stop.
+ */
+export function startCommandScopeSnapshot(
+  scope: NodeScope,
+  store: NodeSnapshotStore,
+  options: SnapshotWriterOptions & {
+    readonly registry?: Parameters<typeof startSnapshotRegistryWatch>[1];
+  } = {},
+): () => void {
+  const stops: Array<() => void> = [];
+  rememberCommandNodeId(scope.nodeId);
+  const proven = isProvisionalBackendId(scope.nodeId) ? provenNodeIdSignal(scope.client) : null;
+  if (proven) {
+    const remember = (nodeId: BackendId | null) => {
+      if (nodeId) rememberCommandNodeId(nodeId);
+    };
+    stops.push(proven.subscribe(remember));
+    remember(proven.get());
+  }
+  stops.push(startNodeSnapshotWriter(scope, store, options));
+  stops.push(startSnapshotRegistryWatch(store, options.registry));
+  return () => {
+    for (const stop of stops.splice(0)) stop();
+  };
+}
+
 /**
  * Every warm scope's snapshot duty (plan item 4003): a leaf writes its
- * snapshot; the window's command scope watches the registry for removed
- * nodes. Nothing runs without a snapshot store, or in a realm document (its
- * command scope is the realm's own node, and realms keep their own storage).
+ * snapshot; the window's command scope writes its own, remembers its id and
+ * watches the registry for removed nodes (`startCommandScopeSnapshot`).
+ * Nothing runs without a snapshot store, or in a realm document (its command
+ * scope is the realm's own node, and realms keep their own storage).
  */
 export const nodeSnapshotService = defineScopedService("node-snapshot", (scope) => {
   const store = nodeSnapshotStore();
   if (!store) return { stop: () => undefined };
   if (scope.role === "leaf") return { stop: startNodeSnapshotWriter(scope, store) };
   if (isWorkspaceRealm()) return { stop: () => undefined };
-  return { stop: startSnapshotRegistryWatch(store) };
+  return { stop: startCommandScopeSnapshot(scope, store) };
 });

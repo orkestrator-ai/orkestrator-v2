@@ -20,7 +20,6 @@ import {
 import { InvalidCommandResultError } from "@orkestrator/protocol/contract/command";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
-import { backendDomainApi } from "./domain-client";
 import { terminals } from "@/lib/node-scope/domains/terminals";
 import type { ResultOf } from "@orkestrator/protocol/contract/command";
 import type {
@@ -28,6 +27,7 @@ import type {
   getTerminalSessionCommand,
   launchTerminalJobCommand,
 } from "@orkestrator/protocol/contract/domains/terminals";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 export type { TerminalSessionCreateResult } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -73,7 +73,7 @@ export function createTerminalsApi(client: BackendClient) {
   // envelope for a node that advertises the domain.
   const domain = () => terminals(client);
   // The `environments` domain's commands here (plan item 7003).
-  const environments = backendDomainApi(client, environmentsClient);
+  const environments = () => domainApi(client, environmentsClient);
 
   /**
    * The persisted Claude tmux state for a container, or null when none has been

@@ -22,10 +22,10 @@ import {
   type ChangeViewResult,
 } from "@orkestrator/protocol/change-resources";
 import type { BackendId, EnvironmentRef } from "@orkestrator/protocol/federation";
-import { routedBackendClient } from "@/lib/backend/domain-client";
 import { git } from "@/lib/node-scope/domains/git";
 import { portalStore } from "@/lib/portal/portal-store";
 import { subscribeNodeEvents } from "./node-events";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
 
 const MAX_CONCURRENT_READS = 6;
 

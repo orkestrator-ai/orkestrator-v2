@@ -55,8 +55,15 @@ import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
 import { type AccountMachine } from "./agent-accounts";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
-import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./domain-client";
+import {
+  clientInvoke,
+  commandBackendClient,
+  machineInvoker,
+  type BackendClient,
+  machineBackendClient,
+  withArgumentsObject,
+} from "./client";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 import { config as configDomain } from "@/lib/node-scope/domains/config";
 
 /**
@@ -325,14 +332,14 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   // The Control MCP settings and credentials (`coordinator` domain, plan item 7009).
   const coordinator = () => coordinatorApi(client);
   // The `environments` domain's commands here (plan item 7003).
-  const environments = backendDomainApi(client, environmentsClient);
+  const environments = () => domainApi(client, environmentsClient);
   // The machine-aware functions sent through `machineInvoke`, which always
   // passes an arguments object; their calls keep that shape.
-  const ownMachineEnvironments = backendDomainApi(withArgumentsObject(client), environmentsClient);
+  const ownMachineEnvironments = () => domainApi(withArgumentsObject(client), environmentsClient);
   const environmentsOn = (machine: AccountMachine) =>
     machine === undefined
       ? ownMachineEnvironments()
-      : backendDomainApi(machineBackendClient(client, machine), environmentsClient)();
+      : domainApi(machineBackendClient(client, machine), environmentsClient);
   const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
   // Plan usage and the Cursor SDK login are in the `accounts` domain (plan item 7008).

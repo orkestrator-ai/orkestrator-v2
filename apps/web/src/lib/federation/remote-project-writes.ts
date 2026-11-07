@@ -8,9 +8,9 @@ import {
   type ProjectArrangementIntent,
 } from "@/lib/project-folders";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
-import { routedBackendClient } from "@/lib/backend/domain-client";
 import { projects } from "@/lib/node-scope/domains/projects";
 import type { FederatedProject } from "./summaries";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
 
 const OPTIMISTIC_ARRANGEMENT_MS = 10_000;
 

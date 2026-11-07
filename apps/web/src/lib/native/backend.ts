@@ -7,7 +7,7 @@ import { invokeInScope } from "@/lib/node-scope/scope-transport";
  * and its prefetched cache (`invokeInScope`). Behaviour is today's
  * single-backend `invoke`; scoped code calls `invokeInScope` with its own
  * scope instead. `options.envelope` carries a domain client's contract fields
- * (`lib/backend/domain-client.ts`); a call without it is today's.
+ * (`lib/node-scope/domains/domain-api.ts`); a call without it is today's.
  */
 export function invoke<T = unknown>(
   command: string,

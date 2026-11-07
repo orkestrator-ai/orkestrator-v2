@@ -38,8 +38,8 @@ import type {
 import { isRecord } from "./shared";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
-import { backendDomainApi } from "./domain-client";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export interface GitFileChange {
@@ -220,7 +220,7 @@ export function createFilesSessionsApi(client: BackendClient) {
   const hostFiles = projectsDomain(client);
   const invoke = clientInvoke(client);
   // The `environments` domain's commands here (plan item 7003).
-  const environments = backendDomainApi(client, environmentsClient);
+  const environments = () => domainApi(client, environmentsClient);
   const native = () => nativeSessions(client);
   // The `files` domain client (plan item 7002).
   const filesDomain = () => files(client);

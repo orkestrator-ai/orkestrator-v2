@@ -8,8 +8,12 @@ import type {
 } from "@orkestrator/protocol/permission-rules";
 import { type AccountMachine } from "./agent-accounts";
 import { config as configDomain } from "@/lib/node-scope/domains/config";
-import { commandBackendClient, type BackendClient } from "./client";
-import { machineBackendClient, withArgumentsObject } from "./domain-client";
+import {
+  commandBackendClient,
+  type BackendClient,
+  machineBackendClient,
+  withArgumentsObject,
+} from "./client";
 
 /**
  * Orkestrator's own permission rules (todo 0723). The backend owns and applies

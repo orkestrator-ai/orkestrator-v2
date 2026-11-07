@@ -120,7 +120,7 @@ describe("native-sessions definitions", () => {
     // A present field is still type-checked.
     expect(Schema.decodeUnknownResult(NativeAgentSessionSchema)({ key: 1 })._tag).toBe("Failure");
     const open = openRecord({ id: Schema.String });
-    expect(Schema.decodeUnknownSync(open)({ id: "a", deep: { x: [1] } })).toEqual({
+    expect(Schema.decodeUnknownSync(open)({ id: "a", deep: { x: [1] } }) as unknown).toEqual({
       id: "a",
       deep: { x: [1] },
     });

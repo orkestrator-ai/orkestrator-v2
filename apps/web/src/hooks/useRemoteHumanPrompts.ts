@@ -1,4 +1,3 @@
-import { routedBackendClient } from "@/lib/backend/domain-client";
 import { terminals } from "@/lib/node-scope/domains/terminals";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
@@ -13,6 +12,7 @@ import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { subscribeNodeEvents } from "@/lib/federation/node-events";
 import { portalStore } from "@/lib/portal/portal-store";
 import { onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
 
 /** A waiting prompt of a worker on another node, and which node. */
 export type RemoteHumanPromptEntry = HumanPromptEntry & { nodeId: string };

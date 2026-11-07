@@ -12,13 +12,14 @@
 import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import type { BackendId, EnvironmentRef, ProjectRef } from "@orkestrator/protocol/federation";
-import { backendDomainApi, routedBackendClient } from "@/lib/backend/domain-client";
 import { nodesApi } from "@/lib/node-scope/domains/nodes";
 import type { PortalStore } from "@/lib/portal/portal-store";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 
 /** The `environments` domain on `backendId`, through the command node (plan item 7003). */
 function nodeEnvironments(portal: PortalStore, backendId: BackendId) {
-  return backendDomainApi(routedBackendClient(portal, backendId), environmentsClient)();
+  return domainApi(routedBackendClient(portal, backendId), environmentsClient);
 }
 
 export async function startFederatedEnvironment(
@@ -57,10 +58,10 @@ export async function forkFederatedEnvironment(
   environmentType: "local" | "containerized",
 ): Promise<{ environmentId: string; projectId: string; name: string }> {
   if (environmentType === "containerized") {
-    const docker = await backendDomainApi(
+    const docker = await domainApi(
       routedBackendClient(portal, ref.backendId),
       dockerClient,
-    )().checkDocker();
+    ).checkDocker();
     if (!docker.available) throw new Error("Docker is unavailable on the owning machine");
   }
   const fork = await nodeEnvironments(portal, ref.backendId).forkEnvironment({

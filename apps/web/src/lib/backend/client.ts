@@ -28,7 +28,7 @@ import { portalInvoke } from "@/lib/portal/portal-transport";
  * What a factory needs of a node: its untyped command call. A `NodeClient` is
  * one. A client may also carry the node's negotiated `domains` and hello
  * `capabilities` (plan item 2011), which a domain client over it
- * (`./domain-client.ts`) picks its adapter from; the command-scope and
+ * (`@/lib/node-scope/domains/domain-api`) picks its adapter from; the command-scope and
  * per-scope clients below carry their scope client's.
  */
 export type BackendClient = Pick<NodeClient, "invokeRaw"> &
@@ -147,4 +147,54 @@ export function machineInvoker(client: BackendClient): MachineInvoke {
       ? client.invokeRaw<T>(command, args)
       : portalStore.invokeOnNode<T>(machine as BackendId, command, args);
   };
+}
+
+/**
+ * `client` aimed at `machine` (`AccountMachine`): `undefined` is `client`'s
+ * own node, `null` the command node over the portal, a node id that node
+ * through the command node. Its calls carry no negotiated range, so a domain
+ * client over it (`@/lib/node-scope/domains/domain-api`) uses the legacy
+ * adapter.
+ */
+export function machineBackendClient(
+  client: BackendClient,
+  machine: AccountMachine,
+): BackendClient {
+  if (machine === undefined) return client;
+  const invoke = machineInvoker(client);
+  return {
+    invokeRaw: <T>(command: string, args?: Readonly<Record<string, unknown>>) =>
+      invoke<T>(machine, command, args as Record<string, unknown> | undefined),
+  };
+}
+
+const withArguments = new WeakMap<BackendClient, BackendClient>();
+
+/**
+ * `client`, sending `{}` where a call has no arguments: the shape
+ * `machineInvoke` always sent, which the machine-aware functions keep for
+ * their own node. The negotiation signals are the client's own. Made once per
+ * client, so a domain client over it is too.
+ */
+export function withArgumentsObject(client: BackendClient): BackendClient {
+  const existing = withArguments.get(client);
+  if (existing) return existing;
+  const wrapped: BackendClient = {
+    invokeRaw: <T>(
+      command: string,
+      args?: Readonly<Record<string, unknown>>,
+      options?: Parameters<BackendClient["invokeRaw"]>[2],
+    ) =>
+      options === undefined
+        ? client.invokeRaw<T>(command, args ?? {})
+        : client.invokeRaw<T>(command, args ?? {}, options),
+    get domains() {
+      return client.domains;
+    },
+    get capabilities() {
+      return client.capabilities;
+    },
+  };
+  withArguments.set(client, wrapped);
+  return wrapped;
 }

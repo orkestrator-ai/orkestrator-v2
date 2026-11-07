@@ -8,8 +8,8 @@
  */
 import { graphsClient, type GraphsApi } from "@orkestrator/protocol/contract/domains/graphs";
 import type { AccountMachine, BackendClient } from "@/lib/backend/client";
-import { machineBackendClient } from "@/lib/backend/domain-client";
 import { domainApi } from "./domain-api";
+import { machineBackendClient } from "@/lib/backend/client";
 
 export type { GraphsApi } from "@orkestrator/protocol/contract/domains/graphs";
 

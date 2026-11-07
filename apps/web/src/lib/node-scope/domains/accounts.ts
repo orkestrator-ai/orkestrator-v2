@@ -14,26 +14,23 @@
  * `invokeCommandNodeSetting` (the overview, the preferred login and the
  * command node's automatic-switching ticks), also version 0.
  *
- * See `lib/backend/domain-client.ts` (plan item 7003) for the adapter choice.
+ * See `./domain-api.ts` for the adapter choice.
  */
 import { accountsClient, type AccountsApi } from "@orkestrator/protocol/contract/domains/accounts";
-import {
-  backendDomainApi,
-  machineBackendClient,
-  withArgumentsObject,
-} from "@/lib/backend/domain-client";
 import type { AccountMachine, BackendClient } from "@/lib/backend/client";
 import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
+import { machineBackendClient, withArgumentsObject } from "@/lib/backend/client";
+import { domainApi } from "./domain-api";
 
 export type { AccountsApi } from "@orkestrator/protocol/contract/domains/accounts";
 
 /** The `accounts` API on `machine`, through `client`. The own-node client is made once. */
 export function accountsOn(client: BackendClient): (machine?: AccountMachine) => AccountsApi {
-  const own = backendDomainApi(withArgumentsObject(client), accountsClient);
+  const own = () => domainApi(withArgumentsObject(client), accountsClient);
   return (machine) =>
     machine === undefined
       ? own()
-      : backendDomainApi(machineBackendClient(client, machine), accountsClient)();
+      : domainApi(machineBackendClient(client, machine), accountsClient);
 }
 
 /** The command node's settings target (`invokeCommandNodeSetting`) as a factory client. */
@@ -45,7 +42,5 @@ export const commandNodeSettingClient: BackendClient = {
 };
 
 /** The `accounts` API on the command node's settings target (version 0, today's calls). */
-export const commandNodeAccounts: () => AccountsApi = backendDomainApi(
-  commandNodeSettingClient,
-  accountsClient,
-);
+export const commandNodeAccounts: () => AccountsApi = () =>
+  domainApi(commandNodeSettingClient, accountsClient);

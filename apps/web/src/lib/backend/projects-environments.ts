@@ -43,9 +43,14 @@ import {
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
-import { backendDomainApi, machineBackendClient } from "./domain-client";
+import {
+  clientInvoke,
+  commandBackendClient,
+  type BackendClient,
+  machineBackendClient,
+} from "./client";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export interface PrDetectionResult {
@@ -88,11 +93,11 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   const projects = projectsDomain(client);
   const invoke = clientInvoke(client);
   // The `environments` domain (plan item 7003): typed, decoded results.
-  const environments = backendDomainApi(client, environmentsClient);
+  const environments = () => domainApi(client, environmentsClient);
   const environmentsOn = (machine: AccountMachine) =>
     machine === undefined
       ? environments()
-      : backendDomainApi(machineBackendClient(client, machine), environmentsClient)();
+      : domainApi(machineBackendClient(client, machine), environmentsClient);
 
   async function getResourceRevisionManifest(
     knownGeneration?: string,

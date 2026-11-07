@@ -17,9 +17,8 @@ import type {
 } from "@orkestrator/protocol/preview-services";
 
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient, machineBackendClient } from "./client";
 import { previews as previewsDomain } from "@/lib/node-scope/domains/previews";
-import { machineBackendClient } from "./domain-client";
 
 /** The result and settings types are the `previews` domain's schemas (plan item 7004). */
 export type {

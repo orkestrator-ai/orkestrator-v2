@@ -49,7 +49,7 @@ describe("nodes over a lib/backend client", () => {
     await api.open_node_workspace({ nodeId: "bk_a" });
     expect(invoke.mock.calls).toEqual([
       ["list_nodes"],
-      ["list_project_copies", {}],
+      ["list_project_copies"],
       ["open_node_workspace", { nodeId: "bk_a" }],
     ] as never);
   });

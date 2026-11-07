@@ -50,6 +50,6 @@ describe("system over a lib/backend client", () => {
     await systemApi(client).discard_bug_report({ reportId: "r1" });
     expect(client.invokeRaw).toHaveBeenLastCalledWith("discard_bug_report", { reportId: "r1" });
     await systemApi(client).get_worktree_locations({});
-    expect(client.invokeRaw).toHaveBeenLastCalledWith("get_worktree_locations", {});
+    expect(client.invokeRaw.mock.calls.at(-1)).toEqual(["get_worktree_locations"]);
   });
 });

@@ -14,10 +14,11 @@ import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import type { AgentSummarySource } from "@/components/environments/EnvironmentAgentSummary";
 import { agentMailClient } from "@orkestrator/protocol/contract/domains/agent-mail";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import { backendDomainApi, routedBackendClient } from "@/lib/backend/domain-client";
 import { portalStore } from "@/lib/portal/portal-store";
 import type { Environment } from "@/types";
 import { subscribeNodeEvents } from "./node-events";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 
 /** Coalesces a burst of changes into one read. */
 const REFRESH_DEBOUNCE_MS = 250;
@@ -38,10 +39,9 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
       resyncOnSubscribe: true,
       // Routed through the command node, so the `agent-mail` client's version 0 (today's call).
       read: (environmentId) =>
-        backendDomainApi(
-          routedBackendClient(portalStore, nodeId),
-          agentMailClient,
-        )().get_agent_registry({ environmentId }),
+        domainApi(routedBackendClient(portalStore, nodeId), agentMailClient).get_agent_registry({
+          environmentId,
+        }),
       subscribe: (environmentId, refresh) =>
         subscribeNodeEvents(nodeId, {
           events: [NATIVE_AGENT_ACTIVITY_EVENT, RESOURCE_CHANGED_EVENT],
@@ -82,7 +82,7 @@ export function useNodeEnvironment(ref: EnvironmentRef, open: boolean): Environm
     let timer: ReturnType<typeof setTimeout> | undefined;
     const read = () => {
       const request = ++latest;
-      void backendDomainApi(routedBackendClient(portalStore, nodeId), environmentsClient)()
+      void domainApi(routedBackendClient(portalStore, nodeId), environmentsClient)
         .getEnvironment({ environmentId })
         .then((value) => {
           // A final PR record answers only `includeFinalPrState`, which this read never sends.

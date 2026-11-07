@@ -23,9 +23,16 @@ import type { AgentExtensionCatalog } from "./files-sessions";
 import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { agentServersClient } from "@orkestrator/protocol/contract/domains/agent-servers";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
-import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./domain-client";
+import {
+  clientInvoke,
+  commandBackendClient,
+  machineInvoker,
+  type BackendClient,
+  machineBackendClient,
+  withArgumentsObject,
+} from "./client";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 /** PR detection result containing URL, state, and merge conflict status */
 
 /** Docker system statistics */
@@ -309,29 +316,29 @@ export function createDockerSkillsApi(client: BackendClient) {
   const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
   // The `docker` domain (plan item 7003): typed, decoded results.
-  const docker = backendDomainApi(client, dockerClient);
+  const docker = () => domainApi(client, dockerClient);
   // The machine-aware functions sent through `machineInvoke`, which always
   // The `agent-servers` domain (plan item 7009): bridges, CLI checks,
   // catalogues, skills and the GitHub CLI sign-in.
-  const agentServers = backendDomainApi(client, agentServersClient);
-  const ownMachineAgentServers = backendDomainApi(withArgumentsObject(client), agentServersClient);
+  const agentServers = () => domainApi(client, agentServersClient);
+  const ownMachineAgentServers = () => domainApi(withArgumentsObject(client), agentServersClient);
   const agentServersOn = (machine: AccountMachine) =>
     machine === undefined
       ? ownMachineAgentServers()
-      : backendDomainApi(machineBackendClient(client, machine), agentServersClient)();
+      : domainApi(machineBackendClient(client, machine), agentServersClient);
   // passes an arguments object; their calls keep that shape.
-  const ownMachineDocker = backendDomainApi(withArgumentsObject(client), dockerClient);
+  const ownMachineDocker = () => domainApi(withArgumentsObject(client), dockerClient);
   const dockerOn = (machine: AccountMachine) =>
     machine === undefined
       ? ownMachineDocker()
-      : backendDomainApi(machineBackendClient(client, machine), dockerClient)();
+      : domainApi(machineBackendClient(client, machine), dockerClient);
   // The `environments` domain's commands here (plan item 7003).
-  const environments = backendDomainApi(client, environmentsClient);
-  const ownMachineEnvironments = backendDomainApi(withArgumentsObject(client), environmentsClient);
+  const environments = () => domainApi(client, environmentsClient);
+  const ownMachineEnvironments = () => domainApi(withArgumentsObject(client), environmentsClient);
   const environmentsOn = (machine: AccountMachine) =>
     machine === undefined
       ? ownMachineEnvironments()
-      : backendDomainApi(machineBackendClient(client, machine), environmentsClient)();
+      : domainApi(machineBackendClient(client, machine), environmentsClient);
 
   async function checkDocker(machine?: AccountMachine): Promise<DockerAvailability> {
     return dockerOn(machine).checkDocker();

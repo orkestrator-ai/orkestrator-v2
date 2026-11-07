@@ -6,8 +6,8 @@
  * (version 1 sends the envelope and decodes results with the protocol's mail
  * schemas); a pre-contract node, or a client without negotiation, uses
  * version 0, today's call (`invokeRaw(command, args)`, or `invokeRaw(command)`
- * for a call without arguments). See `lib/backend/domain-client.ts` (plan item
- * 7003) for the adapter choice.
+ * for a call without arguments). See `./domain-api.ts` for the
+ * adapter choice.
  *
  * `commandNodeAgentMail` is the same domain over `invokeCommandNodeSetting`
  * (the messaging settings are the command node's, which its leaves inherit),
@@ -17,19 +17,17 @@ import {
   agentMailClient,
   type AgentMailApi,
 } from "@orkestrator/protocol/contract/domains/agent-mail";
-import { backendDomainApi } from "@/lib/backend/domain-client";
 import type { BackendClient } from "@/lib/backend/client";
 import { commandNodeSettingClient } from "./accounts";
+import { domainApi } from "./domain-api";
 
 export type { AgentMailApi } from "@orkestrator/protocol/contract/domains/agent-mail";
 
 /** The `agent-mail` API on `client`'s node; the getter picks per connection generation. */
 export function agentMail(client: BackendClient): () => AgentMailApi {
-  return backendDomainApi(client, agentMailClient);
+  return () => domainApi(client, agentMailClient);
 }
 
 /** The `agent-mail` API on the command node's settings target (version 0, today's calls). */
-export const commandNodeAgentMail: () => AgentMailApi = backendDomainApi(
-  commandNodeSettingClient,
-  agentMailClient,
-);
+export const commandNodeAgentMail: () => AgentMailApi = () =>
+  domainApi(commandNodeSettingClient, agentMailClient);

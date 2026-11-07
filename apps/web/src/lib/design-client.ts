@@ -48,10 +48,10 @@ import {
 } from "@orkestrator/protocol/contract/domains/design";
 import type { ArgsOf, ResultOf } from "@orkestrator/protocol/contract/command";
 import { scopeBackendClient } from "@/lib/backend/client";
-import { backendDomainApi } from "@/lib/backend/domain-client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 
 /** A typed design failure; UI branches on `failure.code`, never message text. */
 export class DesignClientError extends Error {
@@ -128,9 +128,10 @@ function unwrap<T>(result: DesignCommandResult<T> | unknown): T {
  * (`@/lib/backend/client`), whose app-command-scope form is
  * `@/lib/native/backend` `invoke`.
  */
-const scopeDesign = defineScopedSlot("design-domain", (scope) =>
-  backendDomainApi(scopeBackendClient(scope), designClient),
-);
+const scopeDesign = defineScopedSlot("design-domain", (scope) => {
+  const client = scopeBackendClient(scope);
+  return () => domainApi(client, designClient);
+});
 
 function design(scope?: NodeScope): DesignApi {
   return scopeDesign(scope)();

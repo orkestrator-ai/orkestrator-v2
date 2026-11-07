@@ -37,20 +37,19 @@ import {
   commandBackendClient,
   scopeBackendClient,
   type AccountMachine,
+  machineBackendClient,
 } from "@/lib/backend/client";
-import { backendDomainApi, machineBackendClient } from "@/lib/backend/domain-client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedSlot, isAppCommandScope } from "@/lib/node-scope-slots";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 
 export type WebAnnotationCommandName = keyof WebAnnotationCommandArgs;
 
 type WebAnnotationsApiGetter = () => WebAnnotationsApi;
 
 /** This view's backend (the command scope's client). */
-const commandScopeApi: WebAnnotationsApiGetter = backendDomainApi(
-  commandBackendClient,
-  webAnnotationsClient,
-);
+const commandScopeApi: WebAnnotationsApiGetter = () =>
+  domainApi(commandBackendClient, webAnnotationsClient);
 
 /** Other machines Settings asks through the command node, by node (`null`: the command node). */
 const machineApis = new Map<string | null, WebAnnotationsApiGetter>();
@@ -61,19 +60,18 @@ function apiFor(machine: AccountMachine): WebAnnotationsApiGetter {
   let api = machineApis.get(machine);
   if (!api) {
     if (machineApis.size >= MAX_MACHINE_APIS) machineApis.clear();
-    api = backendDomainApi(
-      machineBackendClient(commandBackendClient, machine),
-      webAnnotationsClient,
-    );
+    const machineClient = machineBackendClient(commandBackendClient, machine);
+    api = () => domainApi(machineClient, webAnnotationsClient);
     machineApis.set(machine, api);
   }
   return api;
 }
 
 /** A node scope's own domain client (plan item 3012), made once per scope. */
-const scopeApis = defineScopedSlot<WebAnnotationsApiGetter>("web-annotations-domain", (scope) =>
-  backendDomainApi(scopeBackendClient(scope), webAnnotationsClient),
-);
+const scopeApis = defineScopedSlot<WebAnnotationsApiGetter>("web-annotations-domain", (scope) => {
+  const client = scopeBackendClient(scope);
+  return () => domainApi(client, webAnnotationsClient);
+});
 
 /**
  * `machine` asks another machine through the command node, as Settings does.

@@ -680,8 +680,11 @@ export const nodeMailClient = domainClient(nodeMail, {
   is one method per command (`environmentsClient`, `dockerClient`); version 1
   sends the envelope and decodes results, version 0 sends today's call and
   answers as sent (`answeredAsSent`). The web calls them through
-  `backendDomainApi(client, def)` (`lib/backend/domain-client.ts`), with
-  `machineBackendClient`/`routedBackendClient` for another node. Critical
+  `domainApi(client, def)` (`lib/node-scope/domains/domain-api.ts`, the
+  web's one domain-client helper since 7010), with
+  `machineBackendClient` (`lib/backend/client.ts`) or
+  `routedBackendClient` (`lib/portal/routed-backend-client.ts`) for another
+  node. Critical
   keys: the launch's `controlRequestId`/`controlRequestFingerprint` and the
   delegation base on `create_environment`; `operationId`/`expectedRevision`
   on start, stop, recovery-copy discard and restore, recreate and

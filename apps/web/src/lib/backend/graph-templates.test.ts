@@ -32,8 +32,9 @@ const projectRef = {
 describe("graph template wrappers", () => {
   test("call the item 109 backend commands with their arguments", async () => {
     const template = { id: "mine", revision: 0 } as never;
-    const calls: [() => Promise<unknown>, string, Record<string, unknown>][] = [
-      [() => listGraphTemplates(), "graph_templates_list", {}],
+    // A call without arguments (`undefined`) is sent without an arguments object.
+    const calls: [() => Promise<unknown>, string, Record<string, unknown> | undefined][] = [
+      [() => listGraphTemplates(), "graph_templates_list", undefined],
       [() => listGraphTemplates({ projectId: "p1" }), "graph_templates_list", { projectId: "p1" }],
       [
         () => getGraphTemplate(ref, { projectId: "p1" }),
@@ -90,7 +91,9 @@ describe("graph template wrappers", () => {
     ];
     for (const [call, command, args] of calls) {
       await call();
-      expect(invokeMock).toHaveBeenLastCalledWith(command, args);
+      expect(invokeMock).toHaveBeenLastCalledWith(
+        ...(args === undefined ? [command] : [command, args]),
+      );
     }
   });
 

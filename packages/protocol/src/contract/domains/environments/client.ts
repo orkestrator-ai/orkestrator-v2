@@ -2,7 +2,7 @@
  * The `environments` domain client (plan item 7003; §11.2 "Client
  * adapters"): one method per command, taking the definition's arguments and
  * answering its result. The web's `lib/backend` functions call it
- * (`apps/web/src/lib/backend/domain-client.ts`).
+ * (`apps/web/src/lib/node-scope/domains/domain-api.ts`).
  *
  * No environments command was capability-gated and the domain has no
  * capability command, so both adapters call the same commands:

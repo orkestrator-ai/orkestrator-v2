@@ -44,9 +44,7 @@ import type {
   EnvironmentDiffStatsChange,
   EnvironmentDiffStatsSnapshot,
 } from "../../../diff-stats.js";
-import { modelRecord, type ModelSchema, openRecord, variantRecord } from "../../model-schema.js";
-
-type KeysOfUnion<T> = T extends unknown ? keyof T & string : never;
+import { modelRecord, openRecord, variantRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalNullableString = Schema.optional(Schema.NullOr(Schema.String));

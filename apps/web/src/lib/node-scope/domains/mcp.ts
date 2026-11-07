@@ -9,23 +9,18 @@
  * the portal) and a node id (routed through the command node) carry no
  * negotiated range, so they use version 0, today's call. Calls on the
  * client's own node keep the arguments object `machineInvoke` always sent
- * (`withArgumentsObject`). See `lib/backend/domain-client.ts` (plan item 7003).
+ * (`withArgumentsObject`). See `./domain-api.ts`.
  */
 import { mcpClient, type McpApi } from "@orkestrator/protocol/contract/domains/mcp";
-import {
-  backendDomainApi,
-  machineBackendClient,
-  withArgumentsObject,
-} from "@/lib/backend/domain-client";
 import type { AccountMachine, BackendClient } from "@/lib/backend/client";
+import { machineBackendClient, withArgumentsObject } from "@/lib/backend/client";
+import { domainApi } from "./domain-api";
 
 export type { McpApi } from "@orkestrator/protocol/contract/domains/mcp";
 
 /** The `mcp` API on `machine`, through `client`. The own-node client is made once. */
 export function mcpOn(client: BackendClient): (machine?: AccountMachine) => McpApi {
-  const own = backendDomainApi(withArgumentsObject(client), mcpClient);
+  const own = () => domainApi(withArgumentsObject(client), mcpClient);
   return (machine) =>
-    machine === undefined
-      ? own()
-      : backendDomainApi(machineBackendClient(client, machine), mcpClient)();
+    machine === undefined ? own() : domainApi(machineBackendClient(client, machine), mcpClient);
 }

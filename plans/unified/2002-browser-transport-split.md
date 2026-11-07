@@ -3,7 +3,7 @@ id: 2002
 title: "Browser: split createNodeTransport from the window shell API"
 phase: 2
 plan: "§6.2 step 1 and §12 Phase 2.2"
-status: in-progress
+status: done
 depends_on: [2001]
 blocked_by: ""
 owner: claude-worker
@@ -108,7 +108,7 @@ Tests (keep and adapt):
 ## Done when
 
 - [x] Two transports can coexist in a test.
-- [ ] The browser smoke test (`test:agent:browser` against an isolated profile) passes with no visible change.
+- [x] The browser smoke test (`test:agent:browser` against an isolated profile) passes with no visible change. 2026-11-07 at `ee73894da`: 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log).
 
 ## Notes
 
@@ -128,3 +128,4 @@ Tests (keep and adapt):
 - 2026-11-07 (claude-worker): split `createBrowserGatewayApi` into `createNodeTransport` (`node-transport.ts`) and `createWindowShell` (`window-shell.ts`), kept `createBrowserGatewayApi` as their composition and the install paths unchanged; added the `/status` probe after non-401 fetch-stream failures (2005); split `web-gateway.test.ts` into three suites plus `web-gateway.test-support.ts`; added `node-transport.test.ts` and shell-wiring and realm-probe tests. Tests: the gateway suites (`web-gateway*`, `window-shell`, `node-transport`, 10 files) 260 pass; with `lib/native`, `lib/portal`, rich-content reset, transport connectivity, `App.test.tsx` and `lib/node-scope`, 643 pass across 37 files. Web typecheck has no errors in these files (other agents' files had errors mid-edit); `vite build` passes; oxlint and fmt clean. Done when: the browser smoke test is still open.
 - 2026-11-07 (claude-worker, 2013 live pass): ran the browser smoke suite (`mise run test:agent:browser`) against a running `dev:test` profile `uf-2013-smoke` (started like the isolated runner: `--fixture --no-agent-credentials --agent-platforms codex`) at commit `6860254e8`: 51 passed, 3 failed, 124 skipped. The failures are all `e2e/agent-testing/terminal-input-resume.spec.ts`: one fails at base `148e9ad0a` on this host too (vim ruler), two are spec drift after 3008 made `terminalPortalStore.getTerminal` take a `nodeId` (the spec still calls `getTerminal(environmentId, tabId)`). The smoke run did not pass, so the smoke box stays open; it can be ticked after `terminal-input-resume.spec.ts` is updated for 3008 and a smoke run passes (the vim case excepted or fixed). Details and result files: [2013](2013-second-scope-proof.md) Notes, `output/agent-testing/uf-2013/`.
 - 2026-11-07 (claude-worker, 4006): browser smoke `mise run test:agent:browser` at `4ece07c9a` against `uf-4006-smoke` (started as the isolated runner starts its own, flags and environment): 52 passed, 2 failed, 124 skipped. Failures: `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental) and `browser-gateway.spec.ts` "capped file tree … across inactive views and reload" (390 px after a reload the projects drawer stays open after selecting the environment; passed at `6860254e8`, so a branch regression since; details in [4006](4006-multi-node-qualification.md) Notes). The smoke box stays open.
+- 2026-11-07 (claude-worker, 4006 fixes): browser smoke `mise run test:agent:browser` at `ee73894da` against `uf-fix-smoke` (started as the isolated runner starts its own, flags and environment): 53 passed, 1 failed, 124 skipped. The one failure is `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental); the capped-file-tree regression is fixed (`e46872643`). Results: `output/agent-testing/uf-fix/evidence/smoke/results.json`; details in [4006](4006-multi-node-qualification.md) Notes.

@@ -3,7 +3,7 @@ id: 4001
 title: "In-tree workspace for a leaf, behind a per-node setting"
 phase: 4
 plan: "§5.2 and §12 Phase 4.1-4.2"
-status: in-progress
+status: done
 depends_on: [2013, 3013, 3014]
 blocked_by: ""
 owner: claude-worker
@@ -51,7 +51,7 @@ With a setting on for a node, its workspace renders in the window's own React tr
 
 - [x] A flagged leaf renders and works in-tree on the browser against a live attached profile: open environment, terminal, agent tab without a billed turn, files, and previews (a loopback dev-server tab shows "Browser tabs aren't supported here", exactly as on the window's own node). [4006](4006-multi-node-qualification.md)'s e2e, 2026-11-07.
 - [x] On the desktop: open environment, terminal, agent tab without a billed turn and files ([4006](4006-multi-node-qualification.md)'s e2e).
-- [ ] On the desktop: previews. Open: the leaf's loopback preview resolves through the command node's gateway (the desktop node client has no `resolvePreviewUrl`; 4006 Finding 1).
+- [x] On the desktop: previews. Fixed after 4006 Finding 1 (`ca61d7ae8`, `12efe1b97`): the desktop node client addresses its own previews and main's node preview runtime loads them through the leaf's gateway with the leaf's origin; [4006](4006-multi-node-qualification.md)'s desktop e2e at `ee73894da` shows the leaf's page (8/8 flows pass).
 
 ## Notes
 
@@ -78,3 +78,4 @@ With a setting on for a node, its workspace renders in the window's own React tr
 
 - 2026-11-07 (claude-worker): built the setting, the in-tree scope holds, the realm loopback and context, `InTreeWorkspace`, `NodeErrorBoundary`, and one `WorkspaceContent`/`NodeWorkspaceLayout` for the command node, realms and in-tree nodes. Added `backendForScope` and moved the workspace components and hooks of the Done-when flows onto their node, as listed in Notes. Fixed the "for 4001" leftovers listed in Notes and recorded the deferred ones. Tests (all pass): `realm-channel.test.ts` 6, `in-tree-scopes.test.ts` 7, `inTreeNodesStore.test.ts` 3, `NodeErrorBoundary.test.tsx` 3, `InTreeWorkspace.test.tsx` 4 (in-tree for a flagged node and realm otherwise; switching both ways sends no stop/cancel/delete to either node; release after grace; open failure with Try again), `WorkspaceRealmHost.paths.test.tsx` 9 (realm-host scenarios on the page path and the loopback path, plus visibility). Focused suites: web `components/federation`, `lib/federation`, `stores`, `lib/node-scope`, `components/{terminal,native-agent,layout,browser,files-panel,projects,chat,pane-layout,agent-mail}`, `hooks`, `lib/web-annotations`; root `./tests/unit/{components,hooks,contexts,stores}` (run with `./` paths: bare paths also match the copy in `output/agent-testing/base-wt/`). Web typecheck clean, fmt and oxlint clean on touched files. Commits: ddc74ea26 (slice 1), f1e9ac62f, 6c2f86885, b4616bdf1, 92ecf1c3e and the docs/item commit.
 - 2026-11-07 (claude-worker, 4006): live check of the Done-when with `multi-node-window.spec.ts` at `72ae46d49` (in-tree by default since 6001) against `uf-4006-cmd` + `uf-4006-leaf`: browser all surfaces pass; desktop terminal, agent tab and files pass, the preview shows the command node's gateway page. Done-when box split; the desktop previews part stays open.
+- 2026-11-07 (claude-worker, 4006 fixes): desktop previews box ticked. The leaf's preview loaded the command node's gateway page because the desktop node client had no `resolvePreviewUrl`; it now has one (the canonical address) and the node's preview runtime in main resolves it onto the node's gateway on its current route (`nodePreviewUrl`) and presents the node's own origin (`nodePreviewRequestOrigin`). Commits `ca61d7ae8`, `12efe1b97`, `10431ddd7`; live: `multi-node-window.spec.ts` on the desktop, in-tree, six leaves, 8 passed at `ee73894da` (`output/agent-testing/uf-fix/evidence/desktop-in-tree/`). Every box is ticked; status done.

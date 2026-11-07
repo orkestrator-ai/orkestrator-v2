@@ -3,7 +3,7 @@ id: 2003
 title: "Browser: per-node credentials, scoped rich-content clear, no global auth patch"
 phase: 2
 plan: "§6.2 steps 2-3 and §7.4 special cases"
-status: in-progress
+status: done
 depends_on: [2002]
 blocked_by: ""
 owner: claude-worker
@@ -61,7 +61,7 @@ A node transport carries its own bearer, nothing patches globals on its behalf, 
 ## Done when
 
 - [x] No node-transport code path depends on the global fetch patch (the patch is deleted).
-- [ ] The browser smoke test passes. Left to the final live qualification pass.
+- [x] The browser smoke test passes. 2026-11-07 at `ee73894da`: 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log).
 
 ## Notes
 
@@ -86,3 +86,4 @@ A node transport carries its own bearer, nothing patches globals on its behalf, 
 - 2026-11-07 (claude-worker, with 2004): "use it on lapse and reopen" done by the browser node-client registry (`apps/web/src/lib/node-scope/node-clients.ts`): a lapse, refusal or back/forward-cache restore opens a new grant, calls `clearProtectedRichContent("credentials", { nodeId })`, then `setCredential` on the same transport; covered by `node-clients.test.ts`. Only the browser smoke test remains open.
 - 2026-11-07 (claude-worker, 2013 live pass): ran the browser smoke suite (`mise run test:agent:browser`) against a running `dev:test` profile `uf-2013-smoke` (started like the isolated runner: `--fixture --no-agent-credentials --agent-platforms codex`) at commit `6860254e8`: 51 passed, 3 failed, 124 skipped. The failures are all `e2e/agent-testing/terminal-input-resume.spec.ts`: one fails at base `148e9ad0a` on this host too (vim ruler), two are spec drift after 3008 made `terminalPortalStore.getTerminal` take a `nodeId` (the spec still calls `getTerminal(environmentId, tabId)`). The smoke run did not pass, so the smoke box stays open; it can be ticked after `terminal-input-resume.spec.ts` is updated for 3008 and a smoke run passes (the vim case excepted or fixed). Details and result files: [2013](2013-second-scope-proof.md) Notes, `output/agent-testing/uf-2013/`.
 - 2026-11-07 (claude-worker, 4006): browser smoke `mise run test:agent:browser` at `4ece07c9a` against `uf-4006-smoke` (started as the isolated runner starts its own, flags and environment): 52 passed, 2 failed, 124 skipped. Failures: `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental) and `browser-gateway.spec.ts` "capped file tree … across inactive views and reload" (390 px after a reload the projects drawer stays open after selecting the environment; passed at `6860254e8`, so a branch regression since; details in [4006](4006-multi-node-qualification.md) Notes). The smoke box stays open.
+- 2026-11-07 (claude-worker, 4006 fixes): browser smoke `mise run test:agent:browser` at `ee73894da` against `uf-fix-smoke` (started as the isolated runner starts its own, flags and environment): 53 passed, 1 failed, 124 skipped. The one failure is `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental); the capped-file-tree regression is fixed (`e46872643`). Results: `output/agent-testing/uf-fix/evidence/smoke/results.json`; details in [4006](4006-multi-node-qualification.md) Notes.

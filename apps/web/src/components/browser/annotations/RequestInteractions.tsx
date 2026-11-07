@@ -8,6 +8,7 @@
  * `resolve_native_agent_interaction`, exactly as the chat does.
  */
 import { useEffect, useMemo, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Loader2 } from "lucide-react";
 import type {
   AgentInteractionApplyOutcome,
@@ -57,6 +58,8 @@ export function RequestInteractions({
   request: WebAnnotationRequest;
   onAnswerInChat: () => void;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const pending = pendingRequestInteractions(request);
   const { environmentId } = useAnnotationPanel();
   const { transcript, destination } = request;
@@ -125,7 +128,7 @@ export function RequestInteractions({
       interactionId,
       resolution,
     });
-    refreshWebAnnotations(environmentId, { requestIds: [request.id] });
+    refreshWebAnnotations(environmentId, { requestIds: [request.id] }, annotationScope);
     return outcome;
   };
 

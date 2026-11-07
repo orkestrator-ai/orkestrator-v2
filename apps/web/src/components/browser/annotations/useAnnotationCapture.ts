@@ -16,6 +16,7 @@
  * validation) waits for the user instead of retrying.
  */
 import { startCoordinatedPoll } from "@/lib/coordinated-poll";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
@@ -150,6 +151,8 @@ export function useAnnotationCapture({
   isActive: boolean;
   enabled: boolean;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const api: BrowserPreviewCaptureApi | null = enabled ? getBrowserPreviewCaptureApi() : null;
   const apiRef = useRef(api);
   useLayoutEffect(() => {
@@ -272,7 +275,8 @@ export function useAnnotationCapture({
       forgetSaveIntent(captureId);
       if (!ackPending) forgetCaptureIntent(captureId);
       redactionsRef.current.delete(captureId);
-      if (annotationId) refreshWebAnnotations(environmentId, { annotationIds: [annotationId] });
+      if (annotationId)
+        refreshWebAnnotations(environmentId, { annotationIds: [annotationId] }, annotationScope);
       setSaveState(captureId, {
         status: "saved",
         error: null,
@@ -294,7 +298,7 @@ export function useAnnotationCapture({
         });
       }
     },
-    [environmentId, setSaveState],
+    [annotationScope, environmentId, setSaveState],
   );
 
   const runSave = useCallback(

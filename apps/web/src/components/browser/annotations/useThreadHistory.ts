@@ -9,6 +9,7 @@
  * merged set because a snapshot only marks entries inside its own window.
  */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   WEB_ANNOTATION_COMMANDS,
   WEB_ANNOTATION_LIMITS,
@@ -18,6 +19,8 @@ import {
 import { describeWebAnnotationError, webAnnotationCommand } from "@/lib/web-annotations/client";
 
 export function useThreadHistory(environmentId: string, data: WebAnnotationGetResult | null) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const annotationId = data?.annotation.id ?? null;
   const [known, setKnown] = useState<Map<string, WebAnnotationEntry>>(new Map());
   /** `beforeSequence` for the next older page; null when the first entry is loaded. */
@@ -74,14 +77,19 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
       setLoading(true);
       setError(null);
       try {
-        const page = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.entries, {
-          environmentId,
-          annotationId,
-          ...(direction === "older"
-            ? { afterSequence: 0, beforeSequence: cursor }
-            : { afterSequence: cursor }),
-          limit: WEB_ANNOTATION_LIMITS.entryPageItems,
-        });
+        const page = await webAnnotationCommand(
+          WEB_ANNOTATION_COMMANDS.entries,
+          {
+            environmentId,
+            annotationId,
+            ...(direction === "older"
+              ? { afterSequence: 0, beforeSequence: cursor }
+              : { afterSequence: cursor }),
+            limit: WEB_ANNOTATION_LIMITS.entryPageItems,
+          },
+          undefined,
+          annotationScope,
+        );
         if (generationRef.current !== generation) return;
         if (page.resetRequired) {
           // History moved under us: start again from the current snapshot.
@@ -110,7 +118,7 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
         if (generationRef.current === generation) setLoading(false);
       }
     },
-    [annotationId, data, environmentId, loading, newerCursor, olderCursor],
+    [annotationScope, annotationId, data, environmentId, loading, newerCursor, olderCursor],
   );
 
   const entries = useMemo(() => {

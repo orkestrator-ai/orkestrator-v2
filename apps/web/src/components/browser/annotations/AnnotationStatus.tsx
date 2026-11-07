@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { CloudOff, Info, RefreshCw, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatRelativeTime } from "@/lib/format-relative-time";
@@ -23,6 +24,8 @@ export function AnnotationStatus({
   desktopCapture: boolean;
   announcement: string;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const notices: Array<{ key: string; tone: "info" | "warning"; node: ReactNode }> = [];
   if (cache.capabilityStatus === "unavailable") {
     notices.push({
@@ -76,7 +79,7 @@ export function AnnotationStatus({
             size="sm"
             variant="outline"
             className="h-6 gap-1 px-2 text-[11px]"
-            onClick={() => refreshWebAnnotations(environmentId, { full: true })}
+            onClick={() => refreshWebAnnotations(environmentId, { full: true }, annotationScope)}
           >
             <RefreshCw className="h-3 w-3" />
             Retry

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { EyeOff } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -71,6 +72,8 @@ export function SavedImageControls({
   annotation: WebAnnotation;
   capture: WebAnnotationCapture;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId, features, announce } = useAnnotationPanel();
   const [confirmExclude, setConfirmExclude] = useState(false);
   const [redacting, setRedacting] = useState<{ dataUrl: string } | null>(null);
@@ -84,15 +87,20 @@ export function SavedImageControls({
 
   const replace = async (label: string, input: WebAnnotationCaptureInput) => {
     operationRef.current ??= newWebAnnotationOperationId("image-privacy");
-    await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.captureReplace, {
-      environmentId,
-      operationId: operationRef.current,
-      annotationId: annotation.id,
-      expectedContentRevision: annotation.contentRevision,
-      capture: input,
-    });
+    await webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.captureReplace,
+      {
+        environmentId,
+        operationId: operationRef.current,
+        annotationId: annotation.id,
+        expectedContentRevision: annotation.contentRevision,
+        capture: input,
+      },
+      undefined,
+      annotationScope,
+    );
     operationRef.current = null;
-    refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] });
+    refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] }, annotationScope);
     announce(label);
   };
 
@@ -118,10 +126,15 @@ export function SavedImageControls({
 
   const startRedaction = () =>
     run(async () => {
-      const { data } = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.assetGet, {
-        environmentId,
-        assetId,
-      });
+      const { data } = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.assetGet,
+        {
+          environmentId,
+          assetId,
+        },
+        undefined,
+        annotationScope,
+      );
       setRedacting({ dataUrl: `data:image/png;base64,${data}` });
     });
 
@@ -132,12 +145,17 @@ export function SavedImageControls({
         return;
       }
       const redacted = await redactPngDataUrl(dataUrl, regions);
-      const staged = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.assetStage, {
-        environmentId,
-        operationId: newWebAnnotationOperationId("redacted-asset"),
-        mediaType: "image/png",
-        data: pngBase64FromDataUrl(redacted),
-      });
+      const staged = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.assetStage,
+        {
+          environmentId,
+          operationId: newWebAnnotationOperationId("redacted-asset"),
+          mediaType: "image/png",
+          data: pngBase64FromDataUrl(redacted),
+        },
+        undefined,
+        annotationScope,
+      );
       await replace(
         "Redacted image saved",
         capturePrivacyRevision(capture, {

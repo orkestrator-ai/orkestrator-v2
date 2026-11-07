@@ -112,6 +112,8 @@ export function RequestCard({
   /** Prepare a follow-up request (`followUpOf`) for the chosen remaining notes. */
   onFollowUp: (items: ComposerItem[], followUpOf: string) => void;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId, announce, navigateToPage, features } = useAnnotationPanel();
   // The annotation's environment is on the node of the scope this card renders in.
   const scopeNodeId = useScopesWithCommandFallback().scope.nodeId;
@@ -141,10 +143,15 @@ export function RequestCard({
     if (!terminal || request.state === "cancelled" || request.state === "abandoned-unconfirmed")
       return;
     let cancelled = false;
-    void webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestResponse, {
-      environmentId,
-      requestId: request.id,
-    })
+    void webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.requestResponse,
+      {
+        environmentId,
+        requestId: request.id,
+      },
+      undefined,
+      annotationScope,
+    )
       .then((value) => {
         if (!cancelled)
           setResponse({ excerpt: value.response, sourceAvailable: value.sourceAvailable });
@@ -155,7 +162,7 @@ export function RequestCard({
     return () => {
       cancelled = true;
     };
-  }, [environmentId, request.id, request.response, request.state, terminal]);
+  }, [annotationScope, environmentId, request.id, request.response, request.state, terminal]);
 
   const run = async (key: string, action: () => Promise<string | null>) => {
     setBusy(key);
@@ -166,10 +173,14 @@ export function RequestCard({
         setMessage(outcome);
         announce(outcome);
       }
-      refreshWebAnnotations(environmentId, {
-        annotationIds: [annotation.id],
-        requestIds: [request.id],
-      });
+      refreshWebAnnotations(
+        environmentId,
+        {
+          annotationIds: [annotation.id],
+          requestIds: [request.id],
+        },
+        annotationScope,
+      );
     } catch (error) {
       const text = describeWebAnnotationError(error);
       setMessage(text);
@@ -209,11 +220,16 @@ export function RequestCard({
 
   const stop = (queued = false) =>
     run(queued ? "cancel" : "stop", async () => {
-      const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestCancel, {
-        environmentId,
-        requestId: request.id,
-        expectedRevision: request.revision,
-      });
+      const result = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.requestCancel,
+        {
+          environmentId,
+          requestId: request.id,
+          expectedRevision: request.revision,
+        },
+        undefined,
+        annotationScope,
+      );
       if (result.outcome === "cancelled")
         return queued ? "Request cancelled. It was never sent." : "Request stopped.";
       if (result.outcome === "cancelling")
@@ -223,11 +239,16 @@ export function RequestCard({
 
   const recover = (action: "retry" | "reconcile" | "discard") =>
     run(action, async () => {
-      await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestRecover, {
-        environmentId,
-        requestId: request.id,
-        action,
-      });
+      await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.requestRecover,
+        {
+          environmentId,
+          requestId: request.id,
+          action,
+        },
+        undefined,
+        annotationScope,
+      );
       setConfirmDiscard(false);
       if (action === "retry") return "Retrying delivery with the same request.";
       if (action === "discard")
@@ -240,15 +261,20 @@ export function RequestCard({
     resolveOperationRef.current ??= newWebAnnotationOperationId("resolve");
     void run("accept", async () => {
       try {
-        await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.resolve, {
-          environmentId,
-          operationId: resolveOperationRef.current!,
-          annotationId: annotation.id,
-          expectedContentRevision: selection.contentRevision,
-          expectedCaptureId: selection.captureId,
-          requestId: request.id,
-          ...(result ? { resultId: result.id, expectedResultRevision: result.revision } : {}),
-        });
+        await webAnnotationCommand(
+          WEB_ANNOTATION_COMMANDS.resolve,
+          {
+            environmentId,
+            operationId: resolveOperationRef.current!,
+            annotationId: annotation.id,
+            expectedContentRevision: selection.contentRevision,
+            expectedCaptureId: selection.captureId,
+            requestId: request.id,
+            ...(result ? { resultId: result.id, expectedResultRevision: result.revision } : {}),
+          },
+          undefined,
+          annotationScope,
+        );
         resolveOperationRef.current = null;
         setStaleAccept(null);
         return "Accepted and resolved.";

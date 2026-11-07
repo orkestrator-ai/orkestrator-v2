@@ -13,6 +13,7 @@
  * so a newer server draft becomes a conflict rather than being overwritten.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   WEB_ANNOTATION_COMMANDS,
   type WebAnnotationDraft,
@@ -74,6 +75,8 @@ export function useAnnotationDraft({
   context: DraftContext;
   enabled: boolean;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const [text, setTextState] = useState("");
   const [status, setStatus] = useState<DraftStatus>(enabled ? "loading" : "idle");
   const [error, setError] = useState<string | null>(null);
@@ -188,7 +191,12 @@ export function useAnnotationDraft({
     }
     setStatus(local ? "dirty" : "loading");
     let cancelled = false;
-    void webAnnotationCommand(WEB_ANNOTATION_COMMANDS.draftGet, { environmentId, editorId })
+    void webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.draftGet,
+      { environmentId, editorId },
+      undefined,
+      annotationScope,
+    )
       .then((result) => {
         if (cancelled || keyRef.current !== key) return;
         const draft = result?.draft ?? null;
@@ -244,7 +252,7 @@ export function useAnnotationDraft({
         if (!conflictRef.current && dirtyRef.current) void persistRef.current();
       }
     };
-  }, [cancelRetry, editorId, enabled, environmentId, key, syncLocalNow]);
+  }, [annotationScope, cancelRetry, editorId, enabled, environmentId, key, syncLocalNow]);
 
   const persist = useCallback(async (): Promise<void> => {
     if (!enabled) return;
@@ -261,15 +269,20 @@ export function useAnnotationDraft({
         const snapshot = textRef.current;
         if (mountedRef.current) setStatus("saving");
         try {
-          const { draft } = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.draftSave, {
-            environmentId,
-            editorId,
-            expectedRevision: revisionRef.current,
-            text: snapshot,
-            annotationId: contextRef.current.annotationId ?? null,
-            captureId: contextRef.current.captureId ?? null,
-            pendingCaptureId: contextRef.current.pendingCaptureId ?? null,
-          });
+          const { draft } = await webAnnotationCommand(
+            WEB_ANNOTATION_COMMANDS.draftSave,
+            {
+              environmentId,
+              editorId,
+              expectedRevision: revisionRef.current,
+              text: snapshot,
+              annotationId: contextRef.current.annotationId ?? null,
+              captureId: contextRef.current.captureId ?? null,
+              pendingCaptureId: contextRef.current.pendingCaptureId ?? null,
+            },
+            undefined,
+            annotationScope,
+          );
           if (keyRef.current !== requestKey) {
             // The editor switched while this flush was in flight: the text it
             // saved is now on the backend, so its local copy can go.
@@ -289,10 +302,15 @@ export function useAnnotationDraft({
         } catch (saveError) {
           if (keyRef.current !== requestKey || !mountedRef.current) return;
           if (isWebAnnotationConflict(saveError)) {
-            const server = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.draftGet, {
-              environmentId,
-              editorId,
-            }).catch(() => ({ draft: null as WebAnnotationDraft | null }));
+            const server = await webAnnotationCommand(
+              WEB_ANNOTATION_COMMANDS.draftGet,
+              {
+                environmentId,
+                editorId,
+              },
+              undefined,
+              annotationScope,
+            ).catch(() => ({ draft: null as WebAnnotationDraft | null }));
             if (!mountedRef.current || keyRef.current !== requestKey) return;
             setConflict({
               local: textRef.current,
@@ -317,7 +335,7 @@ export function useAnnotationDraft({
     });
     savingRef.current = promise;
     return promise;
-  }, [cancelRetry, enabled, syncLocalNow]);
+  }, [annotationScope, cancelRetry, enabled, syncLocalNow]);
   useLayoutEffect(() => {
     persistRef.current = persist;
   }, [persist]);
@@ -429,14 +447,19 @@ export function useAnnotationDraft({
     setTextState("");
     setStatus("idle");
     if (!enabled || revision === 0) return;
-    await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.draftDelete, {
-      environmentId,
-      editorId,
-      expectedRevision: revision,
-    }).catch(() => undefined);
+    await webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.draftDelete,
+      {
+        environmentId,
+        editorId,
+        expectedRevision: revision,
+      },
+      undefined,
+      annotationScope,
+    ).catch(() => undefined);
     // Typing may already have created a newer revision; keep that one.
     if (revisionRef.current === revision) revisionRef.current = 0;
-  }, [cancelRetry, enabled, syncLocalNow]);
+  }, [annotationScope, cancelRetry, enabled, syncLocalNow]);
 
   /**
    * After publishing `saved`, clear only what was published: text typed while

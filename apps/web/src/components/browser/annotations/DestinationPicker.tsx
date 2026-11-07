@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
@@ -93,6 +94,8 @@ export function DestinationPicker({
    */
   operation?: WebAnnotationRequestOperation | null;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const [options, setOptions] = useState<WebAnnotationDestinationOption[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -121,7 +124,12 @@ export function DestinationPicker({
    */
   const fetchOptions = useCallback(
     () =>
-      webAnnotationCommand(WEB_ANNOTATION_COMMANDS.destinations, { environmentId })
+      webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.destinations,
+        { environmentId },
+        undefined,
+        annotationScope,
+      )
         .then((result) => {
           const usable = excludeTabId
             ? result.options.filter((option) => option.destination.tabId !== excludeTabId)
@@ -140,7 +148,7 @@ export function DestinationPicker({
         .finally(() => {
           setLoading(false);
         }),
-    [environmentId, excludeTabId],
+    [annotationScope, environmentId, excludeTabId],
   );
   const refresh = () => {
     setLoading(true);
@@ -172,15 +180,24 @@ export function DestinationPicker({
       .getState()
       .rememberDestination(environmentId, option.destination.tabId);
     if (defaultFor) {
-      void webAnnotationCommand(WEB_ANNOTATION_COMMANDS.update, {
-        environmentId,
-        operationId: newWebAnnotationOperationId("default-destination"),
-        annotationId: defaultFor.annotationId,
-        expectedMetadataRevision: defaultFor.metadataRevision,
-        defaultDestination: option.destination,
-      })
+      void webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.update,
+        {
+          environmentId,
+          operationId: newWebAnnotationOperationId("default-destination"),
+          annotationId: defaultFor.annotationId,
+          expectedMetadataRevision: defaultFor.metadataRevision,
+          defaultDestination: option.destination,
+        },
+        undefined,
+        annotationScope,
+      )
         .then(() =>
-          refreshWebAnnotations(environmentId, { annotationIds: [defaultFor.annotationId] }),
+          refreshWebAnnotations(
+            environmentId,
+            { annotationIds: [defaultFor.annotationId] },
+            annotationScope,
+          ),
         )
         .catch(() => undefined);
     }

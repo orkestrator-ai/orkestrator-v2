@@ -54,7 +54,7 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * A node in the window's own tree (`inTree`, plan item 4005) shares the
  * window's document and stores, so what the window's stores already hold is
  * read there directly and not sent (report Appendix C): the sidebar is
- * `uiChromeStore`'s.
+ * `uiChromeStore`'s, the files panel's open state `filesPanelChromeStore`'s.
  */
 export interface RealmRequestsOptions {
   /** The node is shown in the window's own tree (`InTreeWorkspace`), over a loopback. */
@@ -110,8 +110,9 @@ export function useRealmRequests(
   }, [inTree, send, sidebarOpen]);
 
   useEffect(() => {
-    if (send && ready.current && !phoneLayout) send({ type: "filesPanel", open: filesPanelOpen });
-  }, [send, filesPanelOpen, phoneLayout]);
+    if (send && ready.current && !phoneLayout && !inTree)
+      send({ type: "filesPanel", open: filesPanelOpen });
+  }, [inTree, send, filesPanelOpen, phoneLayout]);
 
   useEffect(() => {
     if (send && ready.current) send({ type: "grouping", grouping });
@@ -182,7 +183,7 @@ export function useRealmRequests(
       if (message.type === "ready") {
         ready.current = true;
         if (!inTree) latest.current.send?.({ type: "sidebar", open: latest.current.sidebarOpen });
-        if (!latest.current.phoneLayout) {
+        if (!latest.current.phoneLayout && !inTree) {
           latest.current.send?.({ type: "filesPanel", open: latest.current.filesPanelOpen });
         }
         latest.current.send?.({ type: "grouping", grouping: latest.current.grouping });
@@ -199,7 +200,7 @@ export function useRealmRequests(
         // In the window's tree the toolbar writes the window's store itself.
         if (!inTree) useUIChromeStore.getState().setSidebarOpen(message.open);
       } else if (message.type === "filesPanel") {
-        if (latest.current.phoneLayout) return;
+        if (latest.current.phoneLayout || inTree) return;
         if (useFilesPanelChromeStore.getState().isOpen !== message.open) {
           useFilesPanelChromeStore.setState({ isOpen: message.open });
         }

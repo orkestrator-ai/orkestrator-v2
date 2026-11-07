@@ -22,6 +22,7 @@ import { closeInTreeScopes, configureInTreeScopes } from "@/lib/federation/in-tr
 import { observeRealmLoopbacks, type RealmLoopbackTraffic } from "@/lib/federation/realm-channel";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { WindowScopeProvider } from "@/lib/node-scope/providers";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -170,4 +171,16 @@ test("sidebar: the in-tree workspace and the window share one store; nothing is 
   await settle();
   expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
   expect(directTraffic().filter((entry) => entry.endsWith(":sidebar"))).toEqual([]);
+});
+
+test("filesPanel: one open state for every machine, read and toggled in place", async () => {
+  await openLeaf();
+  await settle();
+  // The window opens the panel; the in-tree layout reads the same store.
+  act(() => useFilesPanelChromeStore.getState().openPanel());
+  await settle();
+  act(() => useFilesPanelChromeStore.getState().togglePanel());
+  await settle();
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
+  expect(directTraffic().filter((entry) => entry.endsWith(":filesPanel"))).toEqual([]);
 });

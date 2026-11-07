@@ -170,14 +170,17 @@ export function WorkspaceRealmHost() {
           }),
     [channel, inTree],
   );
+  // In the window's tree the files panel's state is the window's own store.
   useEffect(
     () =>
-      useFilesPanelChromeStore.subscribe((state, previous) => {
-        if (state.isOpen !== previous.isOpen && !applyingShellFilesPanel.current) {
-          channel.post({ type: "filesPanel", open: state.isOpen });
-        }
-      }),
-    [channel],
+      inTree
+        ? undefined
+        : useFilesPanelChromeStore.subscribe((state, previous) => {
+            if (state.isOpen !== previous.isOpen && !applyingShellFilesPanel.current) {
+              channel.post({ type: "filesPanel", open: state.isOpen });
+            }
+          }),
+    [channel, inTree],
   );
 
   useEffect(

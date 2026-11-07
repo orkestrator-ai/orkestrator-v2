@@ -537,6 +537,24 @@ command node.
   it expired, closes the leaf's terminal sockets and event streams it authorized
   and refuses their queued terminal operations
   ([terminal transport](remote-gateway.md#compression-and-terminal-transport)).
+- **Relayed event streams share one request.** Over plain HTTP/1.1 a browser
+  holds at most six connections to the command node's origin, the window's
+  own streams take four, and every relayed leaf's main event stream takes
+  another. Once two or more relayed leaves shown in the window's own tree
+  are warm at once, their main streams move onto one request,
+  `GET /__orkestrator/nodes/events?nodes=a,b`
+  (`nodes/node-event-multiplexer.ts`, `lib/node-scope/multiplexed-relay-stream.ts`,
+  wire format in `@orkestrator/protocol/multiplexed-relay-events`; plan item
+  5005). The command node opens one subscription per leaf with the cursor
+  the client sent and forwards the leaf's frames unchanged, tagged with
+  their node, so each node keeps the main stream's replay contract: a gap is
+  that leaf's to replay or reconcile, and a leaf that drops is reopened from
+  the last cursor forwarded. Each node needs a workspace the client opened
+  for it on this command node; a node without one is refused and reads its
+  own stream. At most 8 nodes per request and 32 requests per command node;
+  leaf frames up to 8 MiB; a response holding more than 16 MiB is closed and
+  every node resumes from its own cursor. An older command node answers 404,
+  and the browser keeps one stream per leaf.
 - **Switching** never reloads the window. Another environment of a node whose
   realm is open is a message to that realm and an instant selection there.
   The window keeps a few realms open, hidden (`MAX_OPEN_REALMS`), so going

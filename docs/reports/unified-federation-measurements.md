@@ -281,3 +281,80 @@ per workspace realm, labelled by the SHA-256 prefix of the node id that its
 storage partition already uses.
 
 A packaged app never samples. The lines hold numbers only.
+
+## 5005: one relayed request for N leaves' event streams
+
+Measured 2026-11-07 for plan item
+[5005](../../plans/unified/5005-multiplexed-relay-stream.md), after it was
+built (the "Recommendation on 5005" above).
+
+### What ran
+
+- **Code:** branch `unified-federation-b4c9ee65814d` at `0fb112063`, in a
+  separate detached worktree with a frozen install.
+- **Host:** the same Mac, loopback only.
+- **Nodes:** two `dev:test` profiles, `uf-5005-cmd` (command node) and
+  `uf-5005-leaf` (attached with `add_node`), both `--fixture
+  --no-agent-credentials --headless --agent-platforms claude` with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off` and the agent session's
+  `ORKESTRATOR_*`/`CLAUDE*` variables removed; two more leaves (Leaf2,
+  Leaf3) run from the worktree's source with throwaway data directories,
+  attached to `uf-5005-cmd`. Each leaf had one local environment.
+- **Browser:** Playwright Chromium (build 1248), headless, one fresh
+  context per run. Every leaf origin was blocked with CDP
+  `Network.setBlockedURLs`, so every leaf took the relay. All three leaves
+  were shown in the window's own tree (4001's `in-tree-nodes` setting,
+  written to the page's storage before load). Leaves were opened one after
+  another; each stays warm (the browser suspends a hidden scope after
+  5 min), so with N opened, N relayed leaves were warm at once.
+- **Before and after on the same build.** "Before": the page's request to
+  `/__orkestrator/nodes/events` was answered 404 (CDP `Fetch`, only that
+  path), which is exactly what an older command node answers, so every
+  relayed leaf read its own stream as before 5005. "After": the route as
+  built.
+- **Counting:** after the last leaf opened, 10 s to settle, then a 30 s
+  window. A long-lived request had a response before the window and was
+  still open at its end; a stalled request had no response after 30 s.
+  Counted from Playwright's context events (which include the window's own
+  streams), cross-checked with the page target's CDP Network domain (same
+  totals in every run). Scripts and JSON are in the ignored
+  `output/agent-testing/uf-5005/`. No tokens, prompts, transcripts or file
+  contents were recorded.
+
+### Results (command node's origin, HTTP/1.1)
+
+| Relayed in-tree leaves warm | Long-lived, before | Long-lived, after | Stalled > 30 s, before | Stalled > 30 s, after | Most requests in flight, before / after |
+|---|---|---|---|---|---|
+| 1 | 5 (`/events` ×2, `/session`, `/client-metrics`, 1 relayed leaf `/events`) | 5 (the same: one leaf keeps its own stream) | 0 | 0 | 5 / 5 |
+| 2 | 6 (2 relayed leaf `/events`): the pool is full | 5 (1 `/nodes/events` for both) | 0 | 0 | 6 / 6 |
+| 3 | 8 (4 relayed leaf `/events`, see below) | 5 (1 `/nodes/events` for all three) | **12** (`invoke` 3 of the window's own, relayed leaf `invoke` 9) | **0** | 23 / 5 |
+
+- `nextHopProtocol` and CDP's response protocol were `http/1.1` on the
+  command origin in every run; no response came from a leaf origin.
+- **Relief:** with the shared request the command origin holds five
+  long-lived requests whatever the number of relayed leaves (up to 8 per
+  request), so one of HTTP/1.1's six connections stays free for commands.
+  Before it, a third warm relayed leaf left 12 commands, the window's own
+  among them, waiting more than 30 s.
+- **Every leaf's events arrived on the one request.** After each window, one
+  `backend-profile-changed` was raised on each leaf (its profile saved
+  unchanged, through `invoke_on_node`), and the shared request's body
+  (CDP `Network.streamResourceContent`) carried it for every leaf: with
+  three leaves, Leaf, Leaf2 and Leaf3 each had their `gateway.connected`
+  and their `backend-profile-changed` as node frames, beside 2
+  `mux.connected` and 5 `mux.node` control frames.
+- **Joins cost one reopen.** With three leaves the page made two shared
+  requests: one when the second leaf joined (both nodes), one when the third
+  did (all three, each resuming from its own cursor, so the first two
+  leaves' second `gateway.connected` was a caught-up handshake). The first
+  leaf moved off its own stream onto the shared one when the second joined.
+- **All leaves opened in 159–219 ms** in both modes; the stall shows in the
+  commands that followed, not in the open.
+- **The "before, 3" row counts four relayed leaf streams for three leaves.**
+  One relayed `/events` that had answered was never reported finished by
+  either Playwright or CDP while the pool was exhausted; Chromium also keeps
+  separate HTTP/1.1 pools for credentialed and uncredentialed requests, so
+  eight responded requests can be open at once. The stall count is the
+  number that matters there.
+- Not measured: a real LAN or tailnet, WebKit, and the desktop (its node
+  traffic goes over IPC, so 5005 does not apply to it).

@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import type { CommandContext } from "./commands.js";
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { registerTmuxBackendCommands } from "./tmux-commands.js";
 import { TmuxSession } from "./tmux-session-manager.js";
@@ -49,9 +50,15 @@ describe("tmux liveness reuse", () => {
       string,
       (args: Record<string, unknown>, context: CommandContext) => unknown
     >();
-    registerTmuxBackendCommands((name, handler) => {
-      commands.set(name, handler as never);
-    });
+    // The fake session's status is partial, so its result is not validated.
+    registerTmuxBackendCommands(
+      registrarFrom(
+        (name, handler) => {
+          commands.set(name, handler as never);
+        },
+        { validateResults: false },
+      ),
+    );
     const status = commands.get("claude_tmux_status")!;
     let probes = 0;
     let recent: boolean | undefined = true;

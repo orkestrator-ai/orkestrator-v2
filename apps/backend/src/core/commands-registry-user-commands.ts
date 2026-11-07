@@ -1,6 +1,13 @@
 import { stat } from "node:fs/promises";
 
 import {
+  cancelUserCommandCommand,
+  listHumanPromptsCommand,
+  listUserCommandsCommand,
+  runUserCommandCommand,
+  writeUserCommandInputCommand,
+} from "@orkestrator/protocol/contract/domains/terminals";
+import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
@@ -11,13 +18,14 @@ import {
 } from "./agent-accounts-active.js";
 import { envWithManagedBinaries } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   assertEnvironmentDeletionNotRequested,
   resolveLocalShellPath,
   terminalEnv,
 } from "./commands-terminal.js";
-import { asBoolean, asString } from "./commands-validation.js";
+import { asBoolean } from "./commands-validation.js";
 import { lowPriorityCommand } from "./process-priority.js";
 import { spawnPty } from "./pty.js";
 import { spawnContainerUserCommand } from "./user-command-container.js";
@@ -212,31 +220,28 @@ async function localLaunch(
 }
 
 export function registerUserCommandCommands(register: CommandRegistrar): void {
-  register("run_user_command", async ({ environmentId, tabId, command }, context) =>
-    service(context).run({
-      environmentId: asString(environmentId, "environmentId"),
-      tabId: asString(tabId, "tabId"),
-      command: asString(command, "command"),
-    }),
+  register(
+    runUserCommandCommand,
+    async ({ environmentId, tabId, command }, context) =>
+      service(context).run({ environmentId, tabId, command }),
+    ASYNC_HANDLER,
   );
-  register("list_user_commands", ({ environmentId, tabId }, context) => {
-    const environment = asString(environmentId, "environmentId");
-    const tab = asString(tabId, "tabId");
-    return {
-      environmentId: environment,
-      tabId: tab,
-      commands: context.userCommands?.list(environment, tab) ?? [],
-    };
-  });
-  register("write_user_command_input", ({ id, text, enter }, context) =>
-    service(context).write(asString(id, "id"), typeof text === "string" ? text : "", {
+  register(listUserCommandsCommand, ({ environmentId, tabId }, context) => ({
+    environmentId,
+    tabId,
+    commands: context.userCommands?.list(environmentId, tabId) ?? [],
+  }));
+  register(writeUserCommandInputCommand, ({ id, text, enter }, context) =>
+    service(context).write(id, typeof text === "string" ? text : "", {
       enter: asBoolean(enter, true),
     }),
   );
-  register("cancel_user_command", async ({ id }, context) =>
-    service(context).cancel(asString(id, "id")),
+  register(
+    cancelUserCommandCommand,
+    async ({ id }, context) => service(context).cancel(id),
+    ASYNC_HANDLER,
   );
-  register("list_human_prompts", ({ environmentIds, tabId }, context) => ({
+  register(listHumanPromptsCommand, ({ environmentIds, tabId }, context) => ({
     prompts:
       context.humanPrompts?.list({
         ...(Array.isArray(environmentIds)

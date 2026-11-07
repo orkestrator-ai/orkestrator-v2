@@ -32,6 +32,7 @@ import {
 } from "../src/core/tmux";
 
 import { BackendRuntime } from "../src/core/backend-runtime";
+import { registrarFrom } from "../src/core/commands-registry-contracts";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 
@@ -711,9 +712,12 @@ afterEach(async () => {
 
 export function createHandlers(options: Parameters<typeof registerTmuxBackendCommands>[1] = {}) {
   const handlers = new Map<string, (args: Record<string, unknown>, context: unknown) => unknown>();
-  registerTmuxBackendCommands((name, handler) => {
-    handlers.set(name, handler as (args: Record<string, unknown>, context: unknown) => unknown);
-  }, options);
+  registerTmuxBackendCommands(
+    registrarFrom((name, handler) => {
+      handlers.set(name, handler as (args: Record<string, unknown>, context: unknown) => unknown);
+    }),
+    options,
+  );
   return handlers;
 }
 

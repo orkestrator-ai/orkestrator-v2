@@ -7,7 +7,7 @@ import { dispatchResourceChange } from "@/lib/resource-sync";
 import { environmentStore } from "@/stores/environmentStore";
 import { graphDescribeStore } from "@/stores/graphDescribeStore";
 import { graphDesignerStore } from "@/stores/graphDesignerStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import { GraphDesignerTab } from "./GraphDesignerTab";
 import { builtInDetail, listResult } from "./graph-designer.test-fixtures";
@@ -84,7 +84,7 @@ function seedStores() {
   appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,

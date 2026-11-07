@@ -11,7 +11,7 @@ import {
 } from "bun:test";
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
@@ -45,7 +45,7 @@ let nextAnimationFrameId = 0;
 const pendingAnimationFrames = new Set<number>();
 
 function setBrowserTab(url = "", includeNativeAgent = false) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: "env-1",
     environments: new Map([
       [
@@ -345,7 +345,7 @@ describe("BrowserTab", () => {
   });
 
   test("focuses the browser address in the focused pane when two previews are visible", () => {
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-1",
       environments: new Map([
         [
@@ -447,7 +447,7 @@ describe("BrowserTab", () => {
   });
 
   test("activates the owning pane when Cmd+L comes from a native preview", () => {
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-1",
       environments: new Map([
         [
@@ -509,7 +509,9 @@ describe("BrowserTab", () => {
     expect(document.activeElement).toBe(address);
     expect(address.selectionStart).toBe(0);
     expect(address.selectionEnd).toBe(address.value.length);
-    expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-left");
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.activePaneId,
+    ).toBe("pane-left");
   });
 
   test("normalizes, loads, and persists a submitted backend-local address", async () => {
@@ -521,7 +523,7 @@ describe("BrowserTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
 
     await waitFor(() => {
-      const environment = usePaneLayoutStore.getState().environments.get("env-1");
+      const environment = appCommandStore(paneLayoutStore).getState().environments.get("env-1");
       if (!environment || environment.root.kind !== "leaf") throw new Error("expected leaf");
       expect(environment.root.tabs[0]?.browserData?.url).toBe("http://localhost:3000/");
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
@@ -672,7 +674,8 @@ describe("BrowserTab", () => {
       fireEvent.click(notes);
       await waitFor(() =>
         expect(
-          usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.annotationPanel?.open,
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData
+            ?.annotationPanel?.open,
         ).toBe(true),
       );
     } finally {
@@ -705,7 +708,7 @@ describe("BrowserTab", () => {
 
   test("keeps a narrow native preview visible when a persisted panel cannot open", async () => {
     setBrowserTab("http://localhost:3000/");
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserAnnotationPanel("browser-1", { open: true }, "env-1");
     const native = installNativePreview({ capture: createFakeCaptureApi().api });
@@ -723,7 +726,7 @@ describe("BrowserTab", () => {
       disconnect() {}
     } as unknown as typeof ResizeObserver;
     try {
-      const data = usePaneLayoutStore.getState().getAllTabs("env-1")[0]!.browserData!;
+      const data = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]!.browserData!;
       render(<BrowserTab tabId="browser-1" environmentId="env-1" data={data} isActive />);
       const notes = await screen.findByRole("button", { name: "Annotations unavailable" });
       await waitFor(() =>
@@ -739,14 +742,14 @@ describe("BrowserTab", () => {
 
   test("renders the notes panel beside the native preview host and cancels selection on reload", async () => {
     setBrowserTab("http://localhost:5173/settings?tab=profile");
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserAnnotationPanel("browser-1", { open: true }, "env-1");
     const capture = createFakeCaptureApi();
     const native = installNativePreview({ capture: capture.api });
     new FakeWebAnnotationBackend("env-1").install();
     try {
-      const data = usePaneLayoutStore.getState().getAllTabs("env-1")[0]!.browserData!;
+      const data = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]!.browserData!;
       const { container } = render(
         <BrowserTab tabId="browser-1" environmentId="env-1" data={data} isActive />,
       );
@@ -910,7 +913,9 @@ describe("BrowserTab", () => {
     // React double-invokes state updaters in development, so recording history
     // inside one made the second invocation read the cursor the first had
     // already advanced and keep the entry it was truncating.
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData,
+    ).toMatchObject({
       url: "http://localhost:6000/",
       history: ["http://localhost:3000/", "http://localhost:4000/", "http://localhost:6000/"],
       historyIndex: 2,
@@ -934,7 +939,9 @@ describe("BrowserTab", () => {
     fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "4100" } });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
 
-    const recorded = usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData;
+    const recorded = appCommandStore(paneLayoutStore)
+      .getState()
+      .getAllTabs("env-1")[0]?.browserData;
     expect(recorded?.history).toHaveLength(100);
     expect(recorded?.history?.[0]).toBe(history[1]);
     expect(recorded?.history?.[99]).toBe("http://localhost:4100/");
@@ -942,9 +949,9 @@ describe("BrowserTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe(history[99]);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(
-      98,
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData?.historyIndex,
+    ).toBe(98);
   });
 
   test("records a navigation from a cursor left behind the newest entry", () => {
@@ -962,7 +969,9 @@ describe("BrowserTab", () => {
     fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "6000" } });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
 
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData,
+    ).toMatchObject({
       url: "http://localhost:6000/",
       history: [history[0], "http://localhost:6000/"],
       historyIndex: 1,
@@ -1325,7 +1334,7 @@ describe("BrowserTab", () => {
     );
     expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(false);
-    const environment = usePaneLayoutStore.getState().environments.get("env-1");
+    const environment = appCommandStore(paneLayoutStore).getState().environments.get("env-1");
     if (!environment || environment.root.kind !== "leaf") throw new Error("expected leaf");
     expect(environment.root.tabs[0]?.browserData?.url).toBe("http://localhost:3000/docs?q=1#intro");
 
@@ -1362,7 +1371,7 @@ describe("BrowserTab", () => {
         "http://localhost:3000/direct?q=1#result",
       ),
     );
-    const environment = usePaneLayoutStore.getState().environments.get("env-1");
+    const environment = appCommandStore(paneLayoutStore).getState().environments.get("env-1");
     if (!environment || environment.root.kind !== "leaf") throw new Error("expected leaf");
     expect(environment.root.tabs[0]?.browserData?.url).toBe(
       "http://localhost:3000/direct?q=1#result",
@@ -1496,7 +1505,7 @@ describe("BrowserTab", () => {
     });
     const history = ["http://localhost:3000/", "http://localhost:4000/"];
     setBrowserTab("http://localhost:4000/");
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[1]!, "env-1", history, 1);
     render(
@@ -1518,7 +1527,9 @@ describe("BrowserTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("history failed"));
 
-    const persisted = usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData;
+    const persisted = appCommandStore(paneLayoutStore)
+      .getState()
+      .getAllTabs("env-1")[0]?.browserData;
     expect(persisted).toMatchObject({ url: history[1], historyIndex: 1, history });
   });
 
@@ -1537,7 +1548,7 @@ describe("BrowserTab", () => {
       goBack,
     });
     setBrowserTab(history[1]!);
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[1]!, "env-1", history, 1);
     const view = render(
@@ -1559,7 +1570,7 @@ describe("BrowserTab", () => {
       ),
     );
     native.browserPreview.attach.mockClear();
-    const persistedBeforeBack = usePaneLayoutStore.getState().environments;
+    const persistedBeforeBack = appCommandStore(paneLayoutStore).getState().environments;
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     // The RPC resolves before Chromium commits the navigation, so its snapshot
@@ -1580,7 +1591,7 @@ describe("BrowserTab", () => {
     // Only the surface fields of that snapshot are applied.
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
     expect(native.browserPreview.attach).not.toHaveBeenCalled();
-    expect(usePaneLayoutStore.getState().environments).toBe(persistedBeforeBack);
+    expect(appCommandStore(paneLayoutStore).getState().environments).toBe(persistedBeforeBack);
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
       "http://localhost:9000/",
     );
@@ -1591,9 +1602,9 @@ describe("BrowserTab", () => {
         history[1]!,
       ),
     );
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url).toBe(
-      history[1]!,
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData?.url,
+    ).toBe(history[1]!);
     // Every attach the move caused carries Chromium's own URL. The tracked
     // entry for index 0 is never reattached, which is what truncated the real
     // forward history.
@@ -1749,7 +1760,7 @@ describe("BrowserTab", () => {
       goBack,
     });
     setBrowserTab(history[2]!);
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[2]!, "env-1", history, 2);
     render(
@@ -1769,7 +1780,9 @@ describe("BrowserTab", () => {
     // Two clicks are two real steps in Chromium, and neither may write a cursor
     // the second click would then recompute from a stale value.
     expect(goBack).toHaveBeenCalledTimes(2);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData,
+    ).toMatchObject({
       url: history[2],
       historyIndex: 2,
       history,
@@ -1790,7 +1803,9 @@ describe("BrowserTab", () => {
     // The address the user sees and the durable address agree with the preview,
     // and no cursor was advanced behind them: two clicks that each computed the
     // same next index used to persist one that contradicted the address.
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData,
+    ).toMatchObject({
       url: history[0],
       historyIndex: 2,
       history,
@@ -1811,7 +1826,7 @@ describe("BrowserTab", () => {
       goForward,
     });
     setBrowserTab(history[0]!);
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[0]!, "env-1", history, 0);
     render(
@@ -1827,7 +1842,9 @@ describe("BrowserTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("forward failed"));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData,
+    ).toMatchObject({
       url: history[0],
       historyIndex: 0,
       history,
@@ -1835,13 +1852,15 @@ describe("BrowserTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
     await waitFor(() => expect(goForward).toHaveBeenCalledTimes(2));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url).toBe(history[0]);
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData?.url,
+    ).toBe(history[0]);
 
     native.emitState(previewState({ url: history[1], canGoBack: true }));
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url).toBe(
-        history[1]!,
-      ),
+      expect(
+        appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.browserData?.url,
+      ).toBe(history[1]!),
     );
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(history[1]!);
   });

@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { appCommandScope } from "@/lib/node-scope-slots";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { openGraphDesignerTab } from "./graph-designer-open-tab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-1";
 
 function seed(tabs: TabInfo[]) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -22,7 +23,8 @@ function seed(tabs: TabInfo[]) {
 }
 
 function leaf(): PaneLeaf {
-  return usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root as PaneLeaf;
+  return appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!
+    .root as PaneLeaf;
 }
 
 function open(options: {
@@ -31,7 +33,7 @@ function open(options: {
   template?: Parameters<typeof openGraphDesignerTab>[0]["template"];
 }) {
   const addTab = mock((paneId: string, tab: TabInfo, environmentId: string) =>
-    usePaneLayoutStore.getState().addTab(paneId, tab, environmentId),
+    appCommandStore(paneLayoutStore).getState().addTab(paneId, tab, environmentId),
   );
   const onTabLimit = mock(() => {});
   const opened = openGraphDesignerTab({
@@ -63,7 +65,7 @@ describe("openGraphDesignerTab", () => {
     const designer: TabInfo = { id: "graphs", type: "graph-designer", graphDesignerData: {} };
     const tabs: TabInfo[] = [designer, { id: "terminal", type: "plain" }];
     seed(tabs);
-    usePaneLayoutStore.getState().setActiveTab("pane-1", "terminal", ENVIRONMENT_ID);
+    appCommandStore(paneLayoutStore).getState().setActiveTab("pane-1", "terminal", ENVIRONMENT_ID);
     // Opening an existing tab does not count against the limit.
     const { opened, addTab, onTabLimit } = open({
       tabs,
@@ -90,25 +92,25 @@ describe("openGraphDesignerTab", () => {
       { id: "graphs", type: "graph-designer", graphDesignerData: {} },
       { id: "terminal", type: "plain" },
     ]);
-    const store = usePaneLayoutStore.getState();
+    const store = appCommandStore(paneLayoutStore).getState();
     const before = store.environments;
     store.updateTabGraphDesigner(
       "terminal",
       { selected: { scope: "user", id: "x" } },
       ENVIRONMENT_ID,
     );
-    expect(usePaneLayoutStore.getState().environments).toBe(before);
+    expect(appCommandStore(paneLayoutStore).getState().environments).toBe(before);
     store.updateTabGraphDesigner(
       "graphs",
       { selected: { scope: "user", id: "x" } },
       ENVIRONMENT_ID,
     );
-    const after = usePaneLayoutStore.getState().environments;
+    const after = appCommandStore(paneLayoutStore).getState().environments;
     expect(after).not.toBe(before);
     expect(leaf().tabs[0]!.graphDesignerData).toEqual({ selected: { scope: "user", id: "x" } });
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .updateTabGraphDesigner("graphs", { selected: { scope: "user", id: "x" } }, ENVIRONMENT_ID);
-    expect(usePaneLayoutStore.getState().environments).toBe(after);
+    expect(appCommandStore(paneLayoutStore).getState().environments).toBe(after);
   });
 });

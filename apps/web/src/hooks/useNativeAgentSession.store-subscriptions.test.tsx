@@ -13,7 +13,7 @@ import type {
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
@@ -137,7 +137,7 @@ async function settledSession() {
 beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   transcriptKnownTokens.length = 0;
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,

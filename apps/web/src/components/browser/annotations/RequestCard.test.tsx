@@ -9,7 +9,7 @@ import {
 import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createFakeCaptureApi,
   FakeWebAnnotationBackend,
@@ -22,6 +22,7 @@ import {
   seedBrowserLayout,
 } from "@/test/web-annotation-harness";
 import { filesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 let backend: FakeWebAnnotationBackend;
 let bus: ReturnType<typeof installFakeOrkestrator>;
@@ -75,7 +76,7 @@ describe("request cards", () => {
       within(article).getByText(WEB_ANNOTATION_BLOCKED_REASON_LABELS["compose-draft"]),
     ).toBeTruthy();
     fireEvent.click(within(article).getByRole("button", { name: "Open chat" }));
-    const layout = usePaneLayoutStore.getState().environments.get("env-1")!;
+    const layout = appCommandStore(paneLayoutStore).getState().environments.get("env-1")!;
     expect((layout.root as { activeTabId: string }).activeTabId).toBe("tab-agent-1");
 
     fireEvent.click(within(article).getByRole("button", { name: "Choose another session" }));
@@ -142,7 +143,7 @@ describe("request cards", () => {
     render(<AnnotationHarness />);
     const article = await card();
     fireEvent.click(within(article).getByRole("button", { name: "Answer in chat" }));
-    const layout = usePaneLayoutStore.getState().environments.get("env-1")!;
+    const layout = appCommandStore(paneLayoutStore).getState().environments.get("env-1")!;
     expect((layout.root as { activeTabId: string }).activeTabId).toBe("tab-agent-1");
   });
 

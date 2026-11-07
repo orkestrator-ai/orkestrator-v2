@@ -20,7 +20,7 @@ import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
@@ -177,7 +177,7 @@ afterEach(() => {
   enqueuePromptQueueMessageMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
   appCommandStore(environmentStore).setState({ environments: [] });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,

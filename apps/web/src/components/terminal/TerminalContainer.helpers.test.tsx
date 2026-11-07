@@ -21,7 +21,7 @@ import { configStore } from "@/stores/configStore";
 
 import { environmentStore } from "@/stores/environmentStore";
 
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 
@@ -330,7 +330,7 @@ describe("TerminalContainer", () => {
     listenMock.mockReset();
     listenMock.mockResolvedValue(() => undefined);
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-visible",
@@ -530,7 +530,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
         expect(fileTabs).toHaveLength(2);
@@ -575,7 +575,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
         expect(fileTabs).toHaveLength(1);
@@ -624,7 +624,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
         expect(fileTabs.map((tab) => tab.fileData?.changeDiff ?? null)).toEqual([
@@ -662,7 +662,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const fileTabs = usePaneLayoutStore
+        const fileTabs = appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .filter((tab) => tab.type === "file");
@@ -696,7 +696,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
         expect(fileTabs).toHaveLength(1);
@@ -728,7 +728,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
         expect(fileTabs).toHaveLength(1);
@@ -740,7 +740,7 @@ describe("TerminalContainer", () => {
     });
 
     test("activates an existing matching file tab at the limit without reporting an error", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -783,7 +783,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        const environment = appCommandStore(paneLayoutStore)
+          .getState()
+          .environments.get("env-visible");
         if (!environment || environment.root.kind !== "leaf") {
           throw new Error("expected leaf");
         }
@@ -794,7 +796,7 @@ describe("TerminalContainer", () => {
     });
 
     test("creates local file tabs with worktree metadata and no container id", async () => {
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         environments: new Map([
           [
             "env-visible",
@@ -834,7 +836,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const fileTab = env.root.tabs.find((tab) => tab.type === "file");
         expect(fileTab?.fileData).toMatchObject({
@@ -848,7 +850,7 @@ describe("TerminalContainer", () => {
     });
 
     test("does not create a file tab after reaching the tab limit", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -877,7 +879,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const tabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
+        const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible");
         expect(tabs).toHaveLength(MAX_TABS);
         expect(tabs.some((tab) => tab.type === "file")).toBe(false);
       });
@@ -1159,7 +1161,7 @@ describe("TerminalContainer", () => {
     });
 
     test("wires drag-over state into self-collision cross-pane moves and ignores cancelled drops", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "split",
@@ -1215,20 +1217,22 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => {
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getPane("left", "env-visible")
             ?.tabs.map((tab) => tab.id),
         ).toEqual(["b"]);
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getPane("right", "env-visible")
             ?.tabs.map((tab) => tab.id),
         ).toEqual(["x", "a"]);
       });
 
-      const beforeCancelledDrop = usePaneLayoutStore.getState().environments.get("env-visible");
+      const beforeCancelledDrop = appCommandStore(paneLayoutStore)
+        .getState()
+        .environments.get("env-visible");
       act(() => {
         latestDndContextProps!.onDragOver({ over: null });
         latestDndContextProps!.onDragEnd({
@@ -1236,13 +1240,13 @@ describe("TerminalContainer", () => {
           over: null,
         });
       });
-      expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(
+      expect(appCommandStore(paneLayoutStore).getState().environments.get("env-visible")).toEqual(
         beforeCancelledDrop,
       );
     });
 
     test("wires tabbar hover, reorder, split, and unknown hover drag events", async () => {
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("default", { id: "second-tab", type: "plain" }, "env-visible");
       renderInAppCommandScope(
@@ -1266,7 +1270,7 @@ describe("TerminalContainer", () => {
         });
       });
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getPane("default", "env-visible")
           ?.tabs.map((tab) => tab.id),
@@ -1280,9 +1284,9 @@ describe("TerminalContainer", () => {
       });
 
       await waitFor(() => {
-        expect(usePaneLayoutStore.getState().environments.get("env-visible")?.root.kind).toBe(
-          "split",
-        );
+        expect(
+          appCommandStore(paneLayoutStore).getState().environments.get("env-visible")?.root.kind,
+        ).toBe("split");
       });
     });
   });
@@ -1326,7 +1330,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toContainEqual(
         expect.objectContaining({
           type: "multi-review",
           multiReviewTabData: expect.objectContaining({
@@ -1359,7 +1363,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toContainEqual(
         expect.objectContaining({
           type: "multi-review",
           displayTitle: "Reviewer 1",
@@ -1394,7 +1398,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect(
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible"),
+        ).toContainEqual(
           expect.objectContaining({
             type: "agent-native",
             isReviewTab: true,
@@ -1431,7 +1437,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect(
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible"),
+        ).toContainEqual(
           expect.objectContaining({
             id: "resume-only-native",
             type: "agent-native",
@@ -1467,7 +1475,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect(
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible"),
+        ).toContainEqual(
           expect.objectContaining({
             id: "review-only-native",
             type: "agent-native",
@@ -1503,7 +1513,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect(
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible"),
+        ).toContainEqual(
           expect.objectContaining({
             type: "agent-native",
             isReviewTab: true,
@@ -1536,7 +1548,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect(
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible"),
+        ).toContainEqual(
           expect.objectContaining({
             type: "agent-native",
             isReviewTab: true,
@@ -1567,7 +1581,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect(
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible"),
+        ).toContainEqual(
           expect.objectContaining({
             type: "agent-native",
             isReviewTab: true,
@@ -1579,7 +1595,7 @@ describe("TerminalContainer", () => {
 
     test("rejects a multi-review tab without a workflow id", async () => {
       const refused = mock((_created: boolean) => {});
-      const originalTabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
+      const originalTabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible");
       renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
@@ -1593,11 +1609,13 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => expect(refused).toHaveBeenCalledWith(false));
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toEqual(originalTabs);
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toEqual(
+        originalTabs,
+      );
     });
 
     test("reports refusal instead of claiming a multi-review tab was created", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -1630,7 +1648,9 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => expect(refused).toHaveBeenCalledWith(false));
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(
+        MAX_TABS,
+      );
       expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
         description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
         id: "tab-limit-reached",
@@ -1651,7 +1671,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "plain" && t.id !== "visible-tab");
         expect(created?.displayTitle).toBe("Custom");
@@ -1673,7 +1693,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const created = usePaneLayoutStore
+        const created = appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .find((tab) => tab.id === "neutral-native");
@@ -1715,7 +1735,7 @@ describe("TerminalContainer", () => {
 
         await waitFor(() => {
           expect(
-            usePaneLayoutStore
+            appCommandStore(paneLayoutStore)
               .getState()
               .getAllTabs("env-visible")
               .find((tab) => tab.id === `${platform}-cli`),
@@ -1746,7 +1766,7 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => {
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getAllTabs("env-visible")
             .find((tab) => tab.id === "cursor-legacy-cli"),
@@ -1775,7 +1795,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const matches = usePaneLayoutStore
+        const matches = appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .filter((tab) => tab.id === "pi-native");
@@ -1805,7 +1825,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((tab) => tab.type === "browser");
         expect(created?.browserData).toEqual({ url: "http://localhost:49152/" });
@@ -1826,7 +1846,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const created = usePaneLayoutStore
+        const created = appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .find((tab) => tab.type === "browser");
@@ -1849,7 +1869,7 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => {
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getAllTabs("env-visible")
             .some((tab) => tab.type === "browser"),
@@ -1858,7 +1878,7 @@ describe("TerminalContainer", () => {
     });
 
     test("respects the tab limit when creating browser tabs", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -1887,14 +1907,14 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const tabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
+        const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible");
         expect(tabs).toHaveLength(9);
         expect(tabs.some((tab) => tab.type === "browser")).toBe(false);
       });
     });
 
     test("creates browser tabs in the active pane", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "split",
@@ -1935,15 +1955,15 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const right = usePaneLayoutStore.getState().getPane("right", "env-visible");
-        const left = usePaneLayoutStore.getState().getPane("left", "env-visible");
+        const right = appCommandStore(paneLayoutStore).getState().getPane("right", "env-visible");
+        const left = appCommandStore(paneLayoutStore).getState().getPane("left", "env-visible");
         expect(right?.tabs.some((tab) => tab.type === "browser")).toBe(true);
         expect(left?.tabs.some((tab) => tab.type === "browser")).toBe(false);
       });
     });
 
     test("opens a terminal link in a browser tab beside its source terminal", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "split",
@@ -2004,7 +2024,9 @@ describe("TerminalContainer", () => {
       });
 
       await waitFor(() => {
-        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        const environment = appCommandStore(paneLayoutStore)
+          .getState()
+          .environments.get("env-visible");
         if (!environment || environment.root.kind !== "split") {
           throw new Error("expected split layout");
         }
@@ -2025,7 +2047,7 @@ describe("TerminalContainer", () => {
     });
 
     test("opens an agent's loopback link as an agent-link intent beside its agent tab", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "split",
@@ -2084,7 +2106,7 @@ describe("TerminalContainer", () => {
       });
 
       await waitFor(() => {
-        const left = usePaneLayoutStore.getState().getPane("left", "env-visible");
+        const left = appCommandStore(paneLayoutStore).getState().getPane("left", "env-visible");
         expect(left?.tabs.find((tab) => tab.type === "browser")?.browserData).toEqual({
           url: expected,
         });
@@ -2101,7 +2123,7 @@ describe("TerminalContainer", () => {
           return () => undefined;
         },
       } as never;
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "split",
@@ -2155,7 +2177,9 @@ describe("TerminalContainer", () => {
       });
 
       await waitFor(() => {
-        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        const environment = appCommandStore(paneLayoutStore)
+          .getState()
+          .environments.get("env-visible");
         if (!environment || environment.root.kind !== "split") {
           throw new Error("expected split layout");
         }
@@ -2195,7 +2219,7 @@ describe("TerminalContainer", () => {
       // Change the active pane after listener registration. The menu callback
       // must read current store state rather than a pane id captured at render.
       act(() => {
-        usePaneLayoutStore.setState((state) => ({
+        appCommandStore(paneLayoutStore).setState((state) => ({
           environments: new Map(state.environments).set("env-visible", {
             root: {
               kind: "split",
@@ -2226,7 +2250,9 @@ describe("TerminalContainer", () => {
       });
 
       await waitFor(() => {
-        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        const environment = appCommandStore(paneLayoutStore)
+          .getState()
+          .environments.get("env-visible");
         expect(environment?.root.kind).toBe("leaf");
         if (environment?.root.kind !== "leaf") return;
         expect(environment.root.id).toBe("left");
@@ -2240,7 +2266,7 @@ describe("TerminalContainer", () => {
         if (event === "menu-close-tab") closeTabListener = handler;
         return () => undefined;
       });
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2280,7 +2306,7 @@ describe("TerminalContainer", () => {
 
       await waitFor(() =>
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getPane("default", "env-visible")
             ?.tabs.some((tab) => tab.id === "multi-parent"),
@@ -2302,7 +2328,7 @@ describe("TerminalContainer", () => {
         if (event === "menu-close-tab") closeTabListener = handler;
         return () => undefined;
       });
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2341,7 +2367,7 @@ describe("TerminalContainer", () => {
       act(() => closeTabListener?.());
       await waitFor(() => expect(deleteMultiReviewWorkflowMock).toHaveBeenCalledWith("workflow-1"));
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getPane("default", "env-visible")
           ?.tabs.map((tab) => tab.id),
@@ -2350,7 +2376,7 @@ describe("TerminalContainer", () => {
       resolveDelete();
       await waitFor(() =>
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getPane("default", "env-visible")
             ?.tabs.some((tab) => tab.id === "multi-parent"),
@@ -2365,7 +2391,7 @@ describe("TerminalContainer", () => {
         if (event === "menu-close-tab") closeTabListener = handler;
         return () => undefined;
       });
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2406,7 +2432,7 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getPane("default", "env-visible")
           ?.tabs.map((tab) => tab.id),
@@ -2419,7 +2445,7 @@ describe("TerminalContainer", () => {
         if (event === "menu-close-tab") closeTabListener = handler;
         return () => undefined;
       });
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2460,7 +2486,7 @@ describe("TerminalContainer", () => {
 
       await waitFor(() =>
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getPane("default", "env-visible")
             ?.tabs.some((tab) => tab.id === "multi-reviewer"),
@@ -2473,7 +2499,7 @@ describe("TerminalContainer", () => {
     // Electron menu, so nothing would emit `menu-close-tab` and the browser
     // would close its own tab instead of the pane tab.
     test("closes the active pane tab from Command+W when no native menu owns it", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2517,7 +2543,9 @@ describe("TerminalContainer", () => {
       // client has no tab of its own left to close.
       expect(event.defaultPrevented).toBe(true);
       await waitFor(() => {
-        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        const environment = appCommandStore(paneLayoutStore)
+          .getState()
+          .environments.get("env-visible");
         if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
         expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
       });
@@ -2557,7 +2585,9 @@ describe("TerminalContainer", () => {
         expect(event.defaultPrevented, JSON.stringify(modifiers)).toBe(false);
       }
 
-      const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+      const environment = appCommandStore(paneLayoutStore)
+        .getState()
+        .environments.get("env-visible");
       if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
       expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
     });
@@ -2571,7 +2601,7 @@ describe("TerminalContainer", () => {
         if (event === "menu-close-tab") closeTabListener = handler;
         return () => undefined;
       });
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2613,7 +2643,9 @@ describe("TerminalContainer", () => {
       });
 
       await waitFor(() => {
-        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        const environment = appCommandStore(paneLayoutStore)
+          .getState()
+          .environments.get("env-visible");
         if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
         expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab", "second-tab"]);
       });
@@ -2630,7 +2662,9 @@ describe("TerminalContainer", () => {
         window.dispatchEvent(latched);
       });
       expect(latched.defaultPrevented).toBe(true);
-      const afterLatch = usePaneLayoutStore.getState().environments.get("env-visible");
+      const afterLatch = appCommandStore(paneLayoutStore)
+        .getState()
+        .environments.get("env-visible");
       if (afterLatch?.root.kind !== "leaf") throw new Error("expected leaf");
       expect(afterLatch.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab", "second-tab"]);
 
@@ -2638,7 +2672,9 @@ describe("TerminalContainer", () => {
         closeTabListener?.();
       });
       await waitFor(() => {
-        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        const environment = appCommandStore(paneLayoutStore)
+          .getState()
+          .environments.get("env-visible");
         if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
         expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
       });
@@ -2667,7 +2703,9 @@ describe("TerminalContainer", () => {
       });
 
       expect(event.defaultPrevented).toBe(false);
-      const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+      const environment = appCommandStore(paneLayoutStore)
+        .getState()
+        .environments.get("env-visible");
       if (environment?.root.kind !== "leaf") throw new Error("expected leaf");
       expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["visible-tab"]);
     });
@@ -2695,7 +2733,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => expect(openLinkListener).toBeDefined());
-      const before = usePaneLayoutStore.getState().environments.get("env-visible");
+      const before = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
       act(() => {
         // "visible-tab" exists but is a plain terminal, and "missing-tab" has no
         // pane at all. A preview link only ever originates from a browser tab.
@@ -2703,9 +2741,11 @@ describe("TerminalContainer", () => {
         openLinkListener?.({ tabId: "missing-tab", url: "http://localhost:3000/docs" });
       });
 
-      expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(before);
+      expect(appCommandStore(paneLayoutStore).getState().environments.get("env-visible")).toEqual(
+        before,
+      );
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .some((tab) => tab.type === "browser"),
@@ -2713,7 +2753,7 @@ describe("TerminalContainer", () => {
     });
 
     test("ignores terminal links for other environments or missing source tabs without mutating panes", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "split",
@@ -2752,7 +2792,7 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      const before = usePaneLayoutStore.getState().environments.get("env-visible");
+      const before = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
       act(() => {
         requestTerminalBrowserTab({
           environmentId: "another-environment",
@@ -2766,7 +2806,9 @@ describe("TerminalContainer", () => {
         });
       });
 
-      expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(before);
+      expect(appCommandStore(paneLayoutStore).getState().environments.get("env-visible")).toEqual(
+        before,
+      );
     });
 
     test("rejects terminal links at the tab limit without changing the active pane", async () => {
@@ -2774,7 +2816,7 @@ describe("TerminalContainer", () => {
         id: `filler-${index}`,
         type: "plain" as const,
       }));
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "split",
@@ -2821,10 +2863,14 @@ describe("TerminalContainer", () => {
         });
       });
 
-      const environment = usePaneLayoutStore.getState().environments.get("env-visible");
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
+      const environment = appCommandStore(paneLayoutStore)
+        .getState()
+        .environments.get("env-visible");
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(
+        MAX_TABS,
+      );
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .some((tab) => tab.type === "browser"),
@@ -2849,9 +2895,11 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(0);
+        expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(
+          0,
+        );
       });
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2863,7 +2911,9 @@ describe("TerminalContainer", () => {
           containerId: "container-visible",
         }),
       }));
-      const stoppedBefore = usePaneLayoutStore.getState().environments.get("env-visible");
+      const stoppedBefore = appCommandStore(paneLayoutStore)
+        .getState()
+        .environments.get("env-visible");
       act(() => {
         requestTerminalBrowserTab({
           environmentId: "env-visible",
@@ -2871,7 +2921,9 @@ describe("TerminalContainer", () => {
           url: "http://localhost:3000/stopped",
         });
       });
-      expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(stoppedBefore);
+      expect(appCommandStore(paneLayoutStore).getState().environments.get("env-visible")).toEqual(
+        stoppedBefore,
+      );
 
       unmount();
       appCommandStore(environmentStore).setState((state) => ({
@@ -2887,7 +2939,7 @@ describe("TerminalContainer", () => {
             : environment,
         ),
       }));
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2904,7 +2956,9 @@ describe("TerminalContainer", () => {
           <TerminalContainer environmentId="env-visible" containerId={null} isActive />
         </TerminalProvider>,
       );
-      const localBefore = usePaneLayoutStore.getState().environments.get("env-visible");
+      const localBefore = appCommandStore(paneLayoutStore)
+        .getState()
+        .environments.get("env-visible");
       act(() => {
         requestTerminalBrowserTab({
           environmentId: "env-visible",
@@ -2912,11 +2966,13 @@ describe("TerminalContainer", () => {
           url: "http://localhost:3000/not-ready",
         });
       });
-      expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(localBefore);
+      expect(appCommandStore(paneLayoutStore).getState().environments.get("env-visible")).toEqual(
+        localBefore,
+      );
     });
 
     test("does not create a browser tab when the active pane id is stale", async () => {
-      usePaneLayoutStore.setState((state) => ({
+      appCommandStore(paneLayoutStore).setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
             kind: "leaf",
@@ -2945,7 +3001,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const tabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
+        const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible");
         expect(tabs).toHaveLength(1);
         expect(tabs[0]?.id).toBe("visible-tab");
       });
@@ -2983,7 +3039,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Review");
@@ -3022,7 +3078,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "claude-tmux");
         expect(created).toBeDefined();
@@ -3074,7 +3130,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "claude-tmux");
         expect(created?.displayTitle).toBe("Repo tmux");
@@ -3113,7 +3169,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("PR");
@@ -3156,7 +3212,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Conflict");
@@ -3198,7 +3254,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "claude-tmux");
         expect(created?.displayTitle).toBe("Forced tmux");
@@ -3240,7 +3296,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Forced native");
@@ -3269,7 +3325,7 @@ describe("TerminalContainer", () => {
         );
 
         await waitFor(() => {
-          const created = usePaneLayoutStore
+          const created = appCommandStore(paneLayoutStore)
             .getState()
             .getAllTabs("env-visible")
             .find((tab) => tab.id === `explicit-${platform}`);
@@ -3312,7 +3368,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const created = usePaneLayoutStore
+        const created = appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .find((tab) => tab.id === "create-dialog-preselect");
@@ -3364,7 +3420,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created).toMatchObject({
@@ -3405,7 +3461,7 @@ describe("TerminalContainer", () => {
         expect(duplicateResult).toHaveBeenCalledWith(false);
       });
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .filter((tab) => tab.id === options.tabId),
@@ -3464,7 +3520,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         for (const launchCase of launchCases) {
           const created = env.root.tabs.find((tab) => tab.displayTitle === launchCase.title);
@@ -3517,7 +3573,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "opencode");
         expect(created?.displayTitle).toBe("Forced CLI");
@@ -3559,7 +3615,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "claude");
         expect(created?.displayTitle).toBe("Forced Claude CLI");
@@ -3601,7 +3657,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Forced Claude Native");
@@ -3644,7 +3700,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "codex");
         expect(created?.displayTitle).toBe("Forced Codex CLI");
@@ -3689,7 +3745,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        const env = appCommandStore(paneLayoutStore).getState().environments.get("env-visible");
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((t) => t.type === "agent-native");
         expect(created?.displayTitle).toBe("Forced OpenCode Native");

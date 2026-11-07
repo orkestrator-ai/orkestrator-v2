@@ -24,7 +24,7 @@ import { multiReviewStore } from "@/stores/multiReviewStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { uiStore } from "@/stores/uiStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import {
@@ -4571,8 +4571,8 @@ describe("MultiReviewTab pipeline step cards", () => {
 
 describe("PR background state and review clock", () => {
   function installPrTab() {
-    const saved = usePaneLayoutStore.getState().environments;
-    usePaneLayoutStore.setState({
+    const saved = appCommandStore(paneLayoutStore).getState().environments;
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -4596,7 +4596,7 @@ describe("PR background state and review clock", () => {
         ],
       ]),
     });
-    return () => usePaneLayoutStore.setState({ environments: saved });
+    return () => appCommandStore(paneLayoutStore).setState({ environments: saved });
   }
   function snapshot(phase: NativeAgentTurnPhase): NativeAgentSessionStateUpdate {
     return {
@@ -4659,7 +4659,8 @@ describe("PR background state and review clock", () => {
         viewVersion: 1,
       });
       expect(
-        usePaneLayoutStore.getState().findPaneWithTab("agent-job-pr", "env-1")?.activeTabId,
+        appCommandStore(paneLayoutStore).getState().findPaneWithTab("agent-job-pr", "env-1")
+          ?.activeTabId,
       ).toBe("overview");
       for (const [next, state, label] of [
         ["blocked", "running", "needs input"],
@@ -4690,7 +4691,8 @@ describe("PR background state and review clock", () => {
       selectFlowNode("Pull request,");
       fireEvent.click(inspector().getByRole("button", { name: "Open PR session" }));
       expect(
-        usePaneLayoutStore.getState().findPaneWithTab("agent-job-pr", "env-1")?.activeTabId,
+        appCommandStore(paneLayoutStore).getState().findPaneWithTab("agent-job-pr", "env-1")
+          ?.activeTabId,
       ).toBe("agent-job-pr");
     } finally {
       view.unmount();

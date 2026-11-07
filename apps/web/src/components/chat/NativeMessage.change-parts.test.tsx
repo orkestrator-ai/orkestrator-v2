@@ -16,11 +16,12 @@ import type { CreateFileTabOptions } from "@/contexts/TerminalContext";
 import type { LegacyPayloadSummary } from "@/lib/backend/changes";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { NativeMessage } from "./NativeMessage";
 import { ChangeFileRows, resetChangePartCachesForTests } from "./NativeMessage.change-parts";
 import { NativeChangeScopeContext, type NativeChangeScope } from "./NativeMessage.change-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 /*
  * Tool rows render backend change projections. The backend is reached only
@@ -266,7 +267,7 @@ afterEach(() => {
   invokeMock.mockImplementation(() => Promise.resolve());
   resetChangeSubscriptionsForTests();
   resetChangePartCachesForTests();
-  useChangeProjectionStore.setState({
+  appCommandStore(changeProjectionStore).setState({
     projections: new Map(),
     deleted: new Set(),
     contentGenerations: new Map(),

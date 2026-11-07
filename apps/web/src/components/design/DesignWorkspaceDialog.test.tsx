@@ -13,7 +13,7 @@ import { createSessionKey } from "@/lib/utils";
 import { configStore } from "@/stores";
 import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
 import type { DesignReadinessView } from "./design-launch";
@@ -89,7 +89,7 @@ const originalConfig = appCommandStore(configStore).getState().config;
 beforeEach(() => {
   resetCapabilities();
   useHostPathPickerStore.getState().settle(null);
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -196,7 +196,7 @@ describe("DesignWorkspaceDialog", () => {
           appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", options!.tabId!),
         ).attachments;
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       return true;
@@ -243,7 +243,7 @@ describe("DesignWorkspaceDialog", () => {
           if (failure === "throw") throw new Error("tab creation failed");
           return false;
         }
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
         return true;
@@ -273,7 +273,7 @@ describe("DesignWorkspaceDialog", () => {
     const module = await import("./design-prompt-images");
     const merge = spyOn(module, "addDesignImagesToDraft").mockReturnValue(false);
     const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       return true;
@@ -556,7 +556,7 @@ describe("DesignWorkspaceDialog", () => {
   test("failure after the agent tab exists offers to open the kept design", async () => {
     const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
       if (type === "design-canvas") return true;
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       throw new Error("agent mount failed");
@@ -615,7 +615,7 @@ describe("DesignWorkspaceDialog", () => {
           appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", options!.tabId!),
         );
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       return true;
@@ -717,7 +717,7 @@ describe("DesignWorkspaceDialog", () => {
         });
         const error = spyOn(toast, "error");
         const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-          usePaneLayoutStore.getState().addTab(
+          appCommandStore(paneLayoutStore).getState().addTab(
             "pane-1",
             {
               id: options!.tabId!,
@@ -749,7 +749,7 @@ describe("DesignWorkspaceDialog", () => {
               description: "Queue offline",
             });
             expect(
-              usePaneLayoutStore
+              appCommandStore(paneLayoutStore)
                 .getState()
                 .getAllTabs("env-1")
                 .find((tab) => tab.id === options.tabId)?.initialPrompt,
@@ -882,7 +882,7 @@ describe("DesignWorkspaceDialog", () => {
           },
         });
       const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
         return true;
@@ -1035,7 +1035,7 @@ describe("DesignWorkspaceDialog", () => {
         throw new Error(`Unexpected command: ${command}`);
       });
       const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
         return true;

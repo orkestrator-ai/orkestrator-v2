@@ -10,7 +10,7 @@ import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { projectStore } from "../../../apps/web/src/stores/projectStore";
 import { sessionStore } from "../../../apps/web/src/stores/sessionStore";
-import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
+import { paneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
 import { mockToastError, mockToastInfo, mockToastSuccess } from "../../mocks/sonner";
 import type {
   Environment,
@@ -180,7 +180,10 @@ describe("useEnvironments", () => {
       collapsedProjects: [],
       selectedEnvironmentIds: [],
     });
-    usePaneLayoutStore.setState({ environments: new Map(), activeEnvironmentId: null });
+    appCommandStore(paneLayoutStore).setState({
+      environments: new Map(),
+      activeEnvironmentId: null,
+    });
     appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -2999,16 +3002,18 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-active" });
-    usePaneLayoutStore.getState().initialize(null, "env-active");
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "question-tab",
-        type: "agent-native",
-        nativeAgentData: { environmentId: "env-active", platform: "codex" },
-      },
-      "env-active",
-    );
+    appCommandStore(paneLayoutStore).getState().initialize(null, "env-active");
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "question-tab",
+          type: "agent-native",
+          nativeAgentData: { environmentId: "env-active", platform: "codex" },
+        },
+        "env-active",
+      );
     renderHook(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(callback).toBeDefined());
 
@@ -3036,8 +3041,8 @@ describe("useEnvironments", () => {
     });
     appCommandStore(environmentStore).setState({ environments: [environment] });
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-active" });
-    usePaneLayoutStore.getState().initialize(null, "env-active");
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore).getState().initialize(null, "env-active");
+    appCommandStore(paneLayoutStore)
       .getState()
       .addTab("default", { id: "terminal-tab", type: "plain" }, "env-active");
     renderHook(() => useEnvironmentLifecycleService());

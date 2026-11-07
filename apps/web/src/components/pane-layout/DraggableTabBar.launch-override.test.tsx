@@ -5,8 +5,8 @@ import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { invoke } from "@/lib/native/backend";
 import { coordinatorLaunchOverrideStore } from "@/stores/coordinatorLaunchOverrideStore";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { appCommandStore } from "@/test/app-command-store";
@@ -35,8 +35,8 @@ function renderTabs(tabs: TabInfo[], environmentId = "worker") {
 
 beforeEach(() => {
   appCommandStore(coordinatorLaunchOverrideStore).getState().reset();
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
-  usePaneLayoutStore.setState({
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,

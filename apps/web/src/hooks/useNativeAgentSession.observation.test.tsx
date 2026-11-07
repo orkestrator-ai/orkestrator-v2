@@ -18,7 +18,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import * as realBackend from "@/lib/backend";
 import * as events from "@/lib/native/events";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
@@ -155,7 +155,7 @@ beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   resetNativeObservationEventsForTests();
   getNativeAgentSessionStateUpdateMock.mockClear();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,

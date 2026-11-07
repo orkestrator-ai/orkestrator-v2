@@ -19,11 +19,11 @@ import {
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   ensurePreviewServiceSync,
+  previewServiceStore,
   resetPreviewServiceSyncForTests,
-  usePreviewServiceStore,
 } from "@/stores/previewServiceStore";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import { FakeWebAnnotationBackend } from "@/test/web-annotation-fakes";
@@ -40,13 +40,15 @@ const originalCancelRaf = window.cancelAnimationFrame;
 const API_SERVICE_ID = "svc_fixture_api_0002";
 
 function tabUrl(): string {
-  const layout = usePaneLayoutStore.getState().environments.get(FIXTURE_ENVIRONMENT_ID)!;
+  const layout = appCommandStore(paneLayoutStore)
+    .getState()
+    .environments.get(FIXTURE_ENVIRONMENT_ID)!;
   return (layout.root as { tabs: Array<{ browserData?: { url: string } }> }).tabs[0]!.browserData!
     .url;
 }
 
 function seedTab(url: string) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: FIXTURE_ENVIRONMENT_ID,
     hydration: new Map([[FIXTURE_ENVIRONMENT_ID, "done"]]),
     environments: new Map([
@@ -431,7 +433,7 @@ describe("service browser tabs", () => {
 
   function savedLayout() {
     return createPersistedPaneLayoutInput(
-      usePaneLayoutStore.getState().environments.get(FIXTURE_ENVIRONMENT_ID)!,
+      appCommandStore(paneLayoutStore).getState().environments.get(FIXTURE_ENVIRONMENT_ID)!,
     );
   }
 
@@ -442,7 +444,9 @@ describe("service browser tabs", () => {
       { environmentId: FIXTURE_ENVIRONMENT_ID, containerId: "container-1", isLocal: false },
     )!;
     act(() =>
-      usePaneLayoutStore.getState().applyAuthoritativeLayout(FIXTURE_ENVIRONMENT_ID, restored),
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .applyAuthoritativeLayout(FIXTURE_ENVIRONMENT_ID, restored),
     );
   }
 
@@ -831,7 +835,7 @@ describe("service browser tabs", () => {
     renderTab();
     await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
     act(() =>
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .updateTabBrowserUrl(
           "browser-1",
@@ -1324,7 +1328,7 @@ describe("service browser tabs", () => {
       seedTab("http://localhost:3000/");
       renderTab();
       await act(async () => {
-        await usePreviewServiceStore.getState().loadCapabilities();
+        await appCommandStore(previewServiceStore).getState().loadCapabilities();
       });
       expect(tabUrl()).toBe("http://localhost:3000/");
     });
@@ -1338,8 +1342,10 @@ describe("service browser tabs", () => {
       seedTab(legacyUrl);
       await act(async () => {
         ensurePreviewServiceSync();
-        await usePreviewServiceStore.getState().loadCapabilities();
-        await usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+        await appCommandStore(previewServiceStore).getState().loadCapabilities();
+        await appCommandStore(previewServiceStore)
+          .getState()
+          .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
       const pending: Array<(snapshot: ReturnType<typeof fixturePreviewSnapshot>) => void> = [];
       backend.snapshot = () => new Promise((done) => pending.push(done));
@@ -1423,8 +1429,10 @@ describe("service browser tabs", () => {
       // Load the snapshot the tab would match against, as another tab would.
       await act(async () => {
         ensurePreviewServiceSync();
-        await usePreviewServiceStore.getState().loadCapabilities();
-        await usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+        await appCommandStore(previewServiceStore).getState().loadCapabilities();
+        await appCommandStore(previewServiceStore)
+          .getState()
+          .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
       expect(tabUrl()).toBe(legacyUrl);
 
@@ -1520,7 +1528,7 @@ describe("service browser tabs", () => {
           view.unmount();
         } else {
           act(() =>
-            usePaneLayoutStore
+            appCommandStore(paneLayoutStore)
               .getState()
               .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
           );
@@ -1550,12 +1558,12 @@ describe("service browser tabs", () => {
       fireEvent.click(open);
       await waitFor(() => expect(resolveOld).toBeDefined());
       act(() =>
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", "http://127.0.0.1:49152/other", FIXTURE_ENVIRONMENT_ID),
       );
       act(() =>
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", legacyUrl, FIXTURE_ENVIRONMENT_ID),
       );
@@ -1594,7 +1602,7 @@ describe("service browser tabs", () => {
       await waitFor(() => expect(resolveOld).toBeDefined());
       const next = "http://127.0.0.1:49152/new-attempt";
       act(() =>
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
       );
@@ -1654,7 +1662,9 @@ describe("service browser tabs", () => {
         new Promise((done) => {
           resolveOld = done;
         });
-      const pending = usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+      const pending = appCommandStore(previewServiceStore)
+        .getState()
+        .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       await waitFor(() => expect(resolveOld).toBeDefined());
       fireEvent.click(open);
       const rebound = fixturePreviewService();

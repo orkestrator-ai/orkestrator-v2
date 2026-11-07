@@ -21,7 +21,7 @@ import {
   useConversationScrollTargetStore,
 } from "@/stores/conversationScrollTargetStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { promptDraftStore } from "@/stores/promptDraftStore";
 import {
   createFakeCaptureApi,
@@ -271,7 +271,7 @@ describe("request card execution details", () => {
       }),
     );
     fireEvent.click(within(waiting).getByRole("button", { name: "Answer in chat" }));
-    const layout = usePaneLayoutStore.getState().environments.get("env-1")!;
+    const layout = appCommandStore(paneLayoutStore).getState().environments.get("env-1")!;
     expect((layout.root as { activeTabId: string }).activeTabId).toBe("tab-agent-1");
   });
 

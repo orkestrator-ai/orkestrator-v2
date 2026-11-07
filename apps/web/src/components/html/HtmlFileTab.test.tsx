@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realMonacoFileEditorSnapshot = { ...realMonacoFileEditor };
 
@@ -58,14 +59,14 @@ function selectMode(name: "Rendered" | "Raw"): void {
 }
 
 beforeEach(() => {
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
-  useFileDirtyStore.getState().setOriginalContent(TAB_ID, HTML);
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).getState().setOriginalContent(TAB_ID, HTML);
   onSave.mockClear();
 });
 
 afterEach(() => {
   cleanup();
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
 });
 
 afterAll(() => {
@@ -94,7 +95,7 @@ describe("HtmlFileTab", () => {
     expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
 
     fireEvent.change(editor, { target: { value: "<h1>Edited</h1>" } });
-    expect(useFileDirtyStore.getState().getContent(TAB_ID)).toBe("<h1>Edited</h1>");
+    expect(appCommandStore(fileDirtyStore).getState().getContent(TAB_ID)).toBe("<h1>Edited</h1>");
 
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
     expect(onSave).toHaveBeenCalledTimes(1);
@@ -102,7 +103,7 @@ describe("HtmlFileTab", () => {
     selectMode("Rendered");
     expect(frame().getAttribute("srcdoc")).toContain("<h1>Edited</h1>");
     // The file's own text is what is saved: the preview's additions stay out of it.
-    expect(useFileDirtyStore.getState().getContent(TAB_ID)).toBe("<h1>Edited</h1>");
+    expect(appCommandStore(fileDirtyStore).getState().getContent(TAB_ID)).toBe("<h1>Edited</h1>");
   });
 
   test.each(["ctrlKey", "metaKey"])("saves from Rendered using %s", async (modifier) => {
@@ -116,7 +117,7 @@ describe("HtmlFileTab", () => {
   });
 
   test("restores an unsaved buffer instead of the disk content", () => {
-    useFileDirtyStore.getState().setContent(TAB_ID, "<h1>Unsaved</h1>");
+    appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, "<h1>Unsaved</h1>");
     render(renderTab());
 
     expect(frame().getAttribute("srcdoc")).toContain("<h1>Unsaved</h1>");
@@ -140,7 +141,9 @@ describe("HtmlFileTab", () => {
   });
 
   test("explains a page whose scripts or external files are refused, in Rendered only", async () => {
-    useFileDirtyStore.getState().setContent(TAB_ID, "<script>draw()</script><h1>Chart</h1>");
+    appCommandStore(fileDirtyStore)
+      .getState()
+      .setContent(TAB_ID, "<script>draw()</script><h1>Chart</h1>");
     render(renderTab());
     const notice = /does not run scripts or load external files/;
 

@@ -5,7 +5,7 @@ import * as realPersistentTerminal from "./PersistentTerminal";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { createXtermTerminal } from "@/lib/terminal-xterm";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -175,7 +175,7 @@ describe("TerminalPortalHost", () => {
       },
     });
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -226,7 +226,7 @@ describe("TerminalPortalHost", () => {
   test("creates terminals even before the pane-layout active environment is set", async () => {
     terminalStoreHasTerminal = false;
     terminalStoreTerminals = new Map();
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       ...state,
       activeEnvironmentId: null,
     }));
@@ -266,7 +266,7 @@ describe("TerminalPortalHost", () => {
   });
 
   test("forwards review-tab state to persistent terminals", async () => {
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       const current = environments.get("env-1");
       if (!current || current.root.kind !== "leaf") {
@@ -302,7 +302,7 @@ describe("TerminalPortalHost", () => {
   test.each(["cursor", "grok", "pi"] as const)(
     "mounts %s CLI tabs as persistent terminals",
     async (tabType) => {
-      usePaneLayoutStore.setState((state) => {
+      appCommandStore(paneLayoutStore).setState((state) => {
         const environments = new Map(state.environments);
         const current = environments.get("env-1");
         if (!current || current.root.kind !== "leaf") throw new Error("expected env-1 leaf");

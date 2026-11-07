@@ -25,7 +25,7 @@ import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage as NativeMessageRow } from "@/components/chat/NativeMessage";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
@@ -248,7 +248,7 @@ afterEach(() => {
   getNativeAgentGoalMock.mockClear();
   mockToastSuccess.mockClear();
   appCommandStore(environmentStore).setState({ environments: [] });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,

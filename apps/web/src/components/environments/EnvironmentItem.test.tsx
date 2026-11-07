@@ -7,7 +7,7 @@ import { claimSidebarAction, releaseSidebarAction } from "@/stores/sidebarAction
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { environmentDiffStore } from "@/stores/environmentDiffStore";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import {
   environmentProjectionFixture,
   exactCount,
@@ -320,7 +320,9 @@ describe("EnvironmentItem change badge", () => {
 
   test("renders the backend projection's counters instead of the legacy mirror", () => {
     appCommandStore(environmentDiffStore).setState({ stats: new Map([["env-1", legacyStats]]) });
-    useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(environmentProjectionFixture("env-1"));
     renderItem();
 
     expect(badge()?.textContent).toBe("+12-3");
@@ -330,14 +332,16 @@ describe("EnvironmentItem change badge", () => {
   });
 
   test("an unknown count renders as ? and never as 0", () => {
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        state: "partial",
-        coverageState: "partial",
-        counters: { additions: unknownCount(), deletions: exactCount(4), changedFiles: null },
-        reasonKeys: ["changes.reason.untracked-scan-capped"],
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          state: "partial",
+          coverageState: "partial",
+          counters: { additions: unknownCount(), deletions: exactCount(4), changedFiles: null },
+          reasonKeys: ["changes.reason.untracked-scan-capped"],
+        }),
+      );
     renderItem();
 
     expect(badge()?.textContent).toBe("~+?-4");
@@ -347,13 +351,15 @@ describe("EnvironmentItem change badge", () => {
   });
 
   test("a stale projection keeps the approximate mark and explains it on hover", async () => {
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        state: "stale",
-        observationState: "stale",
-        reasonKeys: ["changes.reason.stale"],
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          state: "stale",
+          observationState: "stale",
+          reasonKeys: ["changes.reason.stale"],
+        }),
+      );
     renderItem();
     expect(badge()?.textContent).toBe("~+12-3");
 
@@ -367,13 +373,15 @@ describe("EnvironmentItem change badge", () => {
 
   test("the backend's hidden badge stays hidden even when the legacy mirror has numbers", () => {
     appCommandStore(environmentDiffStore).setState({ stats: new Map([["env-1", legacyStats]]) });
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        badge: { visible: false, mode: "none" },
-        hasFileChanges: false,
-        counters: { additions: exactCount(0), deletions: exactCount(0), changedFiles: 0 },
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          badge: { visible: false, mode: "none" },
+          hasFileChanges: false,
+          counters: { additions: exactCount(0), deletions: exactCount(0), changedFiles: 0 },
+        }),
+      );
     renderItem();
     expect(badge()).toBeNull();
     expect(document.body.textContent).not.toContain("+99");
@@ -406,7 +414,9 @@ describe("EnvironmentItem change badge", () => {
 
   test("the projection's own quality wins over the legacy mirror's freshness", () => {
     appCommandStore(environmentDiffStore).setState({ stats: new Map(), syncStatus: "degraded" });
-    useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(environmentProjectionFixture("env-1"));
     renderItem();
     expect(document.querySelector("[data-freshness]") === null).toBe(true);
   });

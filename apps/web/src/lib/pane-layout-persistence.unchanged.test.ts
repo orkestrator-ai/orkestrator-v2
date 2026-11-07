@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 import {
   createPersistedPaneLayoutInput,
@@ -17,7 +17,7 @@ function saved(environmentId: string, input: LayoutInput): PersistedPaneLayout {
 }
 
 function hydrate(environmentId: string, tabId: string) {
-  const store = usePaneLayoutStore.getState();
+  const store = appCommandStore(paneLayoutStore).getState();
   store.initialize(`container-${environmentId}`, environmentId);
   store.addTab("default", { id: tabId, type: "plain" }, environmentId);
   store.beginHydration(environmentId);
@@ -39,7 +39,7 @@ function countSerialisations(marker: string) {
 describe("pane layout persistence with unchanged environments", () => {
   beforeEach(() => {
     appCommandStore(environmentStore).setState({ environments: [] });
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map(),
       hydration: new Map(),
       activeEnvironmentId: null,
@@ -58,7 +58,7 @@ describe("pane layout persistence with unchanged environments", () => {
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     try {
       const quietSerialisations = countSerialisations("quiet-tab-marker");
-      const store = usePaneLayoutStore.getState();
+      const store = appCommandStore(paneLayoutStore).getState();
       for (let index = 0; index < 5; index += 1) {
         store.addTab("default", { id: `busy-${index}`, type: "plain" }, "env-busy");
       }
@@ -84,8 +84,8 @@ describe("pane layout persistence with unchanged environments", () => {
     try {
       const serialisations = countSerialisations("first-tab-marker");
       // A top-level field unrelated to any environment's layout.
-      usePaneLayoutStore.setState({ activeEnvironmentId: "env-1" });
-      usePaneLayoutStore.setState({ activeEnvironmentId: null });
+      appCommandStore(paneLayoutStore).setState({ activeEnvironmentId: "env-1" });
+      appCommandStore(paneLayoutStore).setState({ activeEnvironmentId: null });
       await waitForTimers();
 
       expect(serialisations()).toBe(0);
@@ -106,19 +106,21 @@ describe("pane layout persistence with unchanged environments", () => {
     hydrate("env-other", "other");
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     try {
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("default", { id: "unsaved", type: "plain" }, "env-retry");
       await waitForTimers();
       expect(save).toHaveBeenCalledTimes(1);
-      const unchanged = usePaneLayoutStore.getState().environments.get("env-retry");
-      usePaneLayoutStore
+      const unchanged = appCommandStore(paneLayoutStore).getState().environments.get("env-retry");
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("default", { id: "unrelated", type: "plain" }, "env-other");
       await waitForTimers();
-      expect(usePaneLayoutStore.getState().environments.get("env-retry")).toBe(unchanged);
+      expect(appCommandStore(paneLayoutStore).getState().environments.get("env-retry")).toBe(
+        unchanged,
+      );
       expect(save.mock.calls.filter(([id]) => id === "env-retry")).toHaveLength(1);
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("default", { id: "retry-trigger", type: "plain" }, "env-retry");
       await waitForTimers();
@@ -137,7 +139,7 @@ describe("pane layout persistence with unchanged environments", () => {
     );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     try {
-      const store = usePaneLayoutStore.getState();
+      const store = appCommandStore(paneLayoutStore).getState();
       store.initialize("container-env-1", "env-1");
       store.addTab("default", { id: "restored", type: "plain" }, "env-1");
       store.beginHydration("env-1");

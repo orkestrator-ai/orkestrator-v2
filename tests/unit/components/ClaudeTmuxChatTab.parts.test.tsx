@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 
 import { claudeTmuxStore, createClaudeTmuxStateKey } from "@/stores/claudeTmuxStore";
 
@@ -553,7 +553,7 @@ function seedPane(
   initialAgentModel?: string,
   initialReasoningEffort?: string,
 ) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -2752,7 +2752,7 @@ describe("ClaudeTmuxChatTab", () => {
       expect(
         appCommandStore(claudeTmuxStore).getState().effortLevels.get("env:env-1:tab:tab-1"),
       ).toBe("max");
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
       });
@@ -2812,7 +2812,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
     // Still unconsumed: the tab keeps the option so a remount can retry.
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
       initialAgentModel: "claude-newer-opus",
     });
 
@@ -2848,7 +2848,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByRole("button", { name: /Newer Opus/ })).toBeTruthy();
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
       });
@@ -2878,7 +2878,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByRole("button", { name: /Fable/ })).toBeTruthy();
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
       });

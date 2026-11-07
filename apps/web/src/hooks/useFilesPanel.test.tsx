@@ -6,7 +6,7 @@ import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
 import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
 import type { ChangesRefreshResult } from "@orkestrator/protocol/change-resources";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import {
   environmentProjectionFixture,
@@ -835,7 +835,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 
   test("an event-driven change projection owns the Changes tab: the list is not polled", async () => {
     const { clock } = installFakeReadCoordinator();
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyProjection(environmentProjectionFixture("environment-1"));
     const { result } = await openPanel("changes");
@@ -865,7 +865,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
     );
     expect(snapshotCalls().changes).toBe(0);
     expect(
-      useChangeProjectionStore
+      appCommandStore(changeProjectionStore)
         .getState()
         .projections.get("environment-net/environment/environment-1/live")?.measurementId,
     ).toBe("m-2");
@@ -873,7 +873,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 
   test("the file tree keeps its cadence while a change projection exists", async () => {
     const { clock } = installFakeReadCoordinator();
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyProjection(environmentProjectionFixture("environment-1"));
     await openPanel("all-files");

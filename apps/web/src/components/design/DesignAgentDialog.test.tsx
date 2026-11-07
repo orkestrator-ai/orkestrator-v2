@@ -19,7 +19,7 @@ import { createSessionKey } from "@/lib/utils";
 import { emptyProjection, type DesignProjection } from "@/stores/designStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { TabInfo } from "@/types/paneLayout";
 import { toast } from "sonner";
@@ -115,7 +115,7 @@ function agentTab(id: string, platform?: "claude" | "codex"): TabInfo {
 }
 
 function seedTabs(tabs: TabInfo[]) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: "env-1",
     hydration: new Map([["env-1", "done"]]),
     environments: new Map([
@@ -131,7 +131,7 @@ function seedTabs(tabs: TabInfo[]) {
 }
 
 const createTabMock = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-  const store = usePaneLayoutStore.getState();
+  const store = appCommandStore(paneLayoutStore).getState();
   store.addTab("pane-1", agentTab(options!.tabId!), "env-1");
   return true;
 });

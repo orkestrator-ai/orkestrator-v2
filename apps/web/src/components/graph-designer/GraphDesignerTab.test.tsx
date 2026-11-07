@@ -4,7 +4,7 @@ import { graphTemplateExportText } from "@orkestrator/protocol/graphs/library";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
 import { graphDesignerStore } from "@/stores/graphDesignerStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
 import { GraphDesignerTab } from "./GraphDesignerTab";
@@ -89,7 +89,7 @@ function seedStores(data: GraphDesignerTabData) {
   appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -109,7 +109,7 @@ function seedStores(data: GraphDesignerTabData) {
 }
 
 function persisted(): GraphDesignerTabData | undefined {
-  const root = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root;
+  const root = appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!.root;
   return root.kind === "leaf" ? root.tabs[0]!.graphDesignerData : undefined;
 }
 

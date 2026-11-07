@@ -1,17 +1,18 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   resetConversationScrollTargets,
   useConversationScrollTargetStore,
 } from "@/stores/conversationScrollTargetStore";
 import { openConversationAtMessage } from "./conversation-navigation";
+import { appCommandStore } from "@/test/app-command-store";
 
 const NODE = "bk_node-a" as BackendId;
 const at = (environmentId: string, tabId: string) => ({ nodeId: NODE, environmentId, tabId });
 
 function seedLayout() {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: "env-1",
     environments: new Map([
       [
@@ -53,7 +54,7 @@ function seedLayout() {
 }
 
 function leaf(paneId: string) {
-  return usePaneLayoutStore
+  return appCommandStore(paneLayoutStore)
     .getState()
     .findPaneWithTab(paneId === "pane-2" ? "agent-1" : "browser-1", "env-1");
 }
@@ -70,7 +71,7 @@ describe("openConversationAtMessage", () => {
     ).toBe(true);
 
     expect(leaf("pane-2")?.activeTabId).toBe("agent-1");
-    expect(usePaneLayoutStore.getState().getActivePaneId("env-1")).toBe("pane-2");
+    expect(appCommandStore(paneLayoutStore).getState().getActivePaneId("env-1")).toBe("pane-2");
     expect(useConversationScrollTargetStore.getState().peek(at("env-1", "agent-1"))).toMatchObject({
       messageId: "m-1",
       turnId: "t-1",
@@ -87,7 +88,7 @@ describe("openConversationAtMessage", () => {
     expect(openConversationAtMessage(at("env-1", "gone"), { messageId: "m-1" })).toBe(false);
     expect(openConversationAtMessage(at("env-2", "agent-1"), { messageId: "m-1" })).toBe(false);
     expect(useConversationScrollTargetStore.getState().targets.size).toBe(0);
-    expect(usePaneLayoutStore.getState().getActivePaneId("env-1")).toBe("pane-1");
+    expect(appCommandStore(paneLayoutStore).getState().getActivePaneId("env-1")).toBe("pane-1");
   });
 
   test("focuses the tab without a target when no id is known", () => {

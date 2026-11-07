@@ -13,7 +13,7 @@ import { configStore } from "@/stores/configStore";
 
 import { environmentStore } from "@/stores/environmentStore";
 
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 
@@ -302,7 +302,7 @@ describe("TerminalContainer", () => {
     listenMock.mockReset();
     listenMock.mockResolvedValue(() => undefined);
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-visible",
@@ -463,7 +463,7 @@ describe("TerminalContainer", () => {
       setupScriptsComplete: false,
       setupPhase: "failed",
     });
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       environments.set("env-hidden", {
         root: {
@@ -492,7 +492,7 @@ describe("TerminalContainer", () => {
     expect(screen.getByText("Container is not running")).toBeTruthy();
     expect(screen.queryByText("Environment setup failed.") === null).toBe(true);
     await waitFor(() => {
-      const panes = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const panes = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(panes?.containerId).toBeNull();
       expect(panes?.root).toMatchObject({
         kind: "leaf",

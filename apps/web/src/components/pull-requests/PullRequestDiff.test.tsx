@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GitHubPullRequestReviewThread } from "@orkestrator/protocol/github-pull-requests";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
+import { pullRequestsStore } from "@/stores/pullRequestsStore";
 import { PullRequestDiff, anchorThreads, commentAnchorForLine } from "./PullRequestDiff";
 import {
   callsFor,
@@ -12,6 +12,7 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "./pull-request-test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 function thread(
   id: string,
@@ -139,7 +140,7 @@ describe("PullRequestDiff", () => {
     ["Comment on new line 2", "RIGHT", 2],
     ["Comment on new line 3", "RIGHT", 3],
   ] as const)("%s posts a review comment with side %s line %d", async (label, side, line) => {
-    usePullRequestsStore.setState({
+    appCommandStore(pullRequestsStore).setState({
       files: new Map([["acme/widget#42", makeFiles()]]),
     });
     installBackend({

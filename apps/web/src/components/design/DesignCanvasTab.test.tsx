@@ -4,11 +4,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { DesignElement } from "@orkestrator/protocol/design-canvas";
 import type { DesignOperationDescriptor } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
-import { useDesignStore } from "@/stores/designStore";
+import { designStore } from "@/stores/designStore";
 import { designController, resetDesignControllers } from "./design-controller";
 import { resetCapabilities } from "@/lib/design-client";
 import { FakeBackend, canvasId, deferred, frameA, frameB } from "./design-test-backend";
 import { DesignFrameBridge } from "./frame-bridge";
+import { appCommandStore } from "@/test/app-command-store";
 
 const { DesignCanvasTab } = await import("./DesignCanvasTab");
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -766,19 +767,23 @@ describe("DesignCanvasTab", () => {
     act(() => title.focus());
     fireEvent.click(title);
     act(() =>
-      useDesignStore.getState().update(controller.key, (projection) => ({
-        ...projection,
-        snapshot: "loading",
-      })),
+      appCommandStore(designStore)
+        .getState()
+        .update(controller.key, (projection) => ({
+          ...projection,
+          snapshot: "loading",
+        })),
     );
     fireEvent.keyDown(title, { key: "Delete" });
     expect(prepared("delete_frame")).toHaveLength(0);
 
     act(() =>
-      useDesignStore.getState().update(controller.key, (projection) => ({
-        ...projection,
-        snapshot: "current",
-      })),
+      appCommandStore(designStore)
+        .getState()
+        .update(controller.key, (projection) => ({
+          ...projection,
+          snapshot: "current",
+        })),
     );
     fireEvent.keyDown(title, { key: "Delete" });
     await waitFor(() => expect(prepared("delete_frame")).toHaveLength(1));

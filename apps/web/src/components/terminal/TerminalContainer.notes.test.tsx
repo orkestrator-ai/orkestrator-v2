@@ -4,7 +4,7 @@ import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { keyInformation } from "@/components/build-pipeline/key-information-test-fixture";
@@ -47,7 +47,7 @@ test("Notes activation creates and renders a real pane tab, and reopening reuses
     pipelines: new Map([[pipeline.id, pipeline]]),
     buildEnvironmentIds: new Set(["env-1"]),
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -86,7 +86,7 @@ test("Notes activation creates and renders a real pane tab, and reopening reuses
   const tab = await screen.findByTestId("pipeline-key-information-tab");
   expect(within(tab).getByRole("region", { name: "Needs a look" })).toBeTruthy();
   expect(within(tab).getByText(keyInformation.summary!)).toBeTruthy();
-  const store = usePaneLayoutStore.getState();
+  const store = appCommandStore(paneLayoutStore).getState();
   const opened = store.getAllTabs("env-1").find((t) => t.type === "key-information")!;
   expect(opened.keyInformationTabData).toEqual({
     environmentId: "env-1",
@@ -99,7 +99,9 @@ test("Notes activation creates and renders a real pane tab, and reopening reuses
   const pipelineGraph = await screen.findByRole("tablist", { name: "Build pipeline" });
   fireEvent.doubleClick(within(pipelineGraph).getByRole("tab", { name: /^Notes/ }));
   await waitFor(() =>
-    expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(opened.id),
+    expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
+      opened.id,
+    ),
   );
   expect(store.getAllTabs("env-1").filter((t) => t.type === "key-information")).toHaveLength(1);
 });

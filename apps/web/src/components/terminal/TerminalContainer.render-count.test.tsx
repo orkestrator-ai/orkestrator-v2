@@ -6,7 +6,7 @@ import * as realDndKitCore from "@dnd-kit/core";
 import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -76,7 +76,7 @@ beforeEach(() => {
   cleanup();
   containerRenders = 0;
   appCommandStore(environmentStore).setState({ environments: [environment()] });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -136,7 +136,7 @@ async function writeUnrelatedFields(): Promise<void> {
 
 /** A setup terminal, selected, beside the startup agent the backend published. */
 function seedStartupAgentPane(): void {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -164,7 +164,7 @@ function seedStartupAgentPane(): void {
 }
 
 function selectedTabId(): string | null | undefined {
-  return usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId;
+  return appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId;
 }
 
 test("an unrelated environment field does not re-render the container", async () => {
@@ -232,7 +232,7 @@ test("the launch handoff moves focus once, whatever unrelated writes surround it
   // The launch is still pending, so only the one-shot stops a second handoff
   // taking the user off the terminal they went back to.
   await act(async () => {
-    usePaneLayoutStore.getState().setActiveTab("default", "setup", "env-1");
+    appCommandStore(paneLayoutStore).getState().setActiveTab("default", "setup", "env-1");
   });
   await writeUnrelatedFields();
   expect(selectedTabId()).toBe("setup");
@@ -255,9 +255,9 @@ test("the setup check still sees a user proceeding past a failed setup", async (
 });
 
 test("a provider session binds when published and unrelated writes do not bind it again", async () => {
-  const realUpdate = usePaneLayoutStore.getState().updateTabNativeSessionId;
+  const realUpdate = appCommandStore(paneLayoutStore).getState().updateTabNativeSessionId;
   const updateTabNativeSessionId = mock(realUpdate);
-  usePaneLayoutStore.setState({ updateTabNativeSessionId });
+  appCommandStore(paneLayoutStore).setState({ updateTabNativeSessionId });
   try {
     seedStartupAgentPane();
     await renderContainer();
@@ -276,7 +276,7 @@ test("a provider session binds when published and unrelated writes do not bind i
           },
         });
     });
-    const startupTab = usePaneLayoutStore
+    const startupTab = appCommandStore(paneLayoutStore)
       .getState()
       .getAllTabs("env-1")
       .find((tab) => tab.id === "startup-agent");
@@ -286,6 +286,6 @@ test("a provider session binds when published and unrelated writes do not bind i
     await writeUnrelatedFields();
     expect(updateTabNativeSessionId).toHaveBeenCalledTimes(bindsAfterPublish);
   } finally {
-    usePaneLayoutStore.setState({ updateTabNativeSessionId: realUpdate });
+    appCommandStore(paneLayoutStore).setState({ updateTabNativeSessionId: realUpdate });
   }
 });

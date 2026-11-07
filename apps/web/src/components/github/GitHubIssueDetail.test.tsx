@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
-import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import { githubIssueDetailKey, githubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssueDetail, GitHubRepository } from "@/types/github";
 import type { EnvironmentType } from "@/types";
 import type { GitHubIssueBuildInput } from "@/hooks/useBuildPipeline";
@@ -116,11 +116,11 @@ const startBuildMock = mock<
     "pipeline-new",
 );
 const navigateToPipelineMock = mock(async () => undefined);
-const originalGitHubStoreState = useGitHubIssuesStore.getState();
+const originalGitHubStoreState = appCommandStore(githubIssuesStore).getState();
 
 afterAll(() => {
   cleanup();
-  useGitHubIssuesStore.setState(originalGitHubStoreState, true);
+  appCommandStore(githubIssuesStore).setState(originalGitHubStoreState, true);
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
@@ -164,7 +164,7 @@ describe("GitHubIssueDetail", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       ...originalGitHubStoreState,
       details: new Map([[githubIssueDetailKey("project-1", 42), detail]]),
       snapshots: new Map(),

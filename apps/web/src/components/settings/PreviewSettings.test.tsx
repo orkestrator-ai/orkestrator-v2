@@ -4,13 +4,11 @@ import { fixturePreviewCapabilities } from "@orkestrator/protocol/testing/previe
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import {
-  resetPreviewServiceSyncForTests,
-  usePreviewServiceStore,
-} from "@/stores/previewServiceStore";
+import { previewServiceStore, resetPreviewServiceSyncForTests } from "@/stores/previewServiceStore";
 import { AccountMachineProvider } from "./account-machine";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { PreviewSettings } from "./PreviewSettings";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -137,7 +135,7 @@ describe("preview settings loading", () => {
       expect(
         invokeMock.mock.calls.some(([command]) => command === "get_preview_capabilities"),
       ).toBe(false);
-      expect(usePreviewServiceStore.getState().capabilities).toBeNull();
+      expect(appCommandStore(previewServiceStore).getState().capabilities).toBeNull();
     } finally {
       portalStore.store.setState(initialPortal);
     }

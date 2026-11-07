@@ -3,7 +3,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { uiStore } from "@/stores/uiStore";
 import { onGraphRunViewRequested, takePendingGraphRunView } from "./graph-run-navigation";
 import {
@@ -13,7 +13,7 @@ import {
 import { appCommandStore } from "@/test/app-command-store";
 
 function seedLayout() {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: "env-1",
     hydration: new Map([["env-1", "done"]]),
     environments: new Map([
@@ -79,13 +79,15 @@ function navigation(): CoordinatorWorkNavigation & {
 }
 
 const activeTab = (paneId: string) =>
-  usePaneLayoutStore
+  appCommandStore(paneLayoutStore)
     .getState()
     .getAllTabs("env-1")
     .find(
       (tab) =>
-        usePaneLayoutStore.getState().findPaneWithTab(tab.id, "env-1")?.id === paneId &&
-        usePaneLayoutStore.getState().findPaneWithTab(tab.id, "env-1")?.activeTabId === tab.id,
+        appCommandStore(paneLayoutStore).getState().findPaneWithTab(tab.id, "env-1")?.id ===
+          paneId &&
+        appCommandStore(paneLayoutStore).getState().findPaneWithTab(tab.id, "env-1")
+          ?.activeTabId === tab.id,
     )?.id;
 
 describe("openCoordinatorWorkTarget", () => {
@@ -105,7 +107,7 @@ describe("openCoordinatorWorkTarget", () => {
     expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(activeTab("pane-2")).toBe("worker-tab");
-    expect(usePaneLayoutStore.getState().getActivePaneId("env-1")).toBe("pane-2");
+    expect(appCommandStore(paneLayoutStore).getState().getActivePaneId("env-1")).toBe("pane-2");
   });
 
   test("a Multi Review row focuses the review's own tab, not a reviewer's", () => {
@@ -120,16 +122,17 @@ describe("openCoordinatorWorkTarget", () => {
   test.each([false, true])(
     "restores a closed review tab after hydration (delayed=%s)",
     (delayed) => {
-      const store = usePaneLayoutStore.getState();
+      const store = appCommandStore(paneLayoutStore).getState();
       store.removeTab("pane-2", "review-main", "env-1");
-      if (delayed) usePaneLayoutStore.setState({ hydration: new Map([["env-1", "pending"]]) });
+      if (delayed)
+        appCommandStore(paneLayoutStore).setState({ hydration: new Map([["env-1", "pending"]]) });
       openCoordinatorWorkTarget(
         { type: "review", projectId: "project-1", environmentId: "env-1", workflowId: "review-1" },
         navigation(),
       );
       if (delayed) {
         expect(store.getAllTabs("env-1").some((t) => t.id === "multi-review:review-1")).toBe(false);
-        usePaneLayoutStore.getState().finishHydration("env-1");
+        appCommandStore(paneLayoutStore).getState().finishHydration("env-1");
       }
       expect(activeTab("pane-1")).toBe("multi-review:review-1");
       expect(
@@ -279,7 +282,9 @@ test("a work selection back to the command node activates its surface locally", 
       },
     });
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
-    expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-2");
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.activePaneId,
+    ).toBe("pane-2");
   } finally {
     portalStore.store.setState(original, true);
   }

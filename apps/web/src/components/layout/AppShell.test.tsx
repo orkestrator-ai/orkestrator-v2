@@ -16,7 +16,7 @@ import * as realSystemUsageIndicator from "./SystemUsageIndicator";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { configStore } from "@/stores/configStore";
 import { prMonitorStore } from "@/stores/prMonitorStore";
@@ -217,7 +217,7 @@ afterAll(() => {
 });
 
 function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneId = "pane-a") {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "environment-1",
@@ -263,7 +263,7 @@ beforeEach(() => {
   mountSearch = false;
   startDraggingMock.mockReset();
   document.title = "";
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
@@ -275,7 +275,7 @@ afterEach(() => {
   useActiveCoordinatorConversationStore.setState({ active: null });
   uiStore.setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
@@ -760,7 +760,9 @@ describe("AppShell", () => {
       await waitFor(() => expect(refreshes()).toBeGreaterThan(0));
       const before = refreshes();
       await act(async () => {
-        usePaneLayoutStore.setState((state) => ({ environments: new Map(state.environments) }));
+        appCommandStore(paneLayoutStore).setState((state) => ({
+          environments: new Map(state.environments),
+        }));
       });
       expect(refreshes()).toBe(before);
     } finally {
@@ -907,7 +909,7 @@ describe("AppShell", () => {
       containerId: "container-2",
     });
     const setOtherLayout = (activeTabId: string) =>
-      usePaneLayoutStore.setState((state) => {
+      appCommandStore(paneLayoutStore).setState((state) => {
         const environments = new Map(state.environments);
         environments.set("environment-2", otherLayout(activeTabId) as never);
         return { environments };
@@ -939,7 +941,7 @@ describe("AppShell", () => {
     [
       "the environment has no pane state",
       () => {
-        usePaneLayoutStore.setState({
+        appCommandStore(paneLayoutStore).setState({
           environments: new Map(),
           activeEnvironmentId: null,
         } as never);

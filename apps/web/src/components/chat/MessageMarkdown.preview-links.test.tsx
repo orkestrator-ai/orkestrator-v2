@@ -7,7 +7,7 @@ import {
 } from "@/lib/terminal-links";
 import { invoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { previewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
 import type { PreviewCapabilities } from "@orkestrator/protocol/preview-services";
 import { PreviewLinkSourceContext } from "./link-source-context";
@@ -37,7 +37,7 @@ describe("agent loopback links", () => {
     window.orkestrator = previousOrkestrator;
     window.orkestratorGateway = previousGateway;
     appCommandStore(environmentStore).setState({ environments: [] });
-    usePreviewServiceStore.setState({ status: "idle", capabilities: null });
+    appCommandStore(previewServiceStore).setState({ status: "idle", capabilities: null });
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
   });
@@ -91,7 +91,7 @@ describe("agent loopback links", () => {
       appCommandStore(environmentStore).setState({
         environments: [{ id: "env-a", environmentType: "local" }] as unknown as Environment[],
       });
-      usePreviewServiceStore.setState({
+      appCommandStore(previewServiceStore).setState({
         status: "ready",
         capabilities: {
           backendInstanceId: "backend-instance-1",

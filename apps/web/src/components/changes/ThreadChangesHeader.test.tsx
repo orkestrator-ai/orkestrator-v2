@@ -4,8 +4,9 @@ import type { ChangeHistoryEntry, ChangeProjection } from "@orkestrator/protocol
 import type { LineCount } from "@orkestrator/protocol/change-measurements";
 import { invoke } from "@/lib/native/backend";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { ThreadChangesHeader } from "./ThreadChangesHeader";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -112,7 +113,7 @@ function installBackend(backend: Backend) {
 }
 
 function resetStore() {
-  useChangeProjectionStore.setState({
+  appCommandStore(changeProjectionStore).setState({
     projections: new Map(),
     deleted: new Set(),
     contentGenerations: new Map(),

@@ -5,7 +5,7 @@ import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fi
 import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { FakeWebAnnotationBackend, invokeMock } from "@/test/web-annotation-fakes";
 import { NativeMessage } from "./NativeMessage";
 import { appCommandStore } from "@/test/app-command-store";
@@ -26,7 +26,7 @@ describe("web annotation request chip", () => {
     backend = new FakeWebAnnotationBackend("env-1").install();
     const request = fixtureRequest("running", { id: "req-abc" });
     backend.requests.set(request.id, request);
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-1",
       environments: new Map([
         [
@@ -63,14 +63,14 @@ describe("web annotation request chip", () => {
     expect(screen.getByText(/Web annotation request · change request · 1 note/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open annotation" }));
     await waitFor(() => {
-      const tabs = usePaneLayoutStore.getState().getAllTabs("env-1");
+      const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1");
       const browser = tabs.find((tab) => tab.type === "browser");
       expect(browser?.browserData?.annotationPanel).toMatchObject({
         open: true,
         selectedAnnotationId: "annotation-1",
       });
     });
-    const layout = usePaneLayoutStore.getState().environments.get("env-1")!;
+    const layout = appCommandStore(paneLayoutStore).getState().environments.get("env-1")!;
     expect((layout.root as { activeTabId: string }).activeTabId).toMatch(/^browser-/);
     expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
   });

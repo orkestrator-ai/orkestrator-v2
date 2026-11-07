@@ -1,13 +1,14 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
 import {
   FILE_WRITE_CONFLICT_MESSAGE,
   fileContentSha256,
 } from "@orkestrator/protocol/file-write-precondition";
 import { mockToastError } from "../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const writeContainerFileMock = mock(
@@ -44,7 +45,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   writeContainerFileMock.mockClear();
   writeLocalFileMock.mockClear();
   mockToastError.mockClear();
@@ -60,8 +61,8 @@ afterAll(() => {
 
 describe("useFileSave", () => {
   test("writes current container content and marks it saved", async () => {
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    useFileDirtyStore.getState().setContent("tab", "updated");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "updated");
     const { result } = renderHook(() =>
       useFileSave({
         tabId: "tab",
@@ -84,14 +85,14 @@ describe("useFileSave", () => {
     expect(decodeBase64Utf8(call?.[2] ?? "")).toBe("updated");
     // The write is conditional on the file still holding what was loaded.
     expect(call?.[3]).toEqual({ sha256: fileContentSha256("original") });
-    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(false);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(false);
   });
 
   test("a reload while the buffer is edited does not move what the save checks", async () => {
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    useFileDirtyStore.getState().setContent("tab", "mine");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
     // An agent changed the file; the tab remounted and read it back.
-    useFileDirtyStore.getState().observeDiskContent("tab", "agent's version");
+    appCommandStore(fileDirtyStore).getState().observeDiskContent("tab", "agent's version");
 
     const { result } = renderHook(() =>
       useFileSave({
@@ -112,8 +113,8 @@ describe("useFileSave", () => {
 
   test("a file changed on disk keeps the buffer and offers overwrite or reload", async () => {
     writeLocalFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    useFileDirtyStore.getState().setContent("tab", "mine");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
     const reload = mock(() => undefined);
     const { result } = renderHook(() =>
       useFileSave({
@@ -128,7 +129,7 @@ describe("useFileSave", () => {
     await act(async () => {
       await expect(result.current.saveFile()).resolves.toBe(false);
     });
-    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(true);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(true);
     const [title, options] = mockToastError.mock.calls.at(-1)! as [
       string,
       {
@@ -150,11 +151,11 @@ describe("useFileSave", () => {
     const overwrite = writeLocalFileMock.mock.calls.at(-1);
     expect(decodeBase64Utf8(overwrite?.[2] ?? "")).toBe("mine");
     expect(overwrite?.[3]).toBeUndefined();
-    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(false);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(false);
   });
 
   test("flushes a Unicode override through the local save path", async () => {
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     const { result } = renderHook(() =>
       useFileSave({
         tabId: "tab",
@@ -172,12 +173,12 @@ describe("useFileSave", () => {
     expect(call?.[0]).toBe("/repo");
     expect(call?.[1]).toBe("notes.md");
     expect(decodeBase64Utf8(call?.[2] ?? "")).toBe("# Updated 🌍");
-    expect(useFileDirtyStore.getState().getContent("tab")).toBe("# Updated 🌍");
-    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(false);
+    expect(appCommandStore(fileDirtyStore).getState().getContent("tab")).toBe("# Updated 🌍");
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(false);
   });
 
   test("encodes empty and chunk-spanning UTF-8 content", async () => {
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     const { result } = renderHook(() =>
       useFileSave({
         tabId: "tab",
@@ -233,8 +234,8 @@ describe("useFileSave", () => {
   test("keeps content dirty when the backend write fails", async () => {
     const logs = captureLogs();
     writeContainerFileMock.mockRejectedValueOnce(new Error("disk unavailable"));
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    useFileDirtyStore.getState().setContent("tab", "updated");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "updated");
     const { result } = renderHook(() =>
       useFileSave({
         tabId: "tab",
@@ -246,8 +247,8 @@ describe("useFileSave", () => {
 
     await expect(result.current.saveFile()).resolves.toBe(false);
 
-    expect(useFileDirtyStore.getState().getContent("tab")).toBe("updated");
-    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(true);
+    expect(appCommandStore(fileDirtyStore).getState().getContent("tab")).toBe("updated");
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(true);
     expect(logs.records()).toContainEqual(
       expect.objectContaining({
         level: "error",
@@ -263,8 +264,8 @@ describe("useFileSave", () => {
   test("preserves edits made during a save and rejects a concurrent save", async () => {
     const write = deferred<string>();
     writeContainerFileMock.mockImplementationOnce(() => write.promise);
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    useFileDirtyStore.getState().setContent("tab", "captured-for-save");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "captured-for-save");
     const { result } = renderHook(() =>
       useFileSave({
         tabId: "tab",
@@ -283,7 +284,7 @@ describe("useFileSave", () => {
     await expect(result.current.saveFile()).resolves.toBe(false);
 
     act(() => {
-      useFileDirtyStore.getState().setContent("tab", "typed-during-save");
+      appCommandStore(fileDirtyStore).getState().setContent("tab", "typed-during-save");
     });
     write.resolve("/workspace/README.md");
     await act(async () => {
@@ -291,16 +292,16 @@ describe("useFileSave", () => {
     });
 
     expect(writeContainerFileMock).toHaveBeenCalledTimes(1);
-    expect(useFileDirtyStore.getState().getContent("tab")).toBe("typed-during-save");
-    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(true);
+    expect(appCommandStore(fileDirtyStore).getState().getContent("tab")).toBe("typed-during-save");
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("tab")).toBe(true);
     expect(result.current.isSaving).toBe(false);
   });
 
   test("does not recreate dirty state when a tab unmounts during save", async () => {
     const write = deferred<string>();
     writeContainerFileMock.mockImplementationOnce(() => write.promise);
-    useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    useFileDirtyStore.getState().setContent("tab", "saving");
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
+    appCommandStore(fileDirtyStore).getState().setContent("tab", "saving");
     const { result, unmount } = renderHook(() =>
       useFileSave({
         tabId: "tab",
@@ -315,10 +316,10 @@ describe("useFileSave", () => {
       save = result.current.saveFile();
     });
     unmount();
-    useFileDirtyStore.getState().clearDirty("tab");
+    appCommandStore(fileDirtyStore).getState().clearDirty("tab");
     write.resolve("/workspace/README.md");
     await expect(save).resolves.toBe(true);
 
-    expect(useFileDirtyStore.getState().getContent("tab")).toBeNull();
+    expect(appCommandStore(fileDirtyStore).getState().getContent("tab")).toBeNull();
   });
 });

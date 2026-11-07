@@ -25,7 +25,7 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 function windowHistoryBytes(): number {
   return appCommandScope().budgets.transcripts.usedBytes;
 }
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
@@ -217,7 +217,7 @@ beforeEach(() => {
   resumeNativeAgentSessionMock.mockClear();
   resumeNativeAgentSessionMock.mockImplementation(async () => null);
   getNativeAgentProjectionMock.mockClear();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,

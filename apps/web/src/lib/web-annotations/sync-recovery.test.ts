@@ -13,10 +13,10 @@ import {
 } from "@/test/web-annotation-fakes";
 import {
   getWebAnnotationCache,
-  listQueryKey,
-  useWebAnnotationStore,
-  WEB_ANNOTATION_CACHE_LIMITS,
   type ListQuery,
+  listQueryKey,
+  WEB_ANNOTATION_CACHE_LIMITS,
+  webAnnotationStore,
 } from "@/stores/webAnnotationStore";
 import {
   acquireWebAnnotationSync,
@@ -24,6 +24,7 @@ import {
   registerWebAnnotationList,
   resetWebAnnotationSyncForTests,
 } from "./sync";
+import { appCommandStore } from "@/test/app-command-store";
 
 const FIRST: ListQuery = {
   filter: { pageKey: webAnnotationPageKey(fixturePage), state: "open" },
@@ -92,10 +93,10 @@ describe("web annotation sync recovery", () => {
 });
 
 describe("web annotation cache bounds", () => {
-  afterEach(() => useWebAnnotationStore.getState().reset());
+  afterEach(() => appCommandStore(webAnnotationStore).getState().reset());
 
   test("requests and results are bounded, keeping ones an open thread shows", () => {
-    const store = useWebAnnotationStore.getState();
+    const store = appCommandStore(webAnnotationStore).getState();
     const kept = fixtureRequest("running", { id: "request-kept" });
     store.installThread("env-1", "annotation-1", {
       status: "ready",

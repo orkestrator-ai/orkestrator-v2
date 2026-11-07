@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
+import { pullRequestsStore, usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { AUTO_EXPAND_FILE_LIMIT, PullRequestCodeTab } from "./PullRequestCodeTab";
 import {
@@ -13,6 +13,7 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "./pull-request-test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const key = "acme/widget#42";
 
@@ -32,7 +33,7 @@ afterEach(() => {
 
 describe("PullRequestCodeTab", () => {
   test("viewed checkbox is optimistic, collapses the file and reverts on failure", async () => {
-    usePullRequestsStore.setState({ files: new Map([[key, makeFiles()]]) });
+    appCommandStore(pullRequestsStore).setState({ files: new Map([[key, makeFiles()]]) });
     const pending = deferred<never>();
     installBackend({
       set_github_pull_request_file_viewed: () => pending.promise,
@@ -62,7 +63,7 @@ describe("PullRequestCodeTab", () => {
   });
 
   test("files without a patch link to GitHub instead of a diff", () => {
-    usePullRequestsStore.setState({
+    appCommandStore(pullRequestsStore).setState({
       files: new Map([
         [key, makeFiles({ files: [makeFile({ patchAvailable: false, hunks: [] })] })],
       ]),
@@ -76,7 +77,9 @@ describe("PullRequestCodeTab", () => {
     const many = Array.from({ length: AUTO_EXPAND_FILE_LIMIT + 1 }, (_, index) =>
       makeFile({ path: `src/file-${index}.ts` }),
     );
-    usePullRequestsStore.setState({ files: new Map([[key, makeFiles({ files: many })]]) });
+    appCommandStore(pullRequestsStore).setState({
+      files: new Map([[key, makeFiles({ files: many })]]),
+    });
     render(<ConnectedCodeTab />);
     expect(screen.queryByTestId("pull-request-diff") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Expand all files" }));

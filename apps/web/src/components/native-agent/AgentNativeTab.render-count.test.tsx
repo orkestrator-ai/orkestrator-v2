@@ -29,7 +29,7 @@ import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { createSessionKey } from "@/lib/utils";
 import type { Environment } from "@/types";
 import { tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
@@ -227,7 +227,7 @@ mock.module("@/lib/backend", () => ({
 const { AgentNativeTab } = await import("./AgentNativeTab");
 const { resetNativeAgentSyncCapabilityForTests } = await import("@/hooks/useNativeAgentSession");
 
-const realClearTabInitialPrompt = usePaneLayoutStore.getState().clearTabInitialPrompt;
+const realClearTabInitialPrompt = appCommandStore(paneLayoutStore).getState().clearTabInitialPrompt;
 const clearTabInitialPromptMock = mock((_tabId: string, _environmentId?: string) => {});
 const initialGlobalConfig = appCommandStore(configStore).getState().config.global;
 const initialRepositories = appCommandStore(configStore).getState().config.repositories;
@@ -301,7 +301,7 @@ beforeEach(() => {
   appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   appCommandStore(nativeAgentProjectionStore).getState().reset();
   appCommandStore(environmentStore).setState({ environments: [environment()] });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -312,7 +312,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   appCommandStore(nativeAgentProjectionStore).getState().reset();
-  usePaneLayoutStore.setState({ clearTabInitialPrompt: realClearTabInitialPrompt });
+  appCommandStore(paneLayoutStore).setState({ clearTabInitialPrompt: realClearTabInitialPrompt });
   appCommandStore(configStore).getState().updateGlobalConfig(initialGlobalConfig);
   appCommandStore(configStore).setState((state) => ({
     config: { ...state.config, repositories: initialRepositories },

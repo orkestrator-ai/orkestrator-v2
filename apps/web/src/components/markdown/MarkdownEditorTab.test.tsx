@@ -1,9 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
 import { MarkdownManager } from "@tiptap/markdown";
 import type { Editor } from "@tiptap/react";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realMonacoFileEditorSnapshot = { ...realMonacoFileEditor };
 
@@ -38,8 +39,8 @@ const ORIGINAL_MARKDOWN = "# Original heading\n\nOriginal body.";
 type TiptapEditorElement = HTMLElement & { editor: Editor };
 
 function seedMarkdown(markdown: string): void {
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
-  useFileDirtyStore.getState().setOriginalContent(TAB_ID, markdown);
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).getState().setOriginalContent(TAB_ID, markdown);
 }
 
 beforeEach(() => {
@@ -48,7 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
 });
 
 afterAll(() => {
@@ -139,8 +140,8 @@ describe("MarkdownEditorTab", () => {
     const rawTab = screen.getByRole("tab", { name: "Raw" });
     fireEvent.mouseDown(rawTab, { button: 0 });
 
-    expect(useFileDirtyStore.getState().getContent(TAB_ID)).toBe(ORIGINAL_MARKDOWN);
-    expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(false);
+    expect(appCommandStore(fileDirtyStore).getState().getContent(TAB_ID)).toBe(ORIGINAL_MARKDOWN);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty(TAB_ID)).toBe(false);
     expect(rawTab.getAttribute("data-state")).toBe("active");
     expect(
       (
@@ -177,7 +178,7 @@ describe("MarkdownEditorTab", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Updated in raw mode" })).toBeTruthy();
     });
-    expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(true);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty(TAB_ID)).toBe(true);
   });
 
   test("saves the current dirty-store content from raw mode", async () => {
@@ -200,7 +201,7 @@ describe("MarkdownEditorTab", () => {
     fireEvent.change(rawEditor, { target: { value: "# Ready to save" } });
     fireEvent.keyDown(rawEditor, { key: "s", ctrlKey: true });
 
-    expect(useFileDirtyStore.getState().getContent(TAB_ID)).toBe("# Ready to save");
+    expect(appCommandStore(fileDirtyStore).getState().getContent(TAB_ID)).toBe("# Ready to save");
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
@@ -230,7 +231,7 @@ describe("MarkdownEditorTab", () => {
         })) as HTMLTextAreaElement
       ).value,
     ).toBe("Changed while rendered");
-    expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(true);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty(TAB_ID)).toBe(true);
   });
 
   test("renders and preserves GFM tables in Rendered mode", async () => {

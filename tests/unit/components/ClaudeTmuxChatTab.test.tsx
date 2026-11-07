@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 
 import {
   claudeTmuxStore,
@@ -605,7 +605,7 @@ function seedPane(
   initialAgentModel?: string,
   initialReasoningEffort?: string,
 ) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -964,7 +964,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.initialPrompt).toBe(
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.initialPrompt).toBe(
       "Run the audit",
     );
 
@@ -979,7 +979,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     await waitFor(() => {
       expect(appCommandStore(claudeTmuxStore).getState().getTab("tab-1").busy).toBe(true);
-      const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+      const tab = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0];
       expect(tab?.initialPrompt).toBeUndefined();
     });
   });

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { BROWSER_PREVIEW_CAPTURE_EVENT } from "@orkestrator/protocol/browser-preview";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createFakeCaptureApi,
   FakeWebAnnotationBackend,
@@ -18,6 +18,7 @@ import {
   seedBrowserLayout,
   useAnnotationUiTestBudget,
 } from "@/test/web-annotation-harness";
+import { appCommandStore } from "@/test/app-command-store";
 
 let backend: FakeWebAnnotationBackend;
 let capture: ReturnType<typeof createFakeCaptureApi>;
@@ -47,8 +48,8 @@ function selectedTab() {
 /** Two environments in the layout, each with its own browser tab. */
 function seedTwoEnvironments() {
   seedBrowserLayout({ open: true });
-  const first = usePaneLayoutStore.getState().environments.get("env-1")!;
-  usePaneLayoutStore.setState({
+  const first = appCommandStore(paneLayoutStore).getState().environments.get("env-1")!;
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       ["env-1", first],
       [

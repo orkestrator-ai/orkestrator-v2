@@ -1,4 +1,4 @@
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -33,9 +33,9 @@ afterEach(() => {
 });
 
 test("a pull request linked from a main-area pull request opens in the right-hand PR pane", async () => {
-  const layout = usePaneLayoutStore.getState();
+  const layout = appCommandStore(paneLayoutStore).getState();
   layout.initialize(null, "env");
-  const owner = usePaneLayoutStore.getState().environments.get("env")!;
+  const owner = appCommandStore(paneLayoutStore).getState().environments.get("env")!;
   layout.addTab(
     owner.activePaneId,
     {
@@ -65,9 +65,9 @@ test("a pull request linked from a main-area pull request opens in the right-han
   expect(panel.pullRequestTabs.env?.map((tab) => tab.ref)).toEqual([
     { owner: "acme", repo: "api", number: 7 },
   ]);
-  expect(usePaneLayoutStore.getState().findPaneWithTab("pr-tab", "env")?.activeTabId).toBe(
-    "pr-tab",
-  );
+  expect(
+    appCommandStore(paneLayoutStore).getState().findPaneWithTab("pr-tab", "env")?.activeTabId,
+  ).toBe("pr-tab");
   // The main-area pull request is still the one shown.
   expect(screen.getByRole("heading", { name: "feat: add usage history tab" })).toBeTruthy();
 });

@@ -9,7 +9,7 @@ import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { claudeTmuxStore, createClaudeTmuxStateKey } from "@/stores/claudeTmuxStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { projectStore } from "@/stores/projectStore";
 import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -556,7 +556,7 @@ function resetStores({
     options: {},
   });
 
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -1083,7 +1083,7 @@ describe("App background processing mounts", () => {
     const { unmount } = render(<App />);
 
     act(() => {
-      const store = usePaneLayoutStore.getState();
+      const store = appCommandStore(paneLayoutStore).getState();
       store.initialize("container-1", "env-1");
       store.beginHydration("env-1");
       store.finishHydration("env-1");
@@ -1320,7 +1320,7 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-pending-prompt",

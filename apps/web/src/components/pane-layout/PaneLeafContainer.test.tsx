@@ -14,7 +14,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { agentMailStore } from "@/stores/agentMailStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import type { ChangeDiffTarget, PaneLeaf } from "@/types/paneLayout";
 import { createPaneTabElementId } from "@/types/paneLayout";
@@ -451,7 +451,7 @@ describe("PaneLeafContainer", () => {
     cleanup();
     resetTabLaunches();
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-visible",
@@ -569,12 +569,15 @@ describe("PaneLeafContainer", () => {
 
   test("a focused launch shows shimmer until user tab selection", () => {
     beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
-    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
-    usePaneLayoutStore.setState({
-      environments: new Map(usePaneLayoutStore.getState().environments).set("env-hidden", {
-        ...state,
-        activePaneId: hiddenPane.id,
-      }),
+    const state = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")!;
+    appCommandStore(paneLayoutStore).setState({
+      environments: new Map(appCommandStore(paneLayoutStore).getState().environments).set(
+        "env-hidden",
+        {
+          ...state,
+          activePaneId: hiddenPane.id,
+        },
+      ),
     });
     renderInAppCommandScope(
       <PaneLeafContainer
@@ -605,13 +608,16 @@ describe("PaneLeafContainer", () => {
       createPaneTabElementId("env-hidden", hiddenPane.id, hiddenPane.activeTabId),
     );
 
-    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    const state = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")!;
     act(() => {
-      usePaneLayoutStore.setState({
-        environments: new Map(usePaneLayoutStore.getState().environments).set("env-hidden", {
-          ...state,
-          activePaneId: hiddenPane.id,
-        }),
+      appCommandStore(paneLayoutStore).setState({
+        environments: new Map(appCommandStore(paneLayoutStore).getState().environments).set(
+          "env-hidden",
+          {
+            ...state,
+            activePaneId: hiddenPane.id,
+          },
+        ),
       });
       beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
     });
@@ -650,10 +656,10 @@ describe("PaneLeafContainer", () => {
     ).toBe(false);
     expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
 
-    expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
-      "pane-hidden",
-    );
-    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")?.activePaneId,
+    ).toBe("pane-hidden");
+    expect(appCommandStore(paneLayoutStore).getState().activeEnvironmentId).toBe("env-visible");
   });
 
   test("tab selection updates the target environment without touching the active environment", () => {
@@ -668,14 +674,14 @@ describe("PaneLeafContainer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
 
-    const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+    const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
     expect(envHidden?.root.kind).toBe("leaf");
     if (!envHidden || envHidden.root.kind !== "leaf") {
       throw new Error("env-hidden root should be a leaf");
     }
 
     expect(envHidden.root.activeTabId).toBe("tab-2");
-    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
+    expect(appCommandStore(paneLayoutStore).getState().activeEnvironmentId).toBe("env-visible");
   });
 
   test("renders ClaudeTmuxChatTab for claude-tmux tabs", async () => {
@@ -692,7 +698,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-tmux",
     };
 
-    usePaneLayoutStore.setState((s) => {
+    appCommandStore(paneLayoutStore).setState((s) => {
       const envs = new Map(s.environments);
       envs.set("env-visible", {
         root: tmuxPane,
@@ -1020,7 +1026,7 @@ describe("PaneLeafContainer", () => {
       ],
       activeTabId: "tab-codex",
     };
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       environments.set("env-visible", {
         root: chatPane,
@@ -1062,7 +1068,7 @@ describe("PaneLeafContainer", () => {
         },
       ],
     };
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-visible", {
         root: pane,
         activePaneId: pane.id,
@@ -1295,7 +1301,7 @@ describe("PaneLeafContainer", () => {
       ],
       activeTabId: "tab-build",
     };
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       environments.set("env-visible", {
         root: pane,

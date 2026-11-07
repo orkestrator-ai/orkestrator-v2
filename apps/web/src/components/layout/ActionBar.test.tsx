@@ -23,7 +23,7 @@ import * as realUseFileSearch from "@/hooks/useFileSearch";
 import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { resetTabLaunches } from "@/lib/tab-launch";
 import { tabLaunchStore } from "@/stores/tabLaunchStore";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import { prMonitorStore } from "@/stores/prMonitorStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { coordinatorActivityStore } from "@/stores/coordinatorActivityStore";
@@ -156,7 +156,7 @@ const requestPaneTabActivationMock = mock((environmentId: string, tabId: string)
 // action is swapped rather than the module mocked: `@/stores/paneLayoutStore`
 // stays real for every other suite.
 const clearTabInitialPromptMock = mock((_tabId: string, _environmentId?: string) => {});
-const realClearTabInitialPrompt = usePaneLayoutStore.getState().clearTabInitialPrompt;
+const realClearTabInitialPrompt = appCommandStore(paneLayoutStore).getState().clearTabInitialPrompt;
 const enqueuePromptQueueMessageMock = mock(
   async (_queueKey: string, _environmentId: string, _message: unknown) => ({}),
 );
@@ -882,7 +882,7 @@ afterAll(() => {
   mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
   mock.module("@/lib/multi-review-persistence", () => realMultiReviewPersistenceSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     clearTabInitialPrompt: realClearTabInitialPrompt,
   });
 });
@@ -962,7 +962,7 @@ beforeEach(() => {
   enqueuePromptQueueMessageMock.mockReset();
   enqueuePromptQueueMessageMock.mockImplementation(async () => ({}));
   clearTabInitialPromptMock.mockReset();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     clearTabInitialPrompt: clearTabInitialPromptMock,
   });
   launchMultiReviewMock.mockReset();
@@ -1704,8 +1704,8 @@ describe("ActionBar copy URL", () => {
 describe("ActionBar browser tabs", () => {
   // The tab opens on the press; its address follows once it has been looked up.
   const installBrowserTabs = () => {
-    const previous = usePaneLayoutStore.getState().environments;
-    usePaneLayoutStore.setState({
+    const previous = appCommandStore(paneLayoutStore).getState().environments;
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map(previous).set("env-1", {
         root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
         activePaneId: "default",
@@ -1714,7 +1714,7 @@ describe("ActionBar browser tabs", () => {
       }),
     });
     createTabMock.mockImplementation(((type: string, options?: { tabId?: string }) => {
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab(
           "default",
@@ -1723,10 +1723,10 @@ describe("ActionBar browser tabs", () => {
         );
       return true;
     }) as never);
-    return () => usePaneLayoutStore.setState({ environments: previous });
+    return () => appCommandStore(paneLayoutStore).setState({ environments: previous });
   };
   const browserTabUrl = () => {
-    const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    const root = appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.root;
     return root?.kind === "leaf" ? root.tabs[0]?.browserData?.url : undefined;
   };
 
@@ -1905,13 +1905,14 @@ describe("ActionBar editor and run commands", () => {
     );
 
     const orkestratorDescriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
-    const previousEnvironments = usePaneLayoutStore.getState().environments;
-    const previousActiveEnvironmentId = usePaneLayoutStore.getState().activeEnvironmentId;
+    const previousEnvironments = appCommandStore(paneLayoutStore).getState().environments;
+    const previousActiveEnvironmentId =
+      appCommandStore(paneLayoutStore).getState().activeEnvironmentId;
     Object.defineProperty(window, "orkestrator", {
       configurable: true,
       value: { isolatedViewState: true },
     });
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-1",
       environments: new Map([
         [
@@ -1956,7 +1957,7 @@ describe("ActionBar editor and run commands", () => {
         finishPush();
         await Promise.resolve();
       });
-      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
         "agent-job-push",
       );
 
@@ -1964,11 +1965,11 @@ describe("ActionBar editor and run commands", () => {
         finishRun();
         await Promise.resolve();
       });
-      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
         "agent-job-push",
       );
     } finally {
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         environments: previousEnvironments,
         activeEnvironmentId: previousActiveEnvironmentId,
       });
@@ -3604,7 +3605,7 @@ describe("ActionBar workflow tabs", () => {
         jobCompletionAction: "refresh-pr-after-agent-completion",
       },
     ) =>
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         activeEnvironmentId: "env-1",
         environments: new Map([
           [
@@ -3647,7 +3648,7 @@ describe("ActionBar workflow tabs", () => {
     });
 
     afterEach(() => {
-      usePaneLayoutStore.setState({ environments: new Map() });
+      appCommandStore(paneLayoutStore).setState({ environments: new Map() });
     });
 
     test("a plain press asks the backend to reuse the tab and focuses it", async () => {
@@ -7872,9 +7873,9 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       logicalSessionKey: "env-env-1:agent-job-pr",
       status: "accepted" as const,
     }));
-    const paneEnvironments = usePaneLayoutStore.getState().environments;
+    const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
     try {
-      act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+      act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
       renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
@@ -7888,7 +7889,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       // The claim holds while the launched tab is open: the agent is still
       // working towards the PR that would release it.
       act(() =>
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .addTab("default", { id: "agent-job-pr", type: "agent-native" }, "env-1"),
       );
@@ -7896,7 +7897,9 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         (screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled,
       ).toBe(true);
 
-      act(() => usePaneLayoutStore.getState().removeTab("default", "agent-job-pr", "env-1"));
+      act(() =>
+        appCommandStore(paneLayoutStore).getState().removeTab("default", "agent-job-pr", "env-1"),
+      );
       await waitFor(() =>
         expect(
           (screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled,
@@ -7906,7 +7909,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
       await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
     } finally {
-      usePaneLayoutStore.setState({ environments: paneEnvironments });
+      appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
     }
   });
 
@@ -7950,26 +7953,28 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     }
 
     function addPrTab(tabId: string, environmentId: string, platform?: "codex") {
-      usePaneLayoutStore.getState().addTab(
-        "default",
-        {
-          id: tabId,
-          type: "agent-native",
-          ...(platform
-            ? { nativeAgentData: { platform, environmentId, sessionId: `${platform}-session` } }
-            : {}),
-        },
-        environmentId,
-      );
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .addTab(
+          "default",
+          {
+            id: tabId,
+            type: "agent-native",
+            ...(platform
+              ? { nativeAgentData: { platform, environmentId, sessionId: `${platform}-session` } }
+              : {}),
+          },
+          environmentId,
+        );
     }
 
     test("holds an unseen claim until CREATE_PR_TAB_GRACE_MS, then releases it", async () => {
       currentEnvironment = envWithoutPr();
       const launch = holdLaunch();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       jest.useFakeTimers();
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         expect(createPrButton().disabled).toBe(true);
@@ -7991,16 +7996,16 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         expect(createPrButton().disabled).toBe(true);
       } finally {
         jest.useRealTimers();
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("does not release a tabSeen claim when the grace timer fires", async () => {
       currentEnvironment = envWithoutPr();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       jest.useFakeTimers();
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await act(async () => {
@@ -8015,16 +8020,16 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         expect(createPrButton().disabled).toBe(true);
       } finally {
         jest.useRealTimers();
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("keeps an acknowledged launch claimed when its tab never appears", async () => {
       currentEnvironment = envWithoutPr();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       jest.useFakeTimers();
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await act(async () => {
@@ -8038,19 +8043,19 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         expect(createPrButton().disabled).toBe(true);
       } finally {
         jest.useRealTimers();
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("does not restart env A's grace when env B starts a Create PR", async () => {
       currentEnvironment = envWithoutPr();
       const launchA = holdLaunch();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       jest.useFakeTimers();
       try {
         act(() => {
-          usePaneLayoutStore.getState().initialize(null, "env-1");
-          usePaneLayoutStore.getState().initialize(null, "env-2");
+          appCommandStore(paneLayoutStore).getState().initialize(null, "env-1");
+          appCommandStore(paneLayoutStore).getState().initialize(null, "env-2");
         });
         const view = renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
@@ -8093,16 +8098,16 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         });
       } finally {
         jest.useRealTimers();
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("marks tabSeen when the tab is published before launch acknowledges", async () => {
       currentEnvironment = envWithoutPr();
       const launch = holdLaunch();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         act(() => addPrTab("agent-job-pr", "env-1"));
@@ -8110,39 +8115,43 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
         expect(createPrButton().disabled).toBe(true);
 
-        act(() => usePaneLayoutStore.getState().removeTab("default", "agent-job-pr", "env-1"));
+        act(() =>
+          appCommandStore(paneLayoutStore).getState().removeTab("default", "agent-job-pr", "env-1"),
+        );
         await waitFor(() => expect(createPrButton().disabled).toBe(false));
       } finally {
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("releases immediately when the tab opens and closes before acknowledgement", async () => {
       currentEnvironment = envWithoutPr();
       const launch = holdLaunch();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         expect(createPrButton().disabled).toBe(true);
 
         act(() => addPrTab("agent-job-pr", "env-1"));
-        act(() => usePaneLayoutStore.getState().removeTab("default", "agent-job-pr", "env-1"));
+        act(() =>
+          appCommandStore(paneLayoutStore).getState().removeTab("default", "agent-job-pr", "env-1"),
+        );
         launch.resolve(acceptedPrJob("agent-job-pr"));
         await waitFor(() => expect(createPrButton().disabled).toBe(false));
       } finally {
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("keeps Create PR enabled on env B while env A has a live claim", async () => {
       currentEnvironment = envWithoutPr();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       try {
         act(() => {
-          usePaneLayoutStore.getState().initialize(null, "env-1");
-          usePaneLayoutStore.getState().initialize(null, "env-2");
+          appCommandStore(paneLayoutStore).getState().initialize(null, "env-1");
+          appCommandStore(paneLayoutStore).getState().initialize(null, "env-2");
         });
         const view = renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
@@ -8161,17 +8170,17 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
         expect(createPrButton().disabled).toBe(true);
       } finally {
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("closing env A's tab while viewing env B releases only A's claim", async () => {
       currentEnvironment = envWithoutPr();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       try {
         act(() => {
-          usePaneLayoutStore.getState().initialize(null, "env-1");
-          usePaneLayoutStore.getState().initialize(null, "env-2");
+          appCommandStore(paneLayoutStore).getState().initialize(null, "env-1");
+          appCommandStore(paneLayoutStore).getState().initialize(null, "env-2");
         });
         const view = renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
@@ -8187,7 +8196,11 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
         act(() => addPrTab("agent-job-resolve", "env-2"));
 
-        act(() => usePaneLayoutStore.getState().removeTab("default", "agent-job-resolve", "env-1"));
+        act(() =>
+          appCommandStore(paneLayoutStore)
+            .getState()
+            .removeTab("default", "agent-job-resolve", "env-1"),
+        );
         expect(createPrButton().disabled).toBe(true);
 
         currentSelectedEnvironmentId = "env-1";
@@ -8202,57 +8215,65 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         view.rerender(<ActionBar />);
         expect(createPrButton().disabled).toBe(true);
       } finally {
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("keeps a live claim through relocate and unrelated pane-store writes", async () => {
       currentEnvironment = envWithoutPr();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
         act(() => {
           addPrTab("agent-job-resolve", "env-1");
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .addTab("default", { id: "companion", type: "plain" }, "env-1");
         });
         expect(createPrButton().disabled).toBe(true);
 
         act(() =>
-          usePaneLayoutStore.getState().splitPane("default", "horizontal", "companion", "env-1"),
+          appCommandStore(paneLayoutStore)
+            .getState()
+            .splitPane("default", "horizontal", "companion", "env-1"),
         );
         expect(createPrButton().disabled).toBe(true);
 
-        const leaves = getAllLeaves(usePaneLayoutStore.getState().environments.get("env-1")!.root);
+        const leaves = getAllLeaves(
+          appCommandStore(paneLayoutStore).getState().environments.get("env-1")!.root,
+        );
         const prPane = leaves.find((leaf) =>
           leaf.tabs.some((tab) => tab.id === "agent-job-resolve"),
         );
         const otherPane = leaves.find((leaf) => leaf.id !== prPane?.id);
         expect(prPane && otherPane).toBeTruthy();
         act(() =>
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .moveTab(prPane!.id, otherPane!.id, "agent-job-resolve", undefined, "env-1"),
         );
         expect(createPrButton().disabled).toBe(true);
 
-        act(() => usePaneLayoutStore.getState().setActiveTab(otherPane!.id, "companion", "env-1"));
+        act(() =>
+          appCommandStore(paneLayoutStore)
+            .getState()
+            .setActiveTab(otherPane!.id, "companion", "env-1"),
+        );
         expect(createPrButton().disabled).toBe(true);
       } finally {
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("hasPR release does not leave a stale tabSeen claim after the tab closes", async () => {
       currentEnvironment = envWithoutPr();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       const view = renderInAppCommandScope(<ActionBar />);
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         view.rerender(<ActionBar />);
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
@@ -8269,7 +8290,11 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
           expect(screen.queryByRole("button", { name: "Create PR" }) === null).toBe(true),
         );
 
-        act(() => usePaneLayoutStore.getState().removeTab("default", "agent-job-resolve", "env-1"));
+        act(() =>
+          appCommandStore(paneLayoutStore)
+            .getState()
+            .removeTab("default", "agent-job-resolve", "env-1"),
+        );
         currentEnvironment = envWithoutPr();
         view.rerender(<ActionBar />);
         await waitFor(() => expect(createPrButton().disabled).toBe(false));
@@ -8277,15 +8302,15 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
       } finally {
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
 
     test("closing a Codex PR tab tears the session down so the turn can stop", async () => {
       currentEnvironment = envWithoutPr();
-      const paneEnvironments = usePaneLayoutStore.getState().environments;
+      const paneEnvironments = appCommandStore(paneLayoutStore).getState().environments;
       try {
-        act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+        act(() => appCommandStore(paneLayoutStore).getState().initialize(null, "env-1"));
         renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
@@ -8296,7 +8321,11 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         act(() => addPrTab("agent-job-resolve", "env-1", "codex"));
         expect(createPrButton().disabled).toBe(true);
 
-        act(() => usePaneLayoutStore.getState().removeTab("default", "agent-job-resolve", "env-1"));
+        act(() =>
+          appCommandStore(paneLayoutStore)
+            .getState()
+            .removeTab("default", "agent-job-resolve", "env-1"),
+        );
         expect(teardownTabMock).toHaveBeenCalledWith({
           environmentId: "env-1",
           tabId: "agent-job-resolve",
@@ -8305,7 +8334,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         });
         await waitFor(() => expect(createPrButton().disabled).toBe(false));
       } finally {
-        usePaneLayoutStore.setState({ environments: paneEnvironments });
+        appCommandStore(paneLayoutStore).setState({ environments: paneEnvironments });
       }
     });
   });

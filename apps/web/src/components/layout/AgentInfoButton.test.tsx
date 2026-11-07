@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { configStore } from "@/stores/configStore";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
@@ -333,7 +333,7 @@ function buildStageProjection(
 }
 
 function seedPaneLayout() {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -518,7 +518,7 @@ afterEach(() => {
   // sample must not leak into the next test.
   resetReadCoordinatorForTests();
   window.confirm = originalConfirm;
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
@@ -3395,7 +3395,7 @@ describe("AgentInfoButton session actions", () => {
   }
 
   function expectNoHandoffCreated() {
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
     expect(nativeInvokeMock).not.toHaveBeenCalledWith("save_agent_handoff", expect.anything());
     expect(nativeInvokeMock).not.toHaveBeenCalledWith("delete_agent_handoff", expect.anything());
     expect(mockToastSuccess).not.toHaveBeenCalled();
@@ -3444,7 +3444,9 @@ describe("AgentInfoButton session actions", () => {
       startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+        expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(
+          2,
+        ),
       );
       expect(created).toEqual([
         {
@@ -3463,7 +3465,7 @@ describe("AgentInfoButton session actions", () => {
       for (const command of ["changes_get_handoff", "save_agent_handoff"]) {
         expect(nativeInvokeMock).not.toHaveBeenCalledWith(command, expect.anything());
       }
-      const handoffTab = usePaneLayoutStore
+      const handoffTab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((tab) => tab.id !== TAB_ID)!;
@@ -3566,7 +3568,7 @@ describe("AgentInfoButton session actions", () => {
     // Without native data there is no container or locality to copy onto the
     // destination tab, so the panel offers no session controls at all.
     expect(screen.queryByRole("button", { name: /Continue in/ }) === null).toBe(true);
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
   });
 
   test("names the transfer a tab was itself continued from", async () => {
@@ -3575,7 +3577,9 @@ describe("AgentInfoButton session actions", () => {
     startHandoff(codexTab({ agentHandoffId: "prior-handoff" }), "OpenCode");
 
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(
+        2,
+      ),
     );
     expect(created[0]).toMatchObject({ priorHandoffId: "prior-handoff" });
   });
@@ -3618,14 +3622,16 @@ describe("AgentInfoButton session actions", () => {
       fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID).length).toBe(2),
+        expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID).length).toBe(
+          2,
+        ),
       );
       expect(nativeInvokeMock).toHaveBeenCalledWith("fork_native_agent_session", {
         environmentId: ENVIRONMENT_ID,
         agent: provider,
         logicalSessionKey: SESSION_KEY,
       });
-      const forked = usePaneLayoutStore
+      const forked = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((entry) => entry.id !== TAB_ID)!;
@@ -3660,9 +3666,11 @@ describe("AgentInfoButton session actions", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(
+        2,
+      ),
     );
-    const forked = usePaneLayoutStore
+    const forked = appCommandStore(paneLayoutStore)
       .getState()
       .getAllTabs(ENVIRONMENT_ID)
       .find((entry) => entry.id !== TAB_ID)!;
@@ -3684,7 +3692,7 @@ describe("AgentInfoButton session actions", () => {
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
     await waitFor(() => {
-      const forked = usePaneLayoutStore
+      const forked = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((entry) => entry.id !== TAB_ID);
@@ -3706,7 +3714,7 @@ describe("AgentInfoButton session actions", () => {
         "Codex session cannot be forked while it is running",
       ),
     );
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
     // A failed action leaves the panel open so the user can retry.
     expect(isPopoverOpen()).toBe(true);
   });
@@ -5782,14 +5790,16 @@ describe("AgentInfoButton ACP agents", () => {
     fireEvent.click(screen.getByRole("button", { name: "Claude" }));
 
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(
+        2,
+      ),
     );
     expect(created.at(-1)).toMatchObject({
       sourceAgent: "cursor",
       destinationProvider: "claude",
       sourceTitle: "Cursor investigated the flake",
     });
-    const destinationTab = usePaneLayoutStore
+    const destinationTab = appCommandStore(paneLayoutStore)
       .getState()
       .getAllTabs(ENVIRONMENT_ID)
       .find((tab) => tab.id !== TAB_ID)!;

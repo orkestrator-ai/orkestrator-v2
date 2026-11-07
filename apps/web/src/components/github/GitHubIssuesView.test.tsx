@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import { githubIssueDetailKey, githubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssue, GitHubIssueDetail, GitHubIssueStatus } from "@/types/github";
 import { GitHubIssuesView, resolveGitHubIssueDrop } from "./GitHubIssuesView";
+import { appCommandStore } from "@/test/app-command-store";
 
 const repository = {
   owner: "acme",
@@ -44,11 +45,11 @@ const issues = [
 const loadIssuesMock = mock(async () => undefined);
 const loadIssueMock = mock(async () => undefined);
 const changeStatusMock = mock(async () => undefined);
-const originalState = useGitHubIssuesStore.getState();
+const originalState = appCommandStore(githubIssuesStore).getState();
 
 afterAll(() => {
   cleanup();
-  useGitHubIssuesStore.setState(originalState, true);
+  appCommandStore(githubIssuesStore).setState(originalState, true);
 });
 
 describe("GitHubIssuesView", () => {
@@ -60,7 +61,7 @@ describe("GitHubIssuesView", () => {
     loadIssueMock.mockClear();
     changeStatusMock.mockReset();
     changeStatusMock.mockResolvedValue(undefined);
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       ...originalState,
       snapshots: new Map([
         [
@@ -148,7 +149,7 @@ describe("GitHubIssuesView", () => {
   });
 
   test("disables refresh while a status mutation is in progress", () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       mutations: new Set(["status:project-1:2"]),
     });
 
@@ -173,7 +174,7 @@ describe("GitHubIssuesView", () => {
   });
 
   test("shows an actionable load failure and retries loading", async () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       snapshots: new Map(),
       projectErrors: new Map([["project-1", "GitHub rate limit reached"]]),
     });
@@ -185,7 +186,7 @@ describe("GitHubIssuesView", () => {
   });
 
   test("shows the authoritative status mutation failure on the board", () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       mutationErrors: new Map([["status:project-1:2", "Permission denied while moving issue"]]),
     });
 
@@ -195,7 +196,7 @@ describe("GitHubIssuesView", () => {
   });
 
   test("renders loading and empty repository states", () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       snapshots: new Map(),
       loadingProjects: new Set(["project-1"]),
     });
@@ -203,7 +204,7 @@ describe("GitHubIssuesView", () => {
     expect(screen.getByText("Loading open issues")).toBeTruthy();
 
     act(() => {
-      useGitHubIssuesStore.setState({
+      appCommandStore(githubIssuesStore).setState({
         snapshots: new Map([
           ["project-1", { repository, viewer: { login: "reviewer" }, issues: [] }],
         ]),

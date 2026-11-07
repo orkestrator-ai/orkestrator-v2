@@ -37,7 +37,7 @@ import {
   type AgentHandoffSnapshot,
 } from "@/lib/agent-handoff";
 import { FakeClock } from "@/lib/testing/read-coordinator";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
@@ -354,7 +354,7 @@ beforeEach(() => {
       } as never,
     ],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { agentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
-import { useFileDirtyStore } from "../../../apps/web/src/stores/fileDirtyStore";
+import { fileDirtyStore } from "../../../apps/web/src/stores/fileDirtyStore";
 import { prMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
 import { sessionStore } from "../../../apps/web/src/stores/sessionStore";
 import {
@@ -19,7 +19,7 @@ afterEach(() => {
     containerStateUpdatedAt: {},
   });
   useErrorDialogStore.setState({ error: null });
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   appCommandStore(prMonitorStore).setState({ states: new Map() });
   appCommandStore(sessionStore).setState({
     sessions: new Map(),
@@ -118,7 +118,7 @@ describe("errorDialogStore and fileDirtyStore", () => {
   });
 
   test("tracks dirty content through load, edit, save, and close", () => {
-    const state = useFileDirtyStore.getState();
+    const state = appCommandStore(fileDirtyStore).getState();
     state.setOriginalContent("tab-1", "original");
     expect(state.isDirty("tab-1")).toBe(false);
     state.setContent("tab-1", "changed");

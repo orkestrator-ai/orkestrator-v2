@@ -4,7 +4,7 @@ import { mergePersistedPaneLayouts } from "./pane-layout-merge";
 import { PANE_LAYOUT_VERSION, type PersistedPaneLayoutInput } from "@/types/paneLayout";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneNode, TabInfo } from "@/types/paneLayout";
 import { startBuildPipelineCompletionNotes } from "./build-pipeline-completion-notes";
 import { appCommandStore } from "@/test/app-command-store";
@@ -19,7 +19,7 @@ const buildTab: TabInfo = {
 const chatTab: TabInfo = { id: "chat", type: "plain" };
 
 function seedLayout(root: PaneNode, activePaneId: string, hydrated = true) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([[ENVIRONMENT_ID, { root, activePaneId, containerId: null }]]),
     hydration: new Map(hydrated ? [[ENVIRONMENT_ID, "done" as const]] : []),
   });
@@ -44,14 +44,14 @@ function install(pipeline: BuildPipeline) {
 }
 
 function notesTabs(): TabInfo[] {
-  return usePaneLayoutStore
+  return appCommandStore(paneLayoutStore)
     .getState()
     .getAllTabs(ENVIRONMENT_ID)
     .filter((tab) => tab.type === "key-information" && tab.keyInformationTabData?.view === "notes");
 }
 
 function paneOf(tabId: string) {
-  const root = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root;
+  const root = appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!.root;
   return getAllLeaves(root).find((leaf) => leaf.tabs.some((tab) => tab.id === tabId))!;
 }
 
@@ -87,7 +87,9 @@ describe("startBuildPipelineCompletionNotes", () => {
     const pane = paneOf(notes!.id);
     expect(pane.id).toBe("pane-build");
     expect(pane.activeTabId).toBe(notes!.id);
-    expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-build");
+    expect(appCommandStore(paneLayoutStore).getState().getActivePaneId(ENVIRONMENT_ID)).toBe(
+      "pane-build",
+    );
   });
 
   test("opens nothing for a run that was already complete when first loaded", () => {
@@ -123,7 +125,7 @@ describe("startBuildPipelineCompletionNotes", () => {
     install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
     expect(notesTabs()).toHaveLength(0);
 
-    usePaneLayoutStore.getState().finishHydration(ENVIRONMENT_ID);
+    appCommandStore(paneLayoutStore).getState().finishHydration(ENVIRONMENT_ID);
 
     expect(notesTabs()).toHaveLength(1);
   });
@@ -136,7 +138,9 @@ describe("startBuildPipelineCompletionNotes", () => {
   test("independent clients completing the same pipeline merge into one notes tab", () => {
     const snapshot = (): PersistedPaneLayoutInput => ({
       version: PANE_LAYOUT_VERSION,
-      ...structuredClone(usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!),
+      ...structuredClone(
+        appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!,
+      ),
     });
     const base = snapshot();
     const complete = () => {
@@ -181,9 +185,11 @@ describe("startBuildPipelineCompletionNotes", () => {
           }),
         );
       }
-      usePaneLayoutStore.getState().finishHydration(ENVIRONMENT_ID);
+      appCommandStore(paneLayoutStore).getState().finishHydration(ENVIRONMENT_ID);
       expect(notesTabs()).toHaveLength(0);
-      expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-chat");
+      expect(appCommandStore(paneLayoutStore).getState().getActivePaneId(ENVIRONMENT_ID)).toBe(
+        "pane-chat",
+      );
       expect(paneOf("build").activeTabId).toBe("build");
       expect(paneOf("chat").activeTabId).toBe("chat");
     },
@@ -212,11 +218,15 @@ describe("startBuildPipelineCompletionNotes", () => {
       })),
     );
     seedLayout(root, "pane-chat");
-    const before = structuredClone(usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID));
+    const before = structuredClone(
+      appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID),
+    );
     install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
     install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
     expect(notesTabs()).toHaveLength(0);
-    expect(usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)).toEqual(before);
+    expect(appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)).toEqual(
+      before,
+    );
   });
 
   test.each([0, 64])(
@@ -230,20 +240,24 @@ describe("startBuildPipelineCompletionNotes", () => {
         install(buildPipelineFixture({ id: `queued-${i}`, phase: "complete", backendRevision: 2 }));
       }
       expect(notesTabs()).toHaveLength(0);
-      expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-chat");
+      expect(appCommandStore(paneLayoutStore).getState().getActivePaneId(ENVIRONMENT_ID)).toBe(
+        "pane-chat",
+      );
       // Isolate each end of the queue to prove both eviction and retention.
       for (let i = 0; i < 65; i++) {
         if (i !== remaining)
           appCommandStore(buildPipelineStore).getState().removePipeline(`queued-${i}`);
       }
-      usePaneLayoutStore.getState().finishHydration(ENVIRONMENT_ID);
+      appCommandStore(paneLayoutStore).getState().finishHydration(ENVIRONMENT_ID);
       if (remaining === 64) {
         expect(notesTabs()).toHaveLength(1);
         expect(notesTabs()[0]!.keyInformationTabData?.pipelineId).toBe("queued-64");
         return;
       }
       expect(notesTabs()).toHaveLength(0);
-      expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-chat");
+      expect(appCommandStore(paneLayoutStore).getState().getActivePaneId(ENVIRONMENT_ID)).toBe(
+        "pane-chat",
+      );
       expect(paneOf("build").activeTabId).toBe("build");
       expect(paneOf("chat").activeTabId).toBe("chat");
     },

@@ -13,7 +13,8 @@ import type {
   GitHubPullRequestRef,
 } from "@orkestrator/protocol/github-pull-requests";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
+import { pullRequestsStore } from "@/stores/pullRequestsStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 export const prRef: GitHubPullRequestRef = { owner: "acme", repo: "widget", number: 42 };
 
@@ -196,7 +197,7 @@ export function deferred<T>() {
  * leftovers.
  */
 export function resetPullRequestsStore() {
-  usePullRequestsStore.setState({
+  appCommandStore(pullRequestsStore).setState({
     details: new Map(),
     timelines: new Map(),
     files: new Map(),

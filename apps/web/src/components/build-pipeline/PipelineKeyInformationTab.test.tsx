@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import * as realPersistence from "@/lib/build-pipeline-persistence";
 const persistenceSnapshot = { ...realPersistence };
@@ -82,7 +82,7 @@ function seed(next: BuildPipeline, tabs: TabInfo[] = [buildTab, briefTab]) {
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -343,7 +343,8 @@ describe("PipelineKeyInformationTab", () => {
 
     fireEvent.click(within(tab).getByRole("button", { name: "Open pipeline" }));
 
-    const leaf = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root as PaneLeaf;
+    const leaf = appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!
+      .root as PaneLeaf;
     expect(leaf.activeTabId).toBe("build");
   });
 

@@ -6,7 +6,7 @@ import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createFakeCaptureApi,
   FakeWebAnnotationBackend,
@@ -271,7 +271,7 @@ describe("request composer", () => {
     render(<AnnotationHarness />);
     const composer = await openComposer();
     fireEvent.click(within(composer).getByRole("button", { name: "New agent session" }));
-    const tabs = usePaneLayoutStore.getState().getAllTabs("env-1");
+    const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1");
     expect(tabs.some((tab) => tab.type === "agent-native")).toBe(true);
     expect(within(composer).getByText(/Nothing was sent/)).toBeTruthy();
     expect(backend.callsOf("web_annotation_request_send")).toHaveLength(0);

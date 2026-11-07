@@ -6,7 +6,7 @@ import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
 import { graphDesignerStore } from "@/stores/graphDesignerStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
 import { GraphDesignerTab } from "./GraphDesignerTab";
@@ -74,7 +74,7 @@ function renderTab(data: GraphDesignerTabData) {
   appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,

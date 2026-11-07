@@ -4,7 +4,7 @@ import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { uiStore } from "@/stores/uiStore";
 import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
@@ -75,7 +75,7 @@ describe("the Open action on a notice about a worker", () => {
     appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment],
     });
-    usePaneLayoutStore.getState().hydration.set("worker-env", "done");
+    appCommandStore(paneLayoutStore).getState().hydration.set("worker-env", "done");
     render(
       <MailTile
         mail={{ ...noticeMail(workerNotice()), participants: ["a", "b"] }}

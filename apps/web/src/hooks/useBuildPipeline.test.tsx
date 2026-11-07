@@ -5,7 +5,7 @@ import * as realBackend from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { configStore } from "@/stores/configStore";
-import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
+import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import { uiStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/lib/backend";
 import { getWindowBuildPipelineActivation } from "@/lib/pane-selection-storage";
@@ -115,7 +115,7 @@ function olderBackend() {
 }
 
 function buildTabs(environmentId: string) {
-  const state = usePaneLayoutStore.getState().environments.get(environmentId);
+  const state = appCommandStore(paneLayoutStore).getState().environments.get(environmentId);
   return state ? getAllLeaves(state.root).flatMap((leaf) => leaf.tabs) : [];
 }
 
@@ -130,7 +130,7 @@ describe("useBuildPipeline", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map(),
       hydration: new Map(),
       activeEnvironmentId: null,
@@ -475,7 +475,7 @@ describe("useBuildPipeline", () => {
 
     expect(pipelineId).toBeUndefined();
     expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(0);
-    expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+    expect(appCommandStore(paneLayoutStore).getState().environments.size).toBe(0);
   });
 
   test("forwards the launcher's per-step configuration verbatim", async () => {
@@ -830,7 +830,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("finds and focuses an existing build tab inside a nested split tree", async () => {
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-split",
@@ -902,7 +902,7 @@ describe("useBuildPipeline", () => {
       });
     });
 
-    const environment = usePaneLayoutStore.getState().environments.get("env-split");
+    const environment = appCommandStore(paneLayoutStore).getState().environments.get("env-split");
     expect(buildTabs("env-split").filter((tab) => tab.type === "claude-build")).toHaveLength(1);
     expect(environment?.activePaneId).toBe("pane-build");
     expect(
@@ -918,7 +918,7 @@ describe("useBuildPipeline", () => {
       projectId: "project-hydrated",
       environmentId: "env-hydrated",
     });
-    const paneStore = usePaneLayoutStore.getState();
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.setActiveEnvironment("env-hydrated");
     paneStore.beginHydration("env-hydrated");
     const { result } = renderHook(() => useBuildPipeline());
@@ -930,23 +930,27 @@ describe("useBuildPipeline", () => {
     expect(buildTabs("env-hydrated")).toHaveLength(0);
 
     act(() => {
-      usePaneLayoutStore.getState().finishHydration("env-hydrated", {
-        containerId: null,
-        activePaneId: "restored",
-        root: {
-          kind: "leaf",
-          id: "restored",
-          tabs: [{ id: "restored-terminal", type: "plain" }],
-          activeTabId: "restored-terminal",
-        },
-      });
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .finishHydration("env-hydrated", {
+          containerId: null,
+          activePaneId: "restored",
+          root: {
+            kind: "leaf",
+            id: "restored",
+            tabs: [{ id: "restored-terminal", type: "plain" }],
+            activeTabId: "restored-terminal",
+          },
+        });
     });
     await act(async () => {
       await navigation;
     });
 
     expect(buildTabs("env-hydrated").map((tab) => tab.id)).toEqual(["restored-terminal"]);
-    const environment = usePaneLayoutStore.getState().environments.get("env-hydrated");
+    const environment = appCommandStore(paneLayoutStore)
+      .getState()
+      .environments.get("env-hydrated");
     expect(environment?.activePaneId).toBe("restored");
     expect(environment && getAllLeaves(environment.root)[0]?.activeTabId).toBe("restored-terminal");
   });
@@ -960,7 +964,7 @@ describe("useBuildPipeline navigation", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map(),
       hydration: new Map(),
       activeEnvironmentId: null,
@@ -999,7 +1003,7 @@ describe("useBuildPipeline navigation", () => {
 
     // Silently opening an empty environment would be worse than doing nothing.
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
-    expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+    expect(appCommandStore(paneLayoutStore).getState().environments.size).toBe(0);
   });
 
   test("ignores a pipeline that has no environment yet", async () => {
@@ -1013,7 +1017,7 @@ describe("useBuildPipeline navigation", () => {
       });
     });
 
-    expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+    expect(appCommandStore(paneLayoutStore).getState().environments.size).toBe(0);
   });
 
   test("does not create a containerized pipeline tab in the renderer", async () => {
@@ -1049,7 +1053,7 @@ describe("useBuildPipeline navigation", () => {
   });
 
   test("navigation never waits on a stalled pane hydration", async () => {
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map(),
       hydration: new Map([["env-stalled", "pending"]]),
       activeEnvironmentId: null,

@@ -7,11 +7,11 @@ import { createDraggableTabId } from "@/types/paneLayout";
 import { sessionStore } from "@/stores/sessionStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
-import { useFileDirtyStore } from "@/stores";
+import { fileDirtyStore } from "@/stores";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { configStore } from "@/stores/configStore";
 import { agentMailStore } from "@/stores/agentMailStore";
-import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { previewServiceStore } from "@/stores/previewServiceStore";
 import {
   formatPreviewServiceUri,
   type PreviewRegistrySnapshot,
@@ -94,7 +94,7 @@ describe("DraggableTab title precedence", () => {
     appCommandStore(sessionStore).setState({ sessions: new Map() });
     appCommandStore(nativeAgentProjectionStore).setState({ projections: new Map() });
     appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
     appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   });
 
@@ -514,7 +514,7 @@ describe("DraggableTab title precedence", () => {
       expect(screen.getByText("Browser 1")).toBeDefined();
       cleanup();
 
-      usePreviewServiceStore.setState({
+      appCommandStore(previewServiceStore).setState({
         environments: {
           "env-1": {
             loading: false,
@@ -538,7 +538,7 @@ describe("DraggableTab title precedence", () => {
       );
       expect(screen.getByText("Browser 2")).toBeDefined();
     } finally {
-      usePreviewServiceStore.getState().reset();
+      appCommandStore(previewServiceStore).getState().reset();
     }
   });
 
@@ -691,7 +691,7 @@ describe("DraggableTab icons", () => {
     appCommandStore(sessionStore).setState({ sessions: new Map() });
     appCommandStore(nativeAgentProjectionStore).setState({ projections: new Map() });
     appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
     appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   });
 
@@ -809,7 +809,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     appCommandStore(sessionStore).setState({ sessions: new Map() });
     appCommandStore(nativeAgentProjectionStore).setState({ projections: new Map() });
     appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   });
 
   afterEach(() => {
@@ -1094,7 +1094,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("renders an unsaved-changes dot for a dirty file tab", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-file", { content: "edited", originalContent: "on disk" }]]),
     });
 
@@ -1111,7 +1111,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("renders no dot when the file tab content matches disk", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-file", { content: "same", originalContent: "same" }]]),
     });
 
@@ -1128,7 +1128,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("never renders the dot for a non-file tab sharing the dirty tab id", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-terminal", { content: "edited", originalContent: "on disk" }]]),
     });
 
@@ -1257,7 +1257,7 @@ describe("DraggableTab tab semantics", () => {
     cleanup();
     resetSortableMock();
     appCommandStore(sessionStore).setState({ sessions: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   });
 
   afterEach(() => {
@@ -1311,7 +1311,7 @@ describe("DraggableTab tab semantics", () => {
   });
 
   test("names unsaved changes, which the label would otherwise hide", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-file", { content: "edited", originalContent: "on disk" }]]),
     });
     render(
@@ -1500,7 +1500,7 @@ describe("DraggableTab active state", () => {
     cleanup();
     resetSortableMock();
     appCommandStore(sessionStore).setState({ sessions: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   });
 
   afterEach(() => {

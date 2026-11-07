@@ -6,8 +6,8 @@ import { DndContext, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createPaneTabElementId } from "@/types/paneLayout";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { createSessionKey } from "@/lib/utils";
@@ -17,8 +17,8 @@ import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "./TabShell";
 import { appCommandStore } from "@/test/app-command-store";
 
 beforeEach(() => {
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
-  usePaneLayoutStore.setState({
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -34,7 +34,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
 });
 
 describe("DraggableTabBar", () => {
@@ -79,11 +79,15 @@ describe("DraggableTabBar", () => {
     const environmentId = "environment";
 
     function renderStrip(ids: string[], activeTabId = ids[0]!) {
-      usePaneLayoutStore.getState().initialize("container", environmentId);
+      appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
       for (const id of ids) {
-        usePaneLayoutStore.getState().addTab("default", { id, type: "plain" }, environmentId);
+        appCommandStore(paneLayoutStore)
+          .getState()
+          .addTab("default", { id, type: "plain" }, environmentId);
       }
-      usePaneLayoutStore.getState().setActiveTab("default", activeTabId, environmentId);
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .setActiveTab("default", activeTabId, environmentId);
       function Strip() {
         const pane = usePaneLayoutStore((state) => state.getPane("default", environmentId))!;
         return (
@@ -91,7 +95,9 @@ describe("DraggableTabBar", () => {
             pane={pane}
             environmentId={environmentId}
             onTabSelect={(tabId) =>
-              usePaneLayoutStore.getState().setActiveTab("default", tabId, environmentId)
+              appCommandStore(paneLayoutStore)
+                .getState()
+                .setActiveTab("default", tabId, environmentId)
             }
           />
         );
@@ -116,7 +122,7 @@ describe("DraggableTabBar", () => {
 
     const onDragStart = mock(() => undefined);
     const paneTabIds = () =>
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getPane("default", environmentId)
         ?.tabs.map((tab) => tab.id);
@@ -185,18 +191,20 @@ describe("DraggableTabBar", () => {
     });
 
     test("Delete on a dirty file asks first, and Cancel leaves the tab open", async () => {
-      usePaneLayoutStore.getState().initialize("container", environmentId);
-      usePaneLayoutStore.getState().addTab(
-        "default",
-        {
-          id: "dirty-file",
-          type: "file",
-          fileData: { filePath: "src/dirty.ts", containerId: "container" },
-        },
-        environmentId,
-      );
-      useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
-      const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+      appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .addTab(
+          "default",
+          {
+            id: "dirty-file",
+            type: "file",
+            fileData: { filePath: "src/dirty.ts", containerId: "container" },
+          },
+          environmentId,
+        );
+      appCommandStore(fileDirtyStore).getState().hydrateDraft("dirty-file", "changed", "disk");
+      const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
       renderInAppCommandScope(
         <DndContext>
           <DraggableTabBar
@@ -219,16 +227,18 @@ describe("DraggableTabBar", () => {
     for (const fromMenu of [false, true]) {
       test(`dirty keyboard close restores focus after async confirmation (${fromMenu ? "menu" : "Delete"})`, async () => {
         renderStrip(["one"]);
-        usePaneLayoutStore.getState().addTab(
-          "default",
-          {
-            id: "dirty",
-            type: "file",
-            fileData: { filePath: "dirty.ts", containerId: "container" },
-          },
-          environmentId,
-        );
-        useFileDirtyStore.getState().hydrateDraft("dirty", "changed", "disk");
+        appCommandStore(paneLayoutStore)
+          .getState()
+          .addTab(
+            "default",
+            {
+              id: "dirty",
+              type: "file",
+              fileData: { filePath: "dirty.ts", containerId: "container" },
+            },
+            environmentId,
+          );
+        appCommandStore(fileDirtyStore).getState().hydrateDraft("dirty", "changed", "disk");
         const tab = await screen.findByRole("tab", { name: "dirty.ts, unsaved changes" });
         tab.focus();
         if (fromMenu) {
@@ -264,18 +274,20 @@ describe("DraggableTabBar", () => {
       "failed keyboard %s close cannot hand off focus after a later pointer close",
       async (kind) => {
         renderStrip(["one"]);
-        usePaneLayoutStore.getState().addTab(
-          "default",
-          {
-            id: "file",
-            type: kind === "file" ? "file" : "multi-review",
-            fileData:
-              kind === "file" ? { filePath: "file.ts", containerId: "container" } : undefined,
-            multiReviewTabData:
-              kind === "review" ? { environmentId, workflowId: "failed-review" } : undefined,
-          },
-          environmentId,
-        );
+        appCommandStore(paneLayoutStore)
+          .getState()
+          .addTab(
+            "default",
+            {
+              id: "file",
+              type: kind === "file" ? "file" : "multi-review",
+              fileData:
+                kind === "file" ? { filePath: "file.ts", containerId: "container" } : undefined,
+              multiReviewTabData:
+                kind === "review" ? { environmentId, workflowId: "failed-review" } : undefined,
+            },
+            environmentId,
+          );
         appCommandStore(multiReviewStore).setState({
           workflows: new Map([["failed-review", { phase: "cancelled" } as never]]),
         });
@@ -373,8 +385,8 @@ describe("DraggableTabBar", () => {
 
   test("a launching tab joins the tablist as the selected tab and selects by keyboard", () => {
     const environmentId = "environment";
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
       .getState()
       .addTab("default", { id: "terminal", type: "plain" }, environmentId);
     appCommandStore(tabLaunchStore).setState({
@@ -385,7 +397,7 @@ describe("DraggableTabBar", () => {
         ],
       ]),
     });
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
     try {
       renderInAppCommandScope(
         <DndContext>
@@ -493,18 +505,20 @@ describe("DraggableTabBar", () => {
 
   test("clears a clean file buffer when the tab is explicitly closed", async () => {
     const environmentId = "environment";
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "file",
-        type: "file",
-        fileData: { filePath: "src/index.ts", containerId: "container" },
-      },
-      environmentId,
-    );
-    useFileDirtyStore.getState().setOriginalContent("file", "disk");
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "file",
+          type: "file",
+          fileData: { filePath: "src/index.ts", containerId: "container" },
+        },
+        environmentId,
+      );
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("file", "disk");
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     const { container } = renderInAppCommandScope(
       <DndContext>
@@ -516,30 +530,34 @@ describe("DraggableTabBar", () => {
     fireEvent.click(close);
 
     await waitFor(() => {
-      expect(useFileDirtyStore.getState().dirtyFiles.has("file")).toBe(false);
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.has("file")).toBe(false);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
     });
   });
 
   test("sends one backend teardown intent before closing a Multi Review parent tab", async () => {
     const environmentId = "environment";
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "multi-review",
-        type: "multi-review",
-        multiReviewTabData: {
-          environmentId,
-          workflowId: "workflow-1",
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "multi-review",
+          type: "multi-review",
+          multiReviewTabData: {
+            environmentId,
+            workflowId: "workflow-1",
+          },
         },
-      },
-      environmentId,
-    );
+        environmentId,
+      );
     appCommandStore(multiReviewStore).setState({
       workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
     });
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     const { container } = renderInAppCommandScope(
       <DndContext>
@@ -554,7 +572,9 @@ describe("DraggableTabBar", () => {
       expect(invoke).toHaveBeenCalledWith("delete_multi_review_workflow", {
         workflowId: "workflow-1",
       });
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
     });
   });
 
@@ -562,20 +582,22 @@ describe("DraggableTabBar", () => {
     "hides a %s Multi Review parent without tearing down its workflow",
     async (phase) => {
       const environmentId = "environment";
-      usePaneLayoutStore.getState().initialize("container", environmentId);
-      usePaneLayoutStore.getState().addTab(
-        "default",
-        {
-          id: "multi-review",
-          type: "multi-review",
-          multiReviewTabData: { environmentId, workflowId: "workflow-1" },
-        },
-        environmentId,
-      );
+      appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .addTab(
+          "default",
+          {
+            id: "multi-review",
+            type: "multi-review",
+            multiReviewTabData: { environmentId, workflowId: "workflow-1" },
+          },
+          environmentId,
+        );
       appCommandStore(multiReviewStore).setState({
         workflows: new Map([["workflow-1", { phase } as never]]),
       });
-      const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+      const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
       const { container } = renderInAppCommandScope(
         <DndContext>
@@ -591,7 +613,9 @@ describe("DraggableTabBar", () => {
       fireEvent.click(close);
 
       await waitFor(() => {
-        expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+        expect(
+          appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+        ).toEqual([]);
       });
       expect(invoke).not.toHaveBeenCalledWith("delete_multi_review_workflow", expect.anything());
     },
@@ -599,24 +623,26 @@ describe("DraggableTabBar", () => {
 
   test("closing a reviewer tab never tears down its parent workflow", async () => {
     const environmentId = "environment";
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "multi-reviewer",
-        type: "multi-review",
-        multiReviewTabData: {
-          environmentId,
-          workflowId: "workflow-1",
-          reviewerId: "reviewer-1",
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "multi-reviewer",
+          type: "multi-review",
+          multiReviewTabData: {
+            environmentId,
+            workflowId: "workflow-1",
+            reviewerId: "reviewer-1",
+          },
         },
-      },
-      environmentId,
-    );
+        environmentId,
+      );
     appCommandStore(multiReviewStore).setState({
       workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
     });
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     const { container } = renderInAppCommandScope(
       <DndContext>
@@ -628,25 +654,29 @@ describe("DraggableTabBar", () => {
     fireEvent.click(close);
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
     });
     expect(invoke).not.toHaveBeenCalledWith("delete_multi_review_workflow", expect.anything());
   });
 
   test("clears a dirty file buffer after confirming discard", async () => {
     const environmentId = "environment";
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "dirty-file",
-        type: "file",
-        fileData: { filePath: "src/dirty.ts", containerId: "container" },
-      },
-      environmentId,
-    );
-    useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "dirty-file",
+          type: "file",
+          fileData: { filePath: "src/dirty.ts", containerId: "container" },
+        },
+        environmentId,
+      );
+    appCommandStore(fileDirtyStore).getState().hydrateDraft("dirty-file", "changed", "disk");
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     const { container } = renderInAppCommandScope(
       <DndContext>
@@ -660,25 +690,29 @@ describe("DraggableTabBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
 
     await waitFor(() => {
-      expect(useFileDirtyStore.getState().dirtyFiles.has("dirty-file")).toBe(false);
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.has("dirty-file")).toBe(false);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
     });
   });
 
   test("deletes persisted Claude compose drafts when closing a native tab", async () => {
     const environmentId = "environment";
     const sessionKey = createSessionKey(environmentId, "claude-tab");
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "claude-tab",
-        type: "agent-native",
-        nativeAgentData: { platform: "claude", environmentId, containerId: "container" },
-      },
-      environmentId,
-    );
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "claude-tab",
+          type: "agent-native",
+          nativeAgentData: { platform: "claude", environmentId, containerId: "container" },
+        },
+        environmentId,
+      );
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     const { container } = renderInAppCommandScope(
       <DndContext>
@@ -690,7 +724,9 @@ describe("DraggableTabBar", () => {
     fireEvent.click(close);
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
     });
     expect(invoke).toHaveBeenCalledWith("delete_compose_draft", {
       draftKey: `claude:${environmentId}:${encodeURIComponent(sessionKey)}`,
@@ -701,17 +737,19 @@ describe("DraggableTabBar", () => {
   test("deletes persisted Pi compose drafts when closing a native tab", async () => {
     const environmentId = "environment";
     const sessionKey = createSessionKey(environmentId, "pi-tab");
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "pi-tab",
-        type: "agent-native",
-        nativeAgentData: { platform: "pi", environmentId, containerId: "container" },
-      },
-      environmentId,
-    );
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "pi-tab",
+          type: "agent-native",
+          nativeAgentData: { platform: "pi", environmentId, containerId: "container" },
+        },
+        environmentId,
+      );
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     const { container } = renderInAppCommandScope(
       <DndContext>
@@ -723,7 +761,9 @@ describe("DraggableTabBar", () => {
     fireEvent.click(close);
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
     });
     expect(invoke).toHaveBeenCalledWith("delete_compose_draft", {
       draftKey: `pi:${environmentId}:${encodeURIComponent(sessionKey)}`,
@@ -733,17 +773,19 @@ describe("DraggableTabBar", () => {
 
   test("close all confirms mixed dirty tabs before removing the complete set", async () => {
     const environmentId = "environment";
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "dirty-file",
-        type: "file",
-        fileData: { filePath: "src/dirty.ts", containerId: "container" },
-      },
-      environmentId,
-    );
-    usePaneLayoutStore.getState().addTab(
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "dirty-file",
+          type: "file",
+          fileData: { filePath: "src/dirty.ts", containerId: "container" },
+        },
+        environmentId,
+      );
+    appCommandStore(paneLayoutStore).getState().addTab(
       "default",
       {
         id: "terminal",
@@ -751,8 +793,8 @@ describe("DraggableTabBar", () => {
       },
       environmentId,
     );
-    useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    appCommandStore(fileDirtyStore).getState().hydrateDraft("dirty-file", "changed", "disk");
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     renderInAppCommandScope(
       <DndContext>
@@ -763,12 +805,16 @@ describe("DraggableTabBar", () => {
     fireEvent.contextMenu(screen.getByText("Terminal 2"));
     fireEvent.click(await screen.findByText(/close all/i));
     expect(screen.getByText(/unsaved changes in dirty\.ts/i)).toBeTruthy();
-    expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toHaveLength(2);
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+    ).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
-      expect(useFileDirtyStore.getState().dirtyFiles.has("dirty-file")).toBe(false);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
+      expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.has("dirty-file")).toBe(false);
     });
   });
 
@@ -783,33 +829,37 @@ describe("DraggableTabBar", () => {
         ? Promise.reject(new Error("bridge unavailable"))
         : Promise.resolve(),
     );
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "dirty-file",
-        type: "file",
-        fileData: { filePath: "src/dirty.ts", containerId: "container" },
-      },
-      environmentId,
-    );
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "multi-review",
-        type: "multi-review",
-        multiReviewTabData: { environmentId, workflowId: "workflow-1" },
-      },
-      environmentId,
-    );
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "dirty-file",
+          type: "file",
+          fileData: { filePath: "src/dirty.ts", containerId: "container" },
+        },
+        environmentId,
+      );
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "multi-review",
+          type: "multi-review",
+          multiReviewTabData: { environmentId, workflowId: "workflow-1" },
+        },
+        environmentId,
+      );
+    appCommandStore(paneLayoutStore)
       .getState()
       .addTab("default", { id: "terminal", type: "plain" }, environmentId);
-    useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
+    appCommandStore(fileDirtyStore).getState().hydrateDraft("dirty-file", "changed", "disk");
     appCommandStore(multiReviewStore).setState({
       workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
     });
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     renderInAppCommandScope(
       <DndContext>
@@ -822,12 +872,12 @@ describe("DraggableTabBar", () => {
 
     await waitFor(() => {
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getPane("default", environmentId)
           ?.tabs.map((tab) => tab.id),
       ).toEqual(["multi-review"]);
-      expect(useFileDirtyStore.getState().dirtyFiles.has("dirty-file")).toBe(false);
+      expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.has("dirty-file")).toBe(false);
       expect(screen.queryByText("Unsaved Changes") === null).toBe(true);
     });
   });
@@ -837,11 +887,13 @@ describe("DraggableTabBar", () => {
     ["Close to the right", ["left", "selected"]],
   ])("%s closes exactly its requested tab set", async (action, expectedIds) => {
     const environmentId = "environment";
-    usePaneLayoutStore.getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
     for (const id of ["left", "selected", "right"]) {
-      usePaneLayoutStore.getState().addTab("default", { id, type: "plain" }, environmentId);
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .addTab("default", { id, type: "plain" }, environmentId);
     }
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     renderInAppCommandScope(
       <DndContext>
@@ -853,7 +905,7 @@ describe("DraggableTabBar", () => {
 
     await waitFor(() => {
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getPane("default", environmentId)
           ?.tabs.map((tab) => tab.id),
@@ -874,17 +926,19 @@ describe("DraggableTabBar", () => {
     ).mockImplementation((command) =>
       command === "delete_file_draft" ? deletePending : Promise.resolve(),
     );
-    usePaneLayoutStore.getState().initialize("container", environmentId);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "file",
-        type: "file",
-        fileData: { filePath: "src/racing.ts", containerId: "container" },
-      },
-      environmentId,
-    );
-    usePaneLayoutStore.getState().addTab(
+    appCommandStore(paneLayoutStore).getState().initialize("container", environmentId);
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "file",
+          type: "file",
+          fileData: { filePath: "src/racing.ts", containerId: "container" },
+        },
+        environmentId,
+      );
+    appCommandStore(paneLayoutStore).getState().addTab(
       "default",
       {
         id: "terminal",
@@ -892,8 +946,8 @@ describe("DraggableTabBar", () => {
       },
       environmentId,
     );
-    useFileDirtyStore.getState().setOriginalContent("file", "disk");
-    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    appCommandStore(fileDirtyStore).getState().setOriginalContent("file", "disk");
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)!;
 
     renderInAppCommandScope(
       <DndContext>
@@ -906,14 +960,18 @@ describe("DraggableTabBar", () => {
       expect(invoke).toHaveBeenCalledWith("delete_file_draft", expect.any(Object)),
     );
 
-    useFileDirtyStore.getState().setContent("file", "changed while closing");
+    appCommandStore(fileDirtyStore).getState().setContent("file", "changed while closing");
     resolveDelete();
 
     expect(await screen.findByText(/unsaved changes in racing\.ts/i)).toBeTruthy();
-    expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toHaveLength(2);
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+    ).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", environmentId)?.tabs,
+      ).toEqual([]);
     });
   });
 });

@@ -8,7 +8,7 @@ import {
   resetTabLaunches,
   TAB_LAUNCH_CLAIM_MIN_MS,
 } from "@/lib/tab-launch";
-import { usePaneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import { type EnvironmentPaneState, paneLayoutStore } from "@/stores/paneLayoutStore";
 
 import type { TabInfo } from "@/types/paneLayout";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -32,23 +32,23 @@ function paneState(tabs: TabInfo[], activeTabId: string): EnvironmentPaneState {
 }
 
 function install(tabs: TabInfo[], activeTabId: string) {
-  const environments = new Map(usePaneLayoutStore.getState().environments);
+  const environments = new Map(appCommandStore(paneLayoutStore).getState().environments);
   environments.set(ENV, paneState(tabs, activeTabId));
-  usePaneLayoutStore.setState({ environments });
+  appCommandStore(paneLayoutStore).setState({ environments });
 }
 
 const terminal: TabInfo = { id: "terminal", type: "plain" };
 const launched: TabInfo = { id: "launched", type: "plain" };
 
 function activeTab(): string | null | undefined {
-  const root = usePaneLayoutStore.getState().environments.get(ENV)?.root;
+  const root = appCommandStore(paneLayoutStore).getState().environments.get(ENV)?.root;
   return root?.kind === "leaf" ? root.activeTabId : undefined;
 }
 
 describe("tab launches", () => {
   beforeEach(() => {
     resetTabLaunches();
-    usePaneLayoutStore.setState({ environments: new Map() });
+    appCommandStore(paneLayoutStore).setState({ environments: new Map() });
     install([terminal], "terminal");
   });
 
@@ -239,7 +239,7 @@ describe("per node scope (plan item 3003)", () => {
 
   beforeEach(() => {
     resetTabLaunches();
-    usePaneLayoutStore.setState({ environments: new Map() });
+    appCommandStore(paneLayoutStore).setState({ environments: new Map() });
     install([terminal], "terminal");
     windowScope = new WindowScope();
     windowScope.open({

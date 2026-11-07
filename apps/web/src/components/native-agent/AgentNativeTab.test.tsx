@@ -34,7 +34,7 @@ import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { configStore, useConfigStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   nativeComposeDraft,
   nativeComposePersistenceStore,
@@ -663,7 +663,7 @@ afterEach(() => {
       enabledAgentPlatforms: ["claude", "codex", "opencode"],
       agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
     });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -810,7 +810,7 @@ function TerminalTabHarness({
 }
 
 function seedEnvTab(tab: TabInfo) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -941,7 +941,7 @@ function NativeSessionIdentityHarness({
 }
 
 function seedUnassignedPane(tabId: string) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -975,7 +975,7 @@ function seedAssignedPane(
     "initialConversationMode" | "initialFastMode" | "initialExecutionProfileId" | "initialPrompt"
   >,
 ) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -2875,7 +2875,7 @@ describe("AgentNativeTab", () => {
     expect(onAssignPlatform.mock.calls[0]![1]).toContain("Inspect this");
     // The pane store owns a normal tab's lock; a coordinator conversation is
     // backend state and must not be locked locally.
-    expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+    expect(appCommandStore(paneLayoutStore).getState().environments.size).toBe(0);
   });
 
   test("a platform-locked tab filters favourites and merges visible reorder into their original slots", async () => {
@@ -3297,7 +3297,7 @@ describe("AgentNativeTab", () => {
     const tabId = "tab-preselect-then-switch";
     const sessionKey = createSessionKey("env-1", tabId);
     seedUnassignedPane(tabId);
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environment = state.environments.get("env-1");
       if (!environment || environment.root.kind !== "leaf") return state;
       return {
@@ -3337,7 +3337,7 @@ describe("AgentNativeTab", () => {
     expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.modelId).toBe(
       "claude-sonnet-5",
     );
-    const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    const root = appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.root;
     expect(root?.kind).toBe("leaf");
     if (!root || root.kind !== "leaf") throw new Error("Expected leaf pane");
     expect(
@@ -3351,7 +3351,7 @@ describe("AgentNativeTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
-    const lockedRoot = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    const lockedRoot = appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.root;
     expect(lockedRoot?.kind).toBe("leaf");
     if (!lockedRoot || lockedRoot.kind !== "leaf") throw new Error("Expected leaf pane");
     expect(getNativeAgentData(lockedRoot.tabs.find((tab) => tab.id === tabId)!)?.platform).toBe(
@@ -4093,7 +4093,7 @@ describe("AgentNativeTab", () => {
       .updateGlobalConfig({
         enabledAgentPlatforms: [...AGENT_PLATFORMS],
       });
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -4149,7 +4149,7 @@ describe("AgentNativeTab", () => {
       .updateGlobalConfig({
         enabledAgentPlatforms: [...AGENT_PLATFORMS],
       });
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -4263,9 +4263,10 @@ describe("AgentNativeTab", () => {
     fireEvent.click(await within(picker).findByRole("button", { name: /Earlier work/ }));
 
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.nativeAgentData?.sessionId).toBe(
-        "grok-earlier",
-      ),
+      expect(
+        appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.nativeAgentData
+          ?.sessionId,
+      ).toBe("grok-earlier"),
     );
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
     expect(calls).toEqual(["resume grok-earlier"]);
@@ -4871,7 +4872,7 @@ describe("AgentNativeTab", () => {
         });
         return { outcome: "accepted", requestId: input.requestId };
       });
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         environments: new Map([
           [
             "env-1",
@@ -4928,7 +4929,7 @@ describe("AgentNativeTab", () => {
       view.unmount();
 
       await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
-      const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+      const root = appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.root;
       expect(root?.kind).toBe("leaf");
       if (!root || root.kind !== "leaf") throw new Error("Expected leaf pane");
       const tab = root.tabs.find((candidate) => candidate.id === "tab-first-prompt");
@@ -7467,7 +7468,7 @@ describe("AgentNativeTab", () => {
     const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
-      const tab = usePaneLayoutStore
+      const tab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .find((candidate) => candidate.id === tabId);
@@ -7494,7 +7495,7 @@ describe("AgentNativeTab", () => {
     const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
-      const tab = usePaneLayoutStore
+      const tab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .find((candidate) => candidate.id === tabId);
@@ -7519,7 +7520,7 @@ describe("AgentNativeTab", () => {
     renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
-      const tab = usePaneLayoutStore
+      const tab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .find((candidate) => candidate.id === tabId);
@@ -7624,7 +7625,9 @@ describe("AgentNativeTab", () => {
           text: edited ? "My follow-up" : "",
           attachments: [],
         });
-        expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.initialPrompt).toBeUndefined();
+        expect(
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.initialPrompt,
+        ).toBeUndefined();
       });
     }
   }
@@ -7863,7 +7866,7 @@ describe("AgentNativeTab", () => {
     });
 
     const tabId = "tab-handoff-cursor";
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -7925,7 +7928,7 @@ describe("AgentNativeTab", () => {
       expect(promptIndex).toBeGreaterThan(replyIndex);
     });
 
-    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    const tab = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0];
     expect(tab?.agentHandoffId).toBe(snapshot.id);
     expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
   });
@@ -7979,7 +7982,7 @@ describe("AgentNativeTab", () => {
     );
     // Only the backend marks it consumed: enqueueing delivers nothing yet, and
     // marking it here would have the backend drop the history at dispatch.
-    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    const tab = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0];
     expect(tab?.agentHandoffId).toBe(snapshot.id);
     expect(tab?.consumedAgentHandoffId).toBeUndefined();
   });
@@ -8031,7 +8034,7 @@ describe("AgentNativeTab", () => {
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     expect(await screen.findByText("Investigate the layout")).toBeTruthy();
     expect(screen.getByText("I found three concrete gaps")).toBeTruthy();
-    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    const tab = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0];
     expect(tab?.agentHandoffId).toBe(snapshot.id);
     expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
   });
@@ -8072,13 +8075,15 @@ describe("AgentNativeTab", () => {
 
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBeUndefined(),
+      expect(
+        appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.agentHandoffId,
+      ).toBeUndefined(),
     );
     await waitFor(() => {
       expect(screen.queryByText("Investigate the layout") === null).toBe(true);
       expect(screen.queryByText("I found three concrete gaps") === null).toBe(true);
     });
-    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    const tab = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0];
     expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
     expect(getNativeAgentData(tab!)?.sessionId).toBe("cursor-replacement");
   });
@@ -8165,9 +8170,9 @@ describe("AgentNativeTab", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
-        snapshot.id,
-      ),
+      expect(
+        appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId,
+      ).toBe(snapshot.id),
     );
     first.unmount();
 
@@ -8181,14 +8186,16 @@ describe("AgentNativeTab", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
 
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBeUndefined(),
+      expect(
+        appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.agentHandoffId,
+      ).toBeUndefined(),
     );
     expect(await screen.findByText("Resumed earlier work")).toBeTruthy();
     expect(screen.queryByText("Investigate the layout") === null).toBe(true);
     expect(screen.queryByText((text) => text.includes("orkestrator-handoff")) === null).toBe(true);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
-      snapshot.id,
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId,
+    ).toBe(snapshot.id);
   });
 
   test("does not delete a handoff when resume runs before the projection has a session id", async () => {
@@ -8231,7 +8238,9 @@ describe("AgentNativeTab", () => {
     const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
     fireEvent.click(within(dialog).getByRole("button", { name: /Current destination/ }));
     await waitFor(() => expect(resumeNativeAgentSessionMock).toHaveBeenCalledTimes(1));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBe(snapshot.id);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.agentHandoffId).toBe(
+      snapshot.id,
+    );
   });
 
   test("renders the coordinator hint through the real assigned controller", async () => {
@@ -9607,7 +9616,7 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input)),
       sessionId: "provider-replacement",
     }));
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -9649,7 +9658,7 @@ describe("AgentNativeTab", () => {
         /fresh Address Findings session was created and seeded with the consolidated findings/i,
       ),
     ).toBeTruthy();
-    const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    const root = appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.root;
     expect(root?.kind === "leaf" ? getNativeAgentData(root.tabs[0]!)?.sessionId : undefined).toBe(
       "provider-replacement",
     );
@@ -13872,12 +13881,12 @@ describe("AgentNativeTab", () => {
 
       await waitFor(() =>
         expect(
-          usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId,
+          appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.agentHandoffId,
         ).toBeUndefined(),
       );
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
-        snapshot.id,
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId,
+      ).toBe(snapshot.id);
     });
 
     test("resuming the current session leaves a consumed handoff intact", async () => {
@@ -13920,7 +13929,7 @@ describe("AgentNativeTab", () => {
         true,
       );
       expect(within(dialog).getByText("Earlier work")).toBeTruthy();
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
         agentHandoffId: snapshot.id,
         consumedAgentHandoffId: snapshot.id,
       });
@@ -13961,7 +13970,7 @@ describe("AgentNativeTab", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
 
       await waitFor(() => expect(mockToastError).toHaveBeenCalled());
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
         agentHandoffId: snapshot.id,
         consumedAgentHandoffId: snapshot.id,
       });

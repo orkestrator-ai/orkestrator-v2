@@ -10,8 +10,9 @@ import {
 } from "@/components/browser/annotations/BrowserAnnotationsLayout";
 import { currentPageForManualUrl } from "@/components/browser/annotations/format";
 import { useBrowserAnnotations } from "@/components/browser/annotations/useBrowserAnnotations";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { BrowserAnnotationPanelState, TabInfo } from "@/types/paneLayout";
+import { appCommandStore } from "@/test/app-command-store";
 
 export const PAGE_URL = "http://localhost:5173/settings?tab=profile";
 
@@ -48,7 +49,7 @@ export function seedBrowserLayout(
   extraTabs: TabInfo[] = [],
   environmentId = "env-1",
 ) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: environmentId,
     environments: new Map([
       [
@@ -76,7 +77,7 @@ export function seedBrowserLayout(
 }
 
 export function panelState(environmentId = "env-1"): BrowserAnnotationPanelState | undefined {
-  const tab = usePaneLayoutStore
+  const tab = appCommandStore(paneLayoutStore)
     .getState()
     .getAllTabs(environmentId)
     .find((candidate) => candidate.id === "browser-1");

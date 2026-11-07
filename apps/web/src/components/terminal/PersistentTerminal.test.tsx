@@ -426,7 +426,7 @@ mock.module("@/components/terminal/ComposeBar", () => ({
 import { createSessionKey, terminalSessionStore } from "@/stores/terminalSessionStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import { ROOT_TERMINAL_USER } from "@/constants/terminal";
@@ -657,7 +657,7 @@ describe("PersistentTerminal", () => {
       deletingEnvironments: new Set<string>(),
     });
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -1819,8 +1819,10 @@ describe("PersistentTerminal", () => {
 
     fireEvent.click(container.querySelector("div[style]") as HTMLElement);
 
-    expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-1");
-    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-2");
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.activePaneId,
+    ).toBe("pane-1");
+    expect(appCommandStore(paneLayoutStore).getState().activeEnvironmentId).toBe("env-2");
   });
 
   it("keeps only one input handler attached to a persistent xterm instance", async () => {
@@ -2551,7 +2553,7 @@ describe("PersistentTerminal", () => {
         useTerminalIsConnecting = false;
         useTerminalSessionId = "env-1:setup";
         connectMock.mockImplementation(() => new Promise(() => {}));
-        usePaneLayoutStore.setState((state) => ({
+        appCommandStore(paneLayoutStore).setState((state) => ({
           ...state,
           activeEnvironmentId: "env-1",
           environments: new Map(state.environments).set("env-1", {
@@ -2581,7 +2583,7 @@ describe("PersistentTerminal", () => {
         fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
 
         expect(reconnectMock).not.toHaveBeenCalled();
-        expect(usePaneLayoutStore.getState().getAllTabs("env-1")).toEqual([
+        expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")).toEqual([
           { id: "tab-1", type: "plain" },
         ]);
         expect(
@@ -3706,7 +3708,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("launches Codex terminal mode with one-shot model, effort, speed, and prompt", async () => {
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       const environment = environments.get("env-1")!;
       if (environment.root.kind !== "leaf") throw new Error("expected leaf");
@@ -3751,7 +3753,7 @@ describe("PersistentTerminal", () => {
         'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" --config "service_tier=\\"default\\"" "Fix the failing tests"\n',
       );
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
       initialFastMode: undefined,
@@ -3764,7 +3766,7 @@ describe("PersistentTerminal", () => {
     // a PTY readiness marker, so this is the longest-lived unconsumed window in
     // the app — and the one a test must pin, or the retention could be deleted
     // without any suite noticing.
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       const environment = environments.get("env-1")!;
       if (environment.root.kind !== "leaf") throw new Error("expected leaf");
@@ -3808,7 +3810,7 @@ describe("PersistentTerminal", () => {
     });
     expect(writeMock).not.toHaveBeenCalled();
     expect(clocks.pending()).toBe(0);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
       initialAgentModel: "gpt-review",
       initialReasoningEffort: "high",
     });
@@ -3824,7 +3826,7 @@ describe("PersistentTerminal", () => {
         'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" "Fix the failing tests"\n',
       );
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]).toMatchObject({
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
     });
@@ -3852,7 +3854,7 @@ describe("PersistentTerminal", () => {
       ],
     });
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",

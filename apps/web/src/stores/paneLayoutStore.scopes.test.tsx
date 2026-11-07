@@ -31,6 +31,7 @@ import { environmentStore } from "./environmentStore";
 import * as barrel from "./index";
 import { getAllLeaves, paneLayoutStore, usePaneLayoutStore } from "./paneLayoutStore";
 import { createSessionKey, terminalSessionStore } from "./terminalSessionStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const NODE_A = "bk_pane-layout-a" as BackendId;
 const NODE_B = "bk_pane-layout-b" as BackendId;
@@ -155,7 +156,7 @@ describe("pane layouts per node", () => {
     act(() => seedLayout(scope, [TAB]));
     expect(screen.getByTestId("tab-count").textContent).toBe("1");
     // The deprecated statics reach the app's command scope, a different instance.
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toEqual([]);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toEqual([]);
     expect(getWindowScope().commandScope().store(paneLayoutStore)).not.toBe(
       scope.store(paneLayoutStore),
     );

@@ -2,8 +2,8 @@ import { invoke } from "@/lib/native/backend";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
 import * as realBackend from "@/lib/backend";
 import * as realMarkdownEditorTab from "@/components/markdown/MarkdownEditorTab";
@@ -12,6 +12,7 @@ import * as realMonacoFileEditor from "./MonacoFileEditor";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import { FILE_WRITE_CONFLICT_MESSAGE } from "@orkestrator/protocol/file-write-precondition";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realMarkdownEditorTabSnapshot = { ...realMarkdownEditorTab };
@@ -149,7 +150,7 @@ const liveImageProps = {
 
 function invalidateImage(generation: number, ownerGeneration?: string) {
   act(() => {
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyContentInvalidation(RESOURCE_KEY, generation, null, ownerGeneration);
   });
@@ -157,7 +158,7 @@ function invalidateImage(generation: number, ownerGeneration?: string) {
 
 beforeEach(() => {
   resetChangeSubscriptionsForTests();
-  useChangeProjectionStore.setState({
+  appCommandStore(changeProjectionStore).setState({
     projections: new Map(),
     retiredOwners: new Map(),
     transportRevision: 0,
@@ -165,7 +166,7 @@ beforeEach(() => {
     contentGenerations: new Map(),
     toolPresentations: new Map(),
   });
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   readLocalFileMock.mockClear();
   readContainerFileMock.mockClear();
   readEnvironmentFileBase64Mock.mockClear();
@@ -191,7 +192,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetChangeSubscriptionsForTests();
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
 });
 
 afterAll(() => {
@@ -286,7 +287,9 @@ describe("FileViewerTab component", () => {
     expect(await screen.findByTestId("markdown-file-editor")).toBeTruthy();
     expect(screen.getByText("# Loaded Markdown")).toBeTruthy();
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "README.md");
-    expect(useFileDirtyStore.getState().getContent("markdown-tab")).toBe("# Loaded Markdown");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("markdown-tab")).toBe(
+      "# Loaded Markdown",
+    );
   });
 
   test("opens a local HTML file on its rendered view, with Raw one click away", async () => {
@@ -308,7 +311,9 @@ describe("FileViewerTab component", () => {
     expect(frame.getAttribute("sandbox")).toBe("");
     expect(frame.getAttribute("srcdoc")).toContain("<h1>Report</h1>");
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "docs/report.html");
-    expect(useFileDirtyStore.getState().getContent("html-tab")).toBe("<h1>Report</h1>");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("html-tab")).toBe(
+      "<h1>Report</h1>",
+    );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
     const editor = await screen.findByRole("textbox", { name: "Monaco html" });
@@ -346,7 +351,7 @@ describe("FileViewerTab component", () => {
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
     fireEvent.change(editor, { target: { value: "updated text" } });
-    expect(useFileDirtyStore.getState().getContent("text-tab")).toBe("updated text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("text-tab")).toBe("updated text");
   });
 
   test("shows backend read errors", async () => {
@@ -547,9 +552,9 @@ describe("FileViewerTab component", () => {
     await screen.findByRole("img");
     readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("Connection lost"));
 
-    act(() => useChangeProjectionStore.getState().resync());
+    act(() => appCommandStore(changeProjectionStore).getState().resync());
     await screen.findByTestId("diff-viewer");
-    act(() => useChangeProjectionStore.getState().resync());
+    act(() => appCommandStore(changeProjectionStore).getState().resync());
 
     await screen.findByRole("img");
     expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(3);
@@ -706,16 +711,18 @@ describe("FileViewerTab component", () => {
     );
     await screen.findByTestId("markdown-file-editor");
     act(() => {
-      useFileDirtyStore.getState().setContent("closing-tab", "unsaved");
+      appCommandStore(fileDirtyStore).getState().setContent("closing-tab", "unsaved");
     });
 
     view.unmount();
 
-    expect(useFileDirtyStore.getState().getContent("closing-tab")).toBe("unsaved");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("closing-tab")).toBe("unsaved");
   });
 
   test("prefers a newer in-memory buffer over an older backend draft on remount", async () => {
-    useFileDirtyStore.getState().hydrateDraft("remount-tab", "newer unsaved buffer", "older disk");
+    appCommandStore(fileDirtyStore)
+      .getState()
+      .hydrateDraft("remount-tab", "newer unsaved buffer", "older disk");
     getFileDraftMock.mockResolvedValueOnce({
       draftKey: "file:env-1:notes.txt",
       environmentId: "env-1",
@@ -739,7 +746,7 @@ describe("FileViewerTab component", () => {
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("newer unsaved buffer");
     expect(getFileDraftMock).not.toHaveBeenCalled();
-    expect(useFileDirtyStore.getState().dirtyFiles.get("remount-tab")).toEqual({
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("remount-tab")).toEqual({
       content: "newer unsaved buffer",
       originalContent: "container text",
       // A save still checks what the buffer was edited from, not the newer read.
@@ -771,7 +778,7 @@ describe("FileViewerTab component", () => {
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("restored buffer");
     expect(getFileDraftMock).toHaveBeenCalledWith("file:env-restore:notes.txt");
-    expect(useFileDirtyStore.getState().dirtyFiles.get("restore-tab")).toEqual({
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("restore-tab")).toEqual({
       content: "restored buffer",
       originalContent: "container text",
       baseContent: "old disk",
@@ -794,7 +801,7 @@ describe("FileViewerTab component", () => {
     fireEvent.change(editor, { target: { value: "mine" } });
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
-    expect(useFileDirtyStore.getState().isDirty("conflict-tab")).toBe(true);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("conflict-tab")).toBe(true);
 
     readContainerFileMock.mockImplementation(async () => ({
       content: "newer on disk",
@@ -813,7 +820,7 @@ describe("FileViewerTab component", () => {
       ).toBe("newer on disk"),
     );
     expect(deleteFileDraftMock).toHaveBeenCalled();
-    expect(useFileDirtyStore.getState().dirtyFiles.get("conflict-tab")).toEqual({
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("conflict-tab")).toEqual({
       content: "newer on disk",
       originalContent: "newer on disk",
     });
@@ -914,7 +921,7 @@ describe("FileViewerTab component", () => {
     fireEvent.change(editor, { target: { value: "saved text" } });
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
     await waitFor(() =>
-      expect(useFileDirtyStore.getState().isDirty("save-unmount-tab")).toBe(false),
+      expect(appCommandStore(fileDirtyStore).getState().isDirty("save-unmount-tab")).toBe(false),
     );
 
     view.unmount();
@@ -939,7 +946,7 @@ describe("FileViewerTab component", () => {
 
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().isDirty("draft-error-tab")).toBe(false);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("draft-error-tab")).toBe(false);
   });
 
   test("offers to save the local buffer after a draft revision conflict", async () => {
@@ -984,7 +991,9 @@ describe("FileViewerTab component", () => {
         4,
       ),
     );
-    expect(useFileDirtyStore.getState().getContent("save-conflict-tab")).toBe("my unsaved text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("save-conflict-tab")).toBe(
+      "my unsaved text",
+    );
   });
 
   test("offers to finish discarding after a draft deletion conflict", async () => {
@@ -1065,7 +1074,9 @@ describe("FileViewerTab component", () => {
       await Promise.resolve();
     });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().getContent("stale-read-tab")).toBe("container text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("stale-read-tab")).toBe(
+      "container text",
+    );
   });
 
   test("ignores an older file-read rejection after its props change", async () => {
@@ -1153,7 +1164,9 @@ describe("FileViewerTab component", () => {
       await Promise.resolve();
     });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().getContent("stale-draft-tab")).toBe("container text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("stale-draft-tab")).toBe(
+      "container text",
+    );
   });
 
   test("ignores a file read that finishes after unmount", async () => {
@@ -1182,7 +1195,7 @@ describe("FileViewerTab component", () => {
     });
     await Promise.resolve();
 
-    expect(useFileDirtyStore.getState().getContent("unmounted-read-tab")).toBeNull();
+    expect(appCommandStore(fileDirtyStore).getState().getContent("unmounted-read-tab")).toBeNull();
   });
 });
 

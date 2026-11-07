@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
 import { projectStore } from "@/stores/projectStore";
 import { kanbanStore, useKanbanStore } from "@/stores/kanbanStore";
-import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import { githubIssuesStore, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import { uiStore } from "@/stores/uiStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
@@ -46,7 +46,7 @@ beforeEach(() => {
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
-  useGitHubIssuesStore.setState({
+  appCommandStore(githubIssuesStore).setState({
     snapshots: new Map([
       [
         "project-1",

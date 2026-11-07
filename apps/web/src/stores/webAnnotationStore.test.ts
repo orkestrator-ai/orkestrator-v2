@@ -25,10 +25,11 @@ import {
 } from "@/test/web-annotation-fakes";
 import {
   getWebAnnotationCache,
-  listQueryKey,
-  useWebAnnotationStore,
   type ListQuery,
+  listQueryKey,
+  webAnnotationStore,
 } from "./webAnnotationStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const QUERY: ListQuery = {
   filter: { pageKey: webAnnotationPageKey(fixturePage), state: "open" },
@@ -148,7 +149,7 @@ describe("web annotation sync", () => {
   });
 
   test("an older thread snapshot never regresses a newer summary", () => {
-    const store = useWebAnnotationStore.getState();
+    const store = appCommandStore(webAnnotationStore).getState();
     const newer = { ...fixtureAnnotation({ id: "annotation-a" }), activeRequest: null };
     newer.metadataRevision = 5;
     newer.contentRevision = 3;

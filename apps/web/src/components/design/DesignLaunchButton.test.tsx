@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:te
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { resetCapabilities } from "@/lib/design-client";
 import { DesignLaunchButton } from "./DesignLaunchButton";
+import { appCommandStore } from "@/test/app-command-store";
 
 // `@/lib/native/backend` is mocked once in tests/setup.ts; vary its behavior here.
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
@@ -52,7 +53,7 @@ beforeEach(() => {
       };
     throw new Error(`Unexpected command: ${command}`);
   });
-  usePaneLayoutStore.setState((state) => ({
+  appCommandStore(paneLayoutStore).setState((state) => ({
     hydration: new Map(state.hydration).set("env-1", "done"),
   }));
 });

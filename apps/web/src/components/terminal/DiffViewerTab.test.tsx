@@ -11,9 +11,10 @@ import {
 } from "@orkestrator/protocol/change-resources";
 import { invoke } from "@/lib/native/backend";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import { DiffViewerTab } from "./DiffViewerTab";
+import { appCommandStore } from "@/test/app-command-store";
 
 type InvokeArgs = Record<string, unknown> | undefined;
 type CommandHandler = (args: InvokeArgs) => unknown;
@@ -200,7 +201,7 @@ beforeEach(() => {
   mediaQueryListeners.clear();
   installMatchMedia();
   resetChangeSubscriptionsForTests();
-  useChangeProjectionStore.setState({
+  appCommandStore(changeProjectionStore).setState({
     projections: new Map(),
     retiredOwners: new Map(),
     transportRevision: 0,
@@ -523,10 +524,10 @@ describe("DiffViewerTab live targets", () => {
     liveHandlers();
     const view = render(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+body of diff-live-1");
-    act(() => useChangeProjectionStore.getState().resync());
+    act(() => appCommandStore(changeProjectionStore).getState().resync());
     await screen.findByText("+body of diff-live-2");
     view.rerender(<DiffViewerTab target={live} isActive={false} />);
-    act(() => useChangeProjectionStore.getState().resync());
+    act(() => appCommandStore(changeProjectionStore).getState().resync());
     view.rerender(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+body of diff-live-3");
   });
@@ -546,14 +547,16 @@ describe("DiffViewerTab live targets", () => {
 
     // Another file changed: nothing to do.
     act(() => {
-      useChangeProjectionStore.getState().applyContentInvalidation(RESOURCE_KEY, 1, ["p:other.ts"]);
+      appCommandStore(changeProjectionStore)
+        .getState()
+        .applyContentInvalidation(RESOURCE_KEY, 1, ["p:other.ts"]);
     });
     await act(async () => {});
     expect(calls("changes_resolve_live_detail")).toHaveLength(1);
 
     // This file changed: a new identity, resolved by the path id the backend named.
     act(() => {
-      useChangeProjectionStore
+      appCommandStore(changeProjectionStore)
         .getState()
         .applyContentInvalidation(RESOURCE_KEY, 2, ["p:other.ts", "p:src/app.ts"]);
     });
@@ -565,7 +568,9 @@ describe("DiffViewerTab live targets", () => {
 
     // Every path may have changed.
     act(() => {
-      useChangeProjectionStore.getState().applyContentInvalidation(RESOURCE_KEY, 3, null);
+      appCommandStore(changeProjectionStore)
+        .getState()
+        .applyContentInvalidation(RESOURCE_KEY, 3, null);
     });
     expect(await screen.findByText("+body of diff-live-3")).toBeTruthy();
     expect(calls("changes_get_diff").map((args) => args?.diffIdentityId)).toEqual([
@@ -581,7 +586,7 @@ describe("DiffViewerTab live targets", () => {
     await screen.findByText("+body of diff-live-1");
 
     act(() => {
-      useChangeProjectionStore
+      appCommandStore(changeProjectionStore)
         .getState()
         .applyContentInvalidation(environmentChangeResourceKey("env-2"), 5, null);
     });

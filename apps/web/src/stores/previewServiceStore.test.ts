@@ -8,7 +8,8 @@ import {
 } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { resetPreviewServiceSyncForTests, usePreviewServiceStore } from "./previewServiceStore";
+import { previewServiceStore, resetPreviewServiceSyncForTests } from "./previewServiceStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalOrkestrator = window.orkestrator;
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
@@ -33,8 +34,8 @@ describe("previewServiceStore", () => {
 
   test("an unknown command marks an old backend; other failures are errors", async () => {
     install({});
-    expect(await usePreviewServiceStore.getState().loadCapabilities()).toBeNull();
-    expect(usePreviewServiceStore.getState().status).toBe("unsupported");
+    expect(await appCommandStore(previewServiceStore).getState().loadCapabilities()).toBeNull();
+    expect(appCommandStore(previewServiceStore).getState().status).toBe("unsupported");
 
     resetPreviewServiceSyncForTests();
     install({
@@ -42,8 +43,8 @@ describe("previewServiceStore", () => {
         throw new Error("Unauthorized");
       },
     });
-    expect(await usePreviewServiceStore.getState().loadCapabilities()).toBeNull();
-    expect(usePreviewServiceStore.getState().status).toBe("error");
+    expect(await appCommandStore(previewServiceStore).getState().loadCapabilities()).toBeNull();
+    expect(appCommandStore(previewServiceStore).getState().status).toBe("error");
   });
 
   test("refreshes conditionally and keeps the cached snapshot when not modified", async () => {
@@ -54,10 +55,10 @@ describe("previewServiceStore", () => {
           ? fixturePreviewSnapshot([], { notModified: true, registryRevision: 3 })
           : fixturePreviewSnapshot(),
     });
-    const store = usePreviewServiceStore.getState();
+    const store = appCommandStore(previewServiceStore).getState();
     const first = await store.refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
     expect(first?.services).toHaveLength(1);
-    const second = await usePreviewServiceStore
+    const second = await appCommandStore(previewServiceStore)
       .getState()
       .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
     expect(second?.services).toHaveLength(1);
@@ -75,30 +76,36 @@ describe("previewServiceStore", () => {
       get_preview_capabilities: () => fixturePreviewCapabilities(),
       get_preview_services: () => fixturePreviewSnapshot(undefined, { registryRevision: revision }),
     });
-    await usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+    await appCommandStore(previewServiceStore)
+      .getState()
+      .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
     const calls = () =>
       invoke.mock.calls.filter(([command]) => command === "get_preview_services").length;
     const before = calls();
-    usePreviewServiceStore.getState().handleChanged({
-      backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
-      backendEpoch: FIXTURE_BACKEND_EPOCH,
-      registryRevision: 3,
-      environmentIds: [FIXTURE_ENVIRONMENT_ID, "never-viewed"],
-      revokedServiceIds: [],
-    });
+    appCommandStore(previewServiceStore)
+      .getState()
+      .handleChanged({
+        backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
+        backendEpoch: FIXTURE_BACKEND_EPOCH,
+        registryRevision: 3,
+        environmentIds: [FIXTURE_ENVIRONMENT_ID, "never-viewed"],
+        revokedServiceIds: [],
+      });
     expect(calls()).toBe(before);
     revision = 5;
-    usePreviewServiceStore.getState().handleChanged({
-      backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
-      backendEpoch: FIXTURE_BACKEND_EPOCH,
-      registryRevision: 5,
-      environmentIds: [FIXTURE_ENVIRONMENT_ID],
-      revokedServiceIds: [],
-    });
+    appCommandStore(previewServiceStore)
+      .getState()
+      .handleChanged({
+        backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
+        backendEpoch: FIXTURE_BACKEND_EPOCH,
+        registryRevision: 5,
+        environmentIds: [FIXTURE_ENVIRONMENT_ID],
+        revokedServiceIds: [],
+      });
     await Bun.sleep(5);
     expect(calls()).toBe(before + 1);
     expect(
-      usePreviewServiceStore.getState().environments[FIXTURE_ENVIRONMENT_ID]?.snapshot
+      appCommandStore(previewServiceStore).getState().environments[FIXTURE_ENVIRONMENT_ID]?.snapshot
         ?.registryRevision,
     ).toBe(5);
   });
@@ -108,7 +115,7 @@ describe("previewServiceStore", () => {
       get_preview_capabilities: () => fixturePreviewCapabilities(),
       get_preview_services: () => fixturePreviewSnapshot(),
     });
-    const store = usePreviewServiceStore.getState();
+    const store = appCommandStore(previewServiceStore).getState();
     const first = store.refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
     const second = store.refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
     const [a, b] = await Promise.all([first, second]);
@@ -129,18 +136,21 @@ describe("previewServiceStore", () => {
           resolveServices = resolve;
         }),
     });
-    const pending = usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+    const pending = appCommandStore(previewServiceStore)
+      .getState()
+      .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
     await Bun.sleep(5);
     // A newer snapshot lands while the first request is still in flight.
     const newer = fixturePreviewSnapshot([], { registryRevision: 5 });
-    usePreviewServiceStore.setState({
+    appCommandStore(previewServiceStore).setState({
       environments: {
         [FIXTURE_ENVIRONMENT_ID]: { snapshot: newer, loading: false, error: null },
       },
     });
     resolveServices(fixturePreviewSnapshot(undefined, { registryRevision: 3 }));
     expect(await pending).toBe(newer);
-    const stored = usePreviewServiceStore.getState().environments[FIXTURE_ENVIRONMENT_ID];
+    const stored =
+      appCommandStore(previewServiceStore).getState().environments[FIXTURE_ENVIRONMENT_ID];
     expect(stored?.snapshot).toBe(newer);
     expect(stored?.loading).toBe(false);
   });
@@ -152,11 +162,13 @@ describe("previewServiceStore", () => {
       get_preview_services: () =>
         fixturePreviewSnapshot(undefined, { backendInstanceId: identity }),
     });
-    await usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+    await appCommandStore(previewServiceStore)
+      .getState()
+      .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
     identity = "bk_other_backend_01";
-    await usePreviewServiceStore.getState().loadCapabilities({ force: true });
-    expect(usePreviewServiceStore.getState().environments).toEqual({});
-    expect(usePreviewServiceStore.getState().capabilities?.backendInstanceId).toBe(
+    await appCommandStore(previewServiceStore).getState().loadCapabilities({ force: true });
+    expect(appCommandStore(previewServiceStore).getState().environments).toEqual({});
+    expect(appCommandStore(previewServiceStore).getState().capabilities?.backendInstanceId).toBe(
       "bk_other_backend_01",
     );
   });

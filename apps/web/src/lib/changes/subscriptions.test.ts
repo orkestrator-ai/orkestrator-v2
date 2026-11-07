@@ -9,7 +9,7 @@ import {
 import { invoke } from "@/lib/native/backend";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { useChangeProjection } from "@/hooks/useChangeProjection";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import {
   environmentProjectionFixture,
   exactCount,
@@ -20,6 +20,7 @@ import {
   subscribeChangeResource,
   subscribeToolPresentation,
 } from "./subscriptions";
+import { appCommandStore } from "@/test/app-command-store";
 
 // `@/lib/native/backend` and `@/lib/native/events` are mocked for every
 // renderer test in tests/setup.ts.
@@ -59,7 +60,7 @@ async function settle() {
 }
 
 function held() {
-  return useChangeProjectionStore.getState().projections.get(KEY);
+  return appCommandStore(changeProjectionStore).getState().projections.get(KEY);
 }
 
 describe("change projection subscriptions", () => {
@@ -201,7 +202,7 @@ describe("change projection subscriptions", () => {
       contentGeneration: 4,
       pathIds: ["p:src/a.ts"],
     });
-    expect(useChangeProjectionStore.getState().contentGenerations.get(KEY)).toEqual({
+    expect(appCommandStore(changeProjectionStore).getState().contentGenerations.get(KEY)).toEqual({
       generation: 4,
       ownerGeneration: "gen-2",
       pathIds: ["p:src/a.ts"],
@@ -209,7 +210,7 @@ describe("change projection subscriptions", () => {
 
     emit({ kind: "deleted", resourceKey: KEY, ownerGeneration: "gen-2", revision: 2 });
     expect(held()).toBeUndefined();
-    expect(useChangeProjectionStore.getState().deleted.has(KEY)).toBe(true);
+    expect(appCommandStore(changeProjectionStore).getState().deleted.has(KEY)).toBe(true);
     release();
   });
 
@@ -220,9 +221,9 @@ describe("change projection subscriptions", () => {
       kind: "projection",
       projection: projection(1, { resourceKey: "turn-net/turn/other/live" }),
     });
-    expect(useChangeProjectionStore.getState().projections.has("turn-net/turn/other/live")).toBe(
-      false,
-    );
+    expect(
+      appCommandStore(changeProjectionStore).getState().projections.has("turn-net/turn/other/live"),
+    ).toBe(false);
     release();
   });
 
@@ -282,7 +283,7 @@ describe("change projection subscriptions", () => {
   test("owner replacement resets content counters and retires late owners", async () => {
     const release = subscribeChangeResource(KEY);
     await settle();
-    const store = useChangeProjectionStore.getState();
+    const store = appCommandStore(changeProjectionStore).getState();
     store.applyProjection(projection(1, { ownerGeneration: "A" }));
     emit({
       kind: "content-invalidated",
@@ -306,7 +307,7 @@ describe("change projection subscriptions", () => {
       contentGeneration: 101,
       pathIds: ["u:a"],
     });
-    expect(useChangeProjectionStore.getState().contentGenerations.get(KEY)).toEqual({
+    expect(appCommandStore(changeProjectionStore).getState().contentGenerations.get(KEY)).toEqual({
       generation: 1,
       ownerGeneration: "B",
       pathIds: ["u:b"],
@@ -341,12 +342,14 @@ describe("change projection subscriptions", () => {
     const release = subscribeToolPresentation(scope, "call");
     await settle();
     const key = "env-1\0codex\0s\0call";
-    expect(useChangeProjectionStore.getState().toolPresentations.get(key)).toBeNull();
+    expect(appCommandStore(changeProjectionStore).getState().toolPresentations.get(key)).toBeNull();
     available = true;
     // Nobody has resource interest yet: only the tool row is mounted.
     emit({ kind: "projection", projection: projection(2) });
     await settle();
-    expect(useChangeProjectionStore.getState().toolPresentations.get(key)?.changes).toHaveLength(1);
+    expect(
+      appCommandStore(changeProjectionStore).getState().toolPresentations.get(key)?.changes,
+    ).toHaveLength(1);
     const before = reads;
     reconnect();
     await settle();

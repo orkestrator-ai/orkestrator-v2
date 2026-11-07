@@ -5,7 +5,7 @@ import * as realBackend from "@/lib/backend";
 import { configStore } from "../../../apps/web/src/stores/configStore";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
-import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
+import { paneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
 import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import type { Environment, RepositoryConfig } from "../../../apps/web/src/types";
@@ -198,7 +198,7 @@ function resetStores(
     targetBranch: "main",
   });
 
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -1408,7 +1408,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(environment);
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-local",
       environments: new Map([
         [
@@ -1457,7 +1457,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(environment);
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-local",
       environments: new Map([
         [
@@ -1830,7 +1830,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(environment);
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-local",
       environments: new Map([
         [

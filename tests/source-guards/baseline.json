@@ -491,9 +491,7 @@
     "[native-compose] apps/web/src/stores/paneLayoutStore.ts": 2,
     "[project] apps/web/src/lib/question-desktop-notification.ts": 1,
     "[prompt-draft] apps/web/src/stores/claudeTmuxStore.ts": 5,
-    "[ui] apps/web/src/components/federation/WorkspaceRealmHost.tsx": 2,
-    "[ui] apps/web/src/lib/coordinator-work-navigation.ts": 1,
-    "[ui] apps/web/src/lib/feature-build-activation.ts": 1
+    "[ui] apps/web/src/components/federation/WorkspaceRealmHost.tsx": 2
   },
   "lib-backend-command-default": {
     "[agent-mail] apps/web/src/lib/store-resource-sync.ts": 1,

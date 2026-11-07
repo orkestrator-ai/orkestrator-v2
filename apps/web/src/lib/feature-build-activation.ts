@@ -7,7 +7,7 @@ import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { buildPipelineStore, isActiveBuildPhase } from "@/stores/buildPipelineStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { armBuildPipelineTabActivation } from "@/lib/pane-layout-authoritative";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -61,7 +61,7 @@ function activate(
   pipelineId: string,
 ): void {
   armBuildPipelineTabActivation(environmentId, pipelineId);
-  const ui = useUIStore.getState();
+  const ui = scope.store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
 

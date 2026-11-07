@@ -18,7 +18,7 @@ import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { openConversationTab } from "@/lib/web-annotations/navigation";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { CoordinatorWorkTarget } from "./coordinator-work-items";
 
 export interface CoordinatorWorkNavigation {
@@ -52,8 +52,8 @@ const defaultNavigation: CoordinatorWorkNavigation = {
   openBuild: scheduleBuildPipelineTabActivation,
 };
 
-function selectEnvironment(projectId: string, environmentId: string): void {
-  const ui = useUIStore.getState();
+function selectEnvironment(scope: NodeScope, projectId: string, environmentId: string): void {
+  const ui = scope.store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
 }
@@ -166,7 +166,7 @@ export function openCoordinatorWorkTarget(
 ): void {
   switch (target.type) {
     case "worker-tab":
-      selectEnvironment(target.projectId, target.environmentId);
+      selectEnvironment(scope, target.projectId, target.environmentId);
       if (target.tabId) {
         const state = navigationState(scope);
         const { pendingWorkers } = state;
@@ -180,7 +180,7 @@ export function openCoordinatorWorkTarget(
       navigation.openBuild(target.projectId, target.pipelineId, target.environmentId, scope);
       return;
     case "review": {
-      selectEnvironment(target.projectId, target.environmentId);
+      selectEnvironment(scope, target.projectId, target.environmentId);
       const tab = usePaneLayoutStore
         .getState()
         .getAllTabs(target.environmentId)
@@ -202,7 +202,7 @@ export function openCoordinatorWorkTarget(
       return;
     }
     case "graph-run":
-      selectEnvironment(target.projectId, target.environmentId);
+      selectEnvironment(scope, target.projectId, target.environmentId);
       requestGraphRunView({
         runId: target.runId,
         projectId: target.projectId,

@@ -11,6 +11,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { isDomainName } from "@orkestrator/protocol/contract/domain";
+
 import { supportFloor } from "../../scripts/contract-ci";
 import { CONTRACTS_DIRECTORY, readReleaseIndex } from "../../scripts/contract-snapshots";
 import {
@@ -219,6 +221,11 @@ describe("scenario outcome", () => {
     expect(scenarioStatus([ok, { ...ok, ok: false }], {})).toBe("failed");
     expect(scenarioStatus([ok], { error: new Error("boom") })).toBe("failed");
     expect(scenarioStatus([], { error: new NotApplicable("no nodes") })).toBe("not-applicable");
+    expect(scenarioStatus([ok], { error: new NotApplicable("no nodes") })).toBe("not-applicable");
+    // A refusal check that failed before the skip still fails it.
+    expect(scenarioStatus([{ ...ok, ok: false }], { error: new NotApplicable("no nodes") })).toBe(
+      "failed",
+    );
     expect(scenarioStatus([], {})).toBe("failed");
   });
 
@@ -281,13 +288,14 @@ describe("adapters", () => {
 describe("registered scenario modules", () => {
   const manifest = JSON.parse(
     readFileSync(path.join(CONTRACTS_DIRECTORY, "manifest.json"), "utf8"),
-  ) as { domains: Record<string, unknown>; commands: Record<string, unknown> };
+  ) as { commands: Record<string, unknown> };
 
-  test("cover the pilot domains, one module each, named after a manifest domain", () => {
+  test("cover the pilot domains, one module each, named after a contract domain", () => {
     const domains = SCENARIOS.map((module) => module.domain);
     expect(new Set(domains).size).toBe(domains.length);
     expect(domains).toEqual(expect.arrayContaining(["node-mail", "node-files", "ticket-sync"]));
-    for (const domain of domains) expect(Object.keys(manifest.domains)).toContain(domain);
+    for (const domain of domains)
+      expect({ domain, known: isDomainName(domain) }).toEqual({ domain, known: true });
   });
 
   test("require only commands this checkout registers", () => {

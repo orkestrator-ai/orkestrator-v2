@@ -159,8 +159,9 @@ export function scenarioStatus(
   checks: readonly ScenarioCheck[],
   outcome: { readonly error?: unknown },
 ): ScenarioStatus {
+  // A failed check fails the scenario even when it then stopped as not applicable.
+  if (checks.some((entry) => !entry.ok)) return "failed";
   if (outcome.error instanceof NotApplicable) return "not-applicable";
   if (outcome.error !== undefined) return "failed";
-  if (checks.length === 0) return "failed";
-  return checks.every((entry) => entry.ok) ? "passed" : "failed";
+  return checks.length > 0 ? "passed" : "failed";
 }

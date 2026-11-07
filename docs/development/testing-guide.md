@@ -698,6 +698,17 @@ mise run test:logged -- --name design-mixed-versions -- bun scripts/qualify-desi
   --old-version 2.22.3 --report output/agent-testing/design-mixed-versions/report.json
 ```
 
+Command nodes and leaves across a published release and this checkout, in both
+topologies, for every domain scenario module
+([version-compatibility.md](../architecture/version-compatibility.md#the-manifest-the-ratchet-and-ci),
+"Mixed-version qualification"; scheduled weekly in CI). `--old-version current`
+checks a new module against this checkout on both sides first:
+
+```bash
+mise run test:logged -- --name mixed-versions -- mise run qualify:mixed-versions -- \
+  --old-version latest-stable --report output/agent-testing/mixed-versions/report.json
+```
+
 `e2e/DesignCanvas.spec.ts` takes `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=<rate>`
 (CDP `Emulation.setCPUThrottlingRate`, Chromium only) to slow the page instead
 of loading the host when chasing a timing flake.

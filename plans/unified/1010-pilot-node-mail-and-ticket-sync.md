@@ -3,7 +3,7 @@ id: 1010
 title: "Pilot domains: node mail, node files and ticket sync"
 phase: 1
 plan: "§12 Phase 1.5"
-status: in-progress
+status: done
 depends_on: [1003, 1004, 1005, 1009]
 blocked_by: ""
 owner: claude-worker
@@ -76,7 +76,7 @@ These are mostly **backend to backend** calls, so the pilot's adapters live in t
 ## Done when
 
 - [x] The pilot domains are negotiated, adapted and CI-checked.
-- [ ] A live two-profile node mail and ticket sync run passes, or is listed as needing live evidence. Live check deferred to the live qualification pass (2013/1012).
+- [x] A live two-profile node mail and ticket sync run passes, or is listed as needing live evidence. (Passed 2026-11-07 through 1012; see Work log.)
 
 ## Notes
 
@@ -116,3 +116,4 @@ These are mostly **backend to backend** calls, so the pilot's adapters live in t
 ## Work log
 
 - 2026-11-07 (claude-worker): protocol: `contract/domains/node-files/domain.ts`; `commands.ts`, `client.ts` and `index.ts` for `node-mail`, `node-files` and `ticket-sync` (7011's `domain.ts` reused unchanged), the three clients in `DOMAIN_CLIENTS`, three `package.json` exports, `pilot-domains.test.ts`. Backend: the 24 handlers on `register(def, handler)`, their domain-map entries removed, `nodes/node-domain-clients.ts`, envelope option on `NodeLink.invoke`/`invokeCommand`, `RoutableLink`, `routeToNode` and `NodePortal.invokeOnNode`, the senders listed in Notes, `leafSyncsTickets`/`leafTakesCoordinatorNotices`/`routedDomainApi` in the nodes barrel. Manifest (999 commands, 27 defined), baseline 996 to 972, 21 stored argument schemas, `adapters.json` (three domains, adapters 1 and 0). `mise run contract:check`, `contract:adapters:check` and `contract:ci` pass. Tests: protocol `src` (pass, incl. `pilot-domains.test.ts`); backend focused set of 101 test files (`src/core/nodes`, `public-api`, the coordinator node, mail, ticket, attachment and file suites, `domain-adapter-usage`, `commands-registry-contracts`, `contract-manifest`, gateway hello/envelope/command-node and node SSH tests: 1982 pass, 1 failure from 7011's typed emit, above); root `contract-ci`, `contract-untyped-ratchet`, `domain-import-boundaries`, `unknown-command-text-guard` (pass). Protocol and backend typecheck (both tsconfigs), oxlint and `bun fmt` clean. Live two-profile check deferred to the live qualification pass (2013/1012).
+- 2026-11-07 (claude-worker, 1012): live two-profile check passed. Two `dev:test` profiles (`uf-1012-cmd`, `uf-1012-leaf`; `--fixture --no-agent-credentials --headless --agent-platforms claude`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, host `ORKESTRATOR_*` variables removed) from a detached worktree at 8ba4e87e9, driven by `bun scripts/qualify-contract-mixed-versions.ts --profiles uf-1012-cmd,uf-1012-leaf --scenarios node-mail,ticket-sync`: attach 1/1, node-mail 8/8 (worker delivery, retry by `requestId`, `deliverNow` steered with the leaf's outcome reported, upward coordinator mail collected from the leaf outbox and acked, v1 with no v0 adapter call), ticket-sync 4/4 (ticket to the leaf under the same id, leaf edit back, board in sync, v1). No agent turn was made. Profiles stopped and reset, worktree removed. The same modules also pass against the published v2.36.1 in both topologies through the v0 adapters (1012's Notes).

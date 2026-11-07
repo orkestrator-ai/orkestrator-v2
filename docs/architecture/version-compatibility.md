@@ -737,6 +737,31 @@ export const nodeMailClient = domainClient(nodeMail, {
   `effect/Arbitrary`, 25 seeded samples, sent as JSON) are refused by
   `decodeCommandArgs` with the definition the real registry registered, in
   a sandboxed child. No handler runs.
+- **Mixed-version qualification** (plan item
+  [1012](../../plans/unified/1012-mixed-version-qualification.md),
+  `scripts/qualify-contract-mixed-versions.ts`,
+  `mise run qualify:mixed-versions`; weekly in
+  `.github/workflows/mixed-version-qualification.yml`, not per PR). It runs
+  this checkout against a real published `orkestrator` npm release in both
+  node topologies: this checkout's command node with the release as its
+  leaf, and the release as command node with this checkout as its leaf.
+  `--old-version floor` (the default) is the floor above; while npm lacks it
+  (v2.21.0 and v2.21.1 never reached npm) the oldest published in-window
+  release npm carries. The workflow also runs `latest-stable`. Every backend
+  has its own temporary data directory, HOME and loopback port, a
+  constructed environment (no inherited `ORKESTRATOR_*` or credential
+  variable, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`) and the `agent-test`
+  runtime, so no agent can start. The runner attaches the leaf (a release
+  without command nodes must be refused naming the update), then runs one
+  scenario module per domain from `scripts/mixed-version/scenarios/`; the
+  module interface and its rules are in `scripts/mixed-version/scenario.ts`.
+  A scenario whose commands the release lacks is recorded as not applicable;
+  when this checkout is the command node, each module also asserts which
+  client adapter its domain took (`domain-adapter.backend.<domain>.v0` for a
+  pre-contract peer). Each Phase 7 domain conversion adds its module.
+  `--old-version current` runs this checkout on both sides, and
+  `--profiles <command>,<leaf>` runs the modules against two running
+  `dev:test` profiles.
 
 ### How to add a command
 

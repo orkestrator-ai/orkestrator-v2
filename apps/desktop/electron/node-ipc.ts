@@ -95,7 +95,12 @@ export type NodeGatewaySnapshot =
     };
 
 export type NodeInvoker = {
-  invoke(command: string, args: Record<string, unknown>): Promise<unknown>;
+  /** `options.envelope`: the renderer's invoke envelope (plan item 1003), forwarded. */
+  invoke(
+    command: string,
+    args: Record<string, unknown>,
+    options?: { envelope?: Record<string, unknown> },
+  ): Promise<unknown>;
 };
 
 export interface DesktopNodeIpcOptions<W extends NodeIpcWindow> {
@@ -142,11 +147,13 @@ export class DesktopNodeIpc<W extends NodeIpcWindow> {
   async backendFor(context: W, nodeId: string): Promise<NodeInvoker> {
     if (this.isCommandNode(context, nodeId)) {
       const scope = this.commandScope(context);
-      return { invoke: async (command, args) => this.manager().invoke(command, args, scope) };
+      return {
+        invoke: async (command, args, options) => this.invokeIn(scope, command, args, options),
+      };
     }
     const record = await this.open(context, nodeId);
     return {
-      invoke: async (command, args) => this.manager().invoke(command, args, record.scope),
+      invoke: async (command, args, options) => this.invokeIn(record.scope, command, args, options),
     };
   }
 
@@ -233,6 +240,18 @@ export class DesktopNodeIpc<W extends NodeIpcWindow> {
       );
     }
     return context.scope;
+  }
+
+  /** An envelope is passed on only when the renderer sent one, so older calls stay three-argument. */
+  private invokeIn(
+    scope: string,
+    command: string,
+    args: Record<string, unknown>,
+    options: { envelope?: Record<string, unknown> } | undefined,
+  ): Promise<unknown> {
+    return options?.envelope
+      ? this.manager().invoke(command, args, scope, { envelope: options.envelope })
+      : this.manager().invoke(command, args, scope);
   }
 
   private manager(): NodeIpcManager {

@@ -464,6 +464,30 @@ function watchStreamAttempt(signal: AbortSignal, options: BackendListenOptions) 
   };
 }
 
+/** The contract fields of an invoke envelope, as they go next to `command` and `args`. */
+export type InvokeEnvelopeFields = {
+  domain?: unknown;
+  version?: unknown;
+  critical?: unknown;
+};
+
+/**
+ * The `domain`, `version` and `critical` of a renderer's envelope, or `null`
+ * when it carries none. Opaque here: the backend's gateway decodes them with
+ * the protocol's bounded guard and refuses a malformed one. `command` and
+ * `args` always come from the call itself, never from the envelope.
+ */
+export function invokeEnvelopeFields(
+  envelope: Record<string, unknown> | undefined,
+): InvokeEnvelopeFields | null {
+  if (!envelope) return null;
+  const fields: InvokeEnvelopeFields = {};
+  for (const key of ["domain", "version", "critical"] as const) {
+    if (Object.hasOwn(envelope, key) && envelope[key] !== undefined) fields[key] = envelope[key];
+  }
+  return Object.keys(fields).length > 0 ? fields : null;
+}
+
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
   private listener: {
@@ -608,20 +632,37 @@ export class BackendHttpClient {
     return this.relayedEvents.ready(event);
   }
 
-  invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-    return (this.terminalInput.invoke(command, args) ??
-      this.request<T>(command, args)) as Promise<T>;
+  /**
+   * Runs a command on this backend. `options.envelope` is the renderer's invoke
+   * envelope (plan item 1003): its `domain`, `version` and `critical` travel
+   * next to `command` and `args`, and the backend checks them. Without one the
+   * body is `{ command, args }`, as an older backend expects. Terminal input
+   * and lifecycle commands keep their sequencer, which sends the plain body
+   * (no terminal command has a definition yet; plan item 7002 carries it).
+   */
+  invoke<T>(
+    command: string,
+    args: Record<string, unknown> = {},
+    options?: { envelope?: Record<string, unknown> },
+  ): Promise<T> {
+    const sequenced = this.terminalInput.invoke(command, args);
+    if (sequenced) return sequenced as Promise<T>;
+    const contract = invokeEnvelopeFields(options?.envelope);
+    return contract
+      ? this.request<T>(command, args, undefined, contract)
+      : this.request<T>(command, args);
   }
 
   private async request<T>(
     command: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    contract?: InvokeEnvelopeFields,
   ): Promise<T> {
     const response = await fetch(this.endpoint("/__orkestrator/invoke"), {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ command, args }),
+      body: JSON.stringify(contract ? { command, args, ...contract } : { command, args }),
       signal,
     });
     const payload = (await response.json().catch((error) => {

@@ -74,6 +74,9 @@ import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("connections");
 
+/** An invoke's optional envelope, forwarded to the backend client. */
+type InvokeEnvelopeOptions = { envelope?: Record<string, unknown> };
+
 type LocalBackend = Pick<
   BackendHttpClient,
   | "invoke"
@@ -943,20 +946,27 @@ export class ConnectionManager {
     }
   }
 
+  /** `options.envelope`: the renderer's invoke envelope (plan item 1003), when it sent one. */
   invoke<T>(
     command: string,
     args: Record<string, unknown> = {},
     scope = DEFAULT_CONNECTION_SCOPE,
+    options?: InvokeEnvelopeOptions,
   ): Promise<T> {
     const connectionId = this.connectionIdForScope(scope);
-    if (connectionId === LOCAL_CONNECTION_ID) return this.localBackend.invoke<T>(command, args);
-    return this.invokeRemote<T>(connectionId, command, args);
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      return options?.envelope
+        ? this.localBackend.invoke<T>(command, args, options)
+        : this.localBackend.invoke<T>(command, args);
+    }
+    return this.invokeRemote<T>(connectionId, command, args, options);
   }
 
   private async invokeRemote<T>(
     connectionId: string,
     command: string,
     args: Record<string, unknown>,
+    options?: InvokeEnvelopeOptions,
   ): Promise<T> {
     let remote = this.remoteConnections.get(connectionId);
     if (!remote) throw new Error("The selected remote connection is not available.");
@@ -967,7 +977,9 @@ export class ConnectionManager {
       remote = this.remoteConnections.get(connectionId);
       if (!remote) throw new Error("The selected remote connection is not available.");
     }
-    return remote.client.invoke<T>(command, args);
+    return options?.envelope
+      ? remote.client.invoke<T>(command, args, options)
+      : remote.client.invoke<T>(command, args);
   }
 
   /** Connection epoch of a machine, for fencing late renderer work. */

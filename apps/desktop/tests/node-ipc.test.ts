@@ -493,6 +493,28 @@ describe("node-addressed invoke and events through main", () => {
     ).rejects.toThrow("The invoke envelope is too large");
   });
 
+  test("a node invoker hands the envelope to the connection manager only when there is one", async () => {
+    const invoke = mock(async (..._args: unknown[]) => "ok");
+    const nodeIpc = new DesktopNodeIpc<Context>({
+      nodeScopes: {} as never,
+      manager: () =>
+        ({
+          invoke,
+          getBackendIdentity: () => ({ connectionId: "command", backendId: COMMAND_NODE }),
+        }) as never,
+      mapNodeConnection: () => () => undefined,
+    });
+    const backend = await nodeIpc.backendFor(
+      { scope: "scope-1", portalScope: null } as unknown as Context,
+      COMMAND_NODE,
+    );
+    const envelope = { domain: "projects", version: 1 };
+    await backend.invoke("get_projects", { page: 1 }, { envelope });
+    expect(invoke).toHaveBeenLastCalledWith("get_projects", { page: 1 }, "scope-1", { envelope });
+    await backend.invoke("get_projects", { page: 2 });
+    expect(invoke).toHaveBeenLastCalledWith("get_projects", { page: 2 }, "scope-1");
+  });
+
   test("open, gateway and release: a snapshot without credentials, then a released node", async () => {
     const h = harness();
     const w = h.renderer(1);

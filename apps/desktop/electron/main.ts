@@ -1312,12 +1312,14 @@ function registerIpc(): void {
     getBackend: (event, nodeId) => {
       if (nodeId !== undefined) return nodeIpc.backendFor(nodeWindowContext(event), nodeId);
       const scope = scopeForEvent(event);
-      // The contract envelope (third argument) stops here until item 1003
-      // carries it on the backend client.
+      // The contract envelope (`options.envelope`) goes on to the backend
+      // client, which sends its fields next to `command` and `args` (item 1003).
       return {
-        invoke: (command, args) => {
+        invoke: (command, args, options) => {
           nodeWorkspaceScopes?.noteUse(scope);
-          return manager().invoke(command, args, scope);
+          return options?.envelope
+            ? manager().invoke(command, args, scope, { envelope: options.envelope })
+            : manager().invoke(command, args, scope);
         },
       };
     },

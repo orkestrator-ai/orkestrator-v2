@@ -6,13 +6,13 @@ import type {
 } from "@orkestrator/protocol/change-resources";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { useChangeProjection } from "@/hooks/useChangeProjection";
 import { changeLabel, changeReason, projectionTitle } from "@/lib/changes/labels";
 import { cn } from "@/lib/utils";
 import { ChangeCountBadge } from "./ChangeCountBadge";
 import { ChangeStateTag, isProvisionalProjection } from "./ChangeStateTag";
 import { RestoreChangesButton } from "./RestoreChangesButton";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export const TURN_HISTORY_PAGE_SIZE = 25;
 
@@ -84,6 +84,7 @@ export function TurnChangesHistory({
   onOpenDiff?: OpenDiff;
   pageSize?: number;
 }) {
+  const nodeBackend = useScopeBackend();
   const owner = `${environmentId}\0${logicalSessionKey}`;
   const pageKey = `${owner}\0${String(refreshToken ?? "")}`;
   const [state, setState] = useState<HistoryState | null>(null);
@@ -91,9 +92,9 @@ export function TurnChangesHistory({
   const read = useCallback(
     (cursor: string | null) =>
       Promise.resolve().then(() =>
-        backend.getChangeHistory({ environmentId, logicalSessionKey, cursor, pageSize }),
+        nodeBackend.getChangeHistory({ environmentId, logicalSessionKey, cursor, pageSize }),
       ),
-    [environmentId, logicalSessionKey, pageSize],
+    [environmentId, logicalSessionKey, pageSize, nodeBackend],
   );
 
   useEffect(() => {

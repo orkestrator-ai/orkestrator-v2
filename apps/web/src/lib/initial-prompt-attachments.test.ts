@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import * as backend from "@/lib/backend";
 import { invoke } from "@/lib/native/backend";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
@@ -16,6 +17,7 @@ describe("saveInitialPromptAttachments", () => {
 
   test("sends the complete attachment batch to the environment-scoped backend command", async () => {
     const saved = await saveInitialPromptAttachments({
+      backend,
       environmentId: "env-1",
       attachments: [
         {
@@ -47,7 +49,7 @@ describe("saveInitialPromptAttachments", () => {
 
   test("does not call the backend for an empty batch", async () => {
     await expect(
-      saveInitialPromptAttachments({ environmentId: "env-1", attachments: [] }),
+      saveInitialPromptAttachments({ backend, environmentId: "env-1", attachments: [] }),
     ).resolves.toEqual([]);
     expect(invokeMock).not.toHaveBeenCalled();
   });

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
-import * as backend from "@/lib/backend";
 import {
   focusedCoordinatorConversationId,
   reconcileCoordinatorLayout,
@@ -14,6 +13,7 @@ import {
   selectCoordinatorPaneLayoutReady,
   useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface UseCoordinatorSelectionOptions {
   projectId: string;
@@ -34,6 +34,7 @@ export function useCoordinatorSelection({
   invalidateView,
   setError,
 }: UseCoordinatorSelectionOptions) {
+  const nodeBackend = useScopeBackend();
   const conversationIdsRef = useRef(conversationIds);
   // This node's tab groups (plan item 3011).
   const paneLayouts = useScopedStoreApi(coordinatorPaneLayoutStore);
@@ -118,7 +119,7 @@ export function useCoordinatorSelection({
         while (selection.live && selection.desired !== null) {
           const requested = selection.desired;
           try {
-            const next = await backend.selectCoordinatorConversation(projectId, requested);
+            const next = await nodeBackend.selectCoordinatorConversation(projectId, requested);
             if (!selection.live) return;
             if (selection.desired === requested) {
               setSnapshot(next);
@@ -137,7 +138,7 @@ export function useCoordinatorSelection({
         selection.pending = false;
       })();
     },
-    [invalidateView, projectId, setError, setSnapshot, updateLayout],
+    [invalidateView, projectId, setError, setSnapshot, updateLayout, nodeBackend],
   );
   /**
    * Applies a layout change, then keeps the backend's selection on the

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFederation } from "@/components/federation/FederationProvider";
-import * as backend from "@/lib/backend";
 import type { EnvironmentSetupApproval } from "@/lib/backend";
 import {
   approveSetupCommandsOnNodes,
@@ -10,6 +9,7 @@ import {
 } from "@/lib/portal/setup-approvals";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { approveSetupRuntime, forceResolveSetupRuntime } from "@/lib/setup-commands";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 type Operation = "once" | "project" | "everywhere" | "skip";
 
@@ -37,6 +37,7 @@ function CommandList({ commands }: { commands: readonly string[] }) {
  * approves them for the project here or on every machine, or skips setup.
  */
 export function SetupApprovalPanel({ environmentId }: { environmentId: string }) {
+  const nodeBackend = useScopeBackend();
   const federation = useFederation();
   // The node whose environment this is.
   const scope = useShimNodeScope("environment");
@@ -50,7 +51,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
   useEffect(() => {
     // The parent keys this panel by environment, so state starts empty.
     let active = true;
-    backend.getEnvironmentSetupApproval(environmentId).then(
+    nodeBackend.getEnvironmentSetupApproval(environmentId).then(
       (value) => {
         if (active) setApproval(value);
       },
@@ -63,7 +64,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
     return () => {
       active = false;
     };
-  }, [environmentId]);
+  }, [environmentId, nodeBackend]);
 
   const run = async (kind: Operation) => {
     setError(null);
@@ -90,7 +91,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
         setApproval(null);
         setNodeResults(null);
         try {
-          setApproval(await backend.getEnvironmentSetupApproval(environmentId));
+          setApproval(await nodeBackend.getEnvironmentSetupApproval(environmentId));
         } catch (reason) {
           setLoadError(reason instanceof Error ? reason.message : "Could not read setup commands");
         }

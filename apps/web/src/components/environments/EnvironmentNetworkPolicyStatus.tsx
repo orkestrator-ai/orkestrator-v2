@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const APPLY_OUTCOME: Record<string, string> = {
   "not-running": "The container is not running; the list is applied when it starts.",
@@ -163,6 +163,7 @@ function NameChecks({ policy }: { policy: EnvironmentNetworkPolicy }) {
  * network) is stated rather than implied.
  */
 export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentId: string }) {
+  const nodeBackend = useScopeBackend();
   const [policy, setPolicy] = useState<EnvironmentNetworkPolicy | null>(null);
   const [applying, setApplying] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
@@ -171,7 +172,7 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
     setApplying(true);
     setOutcome(null);
     try {
-      const result = await backend.applyEnvironmentAllowedDomains(environmentId);
+      const result = await nodeBackend.applyEnvironmentAllowedDomains(environmentId);
       setPolicy(result.policy);
       setOutcome(APPLY_OUTCOME[result.kind] ?? null);
     } catch {
@@ -185,7 +186,7 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
     let cancelled = false;
     const load = async () => {
       try {
-        const next = await backend.getEnvironmentNetworkPolicy(environmentId);
+        const next = await nodeBackend.getEnvironmentNetworkPolicy(environmentId);
         if (!cancelled) setPolicy(next);
       } catch {
         if (!cancelled) setPolicy(null);
@@ -195,7 +196,7 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
     return () => {
       cancelled = true;
     };
-  }, [environmentId]);
+  }, [environmentId, nodeBackend]);
 
   if (!policy || policy.policyVersion === null) return null;
   const effective = policy.effective;

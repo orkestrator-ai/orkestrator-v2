@@ -39,7 +39,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { previewNodeFor } from "@/lib/native/browser-preview";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
@@ -95,6 +95,7 @@ import { PreviewServiceDialog } from "./PreviewServiceDialog";
 import { PreviewSessionBanner, PreviewSessionImportDialog } from "./PreviewSessionImport";
 import { PreviewServicePicker, ReadinessDot } from "./PreviewServicePicker";
 import { commandClient } from "@/lib/node-scope/app-window-scope";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
   default: (await import("@/components/environments/EnvironmentSettingsDialog"))
@@ -185,6 +186,7 @@ function ServicePreview({
   refreshRequestId = 0,
   serviceRef,
 }: ServiceBrowserTabProps & { serviceRef: PreviewServiceRef }) {
+  const nodeBackend = useScopeBackend();
   // This node's backend (plan item 4001); the command node outside a node scope.
   const backendScope = useScopesWithCommandFallback().scope;
   // Another node's tab in the window's tree is shown by that node's preview
@@ -638,12 +640,14 @@ function ServicePreview({
     // iOS hands URLs to Safari and cancels about:blank, so it never pre-opens.
     const opener =
       nativeBrowserPreview || isWkWebViewClient() ? null : window.open("about:blank", "_blank");
-    void openServiceExternally({ ...serviceRef, path }, { opener }).catch((error: unknown) => {
-      toast.error("Could not open the preview", {
-        description: previewErrorFromUnknown(error)?.message ?? errorMessage(error),
-      });
-    });
-  }, [nativeBrowserPreview, path, serviceRef]);
+    void openServiceExternally({ ...serviceRef, path }, { opener, scope: backendScope }).catch(
+      (error: unknown) => {
+        toast.error("Could not open the preview", {
+          description: previewErrorFromUnknown(error)?.message ?? errorMessage(error),
+        });
+      },
+    );
+  }, [backendScope, nativeBrowserPreview, path, serviceRef]);
 
   const reportSessionImportError = useCallback((error: unknown) => {
     toast.error("Could not copy your sign-in", {
@@ -679,7 +683,7 @@ function ServicePreview({
           return;
         case "start-environment":
           setBusy(true);
-          void backend
+          void nodeBackend
             .startEnvironmentInBackground(environmentId)
             .then(() => toast.success("Starting environment"))
             .catch((error: unknown) =>
@@ -701,7 +705,7 @@ function ServicePreview({
           return;
         case "confirm-association":
           if (!service) return;
-          void backend
+          void nodeBackend
             .confirmPreviewService(
               service.definition.serviceId,
               service.definition.definitionRevision,
@@ -715,7 +719,7 @@ function ServicePreview({
           return;
       }
     },
-    [environmentId, openExternally, retry, service],
+    [environmentId, openExternally, retry, service, nodeBackend],
   );
 
   const diagnosis = backendMismatch
@@ -889,7 +893,7 @@ function ServicePreview({
                 disabled={!service || !capabilities?.surfaces.browserTopLevel.available}
                 onSelect={() => {
                   if (!service) return;
-                  void backend
+                  void nodeBackend
                     .getPreviewPublicOrigin(service.definition.serviceId)
                     .then(({ origin }) => {
                       if (!origin) throw new Error("This service is not published.");
@@ -1101,6 +1105,7 @@ function PreviewIntentChooser({
   isActive,
   target,
 }: ServiceBrowserTabProps & { target: Extract<PreviewTabTarget, { kind: "intent" }> }) {
+  const nodeBackend = useScopeBackend();
   // This node's backend (plan item 4001); the command node outside a node scope.
   const backendScope = useScopesWithCommandFallback().scope;
   const retarget = useRetarget(tabId, environmentId);
@@ -1183,7 +1188,7 @@ function PreviewIntentChooser({
   const move = (candidate: PreviewServiceSnapshot, applicationPort: number) => {
     setMoving(true);
     setError(null);
-    void backend
+    void nodeBackend
       .updatePreviewService(
         candidate.definition.serviceId,
         candidate.definition.definitionRevision,

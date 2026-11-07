@@ -18,7 +18,6 @@ import {
 import { useConfigStore } from "@/stores";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
-import * as backend from "@/lib/backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
@@ -28,6 +27,7 @@ import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { LinearIssueDetail } from "@/types/linear";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.build-pipeline");
 
@@ -66,6 +66,7 @@ function findBuildTabInTree(
 }
 
 export function useBuildPipeline() {
+  const nodeBackend = useScopeBackend();
   const config = useConfigStore((state) => state.config);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   // This node's pipelines (plan item 3011).
@@ -100,11 +101,13 @@ export function useBuildPipeline() {
           existingEnvironmentId: options.existingEnvironmentId ?? undefined,
           featurePlanId: options.featurePlanId,
         };
-        const authoritative = await backend.launchBuildPipeline(request).catch((error: unknown) => {
-          if (incompatibility(error, "launch_build_pipeline")?.code !== "unknown-command")
-            throw error;
-          return backend.startBuildPipeline(legacyBuildPipelineStartInput(config, request));
-        });
+        const authoritative = await nodeBackend
+          .launchBuildPipeline(request)
+          .catch((error: unknown) => {
+            if (incompatibility(error, "launch_build_pipeline")?.code !== "unknown-command")
+              throw error;
+            return nodeBackend.startBuildPipeline(legacyBuildPipelineStartInput(config, request));
+          });
         const pipeline = authoritative as BuildPipeline;
         replacePipeline(pipeline);
         // An idempotent admission can return a pipeline whose environment is
@@ -130,7 +133,7 @@ export function useBuildPipeline() {
         return undefined;
       }
     },
-    [config, replacePipeline, scope],
+    [config, replacePipeline, scope, nodeBackend],
   );
 
   const startBuild = useCallback(
@@ -145,7 +148,7 @@ export function useBuildPipeline() {
           try {
             return {
               filename: image.filename,
-              data: await backend.getKanbanImageData(image.id),
+              data: await nodeBackend.getKanbanImageData(image.id),
             };
           } catch {
             return null;
@@ -162,7 +165,7 @@ export function useBuildPipeline() {
         options,
       );
     },
-    [startBuildFromTicket],
+    [startBuildFromTicket, nodeBackend],
   );
 
   const navigateToPipeline = useCallback(

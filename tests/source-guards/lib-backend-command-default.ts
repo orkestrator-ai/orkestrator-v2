@@ -206,6 +206,8 @@ export function visitShimUses(
   program: AnyNode,
   file: ScannedFile,
   resolver: LibBackendShimResolver,
+  /** A command-bound name that is right where it is (the workspace guard's window-level calls). */
+  allowed: (subject: string, name: string) => boolean = () => false,
 ): GuardVisitor {
   const bindings = new Map<string, Binding>();
   for (const reference of moduleReferences(program, file.source)) {
@@ -232,7 +234,8 @@ export function visitShimUses(
       const binding = bindings.get(node.name);
       if (binding?.kind !== "named") return;
       const subject = resolver.shimOf(binding.module, binding.imported);
-      if (subject) findings.push({ offset: node.start, subject });
+      if (subject && !allowed(subject, binding.imported))
+        findings.push({ offset: node.start, subject });
       return;
     }
     if (node.type === "MemberExpression" && !node.computed) {
@@ -242,7 +245,7 @@ export function visitShimUses(
       const binding = bindings.get(namespace.name);
       if (binding?.kind !== "namespace") return;
       const subject = resolver.shimOf(binding.module, name);
-      if (subject) findings.push({ offset: node.start, subject });
+      if (subject && !allowed(subject, name)) findings.push({ offset: node.start, subject });
     }
   });
   return { handlers: {}, finish: () => findings };

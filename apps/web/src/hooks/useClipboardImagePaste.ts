@@ -1,13 +1,17 @@
 import { useEffect, useCallback, useRef } from "react";
 import { readImage, readText } from "@/lib/native/clipboard";
-import { writeContainerFile, writeLocalFile } from "@/lib/backend";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("terminal");
 
 type AsyncPasteCallback<T> = (value: T) => void | Promise<void>;
+
+/** Where a pasted image is written: the terminal's node (`useScopeBackend()`, plan item 4007). */
+export type ClipboardImageWriter = Pick<ScopeBackend, "writeContainerFile" | "writeLocalFile">;
 
 interface UseClipboardImagePasteOptions {
   containerId: string | null;
@@ -37,6 +41,7 @@ function generateImageFilename(): string {
  * Returns true if something was processed, false otherwise.
  */
 export async function processClipboardPaste(
+  writer: Pick<ClipboardImageWriter, "writeContainerFile">,
   containerId: string,
   onImageSaved?: AsyncPasteCallback<string>,
   onTextPaste?: AsyncPasteCallback<string>,
@@ -68,7 +73,7 @@ export async function processClipboardPaste(
       // Release canvas memory
       canvas.width = 0;
       canvas.height = 0;
-    } catch (imgError) {
+    } catch {
       // No image in clipboard or processing failed - we'll try text
       // (Size errors no longer thrown since we resize instead)
     }
@@ -86,7 +91,7 @@ export async function processClipboardPaste(
       const filePath = `.orkestrator/clipboard/${filename}`;
 
       // Write to container
-      const fullPath = await writeContainerFile(containerId, filePath, imageData);
+      const fullPath = await writer.writeContainerFile(containerId, filePath, imageData);
       await onImageSaved?.(fullPath);
       return true;
     } else {
@@ -114,6 +119,7 @@ export async function processClipboardPaste(
  * Same as processClipboardPaste but writes to the local filesystem via worktree path.
  */
 export async function processLocalClipboardPaste(
+  writer: Pick<ClipboardImageWriter, "writeLocalFile">,
   worktreePath: string,
   onImageSaved?: AsyncPasteCallback<string>,
   onTextPaste?: AsyncPasteCallback<string>,
@@ -153,7 +159,7 @@ export async function processLocalClipboardPaste(
       const filename = generateImageFilename();
       const filePath = `.orkestrator/clipboard/${filename}`;
 
-      const fullPath = await writeLocalFile(worktreePath, filePath, imageData);
+      const fullPath = await writer.writeLocalFile(worktreePath, filePath, imageData);
       await onImageSaved?.(fullPath);
       return true;
     } else {
@@ -190,6 +196,7 @@ export function useClipboardImagePaste({
   onImageSaved,
   onError,
 }: UseClipboardImagePasteOptions) {
+  const nodeBackend = useScopeBackend();
   const isProcessingRef = useRef(false);
 
   // Handle DOM paste events (for right-click paste menu)
@@ -247,8 +254,8 @@ export function useClipboardImagePaste({
 
         // Write to container or local worktree
         const fullPath = containerId
-          ? await writeContainerFile(containerId, filePath, base64Data)
-          : await writeLocalFile(worktreePath!, filePath, base64Data);
+          ? await nodeBackend.writeContainerFile(containerId, filePath, base64Data)
+          : await nodeBackend.writeLocalFile(worktreePath!, filePath, base64Data);
         await onImageSaved?.(fullPath);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to save image";
@@ -258,7 +265,7 @@ export function useClipboardImagePaste({
         isProcessingRef.current = false;
       }
     },
-    [containerId, worktreePath, isActive, onImageSaved, onError],
+    [containerId, worktreePath, isActive, onImageSaved, onError, nodeBackend],
   );
 
   useEffect(() => {

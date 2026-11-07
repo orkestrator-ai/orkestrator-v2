@@ -21,7 +21,10 @@ import type {
   MermaidRenderRequest,
   MermaidRenderResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
-import { renderMermaidDiagram } from "@/lib/backend/transcript-artifacts";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   contentFingerprint,
   richCacheKey,
@@ -72,11 +75,17 @@ export class MermaidUnavailableError extends Error {
 }
 
 type MermaidRenderer = (input: MermaidRenderRequest) => Promise<MermaidRenderResponse>;
-let renderer: MermaidRenderer = renderMermaidDiagram;
+/** A test's renderer; otherwise the transcript's node renders. */
+let rendererOverride: MermaidRenderer | null = null;
 
 /** Replace the backend renderer (tests). */
 export function setMermaidRenderer(next: MermaidRenderer | null): void {
-  renderer = next ?? renderMermaidDiagram;
+  rendererOverride = next;
+}
+
+/** The renderer of `node`'s backend, unless a test replaced it. */
+function rendererFor(node: NodeScope): MermaidRenderer {
+  return rendererOverride ?? ((input) => backendForScope(node).renderMermaidDiagram(input));
 }
 
 type SvgSanitizer = (markup: string) => { svg: string };
@@ -99,6 +108,8 @@ export function mermaidSourceTooLarge(source: string): boolean {
 export interface MermaidRenderOptions {
   scope?: RichTranscriptScope | null;
   priority?: RichRenderPriority;
+  /** The transcript's node, whose backend renders (plan item 4007); the command node when omitted. */
+  node?: NodeScope;
 }
 
 export function mermaidCacheKey(
@@ -127,9 +138,10 @@ export function useMermaidRenderOptions(): {
   currentPriority: () => RichRenderPriority;
 } {
   const scope = useRichTranscriptScope();
+  const node = useScopesWithCommandFallback().scope;
   const { priority, current } = useRichRenderPriority();
   const epoch = useRichRenderEpoch();
-  return { options: { scope, priority }, epoch, currentPriority: current };
+  return { options: { scope, priority, node }, epoch, currentPriority: current };
 }
 
 /** Raise a queued diagram prefetch to visible priority. */
@@ -189,6 +201,7 @@ function failureFromResponse(error: {
 }
 
 async function renderOnce(
+  renderer: MermaidRenderer,
   source: string,
   theme: "light" | "dark",
   signal: AbortSignal,
@@ -266,7 +279,12 @@ export function requestMermaidPreview(
     priority: options.priority ?? "visible",
     sourceBytes: utf8ByteLength(source),
     run: async (signal) => {
-      const preview = await renderOnce(source, theme, signal);
+      const preview = await renderOnce(
+        rendererFor(options.node ?? appCommandScope()),
+        source,
+        theme,
+        signal,
+      );
       return { value: preview, bytes: preview.svg.length * 2 };
     },
   });

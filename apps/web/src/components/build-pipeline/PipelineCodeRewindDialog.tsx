@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import type { BuildPipelineCodeRewindPreview } from "@orkestrator/protocol/build-pipeline";
-import * as backend from "@/lib/backend";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,6 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface CodeRewindRequest {
   stageId: string;
@@ -44,7 +44,8 @@ export function usePipelineCodeRewind(
     subject?: string;
   } = {},
 ) {
-  const readPreview = options.readPreview ?? backend.previewBuildPipelineCodeRewind;
+  const nodeBackend = useScopeBackend();
+  const readPreview = options.readPreview ?? nodeBackend.previewBuildPipelineCodeRewind;
   const subject = options.subject ?? "the pipeline";
   const [request, setRequest] = useState<CodeRewindRequest | null>(null);
   // Answers for a request the user has since closed or replaced are dropped.

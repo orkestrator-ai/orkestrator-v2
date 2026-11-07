@@ -2,8 +2,8 @@ import { useState } from "react";
 import { Check, Loader2, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { OpenCodeProviderSignIn } from "@/components/opencode/OpenCodeProviderSignIn";
-import { listOpenCodeProviderAuth } from "@/lib/backend";
 import type { OpenCodeProviderAuthEntry } from "@orkestrator/protocol/opencode-provider-auth";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -25,6 +25,7 @@ export function OpenCodeAuthRecoveryAction({
   providerId: string;
   containerId?: string;
 }) {
+  const nodeBackend = useScopeBackend();
   const [provider, setProvider] = useState<OpenCodeProviderAuthEntry | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +36,7 @@ export function OpenCodeAuthRecoveryAction({
     setLoading(true);
     setError(null);
     try {
-      const snapshot = await listOpenCodeProviderAuth();
+      const snapshot = await nodeBackend.listOpenCodeProviderAuth();
       setProvider(
         snapshot.providers.find((candidate) => candidate.id === providerId) ?? {
           id: providerId,

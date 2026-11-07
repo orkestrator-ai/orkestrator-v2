@@ -9,12 +9,7 @@ import {
   includeMissingOpenCodeModels,
   includeOpenCodeDefaultModel,
 } from "@/lib/review-launch-options";
-import {
-  type CachedOpenCodeModel,
-  getCachedOpenCodeModelCatalog,
-  getOpencodeModelPreferences,
-  type OpenCodeModelPreferences,
-} from "@/lib/backend";
+import type { CachedOpenCodeModel, OpenCodeModelPreferences } from "@/lib/backend";
 import {
   EMPTY_OPENCODE_MODEL_PREFERENCES,
   openCodeModelRefToId,
@@ -26,6 +21,7 @@ import {
 import { useConfigStore, useProjectStore } from "@/stores";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.build-pipeline");
 
@@ -56,6 +52,7 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
 
 /** Repository-scoped model catalog shared by launchers and repository settings. */
 export function useProjectModelCatalog(projectId: string, enabled: boolean) {
+  const nodeBackend = useScopeBackend();
   // These subscriptions keep the memoized catalog current when a native agent
   // publishes its models after the launcher has mounted.
   const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
@@ -88,7 +85,8 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
       return () => {
         cancelled = true;
       };
-    void getCachedOpenCodeModelCatalog(projectId)
+    void nodeBackend
+      .getCachedOpenCodeModelCatalog(projectId)
       .then((snapshot) => {
         const models = normalizeCachedOpenCodeModels(snapshot?.models);
         if (!cancelled && snapshot?.projectId === projectId && models) {
@@ -101,7 +99,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [catalogRefreshRevision, enabled, projectId]);
+  }, [catalogRefreshRevision, enabled, projectId, nodeBackend]);
 
   // OpenCode catalogs are repository-scoped and come from the backend's durable
   // per-project cache.
@@ -170,6 +168,7 @@ export function useReviewModelCatalog(projectId: string, enabled: boolean) {
 
 /** Shared defaults and repository-scoped model catalog for every build launcher. */
 export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
+  const nodeBackend = useScopeBackend();
   const config = useConfigStore((state) => state.config);
   const projects = useProjectStore((state) => state.projects);
   const projectHasLocalPath = Boolean(
@@ -211,7 +210,8 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
       return () => {
         cancelled = true;
       };
-    void getOpencodeModelPreferences()
+    void nodeBackend
+      .getOpencodeModelPreferences()
       .then((preferences) => {
         if (
           !cancelled &&
@@ -231,7 +231,7 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, projectId]);
+  }, [enabled, projectId, nodeBackend]);
 
   const favoriteOpenCodeModelIds = useMemo(() => {
     const ids: string[] = [];

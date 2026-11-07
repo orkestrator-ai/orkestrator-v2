@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { writeText } from "@/lib/native/clipboard";
 import { useAccountMachine } from "@/components/settings/account-machine";
-import { openInBrowser, submitAgentAccountLoginCode } from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
 import type { AgentAccountLoginProgress } from "@orkestrator/protocol/agent-accounts";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -26,6 +27,7 @@ export function AgentAccountLoginPanel({
   onCancel: () => void;
   onError: (message: string) => void;
 }) {
+  const nodeBackend = useScopeBackend();
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -36,7 +38,7 @@ export function AgentAccountLoginPanel({
   const submit = async () => {
     setSubmitting(true);
     try {
-      await submitAgentAccountLoginCode(code, machine);
+      await nodeBackend.submitAgentAccountLoginCode(code, machine);
       setCode("");
     } catch (cause) {
       onError(messageOf(cause));

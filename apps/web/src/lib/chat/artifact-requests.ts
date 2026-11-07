@@ -11,11 +11,7 @@ import type {
   ArtifactRepresentation,
   ArtifactRepresentationResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
-import {
-  getTranscriptArtifactPublication,
-  listTranscriptArtifactPublications,
-  readTranscriptArtifactRepresentation,
-} from "@/lib/backend/transcript-artifacts";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
 import { encodeRichKey, type RichTranscriptScope } from "./rich-identity";
 import { NodeByteCache, richContentNodeId } from "./rich-byte-cache";
 import {
@@ -24,6 +20,7 @@ import {
   registerProtectedRichCache,
   type RichConversationScope,
 } from "./rich-content-reset";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Scoped, bounded reads of published artifacts for the transcript.
@@ -39,6 +36,15 @@ import {
  *   one the scope's `backendId` names (`richContentNodeId`). In-flight reads
  *   are de-duplicated and counted separately. Failures are not cached.
  */
+
+/**
+ * The node an artifact is read from: the reading component's
+ * `useScopeBackend()`, so a leaf's transcript reads the leaf (plan item 4007).
+ */
+export type ArtifactReader = Pick<
+  ScopeBackend,
+  "readTranscriptArtifactRepresentation" | "listTranscriptArtifactPublications"
+>;
 
 export type ArtifactReadScope = Pick<
   RichTranscriptScope,
@@ -323,6 +329,7 @@ export function noteArtifactLedgerFailure(scope: RichConversationScope, error: u
  */
 export function verifyArtifactConversation(
   scope: RichConversationScope,
+  reader: Pick<ArtifactReader, "listTranscriptArtifactPublications">,
 ): Promise<ArtifactConversationVerification> {
   const key = conversationStatusKey(scope);
   const existing = verifying.get(key);
@@ -330,7 +337,7 @@ export function verifyArtifactConversation(
   artifactConversationRevocationCounters.verifications++;
   const promise = Promise.resolve()
     .then(() =>
-      listTranscriptArtifactPublications({
+      reader.listTranscriptArtifactPublications({
         environmentId: scope.environmentId,
         logicalSessionKey: scope.logicalSessionKey,
         limit: 1,
@@ -377,9 +384,13 @@ export function resetArtifactConversationRevocations(): void {
  * A scoped read failed with `not_found` or a permission failure: decide
  * through the conversation-level ledger whether the whole scope is gone.
  */
-function noteScopedReadFailure(scope: ArtifactReadScope, error: unknown): void {
+function noteScopedReadFailure(
+  scope: ArtifactReadScope,
+  error: unknown,
+  reader: Pick<ArtifactReader, "listTranscriptArtifactPublications">,
+): void {
   if (isArtifactPermissionError(error) || artifactErrorInfo(error).code === "not_found") {
-    void verifyArtifactConversation(scope);
+    void verifyArtifactConversation(scope, reader);
   }
 }
 
@@ -490,13 +501,16 @@ export function useScopedArtifactRead<T>(
   } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const epoch = useSyncExternalStore(subscribeEpoch, readEpoch, readEpoch);
+  const reader = useScopeBackend();
   const runRef = useRef(run);
   const sizeRef = useRef(sizeOf);
   const scopeRef = useRef(scope);
+  const readerRef = useRef(reader);
   useLayoutEffect(() => {
     runRef.current = run;
     sizeRef.current = sizeOf;
     scopeRef.current = scope;
+    readerRef.current = reader;
   });
 
   useEffect(() => {
@@ -519,7 +533,7 @@ export function useScopedArtifactRead<T>(
         if (error instanceof StaleArtifactScopeError) return;
         // Even for an unmounted reader: deletion and revocation clear the
         // conversation's protected content wherever it is cached.
-        noteScopedReadFailure(scope, error);
+        noteScopedReadFailure(scope, error, readerRef.current);
         if (cancelled) return;
         setResult({
           key,
@@ -556,6 +570,7 @@ export function useArtifactPublication(
   scope: ArtifactReadScope | null,
   publicationId: string | null,
 ): ArtifactRequestState<ArtifactPublicationView> & { retry: () => void } {
+  const nodeBackend = useScopeBackend();
   const key =
     scope && publicationId
       ? encodeRichKey(["publication", ...artifactScopeKeyParts(scope), publicationId])
@@ -564,7 +579,7 @@ export function useArtifactPublication(
     key,
     scope,
     () =>
-      getTranscriptArtifactPublication({
+      nodeBackend.getTranscriptArtifactPublication({
         environmentId: scope!.environmentId,
         logicalSessionKey: scope!.logicalSessionKey,
         publicationId: publicationId!,
@@ -582,6 +597,7 @@ export function useArtifactPublication(
  * revision, representation and whole-document hash as the first.
  */
 export async function readWholeRepresentation(
+  reader: Pick<ArtifactReader, "readTranscriptArtifactRepresentation">,
   scope: ArtifactReadScope,
   publicationId: string,
   representation: ArtifactRepresentation,
@@ -596,7 +612,7 @@ export async function readWholeRepresentation(
     representation,
     ...(captureIndex !== undefined ? { captureIndex } : {}),
   };
-  const first = await readTranscriptArtifactRepresentation(
+  const first = await reader.readTranscriptArtifactRepresentation(
     options.maxBytes !== undefined
       ? { ...base, sourceRange: { offsetBytes: 0, limitBytes: maxBytes } }
       : base,
@@ -609,7 +625,7 @@ export async function readWholeRepresentation(
   let total = first.byteLength;
   while (next !== null && total < maxBytes) {
     const offset: number = next;
-    const page: ArtifactRepresentationResponse = await readTranscriptArtifactRepresentation({
+    const page: ArtifactRepresentationResponse = await reader.readTranscriptArtifactRepresentation({
       ...base,
       sourceRange: {
         offsetBytes: offset,
@@ -641,6 +657,7 @@ export function useArtifactRepresentation(
   representation: ArtifactRepresentation,
   options: { enabled?: boolean; captureIndex?: number } = {},
 ): ArtifactRequestState<ArtifactRepresentationResponse> & { retry: () => void } {
+  const nodeBackend = useScopeBackend();
   const enabled = options.enabled ?? true;
   const key =
     enabled && scope && publicationId
@@ -655,7 +672,14 @@ export function useArtifactRepresentation(
   return useScopedArtifactRead(
     key,
     scope,
-    () => readWholeRepresentation(scope!, publicationId!, representation, options.captureIndex),
+    () =>
+      readWholeRepresentation(
+        nodeBackend,
+        scope!,
+        publicationId!,
+        representation,
+        options.captureIndex,
+      ),
     (value) => value.data.length,
   );
 }

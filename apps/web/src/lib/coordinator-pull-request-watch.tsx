@@ -4,7 +4,10 @@ import {
   parseGitHubPullRequestLink,
   type GitHubPullRequestRef,
 } from "@orkestrator/protocol/github-pull-requests";
-import { watchCoordinatorPullRequest } from "@/lib/backend/coordinator";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { appCommandScope } from "@/lib/node-scope-slots";
 
 /**
  * Pull request links a coordinator conversation shows are watched by the
@@ -65,8 +68,10 @@ export function reportCoordinatorPullRequest(
   ref: GitHubPullRequestRef,
   source: "rendered" | "opened",
   now: number = Date.now(),
+  /** The coordinator's node (plan item 4007); the app's command scope when omitted. */
+  scope: NodeScope = appCommandScope(),
 ): void {
-  const key = `${projectId}\0${gitHubPullRequestKey(ref)}`;
+  const key = `${scope.nodeId}\0${projectId}\0${gitHubPullRequestKey(ref)}`;
   const last = reported.get(key);
   if (
     source === "rendered" &&
@@ -87,11 +92,12 @@ export function reportCoordinatorPullRequest(
     pending.delete(oldest);
   }
   const attempt = (retry: number) => {
-    void watchCoordinatorPullRequest(
-      projectId,
-      { owner: ref.owner, repo: ref.repo, number: ref.number },
-      source,
-    )
+    void backendForScope(scope)
+      .watchCoordinatorPullRequest(
+        projectId,
+        { owner: ref.owner, repo: ref.repo, number: ref.number },
+        source,
+      )
       .then(() => {
         if (pending.get(key) !== entry) return;
         pending.delete(key);
@@ -125,14 +131,17 @@ export function reportCoordinatorPullRequest(
 export function useCoordinatorPullRequestLink(href: string | undefined): () => void {
   const watch = useContext(CoordinatorPullRequestWatchContext);
   const projectId = watch?.projectId;
+  // The coordinator's node: the link reports there (plan item 4007).
+  const scope = useScopesWithCommandFallback().scope;
   const ref = useMemo(
     () => (projectId && href ? parseGitHubPullRequestLink(href) : null),
     [href, projectId],
   );
   useEffect(() => {
-    if (projectId && ref) reportCoordinatorPullRequest(projectId, ref, "rendered");
-  }, [projectId, ref]);
+    if (projectId && ref)
+      reportCoordinatorPullRequest(projectId, ref, "rendered", Date.now(), scope);
+  }, [projectId, ref, scope]);
   return useCallback(() => {
-    if (projectId && ref) reportCoordinatorPullRequest(projectId, ref, "opened");
-  }, [projectId, ref]);
+    if (projectId && ref) reportCoordinatorPullRequest(projectId, ref, "opened", Date.now(), scope);
+  }, [projectId, ref, scope]);
 }

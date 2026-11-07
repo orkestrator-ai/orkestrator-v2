@@ -101,12 +101,7 @@ import {
 } from "@/lib/feature-build-launch";
 import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
-import {
-  getCachedOpenCodeModelCatalog,
-  getWorktreeLocations,
-  ensureHostPiModelCatalog,
-  type CachedOpenCodeModel,
-} from "@/lib/backend";
+import type { CachedOpenCodeModel } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   firstEnabledAgentPlatform,
@@ -125,6 +120,7 @@ import {
 } from "@/stores/agentModelCatalogStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.environment");
 
@@ -279,6 +275,7 @@ export function CreateEnvironmentDialog({
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
   localEnvironmentAvailable = true,
 }: CreateEnvironmentDialogProps) {
+  const nodeBackend = useScopeBackend();
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
   const federation = useFederation();
@@ -339,14 +336,15 @@ export function CreateEnvironmentDialog({
       return;
     }
     piCatalogSeedAttemptedRef.current = true;
-    void ensureHostPiModelCatalog()
+    void nodeBackend
+      .ensureHostPiModelCatalog()
       .then((models) => {
         if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(catalogScope, models);
       })
       .catch((error) => {
         log.warn("models.pi-seed-failed", { error: formatLogError(error) });
       });
-  }, [catalogScope, enabledAgentPlatforms, open, piModels.length]);
+  }, [catalogScope, enabledAgentPlatforms, open, piModels.length, nodeBackend]);
   const {
     favorites: favoriteModels,
     toggleFavorite: toggleFavoriteModel,
@@ -683,7 +681,8 @@ export function CreateEnvironmentDialog({
 
     const normalizedProjectId = projectId?.trim();
     if (normalizedProjectId) {
-      void getCachedOpenCodeModelCatalog(normalizedProjectId)
+      void nodeBackend
+        .getCachedOpenCodeModelCatalog(normalizedProjectId)
         .then((snapshot) => {
           const models = normalizeCachedOpenCodeModels(snapshot?.models);
           if (!cancelled && snapshot && snapshot.projectId === normalizedProjectId && models) {
@@ -698,7 +697,7 @@ export function CreateEnvironmentDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, projectId]);
+  }, [open, projectId, nodeBackend]);
 
   // Restore drafts only for a new dialog/project, never for navigation changes.
   useEffect(() => {
@@ -726,7 +725,8 @@ export function CreateEnvironmentDialog({
   const handleChooseWorktreeLocation = useCallback(async () => {
     let defaultPath = worktreeBaseDir ?? undefined;
     if (!defaultPath) {
-      defaultPath = await getWorktreeLocations()
+      defaultPath = await nodeBackend
+        .getWorktreeLocations()
         .then((locations) => locations.environments.effective)
         .catch(() => undefined);
     }
@@ -736,7 +736,7 @@ export function CreateEnvironmentDialog({
       defaultPath,
     });
     if (chosen) setWorktreeBaseDir(chosen);
-  }, [pickHostPath, worktreeBaseDir]);
+  }, [pickHostPath, worktreeBaseDir, nodeBackend]);
 
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;

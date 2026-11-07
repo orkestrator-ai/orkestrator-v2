@@ -234,9 +234,49 @@ let buildChat: { windowScope: WindowScope; client: FakeNodeClient; scope: NodeSc
  */
 export function buildChatScope(): NodeScope {
   if (!buildChat) {
+    type Args = Readonly<Record<string, unknown>>;
+    // The tab's controls call its node (plan item 4007): each command reaches
+    // the suite's stub with the arguments the `lib/backend` wrapper was given.
+    const id = (args: Args) => args.pipelineId as string;
     const client = new FakeNodeClient({
       nodeId: BUILD_CHAT_NODE,
       invoke: {
+        pause_build_pipeline: (args: Args) => pauseBuildPipelineMock(id(args)),
+        resume_build_pipeline: (args: Args) => resumeBuildPipelineMock(id(args)),
+        cancel_build_pipeline: (args: Args) => cancelBuildPipelineMock(id(args)),
+        send_build_pipeline_message: (args: Args) => sendMessageMock(id(args), args.text as string),
+        steer_build_pipeline: (args: Args) => steerPipelineMock(id(args), args.text as string),
+        steer_queued_build_pipeline_message: (args: Args) =>
+          steerQueuedMock(id(args), args.messageId as string),
+        remove_queued_build_pipeline_message: (args: Args) =>
+          removeQueuedMock(id(args), args.messageId as string),
+        restart_build_pipeline_current_step: (args: Args) => restartCurrentStepMock(id(args)),
+        retry_build_pipeline_stage: (args: Args) => retryStageMock(id(args)),
+        restart_build_pipeline_step: (args: Args) =>
+          "selection" in args
+            ? restartStepMock(id(args), args.stageId as string, args.selection as never)
+            : restartStepMock(id(args), args.stageId as string),
+        preview_build_pipeline_code_rewind: (args: Args) =>
+          previewCodeRewindMock(id(args), args.stageId as string),
+        rewind_build_pipeline_code: (args: Args) =>
+          rewindCodeMock(id(args), args.stageId as string, args.expectedHead as string),
+        skip_build_pipeline_step: (args: Args) => skipStepMock(id(args), args.stageId as string),
+        retry_build_pipeline_reviewer: (args: Args) =>
+          retryReviewerMock(id(args), args.reviewerId as string),
+        restart_build_pipeline_reviewer: (args: Args) =>
+          restartReviewerMock(id(args), args.reviewerId as string),
+        stop_build_pipeline_reviewer: (args: Args) =>
+          stopReviewerMock(id(args), args.reviewerId as string),
+        retry_build_pipeline_interaction_failure: (args: Args) =>
+          retryInteractionFailureMock(id(args)),
+        stop_review_validation_command: (args: Args) =>
+          stopReviewValidationCommandMock(
+            args.environmentId as string,
+            args.run as NonNullable<BuildPipeline["validationRun"]>,
+            args.resultId as string,
+          ),
+        // The launch options' OpenCode catalogue: none cached on this node.
+        get_opencode_model_catalog_cache: () => null,
         get_build_pipeline: (args: Readonly<Record<string, unknown>>) =>
           "knownSessions" in args
             ? getBuildPipelineConditionalMock(
@@ -279,7 +319,11 @@ export function cleanupBuildChatScope(): void {
   buildChat = null;
 }
 export const stopReviewValidationCommandMock = mock(
-  async (_environmentId: string, run: NonNullable<BuildPipeline["validationRun"]>) => run,
+  async (
+    _environmentId: string,
+    run: NonNullable<BuildPipeline["validationRun"]>,
+    _resultId?: string,
+  ) => run,
 );
 
 mock.module("@/lib/backend", () => ({

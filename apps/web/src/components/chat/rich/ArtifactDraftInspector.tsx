@@ -11,10 +11,7 @@ import type {
   ArtifactDraftSummary,
   ArtifactRepresentationResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
-import {
-  listTranscriptArtifactDrafts,
-  readTranscriptArtifactDraft,
-} from "@/lib/backend/transcript-artifacts";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
 import { artifactErrorInfo, MAX_TEXT_REPRESENTATION_BYTES } from "@/lib/chat/artifact-requests";
 import { useRichTranscriptScope } from "@/lib/chat/rich-identity";
 import { writeText } from "@/lib/native/clipboard";
@@ -22,6 +19,7 @@ import { onResourceChanged } from "@/lib/resource-sync";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { ArtifactWorkerPrepareAction } from "./ArtifactWorkerPrepareAction";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Host-owned inspection of a conversation's artifact drafts (spec: "A user
@@ -144,6 +142,7 @@ export function ArtifactDraftInspectorDialog({
   initialArtifactId: string | null;
   onClose: () => void;
 }) {
+  const nodeBackend = useScopeBackend();
   const { environmentId, logicalSessionKey } = scope;
   const [request, setRequest] = useState(0);
   const [result, setResult] = useState<ListResult | null>(null);
@@ -151,7 +150,8 @@ export function ArtifactDraftInspectorDialog({
 
   useEffect(() => {
     let cancelled = false;
-    listTranscriptArtifactDrafts({ environmentId, logicalSessionKey })
+    nodeBackend
+      .listTranscriptArtifactDrafts({ environmentId, logicalSessionKey })
       .then((drafts) => {
         if (!cancelled)
           setResult({
@@ -166,7 +166,7 @@ export function ArtifactDraftInspectorDialog({
     return () => {
       cancelled = true;
     };
-  }, [environmentId, logicalSessionKey, request]);
+  }, [environmentId, logicalSessionKey, request, nodeBackend]);
 
   // Drafts change while the dialog is open (a new revision, a finished preview).
   useEffect(
@@ -429,19 +429,21 @@ function DraftCapture({
   captureIndex: number;
   title: string;
 }) {
+  const nodeBackend = useScopeBackend();
   const [state, setState] = useState<CaptureState>({ status: "loading" });
   const { environmentId, logicalSessionKey } = scope;
   useEffect(() => {
     let cancelled = false;
-    readTranscriptArtifactDraft({
-      environmentId,
-      logicalSessionKey,
-      artifactId,
-      revision,
-      representation: "diagnostic-capture",
-      operationId,
-      captureIndex,
-    })
+    nodeBackend
+      .readTranscriptArtifactDraft({
+        environmentId,
+        logicalSessionKey,
+        artifactId,
+        revision,
+        representation: "diagnostic-capture",
+        operationId,
+        captureIndex,
+      })
       .then((response) => {
         if (cancelled) return;
         if (
@@ -471,7 +473,15 @@ function DraftCapture({
     return () => {
       cancelled = true;
     };
-  }, [artifactId, captureIndex, environmentId, logicalSessionKey, operationId, revision]);
+  }, [
+    artifactId,
+    captureIndex,
+    environmentId,
+    logicalSessionKey,
+    operationId,
+    revision,
+    nodeBackend,
+  ]);
 
   if (state.status === "loading") {
     return (
@@ -515,14 +525,18 @@ type SourceResult =
     }
   | { status: "error"; message: string; code?: string };
 
+/** The node a draft is read from (`useScopeBackend()`). */
+type DraftReader = Pick<ScopeBackend, "readTranscriptArtifactDraft">;
+
 function sliceOf(
+  reader: DraftReader,
   scope: ArtifactConversationScope,
   artifactId: string,
   revision: number,
   offsetBytes: number,
   limitBytes: number,
 ): Promise<ArtifactRepresentationResponse> {
-  return readTranscriptArtifactDraft({
+  return reader.readTranscriptArtifactDraft({
     environmentId: scope.environmentId,
     logicalSessionKey: scope.logicalSessionKey,
     artifactId,
@@ -549,11 +563,12 @@ function checkSlice(
 
 /** Read the exact revision source, all of it, within the copy bound. */
 export async function readWholeDraftSource(
+  reader: DraftReader,
   scope: ArtifactConversationScope,
   artifactId: string,
   revision: number,
 ): Promise<string> {
-  const first = await sliceOf(scope, artifactId, revision, 0, 256 * 1024);
+  const first = await sliceOf(reader, scope, artifactId, revision, 0, 256 * 1024);
   checkSlice(first, artifactId, revision);
   let text = first.data;
   let bytes = first.byteLength;
@@ -565,6 +580,7 @@ export async function readWholeDraftSource(
       );
     }
     const page = await sliceOf(
+      reader,
       scope,
       artifactId,
       revision,
@@ -588,6 +604,7 @@ function DraftSource({
   artifactId: string;
   revision: number;
 }) {
+  const nodeBackend = useScopeBackend();
   const [result, setResult] = useState<SourceResult>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const scopeRef = useRef(scope);
@@ -603,7 +620,14 @@ function DraftSource({
   useEffect(() => {
     scopeRef.current = { environmentId, logicalSessionKey };
     let cancelled = false;
-    sliceOf({ environmentId, logicalSessionKey }, artifactId, revision, 0, DRAFT_SOURCE_SLICE_BYTES)
+    sliceOf(
+      nodeBackend,
+      { environmentId, logicalSessionKey },
+      artifactId,
+      revision,
+      0,
+      DRAFT_SOURCE_SLICE_BYTES,
+    )
       .then((response) => {
         if (cancelled) return;
         checkSlice(response, artifactId, revision);
@@ -625,7 +649,7 @@ function DraftSource({
     return () => {
       cancelled = true;
     };
-  }, [artifactId, attempt, environmentId, logicalSessionKey, revision]);
+  }, [artifactId, attempt, environmentId, logicalSessionKey, revision, nodeBackend]);
 
   const loadMore = useCallback(() => {
     if (result.status !== "ready" || result.loadingMore) return;
@@ -633,6 +657,7 @@ function DraftSource({
     if (source.nextOffsetBytes === null) return;
     setResult({ ...result, loadingMore: true, moreError: undefined });
     sliceOf(
+      nodeBackend,
       scopeRef.current,
       artifactId,
       revision,
@@ -662,10 +687,10 @@ function DraftSource({
           moreError: error instanceof Error ? error.message : artifactErrorInfo(error).message,
         });
       });
-  }, [artifactId, result, revision]);
+  }, [artifactId, result, revision, nodeBackend]);
 
   const copy = () => {
-    void readWholeDraftSource(scopeRef.current, artifactId, revision)
+    void readWholeDraftSource(nodeBackend, scopeRef.current, artifactId, revision)
       .then(async (text) => {
         await writeText(text);
         toast.success("Copied draft source");

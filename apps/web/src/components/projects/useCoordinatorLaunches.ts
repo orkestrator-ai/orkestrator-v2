@@ -2,9 +2,9 @@ import { useCallback, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { coordinatorRuntimeId, type CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
-import * as backend from "@/lib/backend";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** What the composer chose for a conversation's first turn. */
 export interface CoordinatorLaunchOptions {
@@ -76,6 +76,7 @@ export function useCoordinatorLaunches({
   setSnapshot,
   confirmUpstreamMerge,
 }: UseCoordinatorLaunchesOptions) {
+  const nodeBackend = useScopeBackend();
   const [pendingLaunches, setPendingLaunches] = useState(NO_LAUNCHES);
   const assignAgent = useCallback(
     async (
@@ -84,7 +85,7 @@ export function useCoordinatorLaunches({
       launch: CoordinatorLaunchOptions,
       prompt: string,
     ) => {
-      const next = await backend.assignCoordinatorConversationAgent(
+      const next = await nodeBackend.assignCoordinatorConversationAgent(
         projectId,
         conversationId,
         platform,
@@ -98,7 +99,7 @@ export function useCoordinatorLaunches({
       );
       setSnapshot(next);
     },
-    [projectId, setSnapshot],
+    [projectId, setSnapshot, nodeBackend],
   );
   const startConversation = useCallback(
     async (

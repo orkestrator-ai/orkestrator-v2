@@ -55,7 +55,6 @@ import {
 } from "@/stores";
 import { isActiveFeaturePlanningPhase } from "@/stores/featurePlanStore";
 import { buildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import * as backend from "@/lib/backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import {
@@ -72,6 +71,7 @@ import type {
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.feature-plan");
 
@@ -208,6 +208,7 @@ function featureBuildIsLocked(feature: FeaturePlan): boolean {
 }
 
 export function FeaturesView({ projectId }: FeaturesViewProps) {
+  const nodeBackend = useScopeBackend();
   const { scope } = useScopesWithCommandFallback();
   const features = useFeaturePlanStore((state) => state.features);
   const isLoading = useFeaturePlanStore((state) => state.isLoading);
@@ -549,7 +550,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       try {
         // One request: the backend claims the plan, creates the ticket, starts
         // the pipeline and records the link, undoing its own partial work.
-        const started = await backend
+        const started = await nodeBackend
           .startFeaturePlanBuild({ featureId: feature.id })
           .catch((error: unknown) => {
             if (incompatibility(error, "start_feature_plan_build")?.code !== "unknown-command")
@@ -606,6 +607,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       scope,
       startBuild,
       updateFeature,
+      nodeBackend,
     ],
   );
 

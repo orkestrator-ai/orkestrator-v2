@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { getAgentAccountUsage } from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * The plan windows of the account a session runs on, read from the machine's
@@ -36,6 +36,7 @@ export function useAccountPlanUsage({
   refreshKey?: string;
   scope?: NodeScope;
 }): NativeAgentAccountUsageWindow[] | undefined {
+  const nodeBackend = useScopeBackend();
   const identity =
     enabled && accountId && isAgentAccountPlatform(platform)
       ? JSON.stringify([platform, accountId])
@@ -48,7 +49,9 @@ export function useAccountPlanUsage({
   useEffect(() => {
     if (!identity || !accountId || !isAgentAccountPlatform(platform)) return;
     let cancelled = false;
-    const read = scope ? backendForScope(scope).getAgentAccountUsage : getAgentAccountUsage;
+    const read = scope
+      ? backendForScope(scope).getAgentAccountUsage
+      : nodeBackend.getAgentAccountUsage;
     void read(platform, accountId)
       .then((snapshot) => {
         if (cancelled) return;
@@ -60,7 +63,7 @@ export function useAccountPlanUsage({
     return () => {
       cancelled = true;
     };
-  }, [accountId, identity, platform, refreshKey, scope]);
+  }, [accountId, identity, platform, refreshKey, scope, nodeBackend]);
 
   // A refresh of the same account keeps showing the previous reading until it lands.
   if (!identity || reading?.identity !== identity || reading.windows.length === 0) return undefined;

@@ -33,7 +33,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { launchGraphMockRun } from "@/lib/backend/graph-mock";
+import * as graphMock from "@/lib/backend/graph-mock";
 import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import {
   Dialog,
@@ -75,6 +75,7 @@ import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designe
 import { graphSubgraphChoices } from "./graph-designer-subgraphs";
 import { GraphEditorContext } from "./graph-editor-context";
 import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
+import { useScopeApi } from "@/hooks/useScopeBackend";
 
 /**
  * The Graphs designer tab ("Graphs" in the UI): the template library, the
@@ -138,6 +139,7 @@ export function GraphDesignerTab({
   data: GraphDesignerTabData;
   isActive: boolean;
 }) {
+  const nodeGraphMock = useScopeApi(graphMock.createGraphMockApi, graphMock);
   const projectId = useEnvironmentStore(
     (state) =>
       state.environments.find((environment) => environment.id === environmentId)?.projectId ?? null,
@@ -414,7 +416,7 @@ export function GraphDesignerTab({
       if (!projectId) return;
       const ref = await storedRef();
       if (!ref) return;
-      const result = await launchGraphMockRun({
+      const result = await nodeGraphMock.launchGraphMockRun({
         ref,
         projectId,
         stepMs: GRAPH_DESIGNER_MOCK_STEP_MS,

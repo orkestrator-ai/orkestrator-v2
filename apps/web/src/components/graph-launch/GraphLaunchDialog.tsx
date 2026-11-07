@@ -18,8 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { getGraphLaunchOptions, launchGraphRun } from "@/lib/backend/graph-launch";
-import { listGraphTemplates } from "@/lib/backend/graph-templates";
+import * as graphLaunch from "@/lib/backend/graph-launch";
 import { createUuid } from "@/lib/uuid";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -38,6 +37,7 @@ import {
   initialGraphLaunchDraft,
   type GraphLaunchDraft,
 } from "./graph-launch-model";
+import { useScopeApi, useScopeBackend } from "@/hooks/useScopeBackend";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -76,6 +76,8 @@ export function GraphLaunchDialog({
   ticketTaskId = null,
   onLaunched,
 }: GraphLaunchDialogProps) {
+  const nodeBackend = useScopeBackend();
+  const nodeGraphLaunch = useScopeApi(graphLaunch.createGraphLaunchApi, graphLaunch);
   const [chosen, setChosen] = useState<GraphTemplateRef | null>(template);
   const [templates, setTemplates] = useState<GraphTemplateSummary[] | null>(null);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
@@ -126,7 +128,8 @@ export function GraphLaunchDialog({
   useEffect(() => {
     if (!open || template) return;
     let cancelled = false;
-    listGraphTemplates({ projectId })
+    nodeBackend
+      .listGraphTemplates({ projectId })
       .then((result) => {
         if (!cancelled) setTemplates(result.templates);
       })
@@ -136,7 +139,7 @@ export function GraphLaunchDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, template, projectId]);
+  }, [open, template, projectId, nodeBackend]);
 
   useEffect(() => {
     if (open && ticketInput) void loadTasks(projectId);
@@ -157,12 +160,13 @@ export function GraphLaunchDialog({
     if (!open || !chosen || !queryKey) return;
     let cancelled = false;
     const [, queriedEnvironment, create] = queryKey.split("|");
-    getGraphLaunchOptions({
-      ref: chosen,
-      projectId,
-      ...(queriedEnvironment ? { environmentId: queriedEnvironment } : {}),
-      ...(create === "worktree" || create === "container" ? { create } : {}),
-    })
+    nodeGraphLaunch
+      .getGraphLaunchOptions({
+        ref: chosen,
+        projectId,
+        ...(queriedEnvironment ? { environmentId: queriedEnvironment } : {}),
+        ...(create === "worktree" || create === "container" ? { create } : {}),
+      })
       .then((result) => {
         if (cancelled) return;
         setOptions(result);
@@ -177,7 +181,7 @@ export function GraphLaunchDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, chosen, queryKey, projectId, environmentId, ticketTaskId]);
+  }, [open, chosen, queryKey, projectId, environmentId, ticketTaskId, nodeGraphLaunch]);
 
   const problems = options && draft ? graphLaunchProblems(options, draft) : [];
   const cost = options && draft ? graphLaunchCost(options, draft) : null;
@@ -189,7 +193,7 @@ export function GraphLaunchDialog({
     setLaunching(true);
     setLaunchError(null);
     try {
-      const result = await launchGraphRun(
+      const result = await nodeGraphLaunch.launchGraphRun(
         graphLaunchRequest({ ref: chosen, projectId, options, draft, requestId }),
       );
       onOpenChange(false);

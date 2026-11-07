@@ -81,7 +81,6 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { configStore, useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
-import { getClaudeModelCatalog } from "@/lib/backend";
 import { submitClaudeTmuxAddressAll } from "@/lib/claude-tmux-address-all";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -137,6 +136,7 @@ import {
   tmuxModelIsAvailable,
   tmuxModelList,
 } from "./ClaudeTmuxChatTab.parts";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export function ClaudeTmuxChatTab({
   tabId,
@@ -150,6 +150,7 @@ export function ClaudeTmuxChatTab({
   initialFastMode,
   refreshRequestId = 0,
 }: Props) {
+  const nodeBackend = useScopeBackend();
   const { environmentId, containerId } = data;
   const stateKey = useMemo(
     () => createClaudeTmuxStateKey(environmentId, tabId),
@@ -603,7 +604,8 @@ export function ClaudeTmuxChatTab({
     const requestGeneration = (claudeCatalogRequestGenerations.get(environmentId) ?? 0) + 1;
     claudeCatalogRequestGenerations.set(environmentId, requestGeneration);
 
-    void getClaudeModelCatalog(environmentId, refreshRequestId > 0)
+    void nodeBackend
+      .getClaudeModelCatalog(environmentId, refreshRequestId > 0)
       .then((catalog) => {
         if (claudeCatalogRequestGenerations.get(environmentId) !== requestGeneration) {
           return;
@@ -624,7 +626,7 @@ export function ClaudeTmuxChatTab({
           }));
         }
       });
-  }, [backendHydrated, environmentId, refreshRequestId, setModelCatalog, setModels]);
+  }, [backendHydrated, environmentId, refreshRequestId, setModelCatalog, setModels, nodeBackend]);
 
   // 1. Subscribe to backend events (one listener for the whole tab).
   useEffect(() => {
@@ -893,11 +895,12 @@ export function ClaudeTmuxChatTab({
     async (text: string, attachments: TmuxAttachment[]) => {
       setError(null);
       try {
-        await enqueueAgentPrompt<TmuxQueuedMessage>("claude-tmux", storeKey, {
-          id: createUuid(),
-          text,
-          attachments,
-        });
+        await enqueueAgentPrompt<TmuxQueuedMessage>(
+          "claude-tmux",
+          storeKey,
+          { id: createUuid(), text, attachments },
+          tmuxScope,
+        );
       } catch (error) {
         setError(
           `Failed to queue prompt: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -905,7 +908,7 @@ export function ClaudeTmuxChatTab({
         throw error;
       }
     },
-    [storeKey],
+    [storeKey, tmuxScope],
   );
 
   /**
@@ -930,6 +933,7 @@ export function ClaudeTmuxChatTab({
       "claude-tmux",
       storeKey,
       head.id,
+      tmuxScope,
     );
     if (!nextMessage) return;
 
@@ -939,7 +943,7 @@ export function ClaudeTmuxChatTab({
     for (const attachment of nextMessage.attachments) {
       store.addAttachment(storeKey, attachment);
     }
-  }, [storeKey, tmuxTabs]);
+  }, [storeKey, tmuxTabs, tmuxScope]);
 
   const handleAddressAll = async () => {
     setError(null);

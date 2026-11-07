@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import { showEnvironmentUnreadToast } from "@/components/environments/environmentUnreadToast";
-import * as backend from "@/lib/backend";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.environment");
 
@@ -17,6 +17,7 @@ const log = createLogger("web.environment");
  * other client the work has been seen.
  */
 export function useUnreadEnvironmentSync(): void {
+  const nodeBackend = useScopeBackend();
   const selectedEnvironmentId = useVisibleEnvironmentId();
   // The node whose environments this watches: the one the selector below reads.
   const scope = useShimNodeScope("environment");
@@ -46,7 +47,7 @@ export function useUnreadEnvironmentSync(): void {
       hasUnreadWork: false,
       unreadReason: undefined,
     });
-    void backend
+    void nodeBackend
       .setEnvironmentUnread(selectedEnvironmentId, false, observedActivityAt)
       .then((persistedEnvironment) => {
         const currentEnvironment = store.getState().getEnvironmentById(selectedEnvironmentId);
@@ -76,5 +77,5 @@ export function useUnreadEnvironmentSync(): void {
           error: formatLogError(error),
         });
       });
-  }, [scope, selectedEnvironmentId, environments]);
+  }, [scope, selectedEnvironmentId, environments, nodeBackend]);
 }

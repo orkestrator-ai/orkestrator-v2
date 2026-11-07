@@ -1,7 +1,9 @@
 import type { BrowserPreviewServiceTarget } from "@orkestrator/protocol/browser-preview";
 import { previewFailure } from "@orkestrator/protocol/preview-services";
 
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { isWkWebViewClient } from "@/lib/client-platform";
 
 /**
@@ -51,8 +53,13 @@ export function submitPreviewBootstrap(
  */
 export async function openServiceExternally(
   target: BrowserPreviewServiceTarget,
-  options: { opener?: Window | null } = {},
+  options: {
+    opener?: Window | null;
+    /** The service's node (plan item 4007); the app's command scope when omitted. */
+    scope?: NodeScope;
+  } = {},
 ): Promise<void> {
+  const node = backendForScope(options.scope ?? appCommandScope());
   const nativeOpen = window.orkestrator?.browserPreview?.openServiceExternally;
   if (nativeOpen) {
     await nativeOpen(target);
@@ -63,7 +70,7 @@ export async function openServiceExternally(
     // carry a POST. The backend consumes the grant itself and returns a
     // one-use, 30-second session URL bound to the service's own host.
     options.opener?.close();
-    const handoff = await backend.createPreviewHandoffUrl({
+    const handoff = await node.createPreviewHandoffUrl({
       serviceId: target.serviceId,
       path: target.path,
       clientKey: "ios-client",
@@ -82,7 +89,7 @@ export async function openServiceExternally(
     // Some browsers disallow resetting opener on about:blank; noopener is best effort.
   }
   try {
-    const attachment = await backend.createPreviewAttachment({
+    const attachment = await node.createPreviewAttachment({
       serviceId: target.serviceId,
       surface: "browser-top-level",
       path: target.path,

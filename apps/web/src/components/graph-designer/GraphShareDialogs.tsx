@@ -31,14 +31,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  exportGraphTemplateBundle,
-  getGraphSharingKeys,
-  importGraphTemplateBundle,
-  setGraphSharingKeyTrust,
-} from "@/lib/backend/graph-template-sharing";
 import { cn } from "@/lib/utils";
 import { GraphCapabilitySummaryView, GraphCompileCounts } from "./GraphCapabilitySummary";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Sharing templates (item 405): export a template as a share bundle
@@ -81,6 +76,7 @@ export function GraphShareExportDialog({
   onDownload: (fileName: string, text: string) => void;
   onCopy: (text: string) => Promise<void>;
 }) {
+  const nodeBackend = useScopeBackend();
   const [sign, setSign] = useState(true);
   const [author, setAuthor] = useState("");
   const [busy, setBusy] = useState(false);
@@ -92,7 +88,7 @@ export function GraphShareExportDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void getGraphSharingKeys().then(
+    void nodeBackend.getGraphSharingKeys().then(
       (result) => {
         if (!cancelled) setKeys(result);
       },
@@ -101,14 +97,14 @@ export function GraphShareExportDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, exported]);
+  }, [open, exported, nodeBackend]);
 
   const run = async (deliver: (result: GraphTemplateShareExport) => Promise<void> | void) => {
     if (!summary || busy) return;
     setBusy(true);
     setFailure(null);
     try {
-      const result = await exportGraphTemplateBundle(summary.ref, {
+      const result = await nodeBackend.exportGraphTemplateBundle(summary.ref, {
         ...(sign && canSign ? { sign: true } : {}),
         ...(author.trim() ? { author: author.trim() } : {}),
       });
@@ -268,6 +264,7 @@ export function GraphShareImportDialog({
   projectId: string | null;
   onImported: (result: Extract<GraphTemplateShareImportResult, { status: "imported" }>) => void;
 }) {
+  const nodeBackend = useScopeBackend();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<GraphTemplateSharePreview | null>(null);
@@ -303,7 +300,7 @@ export function GraphShareImportDialog({
     setBusy(true);
     setFailure(null);
     try {
-      const result = await importGraphTemplateBundle(text, {
+      const result = await nodeBackend.importGraphTemplateBundle(text, {
         ...(projectId ? { projectId } : {}),
         ...(confirmDigest ? { confirmDigest } : {}),
       });
@@ -335,7 +332,7 @@ export function GraphShareImportDialog({
     if (!signer || !signerLabel.trim()) return;
     setBusy(true);
     try {
-      await setGraphSharingKeyTrust({
+      await nodeBackend.setGraphSharingKeyTrust({
         action: "add",
         publicKey: signer.publicKey,
         label: signerLabel.trim(),

@@ -3,10 +3,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import {
-  retryBuildPipelineCompletionComment,
-  retryBuildPipelineInteractionFailure,
-} from "@/lib/backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface BuildCompletionStatusProps {
   pipeline: BuildPipeline;
@@ -51,6 +48,7 @@ const FAILURE_COPY: Record<
  * GitHub board, and a kanban card has no other surface at all.
  */
 export function BuildCompletionStatus({ pipeline }: BuildCompletionStatusProps) {
+  const nodeBackend = useScopeBackend();
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   // Keyed by kind: both banners can be visible at once, and a retry of one is
   // no reason to take away the other recovery control.
@@ -73,8 +71,8 @@ export function BuildCompletionStatus({ pipeline }: BuildCompletionStatusProps) 
     try {
       replacePipeline(
         kind === "interaction"
-          ? await retryBuildPipelineInteractionFailure(pipeline.id)
-          : await retryBuildPipelineCompletionComment(pipeline.id),
+          ? await nodeBackend.retryBuildPipelineInteractionFailure(pipeline.id)
+          : await nodeBackend.retryBuildPipelineCompletionComment(pipeline.id),
       );
     } catch (error) {
       toast.error("Failed to retry build", {

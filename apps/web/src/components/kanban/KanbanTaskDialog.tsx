@@ -55,7 +55,6 @@ import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { readImage } from "@/lib/native/clipboard";
-import { getKanbanImageData } from "@/lib/backend";
 import {
   openPullRequestUrl,
   openPullRequestInApp,
@@ -72,6 +71,7 @@ import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.kanban");
 
@@ -191,6 +191,7 @@ export function KanbanTaskDialog({
   onOpenChange,
   createForProjectId,
 }: KanbanTaskDialogProps) {
+  const nodeBackend = useScopeBackend();
   const kanban = useScopedStoreApi(kanbanStore);
   const updateTask = useKanbanStore((s) => s.updateTask);
   const updateTaskContent = useKanbanStore((s) => s.updateTaskContent);
@@ -368,7 +369,7 @@ export function KanbanTaskDialog({
     void Promise.all(
       missingIds.map(async (id) => {
         try {
-          const base64 = await getKanbanImageData(id);
+          const base64 = await nodeBackend.getKanbanImageData(id);
           if (!cancelled) {
             setImageUrlCache((prev) => ({ ...prev, [id]: `data:image/webp;base64,${base64}` }));
           }
@@ -381,7 +382,7 @@ export function KanbanTaskDialog({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- imageUrlCache intentionally excluded to avoid re-fetch loop
-  }, [open, task]);
+  }, [open, task, nodeBackend]);
 
   // Reset create mode fields when dialog opens in create mode
   const handleOpenChange = (newOpen: boolean, discardDraft = true) => {

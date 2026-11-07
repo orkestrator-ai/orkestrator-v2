@@ -6,6 +6,7 @@ import {
   type ArtifactRepresentationRequest,
   type ArtifactRepresentationResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
+import * as backend from "@/lib/backend";
 import { invoke } from "@/lib/native/backend";
 import {
   StaleArtifactScopeError,
@@ -100,7 +101,7 @@ describe("readVerifiedEffectiveHtml", () => {
         limitBytes: Math.min(4 * 1024, request.sourceRange?.limitBytes ?? 4 * 1024),
       });
     });
-    const document = await readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html));
+    const document = await readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html));
     expect(document.html).toBe(html);
     expect(document.byteLength).toBe(new TextEncoder().encode(html).byteLength);
     expect(document.sha256).toBe(hashOf(html));
@@ -110,7 +111,7 @@ describe("readVerifiedEffectiveHtml", () => {
   test("a response claiming completion with too few bytes is incomplete", async () => {
     const html = "<p>Whole document</p>";
     serve(() => page(html, undefined, { data: "<p>Who" }));
-    expect(await failure(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html)))).toBe(
+    expect(await failure(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html)))).toBe(
       "static_incomplete",
     );
   });
@@ -122,7 +123,7 @@ describe("readVerifiedEffectiveHtml", () => {
     serve(() =>
       page(html, undefined, { byteLength: budget, totalBytes: budget, nextOffsetBytes: budget }),
     );
-    expect(await failure(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html)))).toBe(
+    expect(await failure(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html)))).toBe(
       "static_incomplete",
     );
   });
@@ -130,7 +131,7 @@ describe("readVerifiedEffectiveHtml", () => {
   test("a read that stops advancing is refused rather than looping", async () => {
     const html = "<p>Whole document</p>";
     serve(() => page(html, undefined, { data: "<p>", byteLength: 3, nextOffsetBytes: 3 }));
-    await expect(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html))).rejects.toThrow(
+    await expect(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html))).rejects.toThrow(
       "did not advance",
     );
   });
@@ -146,7 +147,7 @@ describe("readVerifiedEffectiveHtml", () => {
       };
       return calls === 1 ? page(html, range) : page(html, range, { sha256: "e".repeat(64) });
     });
-    await expect(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html))).rejects.toThrow(
+    await expect(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html))).rejects.toThrow(
       "changed while it was being read",
     );
   });
@@ -163,7 +164,7 @@ describe("readVerifiedEffectiveHtml", () => {
         };
         return calls === 1 ? page(html, range) : page(html, range, change);
       });
-      await expect(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html))).rejects.toThrow(
+      await expect(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html))).rejects.toThrow(
         "changed while it was being read",
       );
     }
@@ -177,7 +178,7 @@ describe("readVerifiedEffectiveHtml", () => {
       { representation: "source" as const },
     ]) {
       serve(() => page(html, undefined, overrides));
-      expect(await failure(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html)))).toBe(
+      expect(await failure(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html)))).toBe(
         "static_identity",
       );
     }
@@ -186,7 +187,7 @@ describe("readVerifiedEffectiveHtml", () => {
   test("a representation hash other than the receipt's is an integrity failure", async () => {
     const html = "<p>Report</p>";
     serve(() => page(html));
-    expect(await failure(readVerifiedEffectiveHtml(SCOPE, REF, "b".repeat(64)))).toBe(
+    expect(await failure(readVerifiedEffectiveHtml(backend, SCOPE, REF, "b".repeat(64)))).toBe(
       "static_integrity",
     );
   });
@@ -195,7 +196,7 @@ describe("readVerifiedEffectiveHtml", () => {
     const claimed = "<p>Report one</p>";
     const received = "<p>Report two</p>";
     serve(() => page(received, undefined, { sha256: hashOf(claimed) }));
-    expect(await failure(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(claimed)))).toBe(
+    expect(await failure(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(claimed)))).toBe(
       "static_integrity",
     );
   });
@@ -207,7 +208,7 @@ describe("readVerifiedEffectiveHtml", () => {
       requests.push(request.sourceRange);
       return page(html, request.sourceRange);
     });
-    expect(await failure(readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html)))).toBe(
+    expect(await failure(readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html)))).toBe(
       "static_over_budget",
     );
     expect(requests).toEqual([
@@ -222,7 +223,7 @@ describe("readVerifiedEffectiveHtml", () => {
       STATIC_PRESENTATION_POLICY.maxDocumentBytes - prefix.length - suffix.length,
     )}${suffix}`;
     serve((request) => page(html, request.sourceRange));
-    const document = await readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html));
+    const document = await readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html));
     expect(document.byteLength).toBe(STATIC_PRESENTATION_POLICY.maxDocumentBytes);
   });
 
@@ -236,7 +237,7 @@ describe("readVerifiedEffectiveHtml", () => {
         }),
     );
     noteArtifactScopeGeneration(SCOPE);
-    const read = readVerifiedEffectiveHtml(SCOPE, REF, hashOf(html));
+    const read = readVerifiedEffectiveHtml(backend, SCOPE, REF, hashOf(html));
     await Bun.sleep(0);
     noteArtifactScopeGeneration({ ...SCOPE, generation: "g2" });
     release(page(html));

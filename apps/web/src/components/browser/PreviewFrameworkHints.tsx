@@ -3,9 +3,9 @@ import { Copy } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { writeText } from "@/lib/native/clipboard";
 import { frameworkHints, PLACEHOLDER_PREVIEW_ORIGIN } from "@/lib/preview-framework-hints";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export interface PreviewFrameworkHintsProps {
   serviceId: string;
@@ -17,11 +17,12 @@ export interface PreviewFrameworkHintsProps {
  * when it is published. Nothing here touches the user's project.
  */
 export function PreviewFrameworkHints({ serviceId, applicationPort }: PreviewFrameworkHintsProps) {
+  const nodeBackend = useScopeBackend();
   const [origin, setOrigin] = useState<{ serviceId: string; value: string | null } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void backend
+    void nodeBackend
       .getPreviewPublicOrigin(serviceId)
       .then((result) => {
         if (!cancelled) setOrigin({ serviceId, value: result.origin });
@@ -32,7 +33,7 @@ export function PreviewFrameworkHints({ serviceId, applicationPort }: PreviewFra
     return () => {
       cancelled = true;
     };
-  }, [serviceId]);
+  }, [serviceId, nodeBackend]);
 
   const known = origin?.serviceId === serviceId ? origin.value : null;
   const hints = frameworkHints({ origin: known, applicationPort });

@@ -13,12 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  createFeatureBuild,
-  getContainerGitHubCredentialStatus,
-  updateEnvironmentAgentSettings,
-  type GitHubCredentialStatus,
-} from "@/lib/backend";
+import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers } from "@/lib/agent-settings";
@@ -37,6 +32,7 @@ import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironment
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.environment");
 
@@ -174,6 +170,7 @@ export function CreateEnvironmentFlowDialog({
   updateEnvironment,
   startEnvironment,
 }: CreateEnvironmentFlowDialogProps) {
+  const nodeBackend = useScopeBackend();
   const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
@@ -288,7 +285,7 @@ export function CreateEnvironmentFlowDialog({
 
       const agentSettings = resolveEnvironmentAgentSettings(options);
       const launchSettings = resolveEnvironmentAgentLaunchSettings(options);
-      const configuredEnvironment = await updateEnvironmentAgentSettings(
+      const configuredEnvironment = await nodeBackend.updateEnvironmentAgentSettings(
         environment.id,
         agentSettings,
         launchSettings.pendingAgentLaunch,
@@ -364,7 +361,7 @@ export function CreateEnvironmentFlowDialog({
     activePreflightRef.current = preflight;
     setIsCreating(true);
     const result = await Promise.race([
-      getContainerGitHubCredentialStatus().then(
+      nodeBackend.getContainerGitHubCredentialStatus().then(
         (status) => ({ status }),
         (error: unknown) => ({ error }),
       ),
@@ -417,7 +414,7 @@ export function CreateEnvironmentFlowDialog({
     if (!projectId) return false;
     setIsCreating(true);
     try {
-      const result = await createFeatureBuild(input);
+      const result = await nodeBackend.createFeatureBuild(input);
       // Selecting the environment is what mounts its terminal surface. An
       // idempotent retry may return before its concurrent winner has attached
       // the environment, so the one-shot activation follows the authoritative

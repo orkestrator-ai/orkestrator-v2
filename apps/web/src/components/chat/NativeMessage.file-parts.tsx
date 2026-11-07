@@ -55,6 +55,7 @@ import {
   UserPromptEvidenceContext,
 } from "./NativeMessage.shared";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const log = createLogger("web.chat");
 
@@ -198,9 +199,16 @@ export function FilePart({
     [messageId, scope],
   );
   const cacheKey = mediaCacheKey({ path, fileUrl, detailRef, containerId }, pin);
+  // The transcript's node: its files are read and cached for it (plan item 4007).
+  const mediaScope = useScopesWithCommandFallback().scope;
+  const mediaNodeId = mediaScope.nodeId;
   const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
-  const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
-  const [snapshot, setSnapshot] = useState(() => readImagePreviewSnapshot(cacheKey, imageSrc));
+  const [imageSrc, setImageSrc] = useState<string | null>(() =>
+    readImagePreviewCache(cacheKey, mediaNodeId),
+  );
+  const [snapshot, setSnapshot] = useState(() =>
+    readImagePreviewSnapshot(cacheKey, imageSrc, mediaNodeId),
+  );
   const snapshotNote = useMediaSnapshotNote(snapshot);
   const [loading, setLoading] = useState(false);
   const [decodedImage, setDecodedImage] = useState(() => {
@@ -235,9 +243,9 @@ export function FilePart({
     if (!isImage) return Promise.resolve(null);
     if (imageLoadRef.current) return imageLoadRef.current;
 
-    const cached = readImagePreviewCache(cacheKey);
+    const cached = readImagePreviewCache(cacheKey, mediaNodeId);
     if (cached) {
-      setSnapshot(readImagePreviewSnapshot(cacheKey, cached));
+      setSnapshot(readImagePreviewSnapshot(cacheKey, cached, mediaNodeId));
       return Promise.resolve(cached);
     }
 
@@ -254,6 +262,7 @@ export function FilePart({
             detailCache: { read: cachedToolDetails, write: cacheToolDetails },
             cacheImage: true,
             pin,
+            scope: mediaScope,
           },
         );
         assertDecodableImage(resolved.url);
@@ -270,7 +279,7 @@ export function FilePart({
           // Remembered only for an owner that drops the row. A first-class file
           // row keeps its badge and stays retryable, which is the behaviour a
           // user clicking it again expects.
-          markImagePreviewUnavailable(cacheKey);
+          markImagePreviewUnavailable(cacheKey, mediaNodeId);
           onLoadUnavailableRef.current();
         }
         return null;
@@ -284,13 +293,24 @@ export function FilePart({
       }
     });
     return request;
-  }, [cacheKey, isImage, path, fileUrl, containerId, detailRef, loadToolDetails, pin]);
+  }, [
+    cacheKey,
+    isImage,
+    path,
+    fileUrl,
+    containerId,
+    detailRef,
+    loadToolDetails,
+    pin,
+    mediaScope,
+    mediaNodeId,
+  ]);
 
   useEffect(() => {
     if (!eagerPreview || !isImage || imageSrc || isRemoteMediaUrl(fileUrl)) return;
     // This exact reference already failed while the transcript was scrolled
     // past. Report it straight back rather than re-issuing the read.
-    if (ownerDropsUnreadable && isImagePreviewUnavailable(cacheKey)) {
+    if (ownerDropsUnreadable && isImagePreviewUnavailable(cacheKey, mediaNodeId)) {
       onLoadUnavailableRef.current?.();
       return;
     }
@@ -307,7 +327,16 @@ export function FilePart({
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, eagerPreview, fileUrl, imageSrc, isImage, loadImage, ownerDropsUnreadable]);
+  }, [
+    cacheKey,
+    eagerPreview,
+    fileUrl,
+    imageSrc,
+    isImage,
+    loadImage,
+    ownerDropsUnreadable,
+    mediaNodeId,
+  ]);
 
   // Every image of the message shares one gallery, in document order.
   useGalleryItem(galleryGroup, isImage, {

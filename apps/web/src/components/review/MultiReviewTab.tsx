@@ -1,6 +1,6 @@
 import { ReviewValidationStatus } from "./ReviewValidationStatus";
 import { WorkflowResultStatus } from "./WorkflowResultStatus";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   ExternalLink,
@@ -41,7 +41,8 @@ import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { MultiReviewAddressFindingsPromptDialog } from "./MultiReviewAddressFindingsPromptDialog";
 import { ModelRestartDialog, MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
@@ -109,6 +110,7 @@ import {
 } from "./multi-review-steps";
 import { ReviewerStartFailureNotice } from "./ReviewerStartFailureNotice";
 import { FloatingNotice, FloatingNoticeLayer } from "@/components/ui/floating-notice";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -142,22 +144,25 @@ interface MultiReviewCommands {
   unstickReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
 }
 
-const defaultCommands: MultiReviewCommands = {
-  address: backend.addressMultiReviewFindings,
-  customAddressFindings: (workflowId, fixModel, instruction) =>
-    backend.startMultiReviewCustomAddressFindings({ workflowId, fixModel, instruction }),
-  retry: backend.retryMultiReview,
-  cancel: backend.cancelMultiReview,
-  stopValidation: backend.stopMultiReviewValidation,
-  stopReviewer: backend.stopMultiReviewReviewer,
-  restartReviewer: backend.restartMultiReviewReviewer,
-  skipStep: backend.skipMultiReviewStep,
-  rewindCode: backend.rewindMultiReviewCode,
-  restartStep: backend.restartMultiReviewStep,
-  pauseStep: backend.pauseMultiReviewStep,
-  resumeStep: backend.resumeMultiReviewStep,
-  unstickReviewer: backend.unstickMultiReviewReviewer,
-};
+/** The workflow's commands on its node (`useScopeBackend()`, plan item 4007). */
+function nodeMultiReviewCommands(node: ScopeBackend): MultiReviewCommands {
+  return {
+    address: (...args) => node.addressMultiReviewFindings(...args),
+    customAddressFindings: (workflowId, fixModel, instruction) =>
+      node.startMultiReviewCustomAddressFindings({ workflowId, fixModel, instruction }),
+    retry: (...args) => node.retryMultiReview(...args),
+    cancel: (...args) => node.cancelMultiReview(...args),
+    stopValidation: (...args) => node.stopMultiReviewValidation(...args),
+    stopReviewer: (...args) => node.stopMultiReviewReviewer(...args),
+    restartReviewer: (...args) => node.restartMultiReviewReviewer(...args),
+    skipStep: (...args) => node.skipMultiReviewStep(...args),
+    rewindCode: (...args) => node.rewindMultiReviewCode(...args),
+    restartStep: (...args) => node.restartMultiReviewStep(...args),
+    pauseStep: (...args) => node.pauseMultiReviewStep(...args),
+    resumeStep: (...args) => node.resumeMultiReviewStep(...args),
+    unstickReviewer: (...args) => node.unstickMultiReviewReviewer(...args),
+  };
+}
 
 interface MultiReviewTabProps {
   ownsGlobalShortcuts?: boolean;
@@ -541,12 +546,15 @@ function MultiReviewOverviewTab({
   data,
   isActive,
   hydrateWorkflow = hydrateMultiReviewWorkflow,
-  commands: providedCommands = defaultCommands,
+  commands: commandsOverride,
   openReviewer,
   loadReviewerTranscript,
   loadStepTranscript,
   loadPrSessionState,
 }: MultiReviewTabProps) {
+  const nodeBackend = useScopeBackend();
+  const defaultCommands = useMemo(() => nodeMultiReviewCommands(nodeBackend), [nodeBackend]);
+  const providedCommands = commandsOverride === undefined ? defaultCommands : commandsOverride;
   const createTab = useOptionalTerminalContext()?.createTab;
   // The workflow belongs to this node; its point reads go to this node (plan item 3003).
   const workflowScope = useShimNodeScope(multiReviewStore.name);
@@ -596,7 +604,7 @@ function MultiReviewOverviewTab({
     pending,
     {
       readPreview: (id, stageId) =>
-        backend.previewMultiReviewCodeRewind(id, stageId as MultiReviewRewindStep),
+        nodeBackend.previewMultiReviewCodeRewind(id, stageId as MultiReviewRewindStep),
       subject: "the review",
     },
   );

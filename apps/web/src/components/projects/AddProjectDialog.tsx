@@ -13,14 +13,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FolderGit2, FolderOpen, GitBranch, Loader2, LockKeyhole, Plus } from "lucide-react";
 import { GithubIcon } from "@/components/icons/GithubIcon";
 import { usePickHostPath } from "@/lib/host-path-picker";
-import {
-  getGitRemoteUrl,
-  listGitHubCloneAccounts,
-  listGitHubCloneRepositories,
-} from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { GitHubRepositoryPicker, type GitHubRepositoryPickerProps } from "./GitHubRepositoryPicker";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.project");
 
@@ -54,9 +50,18 @@ export function AddProjectDialog({
   validateGitUrl,
   defaultCloneDirectory,
   existingGitUrls,
-  loadGitHubAccounts = listGitHubCloneAccounts,
-  loadGitHubRepositories = listGitHubCloneRepositories,
+  loadGitHubAccounts: loadGitHubAccountsOverride,
+  loadGitHubRepositories: loadGitHubRepositoriesOverride,
 }: AddProjectDialogProps) {
+  const nodeBackend = useScopeBackend();
+  const loadGitHubAccounts =
+    loadGitHubAccountsOverride === undefined
+      ? nodeBackend.listGitHubCloneAccounts
+      : loadGitHubAccountsOverride;
+  const loadGitHubRepositories =
+    loadGitHubRepositoriesOverride === undefined
+      ? nodeBackend.listGitHubCloneRepositories
+      : loadGitHubRepositoriesOverride;
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
   const [source, setSource] = useState<ProjectSource>("existing");
@@ -196,7 +201,7 @@ export function AddProjectDialog({
     const timer = setTimeout(
       async () => {
         try {
-          const remoteUrl = await getGitRemoteUrl(repositoryPath);
+          const remoteUrl = await nodeBackend.getGitRemoteUrl(repositoryPath);
           if (cancelled) return;
           if (!remoteUrl || !isCurrent()) {
             lastInspectedPathRef.current = repositoryPath;
@@ -246,7 +251,7 @@ export function AddProjectDialog({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [isLoading, isOpen, localPath, pickedPath, source]);
+  }, [isLoading, isOpen, localPath, pickedPath, source, nodeBackend]);
 
   const handleNewProjectBrowse = useCallback(async () => {
     try {

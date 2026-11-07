@@ -43,7 +43,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
-import { openInBrowser, retryBuildPipelineCompletionComment } from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
 import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import type { EnvironmentType } from "@/types";
@@ -56,6 +56,7 @@ import type {
 import { GITHUB_WORKFLOW_STAGES, getGitHubStageLabel } from "./GitHubIssueCard";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.github");
 
@@ -256,6 +257,7 @@ export function GitHubIssueDetailContent({
   onClosed,
   buildPipeline,
 }: GitHubIssueDetailContentProps) {
+  const nodeBackend = useScopeBackend();
   const dockerAvailable = useDockerAvailability();
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const key = githubIssueDetailKey(projectId, issueNumber);
@@ -829,7 +831,9 @@ export function GitHubIssueDetailContent({
                         if (retryingCompletionIds.has(pipeline.id)) return;
                         setRetryingCompletionIds((current) => new Set(current).add(pipeline.id));
                         try {
-                          replacePipeline(await retryBuildPipelineCompletionComment(pipeline.id));
+                          replacePipeline(
+                            await nodeBackend.retryBuildPipelineCompletionComment(pipeline.id),
+                          );
                         } catch (error) {
                           toast.error("Failed to retry GitHub completion comment", {
                             description: errorMessage(

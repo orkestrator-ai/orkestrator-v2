@@ -46,7 +46,6 @@ import {
 } from "@orkestrator/protocol/git-workflow-prompts";
 import { createOrkestratorScriptPrompt } from "@orkestrator/protocol/orkestrator-script-prompt";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
-import * as backend from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
@@ -79,6 +78,7 @@ import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { toast } from "sonner";
 import type { ResolveLaunchResult } from "./ActionBar.types";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.action-bar");
 
@@ -137,6 +137,7 @@ export interface ActionBarControllerInput {
 }
 
 export function useActionBarController({ presentation }: ActionBarControllerInput) {
+  const nodeBackend = useScopeBackend();
   const dockerAvailable = useDockerAvailability();
   const isGrid = presentation === "grid";
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -981,7 +982,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         // One request: the backend reuses an active review, takes the target
         // branch and instruction from saved settings, starts the review and
         // writes its tab into the layout, so a crash here cannot orphan it.
-        const launched = await backend
+        const launched = await nodeBackend
           .launchMultiReview({
             requestId,
             environmentId: selectedEnvironmentId,
@@ -1049,6 +1050,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedProjectId,
       setupRunning,
       workspaceReady,
+      nodeBackend,
     ],
   );
 
@@ -1225,7 +1227,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       if (!releaseLaunch) return Promise.resolve(false);
       const tabId = `agent-job-${createUuid()}`;
       const launch = beginLaunchedTab(environmentId, tabId, "Run Script");
-      return backend
+      return nodeBackend
         .launchNativeAgentJob({
           requestId: `run-script-${createUuid()}`,
           environmentId,
@@ -1267,6 +1269,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       reviewModelCatalog,
       selectedEnvironmentId,
       tabCount,
+      nodeBackend,
     ],
   );
 

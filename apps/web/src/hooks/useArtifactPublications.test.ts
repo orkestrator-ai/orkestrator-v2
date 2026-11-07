@@ -4,6 +4,7 @@ import {
   TRANSCRIPT_ARTIFACT_COMMANDS,
   type ArtifactPublicationView,
 } from "@orkestrator/protocol/transcript-artifact-commands";
+import * as backend from "@/lib/backend";
 import { invoke } from "@/lib/native/backend";
 import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 import type { RichTranscriptScope } from "@/lib/chat/rich-identity";
@@ -87,7 +88,7 @@ afterEach(() => {
 describe("readArtifactLedger", () => {
   test("reads every page of a ledger within the bound", async () => {
     serveLedger(() => 1_500);
-    const ledger = await readArtifactLedger(SCOPE);
+    const ledger = await readArtifactLedger(SCOPE, backend);
     expect(ledger).toHaveLength(1_500);
     expect(ledger.omittedOlder ?? 0).toBe(0);
     expect(ledger.incomplete ?? false).toBe(false);
@@ -97,7 +98,7 @@ describe("readArtifactLedger", () => {
   test("keeps the newest publications and counts the omitted older ones", async () => {
     const total = MAX_RETAINED_PUBLICATIONS + 450;
     serveLedger(() => total);
-    const ledger = await readArtifactLedger(SCOPE);
+    const ledger = await readArtifactLedger(SCOPE, backend);
     expect(ledger).toHaveLength(MAX_RETAINED_PUBLICATIONS);
     expect(ledger.omittedOlder).toBe(450);
     expect(ledger[0]!.conversationSequence).toBe(451);
@@ -106,7 +107,7 @@ describe("readArtifactLedger", () => {
 
   test("stops at the page bound and marks the ledger incomplete", async () => {
     const calls = serveLedger(() => 1_000_000);
-    const ledger = await readArtifactLedger(SCOPE);
+    const ledger = await readArtifactLedger(SCOPE, backend);
     expect(calls).toHaveLength(MAX_LEDGER_PAGES);
     expect(ledger.incomplete).toBe(true);
     expect(ledger).toHaveLength(MAX_RETAINED_PUBLICATIONS);

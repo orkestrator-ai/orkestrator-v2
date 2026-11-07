@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import * as backend from "@/lib/backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export interface ThreadChangeResource {
   segmentId: string;
@@ -29,6 +29,7 @@ export function useThreadChangeResource(
   logicalSessionKey: string | null | undefined,
   turnActive: boolean,
 ): ThreadChangeResource | null {
+  const nodeBackend = useScopeBackend();
   const owner =
     environmentId && logicalSessionKey ? `${environmentId}\0${logicalSessionKey}` : null;
   const [state, setState] = useState<{
@@ -40,7 +41,7 @@ export function useThreadChangeResource(
     if (!owner || !environmentId || !logicalSessionKey) return;
     let cancelled = false;
     void Promise.resolve()
-      .then(() => backend.getChangeThread(environmentId, logicalSessionKey))
+      .then(() => nodeBackend.getChangeThread(environmentId, logicalSessionKey))
       .then(
         (result: unknown) => {
           if (cancelled) return;
@@ -61,7 +62,7 @@ export function useThreadChangeResource(
     return () => {
       cancelled = true;
     };
-  }, [owner, environmentId, logicalSessionKey, turnActive]);
+  }, [owner, environmentId, logicalSessionKey, turnActive, nodeBackend]);
 
   // A previous session's answer never shows under a new owner.
   return state && state.owner === owner ? state.resource : null;

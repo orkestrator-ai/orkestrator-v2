@@ -47,16 +47,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
-import {
-  listGitHubRepositoryAssignableUsers,
-  listGitHubRepositoryLabels,
-  openInBrowser,
-} from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { PullRequestCommentCard } from "./PullRequestCommentCard";
 import { labelChipStyle } from "./pull-request-format";
 import { CommentComposer, MarkdownBody, UserAvatar, errorMessage } from "./pull-request-shared";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export type SortOrder = "newest" | "oldest";
 
@@ -169,13 +166,17 @@ function ReviewersRow({
   pullRequest: GitHubPullRequestRef;
   detail: GitHubPullRequestDetail;
 }) {
+  const nodeBackend = useScopeBackend();
   const setReviewers = usePullRequestsStore((state) => state.setReviewers);
   const busy = usePullRequestsStore((state) =>
     Array.from(state.mutations).some((key) => key.startsWith("reviewers:")),
   );
   const [search, setSearch] = useState("");
   const users = useLazyOptions<GitHubRepositoryMemberOption>(() =>
-    listGitHubRepositoryAssignableUsers({ owner: pullRequest.owner, repo: pullRequest.repo }),
+    nodeBackend.listGitHubRepositoryAssignableUsers({
+      owner: pullRequest.owner,
+      repo: pullRequest.repo,
+    }),
   );
   const requested = new Set(
     detail.reviewers
@@ -307,13 +308,14 @@ function LabelsRow({
   pullRequest: GitHubPullRequestRef;
   detail: GitHubPullRequestDetail;
 }) {
+  const nodeBackend = useScopeBackend();
   const changeLabel = usePullRequestsStore((state) => state.changeLabel);
   const busy = usePullRequestsStore((state) =>
     Array.from(state.mutations).some((key) => key.startsWith("labels:")),
   );
   const [search, setSearch] = useState("");
   const labels = useLazyOptions<GitHubPullRequestLabel>(() =>
-    listGitHubRepositoryLabels({ owner: pullRequest.owner, repo: pullRequest.repo }),
+    nodeBackend.listGitHubRepositoryLabels({ owner: pullRequest.owner, repo: pullRequest.repo }),
   );
   const current = new Set(detail.labels.map((label) => label.name));
   const filtered = (labels.options ?? []).filter((label) =>

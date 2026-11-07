@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
 import { changeReason } from "@/lib/changes/labels";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const RISK_TEXT: Record<string, string> = {
   "changes.restore.risk.external-writers":
@@ -34,6 +35,7 @@ const RISK_TEXT: Record<string, string> = {
  * preview and confirms.
  */
 export function RestoreChangesButton({ projection }: { projection: ChangeProjection | undefined }) {
+  const nodeBackend = useScopeBackend();
   const action = projection?.actions.find((candidate) => candidate.kind === "restore");
   const [enabled, setEnabled] = useState(false);
   const [preview, setPreview] = useState<Extract<
@@ -65,7 +67,7 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
     setBusy(true);
     setMessage(null);
     try {
-      const result = await backend.prepareChangeRestore(action.targetToken);
+      const result = await nodeBackend.prepareChangeRestore(action.targetToken);
       if (result.kind === "preview") {
         setApplyKey(crypto.randomUUID());
         setPreview(result);
@@ -84,7 +86,7 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
     if (!preview || !applyKey) return;
     setBusy(true);
     try {
-      const result: ChangesApplyRestoreResult = await backend.applyChangeRestore(
+      const result: ChangesApplyRestoreResult = await nodeBackend.applyChangeRestore(
         preview.actionToken,
         applyKey,
       );

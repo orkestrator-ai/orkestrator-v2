@@ -7,7 +7,6 @@ import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-sto
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, getNativeAgentData, parseDraggableTabId } from "@/types/paneLayout";
 import { cn, createSessionKey } from "@/lib/utils";
-import * as backend from "@/lib/backend";
 import {
   discardFileDraft,
   getFileDraftRevisionState,
@@ -34,6 +33,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.pane-layout");
 
@@ -61,6 +61,7 @@ export function DraggableTabBar({
   dragOverPaneId,
   isPaneFocused = false,
 }: DraggableTabBarProps) {
+  const nodeBackend = useScopeBackend();
   const removeTab = usePaneLayoutStore((state) => state.removeTab);
   const multiReviews = useScopedStoreApi(multiReviewStore);
   const launches = useEnvironmentTabLaunches(environmentId);
@@ -194,7 +195,7 @@ export function DraggableTabBar({
         // hidden. The launcher can reattach them, preserving background work.
         if (!phase || !isMultiReviewTerminalPhase(phase)) continue;
         try {
-          await backend.deleteMultiReviewWorkflow(workflowId);
+          await nodeBackend.deleteMultiReviewWorkflow(workflowId);
           multiReviews.getState().removeWorkflow(workflowId);
         } catch (error) {
           failedTabIds.add(tabId);
@@ -205,7 +206,7 @@ export function DraggableTabBar({
       }
       return failedTabIds;
     },
-    [multiReviews, pane.tabs],
+    [multiReviews, pane.tabs, nodeBackend],
   );
 
   const isRefreshableAgentTab = useCallback(

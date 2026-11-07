@@ -3101,7 +3101,11 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick();
 
-    expect(hydratePromptQueuesForEnvironment).toHaveBeenCalledWith("env-1", expect.anything());
+    expect(hydratePromptQueuesForEnvironment).toHaveBeenCalledWith(
+      "env-1",
+      expect.anything(),
+      expect.any(Function),
+    );
     expect(loadSessionsForEnvironment).toHaveBeenCalledWith("env-1");
     expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith(
       "env-1",

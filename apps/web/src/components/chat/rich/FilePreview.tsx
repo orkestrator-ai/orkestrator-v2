@@ -10,10 +10,6 @@ import {
 } from "@/components/ui/dialog";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
-import {
-  closeTranscriptMediaStream,
-  openTranscriptMediaStream,
-} from "@/lib/backend/transcript-artifacts";
 import { useRichTranscriptScope } from "@/lib/chat/rich-identity";
 import { artifactFilename, base64ToBytes, downloadBase64 } from "@/lib/chat/artifact-download";
 import {
@@ -52,6 +48,8 @@ import { cn } from "@/lib/utils";
 import type { TranscriptMediaPdfPreviewRequest } from "@orkestrator/protocol/transcript-artifact-commands";
 import { AgentPlatformContext } from "@/components/chat/NativeMessage.shared";
 import { PdfFirstPagePreview, pdfPreviewSource } from "./PdfFirstPagePreview";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 /** Text shown inline before a preview says "first N of M". */
 const MAX_TEXT_PREVIEW_BYTES = 256 * 1024;
@@ -503,6 +501,9 @@ function FilePreviewDialog({
   mime: string;
   onClose: () => void;
 }) {
+  const nodeBackend = useScopeBackend();
+  // The transcript's node: its files are read and cached for it (plan item 4007).
+  const mediaScope = useScopesWithCommandFallback().scope;
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const createFileTab = useOptionalTerminalContext()?.createFileTab ?? null;
   const playable = isPlayable(kind);
@@ -558,42 +559,46 @@ function FilePreviewDialog({
   useEffect(() => {
     if (loaded.status !== "loading" || !streamable) return;
     let cancelled = false;
-    openTranscriptMediaStream({
-      ...(environmentId !== null ? { environmentId } : {}),
-      ...streamTarget!,
-    }).then(
-      (stream) => {
-        const streamedKind = previewKindForMime(stream.mimeType);
-        const playableBytes = streamedKind === "video" || streamedKind === "audio";
-        if (cancelled || !playableBytes) {
-          void closeTranscriptMediaStream({ streamId: stream.streamId }).catch(() => undefined);
-        }
-        if (cancelled) return;
-        setLoaded({
-          status: "ready",
-          url: stream.url,
-          base64: null,
-          mime: stream.mimeType,
-          size: stream.byteLength,
-          mismatch: !playableBytes,
-          refused: false,
-          mediaUrl: playableBytes ? stream.url : null,
-          streamId: playableBytes ? stream.streamId : null,
-          dimensions: null,
-        });
-      },
-      (error: unknown) => {
-        if (cancelled) return;
-        const outcome = mediaStreamFailure(error);
-        // No reachable content origin (or an older backend): read the bounded base64 copy.
-        if (outcome === "fallback") setStreamFallback(true);
-        else setLoaded({ status: "failed", failure: outcome });
-      },
-    );
+    nodeBackend
+      .openTranscriptMediaStream({
+        ...(environmentId !== null ? { environmentId } : {}),
+        ...streamTarget!,
+      })
+      .then(
+        (stream) => {
+          const streamedKind = previewKindForMime(stream.mimeType);
+          const playableBytes = streamedKind === "video" || streamedKind === "audio";
+          if (cancelled || !playableBytes) {
+            void nodeBackend
+              .closeTranscriptMediaStream({ streamId: stream.streamId })
+              .catch(() => undefined);
+          }
+          if (cancelled) return;
+          setLoaded({
+            status: "ready",
+            url: stream.url,
+            base64: null,
+            mime: stream.mimeType,
+            size: stream.byteLength,
+            mismatch: !playableBytes,
+            refused: false,
+            mediaUrl: playableBytes ? stream.url : null,
+            streamId: playableBytes ? stream.streamId : null,
+            dimensions: null,
+          });
+        },
+        (error: unknown) => {
+          if (cancelled) return;
+          const outcome = mediaStreamFailure(error);
+          // No reachable content origin (or an older backend): read the bounded base64 copy.
+          if (outcome === "fallback") setStreamFallback(true);
+          else setLoaded({ status: "failed", failure: outcome });
+        },
+      );
     return () => {
       cancelled = true;
     };
-  }, [environmentId, loaded.status, streamTarget, streamable]);
+  }, [environmentId, loaded.status, streamTarget, streamable, nodeBackend]);
 
   useEffect(() => {
     if (loaded.status !== "loading" || streamable) return;
@@ -601,6 +606,7 @@ function FilePreviewDialog({
     resolveMediaUrl(reference, {
       loadToolDetails,
       detailCache: { read: cachedToolDetails, write: cacheToolDetails },
+      scope: mediaScope,
     }).then(
       (url) => {
         if (cancelled) return;
@@ -646,7 +652,7 @@ function FilePreviewDialog({
     return () => {
       cancelled = true;
     };
-  }, [kind, loadToolDetails, loaded.status, mime, playable, reference, streamable]);
+  }, [kind, loadToolDetails, loaded.status, mime, playable, reference, streamable, mediaScope]);
 
   const mismatch = loaded.status === "ready" && loaded.mismatch;
   const mediaUrl = loaded.status === "ready" ? loaded.mediaUrl : null;
@@ -661,9 +667,9 @@ function FilePreviewDialog({
   useEffect(() => {
     if (!streamId) return;
     return () => {
-      void closeTranscriptMediaStream({ streamId }).catch(() => undefined);
+      void nodeBackend.closeTranscriptMediaStream({ streamId }).catch(() => undefined);
     };
-  }, [streamId]);
+  }, [streamId, nodeBackend]);
   // A streamed asset small enough for the inline bound can still be
   // downloaded: the bytes are read only when asked for.
   const lazyDownload =
@@ -718,7 +724,9 @@ function FilePreviewDialog({
                 let bytes = downloadable;
                 if (!bytes) {
                   try {
-                    bytes = dataUrlBase64(await resolveMediaUrl(reference, { loadToolDetails }));
+                    bytes = dataUrlBase64(
+                      await resolveMediaUrl(reference, { loadToolDetails, scope: mediaScope }),
+                    );
                   } catch {
                     bytes = null;
                   }

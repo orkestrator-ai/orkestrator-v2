@@ -3,7 +3,9 @@ import {
   decideUpstreamMergeOffer,
   type CoordinatorUpstreamMergeCheck,
 } from "@orkestrator/protocol/coordinator-upstream-merge";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { clientStateCapabilities } from "@/lib/client-state-capabilities";
 import { clearLegacyPersistedState } from "@/lib/legacy-local-state";
 
@@ -20,6 +22,8 @@ export interface UpstreamCheckOptions {
   turnRunning: () => boolean;
   /** Receives the refreshed checkout status as soon as it is known. */
   onStatus?: (status: ProjectGitStatus) => void;
+  /** The project's node (plan item 4007); the app's command scope when omitted. */
+  scope?: NodeScope;
 }
 
 /**
@@ -36,14 +40,16 @@ export async function checkUpstreamMergeOffer(
     legacyCleared = true;
     clearLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY);
   }
-  const capabilities = await clientStateCapabilities();
+  const scope = options.scope ?? appCommandScope();
+  const node = backendForScope(scope);
+  const capabilities = await clientStateCapabilities(scope);
   if (capabilities.coordinatorUpstreamMerge) {
-    const check = await backend.checkCoordinatorUpstreamMerge(projectId);
+    const check = await node.checkCoordinatorUpstreamMerge(projectId);
     if (check?.status) options.onStatus?.(check.status);
     return check;
   }
   if (options.turnRunning()) return { offer: false, reason: "turn-running", status: null };
-  const status = await backend.fetchProjectGit(projectId);
+  const status = await node.fetchProjectGit(projectId);
   options.onStatus?.(status);
   return decideUpstreamMergeOffer(status);
 }

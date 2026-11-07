@@ -18,7 +18,6 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
-import { revealInFileManager } from "@/lib/backend";
 import { formatTokenCount } from "@/lib/context-usage";
 import { writeText } from "@/lib/native/clipboard";
 import { parseBackendTurnStartedAt } from "@/lib/session-timer";
@@ -44,6 +43,7 @@ import {
   useAgentExpansion,
   useDeferredToolResult,
 } from "./NativeMessage.shared";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 function getSubagentStatusLabel(status: NativeAgentStatus): string {
   switch (status) {
@@ -804,6 +804,7 @@ function BackgroundTaskChildList({
 }
 
 function BackgroundTaskOutputFile({ path, containerId }: { path: string; containerId?: string }) {
+  const nodeBackend = useScopeBackend();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -812,12 +813,12 @@ function BackgroundTaskOutputFile({ path, containerId }: { path: string; contain
   }, [copied]);
 
   const reveal = useCallback(() => {
-    void revealInFileManager(path).catch((error) => {
+    void nodeBackend.revealInFileManager(path).catch((error) => {
       toast.error("Could not reveal the output file", {
         description: error instanceof Error ? error.message : String(error),
       });
     });
-  }, [path]);
+  }, [path, nodeBackend]);
   const copy = useCallback(async () => {
     try {
       await writeText(path);

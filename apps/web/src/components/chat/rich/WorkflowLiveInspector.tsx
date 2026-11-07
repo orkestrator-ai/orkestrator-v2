@@ -4,7 +4,6 @@ import {
   validateWorkflowSnapshot,
   type WorkflowSnapshotV1,
 } from "@orkestrator/protocol/workflow-snapshot";
-import { getWorkflowLiveSnapshot } from "@/lib/backend/transcript-artifacts";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -14,6 +13,7 @@ import {
   formatSnapshotTime,
   workflowStatusText,
 } from "./WorkflowSnapshotCardGraph";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * The live workflow inspector: a separate view of the run's *current* state,
@@ -68,6 +68,7 @@ export function useWorkflowLiveSnapshot({
   enabled: boolean;
   pollIntervalMs?: number;
 }): WorkflowLiveState & { refresh: () => void } {
+  const nodeBackend = useScopeBackend();
   const [state, setState] = useState<WorkflowLiveState>({
     phase: "connecting",
     snapshot: null,
@@ -90,7 +91,8 @@ export function useWorkflowLiveSnapshot({
   const fetchNow = useCallback(() => {
     if (disposed.current) return;
     const seq = ++requestSeq.current;
-    getWorkflowLiveSnapshot({ environmentId, workflowId, runId })
+    nodeBackend
+      .getWorkflowLiveSnapshot({ environmentId, workflowId, runId })
       .then((response) => {
         if (disposed.current || seq < appliedSeq.current) return;
         appliedSeq.current = seq;
@@ -139,7 +141,7 @@ export function useWorkflowLiveSnapshot({
         }
         schedule(Math.min(MAX_BACKOFF_MS, pollIntervalMs * 2 ** failures.current));
       });
-  }, [environmentId, pollIntervalMs, runId, schedule, workflowId]);
+  }, [environmentId, pollIntervalMs, runId, schedule, workflowId, nodeBackend]);
   useLayoutEffect(() => {
     fetchRef.current = fetchNow;
   });

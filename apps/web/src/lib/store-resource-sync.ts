@@ -4,6 +4,7 @@ import {
   getEnvironmentSnapshots,
   getPaneLayout,
   getProjects,
+  listPromptQueues,
 } from "@/lib/backend";
 import {
   onResourceChanged,
@@ -18,6 +19,7 @@ import type { ResourceKind } from "@orkestrator/protocol/resource-events";
 import { createAgentMailApi } from "@/lib/backend/agent-mail";
 import { backendApiForScope, scopeBackendClient } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
+import { createWorkflowsApi } from "@/lib/backend/workflows";
 import {
   configTargetsFor,
   runConfigCommand,
@@ -31,7 +33,10 @@ import {
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
 } from "@/lib/pane-layout-authoritative";
-import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
+import {
+  hydratePromptQueuesForEnvironment,
+  type PromptQueueListLoader,
+} from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { configStore } from "@/stores/configStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
@@ -313,17 +318,25 @@ const agentMailHandlers = defineStoreResourceHandlers("agent-mail", "every-scope
   });
 });
 
+/** Each node's prompt queues follow that node's feed (plan item 4007). */
 const promptQueueHandlers = defineStoreResourceHandlers(
   "prompt-queues",
-  "command-scope",
+  "every-scope",
   (context) => {
-    const promptQueueSources = createPromptQueueSources();
+    const promptQueueSources = createPromptQueueSources(context.scope);
+    // The app's command scope keeps the `@/lib/backend` read, which suites mock.
+    const readPromptQueues: PromptQueueListLoader = (environmentId) =>
+      backendApiForScope(context.scope, createWorkflowsApi, { listPromptQueues }).listPromptQueues(
+        environmentId,
+      );
     context.onResync("dependents", (pass) =>
       pass.includes("prompt-queue")
         ? context.scope
             .store(environmentStore)
             .getState()
-            .environments.map(({ id }) => hydratePromptQueuesForEnvironment(id, promptQueueSources))
+            .environments.map(({ id }) =>
+              hydratePromptQueuesForEnvironment(id, promptQueueSources, readPromptQueues),
+            )
         : undefined,
     );
     context.onResourceChanged("prompt-queue", ({ id: environmentId }) => {
@@ -332,7 +345,11 @@ const promptQueueHandlers = defineStoreResourceHandlers(
       // that has never opened a tab still needs its queue if it opens one next.
       if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId))
         return;
-      return hydratePromptQueuesForEnvironment(environmentId, promptQueueSources).catch((error) => {
+      return hydratePromptQueuesForEnvironment(
+        environmentId,
+        promptQueueSources,
+        readPromptQueues,
+      ).catch((error) => {
         log.warn("prompt-queues.refresh-failed", {
           environmentId,
           error: formatLogError(error),

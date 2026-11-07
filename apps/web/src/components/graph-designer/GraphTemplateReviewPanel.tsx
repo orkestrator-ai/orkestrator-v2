@@ -7,13 +7,10 @@ import type {
   GraphTemplateReviewDiffUnavailable,
 } from "@orkestrator/protocol/graphs/sharing";
 import { Button } from "@/components/ui/button";
-import {
-  decideGraphProjectTemplateReview,
-  reviewGraphProjectTemplates,
-} from "@/lib/backend/graph-template-sharing";
 import { onResourceChanged } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
 import { GraphCapabilitySummaryView, GraphCompileCounts } from "./GraphCapabilitySummary";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * The project template review (item 405, report §6.9): every project
@@ -165,6 +162,7 @@ export function GraphTemplateReviewPanel({
   /** After a decision lands (the library re-reads its trust states). */
   onDecided?: (decision: "approve" | "reject", item: GraphProjectTemplateReviewItem) => void;
 }) {
+  const nodeBackend = useScopeBackend();
   const [review, setReview] = useState<GraphProjectTemplateReview | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -180,7 +178,7 @@ export function GraphTemplateReviewPanel({
 
   useEffect(() => {
     let cancelled = false;
-    reviewGraphProjectTemplates(projectId).then(
+    nodeBackend.reviewGraphProjectTemplates(projectId).then(
       (snapshot) => {
         if (cancelled) return;
         setReview(snapshot);
@@ -196,7 +194,7 @@ export function GraphTemplateReviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectId, generation]);
+  }, [projectId, generation, nodeBackend]);
 
   useEffect(
     () => onResourceChanged("graph-template", () => setGeneration((value) => value + 1)),
@@ -207,7 +205,7 @@ export function GraphTemplateReviewPanel({
     setBusy({ path: item.path, decision });
     setDecisionError(null);
     try {
-      await decideGraphProjectTemplateReview({
+      await nodeBackend.decideGraphProjectTemplateReview({
         projectId,
         path: item.path,
         digest: item.digest,

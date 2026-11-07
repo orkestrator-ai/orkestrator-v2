@@ -20,12 +20,14 @@ import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
-import { hydrateBootMultiReviewWorkflows, hydrateBootPromptQueues } from "@/lib/boot-hydration";
+import {
+  environmentHydrationFor,
+  hydrateBootMultiReviewWorkflows,
+  hydrateBootPromptQueues,
+} from "@/lib/boot-hydration";
 import { hydrateBuildPipelinesForProject } from "@/lib/build-pipeline-persistence";
-import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useNodeScope } from "@/lib/node-scope/providers";
-import { isAppCommandScope } from "@/lib/node-scope-slots";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { cn } from "@/lib/utils";
 import {
@@ -93,19 +95,17 @@ function warnMultiReviewRestoreFailed(environmentId: string, error: unknown): vo
  * per project. Call it after the scope's services have started (the change
  * feed before any snapshot read).
  *
- * On the app's command scope the restores go through the boot batcher
- * (`boot-hydration.ts`). Another node's Multi Review workflows are read per
- * environment on its scope. Prompt queues are the command node's until the
- * claude-tmux queue is scoped, so another node's are not restored here.
+ * Each node's restores go through its own boot batcher (`boot-hydration.ts`,
+ * one per scope) into its own stores: a leaf's tmux tabs get the leaf's
+ * prompt queues and its reviews the leaf's workflows (plan item 4007).
  */
 export function useNodeBootHydration(scope: NodeScope): void {
   const environments = useEnvironmentStore((state) => state.environments);
-  const commandScope = isAppCommandScope(scope);
-  const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
+  const promptQueueSources = useMemo(() => createPromptQueueSources(scope), [scope]);
   const hydratePromptQueues = useCallback(
     (environmentId: string) =>
-      commandScope ? hydrateBootPromptQueues(environmentId, promptQueueSources) : Promise.resolve(),
-    [commandScope, promptQueueSources],
+      hydrateBootPromptQueues(environmentId, promptQueueSources, environmentHydrationFor(scope)),
+    [promptQueueSources, scope],
   );
   useHydrateOncePerEnvironment(
     environments,
@@ -119,10 +119,8 @@ export function useNodeBootHydration(scope: NodeScope): void {
   // renderer exit/remount, when the store starts empty.
   const hydrateMultiReviews = useCallback(
     (environmentId: string) =>
-      commandScope
-        ? hydrateBootMultiReviewWorkflows(environmentId)
-        : hydrateMultiReviewWorkflowsForEnvironment(environmentId, scope),
-    [commandScope, scope],
+      hydrateBootMultiReviewWorkflows(environmentId, environmentHydrationFor(scope), scope),
+    [scope],
   );
   useHydrateOncePerEnvironment(
     environments,

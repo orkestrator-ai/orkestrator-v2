@@ -9,7 +9,6 @@ import {
   type ContainerHostReachability,
 } from "@orkestrator/protocol/container-host-reachability";
 
-import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen, type NativeEvent } from "@/lib/native/events";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const DISMISSED_KEY = "orkestrator.containerHostReachability.dismissed";
 const AUTO_OPENED_KEY = "orkestrator.containerHostReachability.autoOpened";
@@ -54,6 +54,7 @@ export function useContainerHostReachability(): {
   checking: boolean;
   recheck: () => Promise<void>;
 } {
+  const nodeBackend = useScopeBackend();
   const [value, setValue] = useState<ContainerHostReachability | null>(null);
   const [checking, setChecking] = useState(false);
 
@@ -63,7 +64,7 @@ export function useContainerHostReachability(): {
       // command, is a quiet no-op rather than a synchronous render error.
       void (async () => {
         try {
-          const next = await backend.getContainerHostReachability();
+          const next = await nodeBackend.getContainerHostReachability();
           if (isContainerHostReachability(next)) setValue(next);
         } catch {
           // The next change event, reconnect or remount refreshes it.
@@ -90,12 +91,12 @@ export function useContainerHostReachability(): {
       disposed = true;
       for (const unlisten of unlisteners) unlisten();
     };
-  }, []);
+  }, [nodeBackend]);
 
   const recheck = useCallback(async () => {
     setChecking(true);
     try {
-      const next = await backend.checkContainerHostReachability();
+      const next = await nodeBackend.checkContainerHostReachability();
       if (isContainerHostReachability(next)) {
         setValue(next);
         if (next.status === "reachable") {
@@ -111,7 +112,7 @@ export function useContainerHostReachability(): {
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [nodeBackend]);
 
   return { value, checking, recheck };
 }

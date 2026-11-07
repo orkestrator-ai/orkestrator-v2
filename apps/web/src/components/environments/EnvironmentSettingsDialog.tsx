@@ -60,7 +60,7 @@ import {
 } from "@/components/settings/FullscreenSettingsLayout";
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import { EnvironmentDiskUsageBreakdown } from "@/components/disk-usage/EnvironmentDiskUsageBreakdown";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
 import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
@@ -88,6 +88,7 @@ import {
   SettingsSectionHeader,
 } from "@/components/settings/SettingsPageLayout";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.environment");
 
@@ -252,19 +253,20 @@ function AgentExtensionSection({
   environmentId: string;
   canRevealSkills: boolean;
 }) {
+  const nodeBackend = useScopeBackend();
   const copy = AGENT_EXTENSION_COPY[catalog.agent];
   const extensionCount = catalog.mcpServers.length + catalog.plugins.length;
   const unavailableCollections =
     Number(Boolean(catalog.mcpError)) + Number(Boolean(catalog.pluginError));
   const listSkills = useCallback(
     (provider: backend.AgentSkillProvider) =>
-      backend.listEnvironmentAgentSkills(environmentId, provider),
-    [environmentId],
+      nodeBackend.listEnvironmentAgentSkills(environmentId, provider),
+    [environmentId, nodeBackend],
   );
   const readSkill = useCallback(
     (provider: backend.AgentSkillProvider, filePath: string) =>
-      backend.readEnvironmentAgentSkill(environmentId, provider, filePath),
-    [environmentId],
+      nodeBackend.readEnvironmentAgentSkill(environmentId, provider, filePath),
+    [environmentId, nodeBackend],
   );
 
   return (
@@ -355,6 +357,7 @@ export function EnvironmentSettingsDialog({
   initialSection,
   sectionRequest,
 }: EnvironmentSettingsDialogProps) {
+  const nodeBackend = useScopeBackend();
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   // Memoised so the identity only changes when the domains do. Left inline, the
@@ -539,7 +542,7 @@ export function EnvironmentSettingsDialog({
     (options: { refresh?: boolean } = {}) => {
       const seq = ++extensionLoadSeq.current;
       const isCurrent = () => seq === extensionLoadSeq.current;
-      return backend
+      return nodeBackend
         .getEnvironmentExtensions(environment.id, options)
         .then(
           (catalogs) => {
@@ -565,7 +568,7 @@ export function EnvironmentSettingsDialog({
           }
         });
     },
-    [environment.id],
+    [environment.id, nodeBackend],
   );
 
   const loadExtensions = (options: { refresh?: boolean } = {}) => {
@@ -641,7 +644,7 @@ export function EnvironmentSettingsDialog({
     setIsTesting(true);
     setTestResults(null);
     try {
-      const results = await backend.testDomainResolution(domains);
+      const results = await nodeBackend.testDomainResolution(domains);
       setTestResults(results);
     } catch (err) {
       log.error("domains.test-failed", {
@@ -711,7 +714,7 @@ export function EnvironmentSettingsDialog({
     setIsResetting(true);
     try {
       if (portMappingsChanged) {
-        await backend.updatePortMappings(environment.id, portMappings);
+        await nodeBackend.updatePortMappings(environment.id, portMappings);
       }
       onUpdate({ ...environment, status: "creating" });
       setShowResetConfirm(false);
@@ -723,7 +726,7 @@ export function EnvironmentSettingsDialog({
         ...(keepResetCopy ? { keepRecoveryCopy: true } : {}),
       });
 
-      const synced = await backend.syncEnvironmentStatus(environment.id);
+      const synced = await nodeBackend.syncEnvironmentStatus(environment.id);
       onUpdate(synced);
       toast.success("Container reset", {
         description: keepResetCopy
@@ -744,7 +747,7 @@ export function EnvironmentSettingsDialog({
         { description: message },
       );
       try {
-        const synced = await backend.syncEnvironmentStatus(environment.id);
+        const synced = await nodeBackend.syncEnvironmentStatus(environment.id);
         onUpdate(synced);
       } catch {
         // Ignore sync errors
@@ -783,24 +786,24 @@ export function EnvironmentSettingsDialog({
       // Update name if changed
       const trimmedName = name.trim();
       if (trimmedName !== environment.name) {
-        updated = await backend.renameEnvironment(environment.id, trimmedName);
+        updated = await nodeBackend.renameEnvironment(environment.id, trimmedName);
       }
 
       // Update domains if not in full access mode
       const isFullAccess = (environment.networkAccessMode ?? "restricted") === "full";
       if (!isFullAccess) {
         const domainsToSave = useGlobalDefaults ? [] : domains || [];
-        updated = await backend.updateEnvironmentAllowedDomains(environment.id, domainsToSave);
+        updated = await nodeBackend.updateEnvironmentAllowedDomains(environment.id, domainsToSave);
       }
 
       // Update port mappings if changed (only effective after restart for running containers)
       if (portMappingsChanged) {
-        updated = await backend.updatePortMappings(environment.id, portMappings);
+        updated = await nodeBackend.updatePortMappings(environment.id, portMappings);
       }
 
       // Update agent settings if changed
       if (agentSettingsChanged) {
-        updated = await backend.updateEnvironmentAgentSettings(environment.id, agentSettings);
+        updated = await nodeBackend.updateEnvironmentAgentSettings(environment.id, agentSettings);
       }
 
       onUpdate(updated);
@@ -1184,7 +1187,7 @@ export function EnvironmentSettingsDialog({
                 onRestart={onRestart}
                 beforeRebuild={async () => {
                   if (portMappingsChanged) {
-                    await backend.updatePortMappings(environment.id, portMappings);
+                    await nodeBackend.updatePortMappings(environment.id, portMappings);
                   }
                 }}
                 onUpdate={onUpdate}

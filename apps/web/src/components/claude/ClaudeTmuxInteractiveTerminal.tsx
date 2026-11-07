@@ -16,6 +16,7 @@ import {
 import { openLinkExternally } from "@/lib/preview-link-external";
 import { createTerminalLinkActivator } from "@/lib/terminal-links";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
 import { configStore, useConfigStore } from "@/stores";
@@ -95,13 +96,14 @@ export function ClaudeTmuxInteractiveTerminal({
 
   const handlePaste = useCallback(async () => {
     await handleTerminalPaste({
+      writer: backendForScope(linkScope),
       containerId,
       worktreePath,
       writeToTerminal,
       focusTerminal,
       componentName: "ClaudeTmuxInteractiveTerminal",
     });
-  }, [containerId, worktreePath, writeToTerminal, focusTerminal]);
+  }, [containerId, worktreePath, writeToTerminal, focusTerminal, linkScope]);
 
   // Keep the latest paste handler in a ref so the terminal/tmux session
   // lifecycle does not depend on the handler's identity. Without this, a

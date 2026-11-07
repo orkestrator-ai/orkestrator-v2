@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ArtifactPublicationView } from "@orkestrator/protocol/transcript-artifact-commands";
-import { listTranscriptArtifactPublications } from "@/lib/backend/transcript-artifacts";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   encodeRichKey,
   type RichKeyPart,
@@ -189,6 +191,8 @@ registerProtectedRichCache("artifact-publications", {
  */
 export async function readArtifactLedger(
   scope: Pick<RichTranscriptScope, "environmentId" | "logicalSessionKey">,
+  /** The conversation's node (`useScopeBackend()`, plan item 4007). */
+  reader: Pick<ScopeBackend, "listTranscriptArtifactPublications">,
 ): Promise<ArtifactPublicationLedger> {
   let publications: ArtifactPublicationView[] = [];
   let omittedOlder = 0;
@@ -199,7 +203,7 @@ export async function readArtifactLedger(
       incomplete = true;
       break;
     }
-    const result = await listTranscriptArtifactPublications({
+    const result = await reader.listTranscriptArtifactPublications({
       environmentId: scope.environmentId,
       logicalSessionKey: scope.logicalSessionKey,
       ...(afterSequence !== undefined ? { afterSequence } : {}),
@@ -247,6 +251,8 @@ export function useArtifactPublications(
   scope: RichTranscriptScope | null,
   messages: readonly NativeMessage[],
 ): ArtifactPublicationLedger {
+  const nodeBackend = useScopeBackend();
+  const nodeScope = useScopesWithCommandFallback().scope;
   const epoch = useSyncExternalStore(subscribeEpoch, readEpoch, readEpoch);
   const key = scope
     ? encodeRichKey([scope.backendId, scope.environmentId, scope.logicalSessionKey, epoch])
@@ -282,7 +288,7 @@ export function useArtifactPublications(
     if (!scope) return;
     const request = ++requestRef.current;
     let cancelled = false;
-    readArtifactLedger(scope)
+    readArtifactLedger(scope, nodeBackend)
       .then((loaded) => {
         if (cancelled || request !== requestRef.current) return;
         if (!acceptLedger(scope, shownRef.current, loaded)) return;
@@ -297,7 +303,7 @@ export function useArtifactPublications(
     return () => {
       cancelled = true;
     };
-  }, [key, scope]);
+  }, [key, scope, nodeBackend]);
 
   // A publish call the ledger does not show yet: re-read with bounded backoff.
   useEffect(() => {
@@ -309,7 +315,7 @@ export function useArtifactPublications(
       if (cancelled || attempt >= RETRY_DELAYS_MS.length) return;
       timer = setTimeout(() => {
         const request = ++requestRef.current;
-        readArtifactLedger(scope)
+        readArtifactLedger(scope, nodeBackend)
           .then((loaded) => {
             if (cancelled || request !== requestRef.current) return;
             if (!acceptLedger(scope, shownRef.current, loaded)) return;
@@ -328,7 +334,7 @@ export function useArtifactPublications(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [key, scope, unresolved]);
+  }, [key, scope, unresolved, nodeBackend]);
 
   // Live hint: the backend announces ledger/draft changes per conversation.
   const scopeRef = useRef(scope);
@@ -343,7 +349,7 @@ export function useArtifactPublications(
       const current = scopeRef.current;
       if (!current) return;
       const request = ++requestRef.current;
-      readArtifactLedger(current)
+      readArtifactLedger(current, nodeBackend)
         .then((loaded) => {
           if (disposed || request !== requestRef.current) return;
           if (!acceptLedger(current, shownRef.current, loaded)) return;
@@ -358,19 +364,24 @@ export function useArtifactPublications(
     };
     // The id is the conversation key; a deletion of this conversation is
     // announced the same way and recognised by the re-read (acceptLedger).
-    const offChange = onResourceChanged("transcript-artifact", (change) => {
-      if (change.id === logicalSessionKey) reread();
-    });
+    // On the conversation's node's change feed (plan item 4007).
+    const offChange = onResourceChanged(
+      "transcript-artifact",
+      (change) => {
+        if (change.id === logicalSessionKey) reread();
+      },
+      nodeScope,
+    );
     // A full resync (sequence gap, reset) may have hidden an event.
     const offResync = onResourceResync((request) => {
       if (request.resources === null) reread();
-    });
+    }, nodeScope);
     return () => {
       disposed = true;
       offChange();
       offResync();
     };
-  }, [key, logicalSessionKey]);
+  }, [key, logicalSessionKey, nodeBackend, nodeScope]);
 
   return publications;
 }

@@ -10,7 +10,6 @@ import { toast } from "sonner";
 import { PreviewServiceDialog } from "@/components/browser/PreviewServiceDialog";
 import { ReadinessDot } from "@/components/browser/PreviewServicePicker";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import {
   diagnoseService,
   serviceReadiness,
@@ -23,6 +22,7 @@ import {
   usePreviewServiceStore,
 } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export interface EnvironmentPreviewServicesProps {
   environment: Pick<Environment, "id" | "environmentType">;
@@ -45,6 +45,7 @@ export function EnvironmentPreviewServices({
   environment,
   onAddPortMapping,
 }: EnvironmentPreviewServicesProps) {
+  const nodeBackend = useScopeBackend();
   const status = usePreviewServiceStore((state) => state.status);
   const capabilities = usePreviewServiceStore((state) => state.capabilities);
   const snapshot = usePreviewServiceStore(
@@ -132,7 +133,7 @@ export function EnvironmentPreviewServices({
                     disabled={busy !== null}
                     onClick={() =>
                       void run(`entry:${definition.serviceId}`, () =>
-                        backend.updatePreviewService(
+                        nodeBackend.updatePreviewService(
                           definition.serviceId,
                           definition.definitionRevision,
                           { entry: true },
@@ -152,7 +153,7 @@ export function EnvironmentPreviewServices({
                   disabled={busy !== null}
                   onClick={() =>
                     void run(`probe:${definition.serviceId}`, () =>
-                      backend.probePreviewService(definition.serviceId),
+                      nodeBackend.probePreviewService(definition.serviceId),
                     )
                   }
                 >
@@ -183,7 +184,7 @@ export function EnvironmentPreviewServices({
                   disabled={busy !== null}
                   onClick={() =>
                     void run(`remove:${definition.serviceId}`, () =>
-                      backend.removePreviewService(
+                      nodeBackend.removePreviewService(
                         definition.serviceId,
                         definition.definitionRevision,
                       ),
@@ -207,7 +208,7 @@ export function EnvironmentPreviewServices({
                       disabled={busy !== null}
                       onClick={() =>
                         void run(`confirm:${definition.serviceId}`, () =>
-                          backend.confirmPreviewService(
+                          nodeBackend.confirmPreviewService(
                             definition.serviceId,
                             definition.definitionRevision,
                           ),

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import * as backend from "@/lib/backend";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { openServiceExternally } from "@/lib/preview-external";
 import { linkUrlSource } from "@/lib/preview-service-entry";
 import { isLoopbackUrl, requestTerminalBrowserTab } from "@/lib/terminal-links";
@@ -84,7 +85,7 @@ export async function openLinkExternally({
 
   let resolution: backend.PreviewTargetResolution;
   try {
-    resolution = await backend.resolvePreviewTarget({
+    resolution = await backendForScope(scope).resolvePreviewTarget({
       intent: { url: url.trim(), source: linkUrlSource(environment, origin), environmentId },
     });
   } catch (error) {
@@ -98,12 +99,15 @@ export async function openLinkExternally({
     return;
   }
   try {
-    await openServiceExternally({
-      backendInstanceId: capabilities.backendInstanceId,
-      environmentId,
-      serviceId: resolution.service.definition.serviceId,
-      path: resolution.path,
-    });
+    await openServiceExternally(
+      {
+        backendInstanceId: capabilities.backendInstanceId,
+        environmentId,
+        serviceId: resolution.service.definition.serviceId,
+        path: resolution.path,
+      },
+      { scope },
+    );
   } catch (error) {
     toast.error("Could not open the service at localhost", {
       description: `${failureMessage(error)} Opened through the gateway proxy instead.`,

@@ -467,13 +467,14 @@ export function PersistentTerminal({
 
   const handlePaste = useCallback(async () => {
     await handleTerminalPaste({
+      writer: backendForScope(backendScope),
       containerId,
       worktreePath,
       writeToTerminal: writeRef.current,
       focusTerminal: () => terminal.focus(),
       componentName: "PersistentTerminal",
     });
-  }, [containerId, worktreePath, terminal]);
+  }, [containerId, worktreePath, terminal, backendScope]);
 
   // Keep compose bar ref in sync with state for synchronous access in key handler
   useEffect(() => {

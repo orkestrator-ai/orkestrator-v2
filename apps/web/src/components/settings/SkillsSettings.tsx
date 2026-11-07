@@ -16,7 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
 import type {
   AgentSkill,
   AgentSkillProvider,
@@ -31,6 +31,7 @@ import {
   SettingsPageHeader,
   SettingsSectionHeader,
 } from "./SettingsPageLayout";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string }> = [
   { id: "claude", label: "Claude" },
@@ -191,20 +192,21 @@ export function SkillsSettings({
   embedded = false,
   reuseLoadedScans = false,
 }: SkillsSettingsProps = {}) {
+  const nodeBackend = useScopeBackend();
   // Without a loader, the skills are those of the machine Settings shows.
   const { machine } = useAccountMachine();
   const listSkills = useMemo(
     () =>
       listSkillsOverride ??
-      ((target: AgentSkillProvider) => backend.listAgentSkills(target, machine)),
-    [listSkillsOverride, machine],
+      ((target: AgentSkillProvider) => nodeBackend.listAgentSkills(target, machine)),
+    [listSkillsOverride, machine, nodeBackend],
   );
   const readSkill = useMemo(
     () =>
       readSkillOverride ??
       ((target: AgentSkillProvider, filePath: string) =>
-        backend.readAgentSkill(target, filePath, machine)),
-    [readSkillOverride, machine],
+        nodeBackend.readAgentSkill(target, filePath, machine)),
+    [readSkillOverride, machine, nodeBackend],
   );
   // Another machine's skill files are not on this one, so there is nothing to reveal.
   const canRevealInFileManager = canRevealOverride && isWindowMachine(machine);
@@ -401,11 +403,11 @@ export function SkillsSettings({
   const revealSkill = useCallback(async () => {
     if (!selected) return;
     try {
-      await backend.revealInFileManager(selected.filePath);
+      await nodeBackend.revealInFileManager(selected.filePath);
     } catch {
       toast.error("Could not reveal the skill in the file manager");
     }
-  }, [selected]);
+  }, [selected, nodeBackend]);
 
   const missingRoots = state.scan?.roots.filter((root) => !root.exists).length ?? 0;
   const presentRoots = (state.scan?.roots.length ?? 0) - missingRoots;

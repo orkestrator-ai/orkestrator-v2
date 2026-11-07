@@ -1,11 +1,6 @@
 import { useEffect, useReducer } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
-import {
-  getEnvironmentProcessUsage,
-  getSystemUsage,
-  type EnvironmentProcessUsageSnapshot,
-  type SystemUsageSnapshot,
-} from "@/lib/backend";
+import type { EnvironmentProcessUsageSnapshot, SystemUsageSnapshot } from "@/lib/backend";
 import { backendClientOver, NO_ARGS } from "@/lib/node-scope/domains/invoke-over";
 import { asSystemModel, systemApi } from "@/lib/node-scope/domains/system";
 import { scopeBackendClient } from "@/lib/backend/client";
@@ -21,6 +16,7 @@ import {
   type ReadKey,
 } from "@/lib/read-coordinator";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Shared, demand-driven system and process meters.
@@ -219,13 +215,14 @@ export function useSystemUsage({
   active?: boolean;
   scope?: NodeScope;
 }): UsageView<SystemUsageSnapshot> {
+  const nodeBackend = useScopeBackend();
   const own = !scope || isAppCommandScope(scope);
   return useUsageRead({
     key: SYSTEM_USAGE_READ_KEY,
     active,
     intervalMs,
     read: own
-      ? getSystemUsage
+      ? nodeBackend.getSystemUsage
       : () =>
           asSystemModel<SystemUsageSnapshot>(
             systemApi(scopeBackendClient(scope)).get_system_usage(NO_ARGS),
@@ -258,6 +255,7 @@ export function useMachineSystemUsage({
   /** `nodeId`'s scope in this window, when it has one. */
   scope?: NodeScope | null;
 }): UsageView<SystemUsageSnapshot> {
+  const nodeBackend = useScopeBackend();
   const onScope = !bound && scope && !isAppCommandScope(scope) ? scope : null;
   return useUsageRead({
     key:
@@ -267,7 +265,7 @@ export function useMachineSystemUsage({
     active,
     intervalMs,
     read: bound
-      ? getSystemUsage
+      ? nodeBackend.getSystemUsage
       : onScope
         ? () =>
             asSystemModel<SystemUsageSnapshot>(
@@ -308,13 +306,14 @@ export function useEnvironmentProcessUsage({
   active?: boolean;
   scope?: NodeScope;
 }): UsageView<EnvironmentProcessUsageSnapshot> {
+  const nodeBackend = useScopeBackend();
   const own = !scope || isAppCommandScope(scope);
   return useUsageRead({
     key: ENVIRONMENT_PROCESS_USAGE_READ_KEY,
     active,
     intervalMs,
     read: own
-      ? getEnvironmentProcessUsage
+      ? nodeBackend.getEnvironmentProcessUsage
       : () =>
           asSystemModel<EnvironmentProcessUsageSnapshot>(
             systemApi(scopeBackendClient(scope)).get_environment_process_usage(NO_ARGS),

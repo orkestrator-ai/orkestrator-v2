@@ -15,9 +15,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getNativeAgentSuborkTranscript, type NativeAgentSuborkTranscript } from "@/lib/backend";
+import type { NativeAgentSuborkTranscript } from "@/lib/backend";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const messageItemKey = (_index: number, message: NativeMessageType) => message.id;
 const SUBORK_FIND = { isActive: false, getSearchText: getNativeMessageSearchText };
@@ -44,6 +45,7 @@ function SuborkTranscriptBody({
   batchId: string;
   subork: NativeAgentSuborkView;
 }) {
+  const nodeBackend = useScopeBackend();
   const [read, setRead] = useState<NativeAgentSuborkTranscript | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [fromIndex, setFromIndex] = useState(0);
@@ -51,26 +53,28 @@ function SuborkTranscriptBody({
   useEffect(() => {
     if (revision === undefined) return;
     let current = true;
-    void getNativeAgentSuborkTranscript({
-      environmentId,
-      batchId,
-      suborkId: subork.id,
-      fromIndex,
-    }).then(
-      (view) => {
-        if (current) {
-          setRead(view);
-          setError(undefined);
-        }
-      },
-      (reason: unknown) => {
-        if (current) setError(reason instanceof Error ? reason.message : String(reason));
-      },
-    );
+    void nodeBackend
+      .getNativeAgentSuborkTranscript({
+        environmentId,
+        batchId,
+        suborkId: subork.id,
+        fromIndex,
+      })
+      .then(
+        (view) => {
+          if (current) {
+            setRead(view);
+            setError(undefined);
+          }
+        },
+        (reason: unknown) => {
+          if (current) setError(reason instanceof Error ? reason.message : String(reason));
+        },
+      );
     return () => {
       current = false;
     };
-  }, [environmentId, batchId, subork.id, revision, fromIndex]);
+  }, [environmentId, batchId, subork.id, revision, fromIndex, nodeBackend]);
   const [fallbackCreatedAt] = useState(() => new Date().toISOString());
   const agent = subork.agent;
   const messages = useMemo(

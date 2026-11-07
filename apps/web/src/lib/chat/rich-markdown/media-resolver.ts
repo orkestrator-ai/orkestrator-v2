@@ -23,7 +23,9 @@
  * does. Every read goes through the command node today (`@/lib/backend`), so
  * the node is the command scope's.
  */
-import { pinTranscriptMedia, readContainerFileBase64, readFileBase64 } from "@/lib/backend";
+import { backendForScope, type ScopeBackend } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import {
   clearImagePreviewCache,
@@ -34,7 +36,6 @@ import {
   writeImagePreviewCache,
 } from "@/lib/chat/image-preview-cache";
 import { registerProtectedRichCache } from "@/lib/chat/rich-content-reset";
-import { richContentNodeId } from "@/lib/chat/rich-byte-cache";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import type {
   TranscriptMediaPinResponse,
@@ -190,6 +191,12 @@ const inflight = new Map<string, InflightRead>();
 const inflightId = (nodeId: string, key: string) => `${nodeId}\u0000${key}`;
 
 interface ResolveOptions {
+  /**
+   * The node the media is read from and cached for (the transcript's:
+   * `useScopesWithCommandFallback().scope`, plan item 4007). The app's
+   * command scope when omitted.
+   */
+  scope?: NodeScope;
   loadToolDetails?: ToolDetailLoader;
   detailCache?: ToolDetailCache;
   cacheImage?: boolean;
@@ -205,7 +212,7 @@ export function resolveMediaUrl(
   options: ResolveOptions = {},
 ): Promise<string> {
   const key = mediaCacheKey(reference, options.pin);
-  const nodeId = richContentNodeId();
+  const nodeId = (options.scope ?? appCommandScope()).nodeId;
   if (options.cacheImage) {
     const cached = readImagePreviewCache(key, nodeId);
     if (cached) return Promise.resolve(cached);
@@ -219,7 +226,7 @@ export function resolveMedia(
   options: ResolveOptions = {},
 ): Promise<ResolvedMedia> {
   const key = mediaCacheKey(reference, options.pin);
-  const nodeId = richContentNodeId();
+  const nodeId = (options.scope ?? appCommandScope()).nodeId;
   if (options.cacheImage) {
     const cached = readImagePreviewCache(key, nodeId);
     if (cached) {
@@ -275,6 +282,7 @@ async function resolveUncached(
     isCurrent: () => boolean;
   },
 ): Promise<Resolution> {
+  const node = backendForScope(options.scope ?? appCommandScope());
   // No path and no inline copy on the part: the bytes live behind the
   // deferred detail reference. Fetch them before choosing a source.
   let resolvedFileUrl = fileUrl;
@@ -313,18 +321,18 @@ async function resolveUncached(
     const relativePath = getSafeContainerRelativePath(containerPath);
     if (!relativePath) throw new Error("Unsafe container media path");
     const mime = mimeFor(containerPath, options.asImage);
-    const pinned = await readPinned(options.pin, { path: relativePath, containerId }, mime);
+    const pinned = await readPinned(node, options.pin, { path: relativePath, containerId }, mime);
     if (pinned) return pinned;
-    const base64 = await readContainerFileBase64(containerId, relativePath);
+    const base64 = await node.readContainerFileBase64(containerId, relativePath);
     return { url: `data:${mime};base64,${base64}`, cacheable: false };
   }
 
   const filePath = localFilePath ?? (isAbsoluteHostPath(path) ? path : null);
   if (!filePath) throw new Error("No readable local media path available");
   const mime = mimeFor(filePath, options.asImage);
-  const pinned = await readPinned(options.pin, { path: filePath }, mime);
+  const pinned = await readPinned(node, options.pin, { path: filePath }, mime);
   if (pinned) return pinned;
-  const base64 = await readFileBase64(filePath);
+  const base64 = await node.readFileBase64(filePath);
   return { url: `data:${mime};base64,${base64}`, cacheable: false };
 }
 
@@ -336,6 +344,7 @@ async function resolveUncached(
  * against a backend that predates pins.
  */
 async function readPinned(
+  node: Pick<ScopeBackend, "pinTranscriptMedia">,
   pin: MediaPinScope | undefined,
   file: { path: string; containerId?: string },
   mime: string,
@@ -343,7 +352,7 @@ async function readPinned(
   if (!pin) return null;
   let response: TranscriptMediaPinResponse;
   try {
-    response = await pinTranscriptMedia({ ...pin, ...file });
+    response = await node.pinTranscriptMedia({ ...pin, ...file });
   } catch {
     return null;
   }

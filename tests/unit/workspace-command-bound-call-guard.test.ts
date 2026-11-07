@@ -7,6 +7,7 @@ import { repositoryModules } from "../source-guards/scoped-store-shim";
 import {
   WORKSPACE_EXEMPT_MODULES,
   WORKSPACE_ROOT_MODULES,
+  WORKSPACE_WINDOW_LEVEL_EXPORTS,
   commandBoundSubject,
   createWorkspaceCommandBoundCallGuard,
   workspaceCommandBoundCall,
@@ -114,6 +115,22 @@ describe("workspace-command-bound-call (plan item 4007)", () => {
       [8, "lib/tmux-client"],
     ]);
     expect(found("apps/web/src/components/LazyPanel")).toEqual([[2, "kanban"]]);
+  });
+
+  test("a window-level export is not counted", () => {
+    const windowLevel = createWorkspaceCommandBoundCallGuard({
+      readModule,
+      roots,
+      exempt,
+      windowLevelExports: { kanban: { listTasks: "opens on the window's machine" } },
+    });
+    const { file, source } = modules["apps/web/src/components/Board"]!;
+    expect(
+      scanSource({ path: file, source, isBunTest: false }, [windowLevel]).map(
+        ({ line, subject }) => [line, subject],
+      ),
+    ).toEqual([[8, "lib/tmux-client"]]);
+    expect(WORKSPACE_WINDOW_LEVEL_EXPORTS["config-integrations"]?.openInBrowser).toBeTruthy();
   });
 
   test("ignores modules outside the workspace graph, exempt ones and what only they reach", () => {

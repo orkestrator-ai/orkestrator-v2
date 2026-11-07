@@ -6,8 +6,8 @@ import {
 } from "@orkestrator/protocol/container-recovery";
 import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { formatBytes } from "@/components/docker/docker-stats-format";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 function providerLabel(provider: string): string {
   if (provider === "git") return "Git identity";
@@ -30,12 +30,13 @@ export function EnvironmentInputsSection({
   environmentId,
   dockerAvailable,
 }: EnvironmentInputsSectionProps) {
+  const nodeBackend = useScopeBackend();
   const [status, setStatus] = useState<EnvironmentInputStatus | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
 
   const load = useCallback(
-    () => backend.getEnvironmentInputs(environmentId).then(setStatus, () => setStatus(null)),
-    [environmentId],
+    () => nodeBackend.getEnvironmentInputs(environmentId).then(setStatus, () => setStatus(null)),
+    [environmentId, nodeBackend],
   );
 
   useEffect(() => {
@@ -50,7 +51,7 @@ export function EnvironmentInputsSection({
   const allowAgain = async (provider: string) => {
     setRevoking(provider);
     try {
-      await backend.restoreProviderCredentials(environmentId, provider);
+      await nodeBackend.restoreProviderCredentials(environmentId, provider);
       toast.success(`${providerLabel(provider)} allowed again`, {
         description: "Its credentials return when the container is next started or rebuilt.",
       });
@@ -65,7 +66,7 @@ export function EnvironmentInputsSection({
   const revoke = async (provider: string) => {
     setRevoking(provider);
     try {
-      const result = await backend.revokeProviderCredentials(environmentId, provider);
+      const result = await nodeBackend.revokeProviderCredentials(environmentId, provider);
       if (!result.removed) {
         toast.error(
           `${providerLabel(provider)} is revoked, but the container could not be reached`,

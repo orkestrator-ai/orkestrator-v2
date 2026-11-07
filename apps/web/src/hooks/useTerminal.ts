@@ -22,6 +22,7 @@ import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { isAppCommandScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { terminalSessionStore } from "@/stores/terminalSessionStore";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 // Reaches the browser console only: the desktop saves nothing from the renderer
 // but the allowlisted startup markers (docs/architecture/logging.md).
@@ -274,6 +275,7 @@ export function useTerminal({
   attachExistingOnly = false,
   trackEnvironmentActivity = false,
 }: UseTerminalOptions): UseTerminalReturn {
+  const nodeBackend = useScopeBackend();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -918,7 +920,7 @@ export function useTerminal({
 
     try {
       if (existingSessionId) {
-        const existingStatus = await backend
+        const existingStatus = await nodeBackend
           .getTerminalSession(existingSessionId)
           .catch(() => null);
         if (!isCurrentConnect()) return;
@@ -1053,6 +1055,7 @@ export function useTerminal({
     cleanupEventListener,
     api,
     scope,
+    nodeBackend,
   ]);
 
   const disconnect = useCallback(async () => {

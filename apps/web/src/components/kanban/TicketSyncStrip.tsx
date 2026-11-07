@@ -6,9 +6,9 @@ import {
   type TicketSyncNodeState,
   type TicketSyncStatusResult,
 } from "@orkestrator/protocol/ticket-sync";
-import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen } from "@/lib/native/events";
 import { cn } from "@/lib/utils";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * The board's one line about other machines (docs/architecture/tickets.md,
@@ -42,13 +42,14 @@ export function useTicketSyncStatus(
   projectId: string,
   boardRevision: unknown,
 ): BoardTicketSyncStatus | null {
+  const nodeBackend = useScopeBackend();
   const [status, setStatus] = useState<BoardTicketSyncStatus | null>(null);
   useEffect(() => {
     let disposed = false;
     const refresh = () => {
       void (async () => {
         try {
-          const next = await backend.getTicketSyncStatus(projectId);
+          const next = await nodeBackend.getTicketSyncStatus(projectId);
           if (!disposed && next && Array.isArray(next.nodes)) setStatus(next);
         } catch (error) {
           if (disposed) return;
@@ -80,7 +81,7 @@ export function useTicketSyncStatus(
       clearInterval(timer);
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [projectId, boardRevision]);
+  }, [projectId, boardRevision, nodeBackend]);
   return status?.projectId === projectId ? status : null;
 }
 

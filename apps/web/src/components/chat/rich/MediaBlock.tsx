@@ -43,6 +43,7 @@ import {
 import { cn } from "@/lib/utils";
 import { MediaGalleryDialog } from "./MediaGallery";
 import { MediaSnapshotBadge } from "./MediaSnapshotBadge";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 /** The environment a text part's Markdown images resolve against. */
 export const MediaScopeContext = createContext<{ containerId?: string }>({});
@@ -179,6 +180,8 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const messageId = useRichMessageIdentity()?.messageId;
   const scope = useRichTranscriptScope();
+  // The transcript's node: its files are read and cached for it (plan item 4007).
+  const mediaScope = useScopesWithCommandFallback().scope;
   const group = messageId ?? "detached";
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [galleryOpen, setGalleryOpen] = useState<{ items: GalleryItem[]; index: number } | null>(
@@ -230,6 +233,7 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
       detailCache: { read: cachedToolDetails, write: cacheToolDetails },
       cacheImage: true,
       pin,
+      scope: mediaScope,
     }).then(
       ({ url, snapshot }) => !cancelled && setState(readyOrUnsupported(url, snapshot)),
       (error: unknown) => {
@@ -249,7 +253,7 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
     return () => {
       cancelled = true;
     };
-  }, [near, state.status, reference, loadToolDetails, pin]);
+  }, [near, state.status, reference, loadToolDetails, pin, mediaScope]);
 
   const url = state.status === "ready" ? state.url : null;
   const snapshotNote = useMediaSnapshotNote(state.status === "ready" ? state.snapshot : null);

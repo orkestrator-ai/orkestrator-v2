@@ -47,7 +47,6 @@ import {
   FloatingNoticeAnchor,
   FloatingNoticeLayer,
 } from "@/components/ui/floating-notice";
-import * as backend from "@/lib/backend";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
@@ -57,12 +56,14 @@ import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinato
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
 import { useProjectStore } from "@/stores/projectStore";
 import { CoordinatorPullRequestWatchProvider } from "@/lib/coordinator-pull-request-watch";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface CoordinatorPanelProps {
   projectId: string;
 }
 
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
+  const nodeBackend = useScopeBackend();
   // The project is on the node of the scope this page renders in.
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   // This node's coordinator tab groups (plan item 3011).
@@ -342,9 +343,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         setReplacement(replacingMain ? { projectId, id: replacingMain } : null);
         try {
           closedSnapshot = replacingMain
-            ? await backend.closeCoordinatorConversation(projectId, replacingMain)
+            ? await nodeBackend.closeCoordinatorConversation(projectId, replacingMain)
             : null;
-          createdSnapshot = await backend.createCoordinatorConversation(
+          createdSnapshot = await nodeBackend.createCoordinatorConversation(
             projectId,
             undefined,
             closeUnused,
@@ -425,7 +426,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   };
   const paused = snapshot.workspace.lifecycleState === "paused";
   const setPaused = (pause: boolean) => {
-    const action = pause ? backend.pauseProjectCoordinator : backend.resumeProjectCoordinator;
+    const action = pause
+      ? nodeBackend.pauseProjectCoordinator
+      : nodeBackend.resumeProjectCoordinator;
     void runAction("conversation", async () => setSnapshot(await action(projectId)), {
       failureMessage: "Could not update Coordinator",
     });
@@ -434,7 +437,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     void runAction(
       "conversation",
       async () =>
-        setSnapshot(await backend.closeCoordinatorConversation(projectId, conversationId)),
+        setSnapshot(await nodeBackend.closeCoordinatorConversation(projectId, conversationId)),
       { failureMessage: "Could not close conversation" },
     );
   };
@@ -442,7 +445,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     void runAction(
       "conversation",
       async () =>
-        setSnapshot(await backend.retryCoordinatorConversation(projectId, conversationId)),
+        setSnapshot(await nodeBackend.retryCoordinatorConversation(projectId, conversationId)),
       { failureMessage: "Could not retry conversation" },
     );
   };

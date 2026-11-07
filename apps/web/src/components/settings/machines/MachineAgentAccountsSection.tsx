@@ -28,14 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  listAgentAccounts,
-  listMachineAgentAccounts,
-  openAgentSignInTerminal,
-  readHostAgentSignIns,
-  setActiveAgentAccount,
-  setPreferredAgentIdentity,
-} from "@/lib/backend";
+import { listMachineAgentAccounts, setPreferredAgentIdentity } from "@/lib/backend";
 import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
 import { inMachineOrder } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
@@ -66,6 +59,7 @@ import {
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { MachineSection, MachineStatusDot } from "./machine-ui";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Coalesces a burst of changes on one machine into one read. */
 const REREAD_DEBOUNCE_MS = 250;
@@ -599,6 +593,7 @@ export function MachineAgentAccountsSection({
    */
   wide?: boolean;
 }) {
+  const nodeBackend = useScopeBackend();
   const { machineOrder } = usePortalLayout();
   const [machines, setMachines] = useState<MachineAgentAccounts[] | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
@@ -689,8 +684,8 @@ export function MachineAgentAccountsSection({
       const seq = nextSeq(machine.nodeId);
       const target = machineTarget(machine);
       const [snapshot, signIns] = await Promise.allSettled([
-        listAgentAccounts(target),
-        readHostAgentSignIns(target),
+        nodeBackend.listAgentAccounts(target),
+        nodeBackend.readHostAgentSignIns(target),
       ]);
       const parsedSnapshot =
         snapshot.status === "fulfilled" ? parseAgentAccountsSnapshot(snapshot.value) : undefined;
@@ -715,7 +710,7 @@ export function MachineAgentAccountsSection({
         ...(signInsValue ? { signIns: signInsValue } : {}),
       });
     },
-    [nextSeq, patch],
+    [nextSeq, patch, nodeBackend],
   );
 
   // One subscription per machine listed. The first resync arrives once the
@@ -767,7 +762,11 @@ export function MachineAgentAccountsSection({
     setError(null);
     try {
       const seq = nextSeq(machine.nodeId);
-      const result = await setActiveAgentAccount(platform, accountId, machineTarget(machine));
+      const result = await nodeBackend.setActiveAgentAccount(
+        platform,
+        accountId,
+        machineTarget(machine),
+      );
       const snapshot = parseAgentAccountsSnapshot(result);
       if (!snapshot) throw new Error("Invalid account snapshot");
       patch(machine.nodeId, seq, { snapshot });
@@ -819,7 +818,7 @@ export function MachineAgentAccountsSection({
         const seq = nextSeq(machine.nodeId);
         try {
           const snapshot = parseAgentAccountsSnapshot(
-            await setActiveAgentAccount(platform, accountId, machineTarget(machine)),
+            await nodeBackend.setActiveAgentAccount(platform, accountId, machineTarget(machine)),
           );
           if (!snapshot) throw new Error("Invalid account snapshot");
           patch(machine.nodeId, seq, { snapshot });
@@ -839,7 +838,7 @@ export function MachineAgentAccountsSection({
     if (!begin(key)) return;
     setError(null);
     try {
-      const terminal = await openAgentSignInTerminal(
+      const terminal = await nodeBackend.openAgentSignInTerminal(
         platform,
         machineTarget(machine),
         environmentOnScreen(machine),

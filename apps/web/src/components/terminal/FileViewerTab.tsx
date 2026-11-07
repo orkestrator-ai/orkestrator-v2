@@ -184,6 +184,8 @@ function LiveImageDiffPreview({
     transportRevision,
   ]);
   const [image, setImage] = useState<LiveImageState | null>(null);
+  // The environment's node: the image is read there (plan item 4007).
+  const imageScope = useShimNodeScope(fileDirtyStore.name);
   const requestRef = useRef(0);
 
   useEffect(() => {
@@ -205,6 +207,7 @@ function LiveImageDiffPreview({
             mimeType,
           },
           controller.signal,
+          imageScope,
         );
         if (controller.signal.aborted) {
           loaded.release();
@@ -227,7 +230,16 @@ function LiveImageDiffPreview({
       controller.abort();
       release?.();
     };
-  }, [key, isActive, filePath, environmentId, containerId, worktreePath, isLocalEnvironment]);
+  }, [
+    key,
+    isActive,
+    filePath,
+    environmentId,
+    containerId,
+    worktreePath,
+    isLocalEnvironment,
+    imageScope,
+  ]);
 
   if (image?.key !== key) return loadingFallback;
   if (image.kind === "failed") return diffFallback;
@@ -519,6 +531,7 @@ export function FileViewerTab({
               mimeType,
             },
             imageController.signal,
+            draftScope,
           );
           if (cancelled) {
             loaded.release();

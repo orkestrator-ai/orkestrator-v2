@@ -20,14 +20,10 @@ import type { WebAnnotationRequest } from "@orkestrator/protocol/web-annotations
 import { NativeAgentInteractionCard } from "@/components/native-agent/NativeAgentInteractionCard";
 import { NativeAgentQuestionCard } from "@/components/native-agent/NativeAgentQuestionCard";
 import { Button } from "@/components/ui/button";
-import {
-  getNativeAgentProjection,
-  holdNativeAgentInteraction,
-  resolveNativeAgentInteraction,
-} from "@/lib/backend/workflows";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useAnnotationPanel } from "./panel-context";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const KIND_LABELS: Record<AgentInteractionKind, string> = {
   question: "question",
@@ -58,6 +54,7 @@ export function RequestInteractions({
   request: WebAnnotationRequest;
   onAnswerInChat: () => void;
 }) {
+  const nodeBackend = useScopeBackend();
   // This node's annotations (plan item 4001); the command node outside a node scope.
   const annotationScope = useScopesWithCommandFallback().scope;
   const pending = pendingRequestInteractions(request);
@@ -95,11 +92,12 @@ export function RequestInteractions({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void getNativeAgentProjection({
-      environmentId,
-      agent: destination.agent,
-      logicalSessionKey: sessionKey,
-    })
+    void nodeBackend
+      .getNativeAgentProjection({
+        environmentId,
+        agent: destination.agent,
+        logicalSessionKey: sessionKey,
+      })
       .then((projection) => {
         if (!cancelled) setFetched(projection?.interactions ?? []);
       })
@@ -112,7 +110,7 @@ export function RequestInteractions({
     return () => {
       cancelled = true;
     };
-  }, [destination.agent, environmentId, ids, sessionKey]);
+  }, [destination.agent, environmentId, ids, sessionKey, nodeBackend]);
   /* oxlint-enable react-hooks/exhaustive-deps */
 
   if (pending.length === 0) return null;
@@ -121,7 +119,7 @@ export function RequestInteractions({
     interactionId: string,
     resolution: AgentInteractionResolution,
   ): Promise<AgentInteractionApplyOutcome> => {
-    const outcome = await resolveNativeAgentInteraction({
+    const outcome = await nodeBackend.resolveNativeAgentInteraction({
       environmentId,
       agent: destination.agent,
       logicalSessionKey: sessionKey,
@@ -134,9 +132,13 @@ export function RequestInteractions({
 
   const hold = async (interactionId: string, held: boolean) => {
     const identity = { environmentId, agent: destination.agent, logicalSessionKey: sessionKey };
-    const outcome = await holdNativeAgentInteraction({ ...identity, interactionId, held });
+    const outcome = await nodeBackend.holdNativeAgentInteraction({
+      ...identity,
+      interactionId,
+      held,
+    });
     // The card shows the moved deadline only once it is read back.
-    const projection = await getNativeAgentProjection(identity).catch(() => null);
+    const projection = await nodeBackend.getNativeAgentProjection(identity).catch(() => null);
     if (projection) setFetched(projection.interactions ?? []);
     return outcome;
   };

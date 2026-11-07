@@ -9,6 +9,7 @@ import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import * as backend from "@/lib/backend";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
 import { readFailuresFreshnessNotice, type FreshnessNotice } from "@/lib/view-freshness";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Low-frequency probe for Git changes made outside Orkestrator (a terminal
@@ -101,6 +102,7 @@ export interface CoordinatorPanelData {
 }
 
 export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData {
+  const nodeBackend = useScopeBackend();
   const instance = useId();
   const projectRef = useRef(projectId);
   // Updated before any effect or late answer of this commit reads it.
@@ -195,7 +197,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
       connectionGenerationRef.current = context.connectionGeneration;
       if (legacyRef.current !== context.connectionGeneration) {
         try {
-          const answer = await backend.getProjectCoordinatorView(pid, sent);
+          const answer = await nodeBackend.getProjectCoordinatorView(pid, sent);
           const classified = classifyViewSnapshotResponse(answer, isCoordinatorSnapshot);
           if (classified.kind === "invalid") {
             throw new Error("The backend returned an invalid coordinator view");
@@ -227,7 +229,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
           legacyRef.current = context.connectionGeneration;
         }
       }
-      const full = await backend.getProjectCoordinator(pid);
+      const full = await nodeBackend.getProjectCoordinator(pid);
       return { projectId: pid, snapshot: full, stamp: null, directSeq, legacy: true };
     },
     onState: (state) => {
@@ -260,7 +262,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     demand: { active: ready, intervalMs: GIT_STATUS_PROBE_INTERVAL_MS, priority: "auxiliary" },
     read: () => {
       lastProbeRef.current = Date.now();
-      return backend.getProjectGitStatus(projectId);
+      return nodeBackend.getProjectGitStatus(projectId);
     },
     onState: (state) => {
       if (state.status === "error") setGitFailures(state.failures);
@@ -302,17 +304,17 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
 
   const hydrate = useCallback(() => {
     const pid = projectId;
-    return backend
+    return nodeBackend
       .ensureProjectCoordinator(pid)
       .then(async (coordinator) => {
         if (projectRef.current !== pid) return;
         applySnapshot(coordinator);
         setReadyProject(pid);
         lastProbeRef.current = Date.now();
-        applyGit(await backend.getProjectGitStatus(pid));
+        applyGit(await nodeBackend.getProjectGitStatus(pid));
         // Fetch-on-open: the backend's fetch cooldown decides whether this
         // reaches the remote; an in-flight fetch from another client is joined.
-        void backend
+        void nodeBackend
           .fetchProjectGit(pid)
           .then(applyGit)
           .catch(() => undefined);
@@ -324,7 +326,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
       .finally(() => {
         if (projectRef.current === pid) setLoading(false);
       });
-  }, [applyGit, applySnapshot, projectId]);
+  }, [applyGit, applySnapshot, projectId, nodeBackend]);
 
   const load = useCallback(() => {
     setLoading(true);

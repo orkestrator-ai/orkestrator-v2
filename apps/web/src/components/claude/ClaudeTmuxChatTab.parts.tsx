@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
@@ -887,7 +887,9 @@ export function TmuxComposeBar({
   const queueSubmittingRef = useRef(false);
   const composerLocked = disabled || settingsSwitching || submitting || queueSubmitting;
   // This node's tmux tabs (plan item 3010).
-  const tmuxTabs = useScopedStoreApi(claudeTmuxStore);
+  // The tab's node: its store, and the queue mutations (plan item 4007).
+  const tmuxScope = useShimNodeScope(claudeTmuxStore.name);
+  const tmuxTabs = tmuxScope.store(claudeTmuxStore);
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
     useCallback(
@@ -1159,6 +1161,7 @@ export function TmuxComposeBar({
           sessionKey,
           message.id,
           toIndex < fromIndex ? "up" : "down",
+          tmuxScope,
         );
       } catch (error) {
         onQueueError?.(
@@ -1168,13 +1171,13 @@ export function TmuxComposeBar({
         );
       }
     },
-    [onQueueError, queuedMessages, sessionKey],
+    [onQueueError, queuedMessages, sessionKey, tmuxScope],
   );
 
   const handleRemoveQueuedMessage = useCallback(
     async (messageId: string) => {
       try {
-        await removeAgentPrompt("claude-tmux", sessionKey, messageId);
+        await removeAgentPrompt("claude-tmux", sessionKey, messageId, tmuxScope);
       } catch (error) {
         onQueueError?.(
           `Failed to remove queued prompt: ${
@@ -1183,7 +1186,7 @@ export function TmuxComposeBar({
         );
       }
     },
-    [onQueueError, sessionKey],
+    [onQueueError, sessionKey, tmuxScope],
   );
 
   return (

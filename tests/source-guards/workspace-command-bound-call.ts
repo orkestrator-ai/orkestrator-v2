@@ -72,7 +72,35 @@ const NOT_FOLLOWED_MODULES: ReadonlySet<string> = new Set([
  * are the window's (or the command node's by design), so the guard neither
  * counts them nor follows their imports. Module id → why.
  */
-export const WORKSPACE_EXEMPT_MODULES: Readonly<Record<string, string>> = {};
+export const WORKSPACE_EXEMPT_MODULES: Readonly<Record<string, string>> = {
+  [`${WEB_SOURCE_ROOT}/components/settings/agent/refresh-model-catalog`]:
+    "Global Settings' model catalogue refresh, for the window's settings; the workspace " +
+    "imports only its MODEL_CATALOG_REFRESHED_EVENT name.",
+  [`${WEB_SOURCE_ROOT}/stores/nativeNoticeDismissalStore`]:
+    "A window store (unscoped zustand): which notices this client dismissed is the client's " +
+    "own state, kept with its other client state on the command node. Scoping it is a store " +
+    "conversion, not a call site.",
+};
+
+/**
+ * Command-bound exports that are the window's wherever they are called,
+ * `subject` → name → why. A use of one is not counted.
+ */
+export const WORKSPACE_WINDOW_LEVEL_EXPORTS: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  "config-integrations": {
+    openInBrowser:
+      "Opens a link on the machine the window runs on (the desktop shell, the browser tab, " +
+      "or the command node that hosts this client), never on the workspace's node.",
+  },
+};
+
+function windowLevel(
+  exports: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): (subject: string, name: string) => boolean {
+  return (subject, name) => Object.hasOwn(exports[subject] ?? {}, name);
+}
 
 function followed(moduleId: string, exempt: Readonly<Record<string, string>>): boolean {
   return (
@@ -134,6 +162,7 @@ export interface WorkspaceCommandBoundCallOptions {
   readModule?: ReadModule;
   roots?: readonly string[];
   exempt?: Readonly<Record<string, string>>;
+  windowLevelExports?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 export function createWorkspaceCommandBoundCallGuard(
@@ -147,6 +176,7 @@ export function createWorkspaceCommandBoundCallGuard(
   const inGraph = (file: Pick<ScannedFile, "path">) =>
     (graph ??= workspaceGraph(readModule, roots, exempt)).has(moduleIdOfFile(file.path));
   const resolver = new LibBackendShimResolver(readModule, commandBoundSubject);
+  const allowed = windowLevel(options.windowLevelExports ?? WORKSPACE_WINDOW_LEVEL_EXPORTS);
   return {
     id: "workspace-command-bound-call",
     advice:
@@ -161,7 +191,7 @@ export function createWorkspaceCommandBoundCallGuard(
       file.path.startsWith(`${WEB_SOURCE_ROOT}/`) && !isTestSource(file.path) && inGraph(file),
     // Only a module that imports another renderer module can use a command-bound export.
     mayOffend: (source) => source.includes("@/") || source.includes("./"),
-    visit: (program: AnyNode, file: ScannedFile) => visitShimUses(program, file, resolver),
+    visit: (program: AnyNode, file: ScannedFile) => visitShimUses(program, file, resolver, allowed),
   };
 }
 

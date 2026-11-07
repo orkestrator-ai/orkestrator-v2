@@ -20,9 +20,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
-import * as backend from "@/lib/backend";
 import type { Environment } from "@/types";
 import { formatBytes } from "@/components/docker/docker-stats-format";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const REASONS: Record<RecoveryCopyReason, string> = {
   "migrate-source": "Container before moving to persistent storage",
@@ -68,6 +68,7 @@ export function EnvironmentRecoveryCopies({
   onUpdate,
   onClose,
 }: EnvironmentRecoveryCopiesProps) {
+  const nodeBackend = useScopeBackend();
   const [list, setList] = useState<RecoveryCopyList | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingAction>(null);
@@ -82,11 +83,11 @@ export function EnvironmentRecoveryCopies({
 
   const fetchList = useCallback(
     () =>
-      backend
+      nodeBackend
         .listRecoveryCopies(environment.id, { measureSize: true })
         .then(setList, () => setList(null))
         .finally(() => setLoading(false)),
-    [environment.id],
+    [environment.id, nodeBackend],
   );
 
   const load = useCallback(() => {
@@ -106,7 +107,7 @@ export function EnvironmentRecoveryCopies({
     let cancelled = false;
     const check = async () => {
       try {
-        const snapshot = await backend.getContainerLifecycleSnapshot(environment.id);
+        const snapshot = await nodeBackend.getContainerLifecycleSnapshot(environment.id);
         if (cancelled) return;
         if (seenRevision.current !== null && snapshot.revision !== seenRevision.current) {
           void load();
@@ -127,7 +128,7 @@ export function EnvironmentRecoveryCopies({
       cancelled = true;
       stopPolling();
     };
-  }, [environment.id, load]);
+  }, [environment.id, load, nodeBackend]);
 
   if (!list || list.copies.length === 0) {
     return loading ? (
@@ -143,7 +144,7 @@ export function EnvironmentRecoveryCopies({
     setWorking(true);
     try {
       if (kind === "discard") {
-        const result = await backend.discardRecoveryCopy(
+        const result = await nodeBackend.discardRecoveryCopy(
           environment.id,
           copy.copyId,
           list.revision,
@@ -162,14 +163,16 @@ export function EnvironmentRecoveryCopies({
         }
       } else {
         onClose();
-        await backend.restoreRecoveryCopy(
+        await nodeBackend.restoreRecoveryCopy(
           environment.id,
           copy.copyId,
           environment.containerId ?? null,
           list.revision,
         );
-        onUpdate(await backend.syncEnvironmentStatus(environment.id));
-        const after = await backend.getContainerLifecycleSnapshot(environment.id).catch(() => null);
+        onUpdate(await nodeBackend.syncEnvironmentStatus(environment.id));
+        const after = await nodeBackend
+          .getContainerLifecycleSnapshot(environment.id)
+          .catch(() => null);
         if (after?.lastOutcome?.kind === "restore" && after.lastOutcome.status === "succeeded") {
           toast.success("Recovery copy restored", {
             description: "The previous state is kept as another recovery copy.",

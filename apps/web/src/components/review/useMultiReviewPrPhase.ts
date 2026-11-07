@@ -2,8 +2,9 @@ import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useEffect, useState } from "react";
 import type { NativeAgentTurnPhase } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { getNativeAgentSessionStateUpdate } from "@/lib/backend";
+import type { getNativeAgentSessionStateUpdate } from "@/lib/backend";
 import { createSessionKey } from "@/lib/utils";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Read only action state, without mounting a transcript or relying on its renderer cache. */
 export function useMultiReviewPrPhase({
@@ -11,7 +12,7 @@ export function useMultiReviewPrPhase({
   tabId,
   agent,
   active,
-  loadSessionState = getNativeAgentSessionStateUpdate,
+  loadSessionState: loadSessionStateOverride,
 }: {
   environmentId: string;
   tabId: string | undefined;
@@ -19,6 +20,11 @@ export function useMultiReviewPrPhase({
   active: boolean;
   loadSessionState?: typeof getNativeAgentSessionStateUpdate;
 }): NativeAgentTurnPhase | undefined {
+  const nodeBackend = useScopeBackend();
+  const loadSessionState =
+    loadSessionStateOverride === undefined
+      ? nodeBackend.getNativeAgentSessionStateUpdate
+      : loadSessionStateOverride;
   const key = tabId && agent ? `${createSessionKey(environmentId, tabId)}:${agent}` : null;
   const [observed, setObserved] = useState<{ key: string; phase: NativeAgentTurnPhase } | null>(
     null,

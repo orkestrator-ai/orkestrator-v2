@@ -5,7 +5,11 @@ import "@xterm/xterm/css/xterm.css";
 import { designBootstrap } from "@orkestrator/protocol/design-runtime";
 import { DesignFrameBridge } from "@/components/design/frame-bridge";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
-import { onAppShortcut, requestAppShortcut } from "@/lib/app-shortcuts";
+import {
+  onAppShortcut,
+  requestAppShortcut,
+  setShownAppShortcutWorkspace,
+} from "@/lib/app-shortcuts";
 import {
   isWorkspaceRealm,
   parseRealmMessage,
@@ -58,7 +62,64 @@ function RealmFixture() {
 }
 
 export function KeyboardShortcutsFixture() {
-  return isWorkspaceRealm() ? <RealmFixture /> : <WindowFixture />;
+  if (isWorkspaceRealm()) return <RealmFixture />;
+  return new URLSearchParams(window.location.search).has("in-tree") ? (
+    <InTreeFixture />
+  ) : (
+    <WindowFixture />
+  );
+}
+
+/** Counts one app shortcut's requests in this document, optionally for one workspace. */
+function useShortcutCount(id: Parameters<typeof onAppShortcut>[0], workspace?: object): number {
+  const [count, setCount] = useState(0);
+  useEffect(
+    () => onAppShortcut(id, () => setCount((value) => value + 1), workspace ? { workspace } : {}),
+    [id, workspace],
+  );
+  return count;
+}
+
+const COMMAND_WORKSPACE = { node: "command" };
+const LEAF_WORKSPACE = { node: "leaf" };
+
+/**
+ * A window showing a leaf in its own tree (plan items 4001 and 5003): the
+ * leaf's workspace is in this document beside the window's own (hidden, still
+ * mounted), with no realm frame and no realm channel. The window says which
+ * workspace it shows, as `AppShell` does.
+ */
+function InTreeFixture() {
+  const [shown, setShown] = useState<object>(LEAF_WORKSPACE);
+  useEffect(() => setShownAppShortcutWorkspace(() => shown), [shown]);
+  const search = useShortcutCount("search-projects");
+  const settings = useShortcutCount("open-settings");
+  const grouping = useShortcutCount("rotate-sidebar-grouping");
+  const commandTabs = useShortcutCount("new-agent-tab", COMMAND_WORKSPACE);
+  const leafTabs = useShortcutCount("new-agent-tab", LEAF_WORKSPACE);
+  const leafShown = shown === LEAF_WORKSPACE;
+  return (
+    <main>
+      <output data-testid="search-requests">{search}</output>
+      <output data-testid="settings-requests">{settings}</output>
+      <output data-testid="grouping-requests">{grouping}</output>
+      <output data-testid="command-new-tabs">{commandTabs}</output>
+      <output data-testid="leaf-new-tabs">{leafTabs}</output>
+      <button
+        type="button"
+        onClick={() => setShown(leafShown ? COMMAND_WORKSPACE : LEAF_WORKSPACE)}
+      >
+        {leafShown ? "Show this machine" : "Show the leaf"}
+      </button>
+      <section data-testid="command-workspace" hidden={leafShown}>
+        <textarea aria-label="Command composer" />
+      </section>
+      <section data-testid="in-tree-workspace" hidden={!leafShown}>
+        <textarea aria-label="Leaf composer" />
+      </section>
+      <KeyboardShortcutsDialog platform="mac" />
+    </main>
+  );
 }
 
 function WindowFixture() {

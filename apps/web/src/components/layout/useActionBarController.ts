@@ -1436,18 +1436,24 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, []);
 
   // An app shortcut, so it opens a tab wherever focus is. Setup owns the first
-  // tab while it runs, so the key waits for it.
+  // tab while it runs, so the key waits for it. Only the workspace on show
+  // takes it: a hidden one (this window's own while another node is shown in
+  // its tree, plan item 5003) stays as it is.
   useEffect(
     () =>
-      onAppShortcut("new-agent-tab", () => {
-        if (setupRunning) return;
-        if (tabCount >= MAX_TABS && createTab && selectedEnvironment) {
-          showTabLimitReachedToast(MAX_TABS);
-          return;
-        }
-        if (canCreateTab) createTab?.("agent-native");
-      }),
-    [canCreateTab, createTab, selectedEnvironment, setupRunning, tabCount],
+      onAppShortcut(
+        "new-agent-tab",
+        () => {
+          if (setupRunning) return;
+          if (tabCount >= MAX_TABS && createTab && selectedEnvironment) {
+            showTabLimitReachedToast(MAX_TABS);
+            return;
+          }
+          if (canCreateTab) createTab?.("agent-native");
+        },
+        { workspace: actionBarScope },
+      ),
+    [actionBarScope, canCreateTab, createTab, selectedEnvironment, setupRunning, tabCount],
   );
 
   // Keyboard shortcuts for terminal tabs

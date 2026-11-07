@@ -2,6 +2,7 @@ import { isWorkspaceRealm, postToShell } from "@/lib/federation/workspace-realm"
 import { portalStore } from "@/lib/portal/portal-store";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useBugReportStore } from "@/stores/bugReportStore";
+import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 /**
@@ -30,11 +31,15 @@ export function currentBugReportMachine(): BugReportMachineId {
 /**
  * Open the Report a bug sheet for `nodeId`.
  *
- * A report's agent session talks to the backend of the renderer that shows
- * it, so another machine's report is shown by that machine's realm: the
- * window opens (or brings forward) the realm and asks it to open its sheet.
- * A realm asked for any machine but its own hands the request to its window.
- * `undefined` means the machine in front.
+ * A report's agent session talks to the backend of the node it reports on.
+ * A node shown in the window's own tree (plan item 5003) has its scope here,
+ * so the window shows that node and opens the sheet on its scope
+ * (`BugReportSheetHost`): the report is created, captured and filed through
+ * the node's own client, and nothing crosses a realm channel. Any other
+ * machine's report is shown by that machine's realm: the window opens (or
+ * brings forward) the realm and asks it to open its sheet. A realm asked for
+ * any machine but its own hands the request to its window. `undefined` means
+ * the machine in front.
  */
 export function openBugReport(nodeId?: BugReportMachineId): void {
   const target = nodeId === undefined ? currentBugReportMachine() : nodeId;
@@ -52,12 +57,18 @@ export function openBugReport(nodeId?: BugReportMachineId): void {
     });
     return;
   }
-  useBugReportStore.getState().closeSheet();
   const remote = useRemoteWorkspaceStore.getState();
   const active = remote.active?.nodeId === target ? remote.active : null;
-  remote.open(target, {
+  const selection = {
     ...(active?.projectId ? { projectId: active.projectId } : {}),
     ...(active?.projectId && active.environmentId ? { environmentId: active.environmentId } : {}),
-    bugReport: true,
-  });
+  };
+  if (isInTreeNode(target, useInTreeNodesStore.getState().nodes)) {
+    // Shown in this window's tree: its sheet runs here, on its scope.
+    if (!active) remote.open(target, selection);
+    useBugReportStore.getState().openSheet(target);
+    return;
+  }
+  useBugReportStore.getState().closeSheet();
+  remote.open(target, { ...selection, bugReport: true });
 }

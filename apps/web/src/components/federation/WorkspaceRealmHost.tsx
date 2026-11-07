@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
@@ -229,22 +228,16 @@ export function WorkspaceRealmHost() {
   // the window's store, and the node's hydration gates its dialogs (4005).
   useEffect(() => (inTree ? undefined : channel.post({ type: "ready" })), [channel, inTree]);
   // The window asked for this node's Report a bug sheet, which runs here so
-  // its agent session talks to this node.
+  // its agent session talks to this node. In the window's tree the sheet is
+  // the window's, on this node's scope (plan item 5003); `openBugReport`
+  // opens it directly, so this is only a request made while the node was
+  // still shown by a realm.
   const bugReportSeq = useRef(resumedSeq);
   useEffect(() => {
     if (!request?.bugReport || bugReportSeq.current >= request.seq) return;
     bugReportSeq.current = request.seq;
-    // In the window's tree the sheet is the window's, on the command node's
-    // backend; another node's report needs the sheet on its scope (5003).
-    if (inTree) {
-      toast.info("Report a bug for this machine from its own workspace view", {
-        description:
-          "Turn off “Workspace in this window” for it in Settings → Machines, then report again.",
-      });
-      return;
-    }
-    useBugReportStore.getState().openSheet();
-  }, [inTree, request]);
+    useBugReportStore.getState().openSheet(inTree ? scope.nodeId : null);
+  }, [inTree, request, scope]);
   // The toolbar here toggles the window's sidebar; in the window's tree it
   // writes the window's store itself, so there is nothing to report.
   useEffect(

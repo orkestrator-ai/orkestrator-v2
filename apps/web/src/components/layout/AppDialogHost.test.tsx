@@ -328,6 +328,91 @@ describe("a dialog request names its node", () => {
   });
 });
 
+describe("node dialogs open under the node's scope with hydration checks (plan item 5003)", () => {
+  const scopes: WindowScope[] = [];
+  afterEach(() => {
+    cleanup();
+    for (const scope of scopes.splice(0)) scope.dispose();
+  });
+
+  /** A window whose node B has not read its projects yet; its first read waits for `release`. */
+  function windowWithColdNodeB() {
+    const windowScope = new WindowScope();
+    scopes.push(windowScope);
+    const projects = deferred<Project[]>();
+    const clientA = new FakeNodeClient({ nodeId: "bk_node-a" as BackendId, invoke: {} });
+    const clientB = new FakeNodeClient({
+      nodeId: "bk_node-b" as BackendId,
+      invoke: {
+        get_projects: () => projects.promise,
+        get_environment_snapshots: [],
+        get_environments: [],
+        remove_project: null,
+        get_config: null,
+      },
+    });
+    windowScope.open({ role: "command", client: clientA });
+    const nodeB = windowScope.open({ role: "leaf", client: clientB });
+    render(
+      <WindowScopeProvider windowScope={windowScope}>
+        <AppDialogHost />
+      </WindowScopeProvider>,
+    );
+    return { clientA, clientB, nodeB, release: () => projects.resolve([project]) };
+  }
+
+  test("a project dialog for a node still reading its projects waits for them, then acts on that node", async () => {
+    const { clientA, clientB, release } = windowWithColdNodeB();
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: clientB.nodeId, kind: "delete-project", projectId: project.id });
+    });
+    // The project is not known yet: the request waits instead of being dropped.
+    await waitFor(() => expect(clientB.calls("get_projects").length).toBeGreaterThan(0));
+    expect(useAppDialogStore.getState().request?.kind).toBe("delete-project");
+    expectDomAbsent(screen.queryByRole("alertdialog"));
+
+    await act(async () => release());
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("remove app from your projects");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(clientB.calls("remove_project")).toHaveLength(1));
+    expect(clientB.calls("get_environment_snapshots")).toHaveLength(1);
+    expect(clientA.invocations).toEqual([]);
+  });
+
+  test("a project that is not there once the node's projects have loaded is dropped", async () => {
+    const { clientB } = windowWithColdNodeB();
+    clientB.respond("get_projects", []);
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: clientB.nodeId, kind: "repository-settings", projectId: project.id });
+    });
+    await waitFor(() => expect(useAppDialogStore.getState().request).toBeNull());
+  });
+
+  test("environment Settings and Rebuild open on the node the request names", async () => {
+    const { clientA, clientB, nodeB } = windowWithColdNodeB();
+    clientB.respond("act_on_environment", null);
+    nodeB.store(environmentStore).setState({ environments: [environment("env-7", "only-on-b")] });
+    act(() => {
+      useAppDialogStore.getState().open({
+        nodeId: nodeB.nodeId,
+        kind: "environment-settings",
+        environmentId: "env-7",
+        section: "container",
+      });
+    });
+    expect(await screen.findByText("Settings for only-on-b")).toBeTruthy();
+    expect(screen.getByText("Section: container")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Act on bk_node-b" }));
+    await waitFor(() => expect(clientB.calls("act_on_environment")).toHaveLength(1));
+    expect(clientA.invocations).toEqual([]);
+  });
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;

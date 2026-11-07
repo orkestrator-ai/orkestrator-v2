@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { useBugReportStore } from "@/stores/bugReportStore";
+import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { openBugReport } from "./open-bug-report";
 
 afterEach(() => {
-  useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
+  useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null, draftInProgress: false });
+  useInTreeNodesStore.setState({ nodes: [] });
   useRemoteWorkspaceStore.setState({ active: null, realms: [], requests: {} });
 });
 
@@ -39,5 +41,27 @@ describe("openBugReport", () => {
       type: "select",
       bugReport: true,
     });
+  });
+
+  test("a node shown in the window's tree gets the window's sheet on its scope, without a realm request", () => {
+    useInTreeNodesStore.setState({ nodes: ["node-b"] });
+    useRemoteWorkspaceStore.setState({
+      active: { nodeId: "node-b", projectId: "p1", environmentId: "e1" },
+      realms: ["node-b"],
+      requests: {},
+    });
+    openBugReport();
+    expect(useBugReportStore.getState()).toMatchObject({ sheetOpen: true, sheetNodeId: "node-b" });
+    // Already in front: nothing is asked of its workspace.
+    expect(useRemoteWorkspaceStore.getState().requests["node-b"]).toBeUndefined();
+  });
+
+  test("an in-tree node not in front is shown on its launcher, and its sheet opens here", () => {
+    useInTreeNodesStore.setState({ nodes: ["node-c"] });
+    openBugReport("node-c");
+    expect(useRemoteWorkspaceStore.getState().requests["node-c"]?.request).toEqual({
+      type: "select",
+    });
+    expect(useBugReportStore.getState()).toMatchObject({ sheetOpen: true, sheetNodeId: "node-c" });
   });
 });

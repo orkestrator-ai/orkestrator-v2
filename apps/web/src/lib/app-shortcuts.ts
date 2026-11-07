@@ -14,6 +14,15 @@
  * `requestAppShortcut` delivers to the shortcut's owner: a window-owned
  * shortcut typed in a realm crosses to the shell over the realm message
  * channel; otherwise this document's handlers (`onAppShortcut`) run.
+ *
+ * One key router for every node the window shows in its own tree (plan item
+ * 5003): an in-tree node's workspace is in this document, so its keys reach
+ * the window's handlers directly, and no `shortcut` message crosses its
+ * loopback. Its workspace handlers sit beside the window's own node's (which
+ * stays mounted, hidden, while another node is shown), so a workspace-owned
+ * shortcut runs only the handlers of the workspace on show: handlers say which
+ * workspace they belong to (`onAppShortcut(id, handler, { workspace })`) and
+ * the window says which one it shows (`setShownAppShortcutWorkspace`).
  */
 
 import {
@@ -33,7 +42,14 @@ export { shortcutFocus } from "@orkestrator/protocol/keyboard-shortcuts";
 
 type Handler = () => void;
 
-const handlers = new Map<AppShortcutId, Set<Handler>>();
+interface Registration {
+  readonly handler: Handler;
+  /** The workspace (a node scope) the handler acts on; none for document-wide handlers. */
+  readonly workspace?: unknown;
+}
+
+const handlers = new Map<AppShortcutId, Set<Registration>>();
+let shownWorkspace: (() => unknown) | null = null;
 /** Requested while their UI was being shown; delivered to the next handler. */
 const pending = new Set<AppShortcutId>();
 let unhandled: ((id: AppShortcutId) => boolean) | null = null;
@@ -95,9 +111,19 @@ export function requestAppShortcut(id: AppShortcutId): void {
     postToShell({ type: "shortcut", shortcut: id });
     return;
   }
-  const current = handlers.get(id);
-  if (current && current.size > 0) {
-    for (const handler of Array.from(current)) handler();
+  const current = Array.from(handlers.get(id) ?? []);
+  if (current.length > 0) {
+    // A workspace's shortcut acts on the workspace on show, never on a hidden one.
+    const shown =
+      appShortcut(id).owner === "workspace" && shownWorkspace ? shownWorkspace() : undefined;
+    const targets =
+      shown === undefined
+        ? current
+        : current.filter(
+            (registration) =>
+              registration.workspace === undefined || registration.workspace === shown,
+          );
+    for (const registration of targets) registration.handler();
     return;
   }
   // The UI is not mounted (the sidebar holding the search is hidden). If the
@@ -108,20 +134,41 @@ export function requestAppShortcut(id: AppShortcutId): void {
 
 /**
  * Run `handler` for each request of `id` in this document, including one
- * made while no handler was mounted.
+ * made while no handler was mounted. `workspace` names the workspace (its
+ * node scope) a workspace-owned shortcut's handler acts on, so it runs only
+ * while that workspace is the one shown.
  */
-export function onAppShortcut(id: AppShortcutId, handler: Handler): () => void {
+export function onAppShortcut(
+  id: AppShortcutId,
+  handler: Handler,
+  options: { workspace?: unknown } = {},
+): () => void {
   const release = retainAppShortcutRouter();
   let set = handlers.get(id);
   if (!set) {
     set = new Set();
     handlers.set(id, set);
   }
-  set.add(handler);
+  const registration: Registration =
+    options.workspace === undefined ? { handler } : { handler, workspace: options.workspace };
+  set.add(registration);
   if (pending.delete(id)) handler();
   return () => {
-    set.delete(handler);
+    set.delete(registration);
     release();
+  };
+}
+
+/**
+ * Which workspace the window shows, for workspace-owned shortcuts: `resolve`
+ * returns the shown workspace's key (its node scope), or `null` while the
+ * window shows a workspace it has no handlers for (a realm's). One per
+ * document; returns the unregister function. Without one, every handler runs.
+ */
+export function setShownAppShortcutWorkspace(resolve: () => unknown): () => void {
+  shownWorkspace = resolve;
+  return () => {
+    if (shownWorkspace === resolve) shownWorkspace = null;
   };
 }
 

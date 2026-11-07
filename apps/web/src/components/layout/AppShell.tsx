@@ -30,7 +30,7 @@ import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
 import { GlobalSettingsHost } from "./GlobalSettingsHost";
-import { BugReportSheet } from "@/components/bug-report/BugReportSheet";
+import { BugReportSheet, BugReportSheetHost } from "@/components/bug-report/BugReportSheet";
 import { MachineCpuReadings } from "@/components/federation/MachineCpuReadings";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
 import {
@@ -41,7 +41,13 @@ import {
 import { useFederation } from "@/components/federation/FederationProvider";
 import { NodeTitleBarAgentInfo, NodeTitleBarUsage, useShownInTreeNode } from "./ShownNodeTitleBar";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
-import { retainAppShortcutRouter, setUnhandledAppShortcut } from "@/lib/app-shortcuts";
+import {
+  retainAppShortcutRouter,
+  setShownAppShortcutWorkspace,
+  setUnhandledAppShortcut,
+} from "@/lib/app-shortcuts";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { shownNodeScope } from "@/lib/node-scope/shown-scope";
 import {
   useRemoteWorkspaceStore,
   type RemoteWorkspaceSelection,
@@ -160,6 +166,13 @@ export function AppShell({ children }: AppShellProps) {
 
   // App shortcuts work wherever focus is in this document (`app-shortcuts.ts`).
   useEffect(() => retainAppShortcutRouter(), []);
+  // One key router for every node the window shows in its tree: a workspace's
+  // shortcut (⌘T) goes to the workspace on show (plan item 5003).
+  const { windowScope } = useScopesWithCommandFallback();
+  useEffect(() => {
+    if (workspaceRealm) return;
+    return setShownAppShortcutWorkspace(() => shownNodeScope(windowScope));
+  }, [windowScope, workspaceRealm]);
   useEffect(() => {
     // ⌘K with the sidebar hidden shows it, with the search open. A realm
     // forwards ⌘K to the window; the phone layout's drawer stays closed.
@@ -214,7 +227,8 @@ export function AppShell({ children }: AppShellProps) {
       {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
       <AppDialogHost />
       <GlobalSettingsHost />
-      <BugReportSheet />
+      {/* This node's sheet, and an in-tree node's on its scope (plan item 5003). */}
+      <BugReportSheetHost />
       <AgentMailPanel />
       <HostPark parkRef={contentParkRef} />
       {isMobile ? (

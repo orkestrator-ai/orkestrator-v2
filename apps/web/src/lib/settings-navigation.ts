@@ -42,9 +42,16 @@ export function isGlobalSettingsSection(value: unknown): value is GlobalSettings
   return GLOBAL_SETTINGS_SECTIONS.includes(value as GlobalSettingsSection);
 }
 
+/**
+ * Opens the window's Settings on `section`. Settings belong to the command
+ * node, so this is always the window's own surface (`GlobalSettingsHost`).
+ * A node shown in the window's own tree runs in this document and calls it
+ * directly (plan item 5003); only a realm document, a page of its own, asks
+ * its window with a `settings` message (deleted with realms, 6002).
+ */
 export function requestGlobalSettings(section: GlobalSettingsSection): void {
   if (typeof window === "undefined") return;
-  // Settings belong to the command node: a realm asks its window.
+  // The page is a realm, never an in-tree node, so this reads the page.
   if (isWorkspaceRealm()) {
     postToShell({ type: "settings", section });
     return;

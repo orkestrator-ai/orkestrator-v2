@@ -129,15 +129,23 @@ function EnvironmentSettingsHost({
   );
 }
 
-/** The request's project, dropping the request once the project is gone. */
+/**
+ * The request's project, dropping the request once the project is gone.
+ *
+ * A hydration check (plan item 5003): a node opened in the window's tree a
+ * moment ago may not have read its projects yet, so the request waits for
+ * the node's first project list (and any read in flight) before it decides
+ * the project is gone. This replaces a realm's readiness gating.
+ */
 function useRequestedProject(projectId: string) {
   const close = useAppDialogStore((state) => state.close);
   const project = useProjectStore(
     (state) => state.projects.find((candidate) => candidate.id === projectId) ?? null,
   );
+  const projectsLoaded = useProjectStore((state) => state.hasLoaded && !state.isLoading);
   useEffect(() => {
-    if (!project) close();
-  }, [close, project]);
+    if (!project && projectsLoaded) close();
+  }, [close, project, projectsLoaded]);
   return { project, close };
 }
 

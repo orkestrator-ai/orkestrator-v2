@@ -57,7 +57,7 @@ Replace the placeholder numbers in §8.2 and the "inferred" claims in §15 with 
 
 ## Done when
 
-- [ ] The report exists. §8.2's table is either replaced with measured defaults or marked "kept as placeholder" with the reason.
+- [x] The report exists. §8.2's table is either replaced with measured defaults or marked "kept as placeholder" with the reason. (Marked kept as placeholder in the report's §8.2 on 2026-11-07.)
 - [x] A recommendation on [5005](5005-multiplexed-relay-stream.md) (needed or not) is recorded.
 
 ## Notes
@@ -71,3 +71,4 @@ Replace the placeholder numbers in §8.2 and the "inferred" claims in §15 with 
 ## Work log
 
 - 2026-11-07 (claude-worker): added the development-only process memory diagnostic (`112938cd5`, 10 unit tests). Live: two `dev:test` profiles plus five extra leaves (browser), a Playwright-launched Electron command node with four leaves (desktop), Chromium over CDP and Playwright WebKit. Measured desktop and browser memory per realm, hidden-realm request rate before/after 0003, WebContentsView visibility and timers, `nextHopProtocol` on loopback direct and relay, long-lived requests per origin with 1-3 relayed realms, cold-open times. Wrote the measurements report. Left open: iPad, Safari proper, LAN/Tailscale Serve protocol, non-empty transcript and packaged-build desktop memory, other hosts, and the §8.2 edit (orchestrator).
+- 2026-11-07 (orchestrator): marked §8.2 "kept as placeholder" in the design report with the reason (per-realm costs measured, not per-scope; iPad and packaged numbers missing), and recorded the observed results in §15 and P5. The iPad and Safari boxes stay open: no iPad or Safari is reachable from this host.

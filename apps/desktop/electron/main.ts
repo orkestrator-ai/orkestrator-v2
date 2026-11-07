@@ -51,6 +51,7 @@ import {
   type WorkspaceViewRecord,
 } from "./workspace-views.js";
 import { NodeWorkspaceScopes } from "./node-workspaces.js";
+import { DesktopNodeScopes, type NodeScopeRecord } from "./node-scopes.js";
 import { editDesktopConnection, setDesktopWorkspaceTarget } from "./window-workspace-target.js";
 import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
@@ -289,6 +290,18 @@ let connectionManager: ConnectionManager | null = null;
 let sshPrompts: SshPromptBroker | null = null;
 let connectionListPublish: ReturnType<typeof setTimeout> | null = null;
 let workspaceViews: WorkspaceViews | null = null;
+/** Per-(window, node) scopes; nothing in the renderer opens one yet. */
+const nodeScopes = new DesktopNodeScopes({
+  manager: () => connectionManager,
+  scopes: () => {
+    const manager = connectionManager;
+    if (!manager) throw new Error("Connections are not initialized");
+    // Node scopes pass their own command access; this is only the default.
+    return (nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
+      manager.invoke(command, args),
+    ));
+  },
+});
 type DesktopWindowContext = {
   window: BrowserWindow;
   /** The renderer: the window's own, or a workspace realm inside it. */
@@ -314,6 +327,8 @@ type DesktopWindowContext = {
     viewId: string;
     layout: WorkspaceViewRecord["layout"];
   } | null;
+  /** This window's scopes on other nodes, by node; see `node-scopes.ts`. Empty for a realm. */
+  nodes: Map<string, NodeScopeRecord>;
 };
 type WindowWorkspaceTarget = {
   nodeId: string;
@@ -346,6 +361,7 @@ const desktopWindows = new DesktopWindowContexts<DesktopWindowContext>({
   closeRealms: (webContentsId) => workspaceViews?.closeAllFor(webContentsId),
   cancelPrompts: (webContentsId) => sshPrompts?.cancelFor(webContentsId),
   releaseWorkspaceGrant: (scope) => nodeWorkspaceScopes?.release(scope),
+  releaseNodeScopes: (context) => nodeScopes.releaseWindowNodeScopes(context),
   releaseSlot: (slot) => windowSlots.release(slot),
   setConnectionTitle: (context) => setConnectionTitle(context.window, context.scope),
   publishConnectionLists: () => publishConnectionLists(),
@@ -1001,6 +1017,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           portalScope: null,
           target: null,
           realm: null,
+          nodes: new Map(),
           localGatewayTransport,
         });
         registered = true;
@@ -1194,6 +1211,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
     portalScope: binding.portalScope,
     target: binding.target,
     realm: { parentWebContentsId, viewId: record.viewId, layout: record.layout },
+    nodes: new Map(),
   });
   installDefaultContextMenu(parent.window, Menu, writeClipboardText, contents);
   contents.on("did-finish-load", () => {
@@ -1205,6 +1223,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
 /** A window's command node changed: its realms belonged to the previous one. */
 async function closeWindowRealms(context: DesktopWindowContext): Promise<void> {
   workspaceViews?.closeAllFor(context.contents.id);
+  nodeScopes.releaseWindowNodeScopes(context);
 }
 
 function registerIpc(): void {

@@ -71,6 +71,11 @@ export interface DesktopWindowContextsOptions<T extends DesktopWindowContextReco
   cancelPrompts(webContentsId: number): void;
   /** Revoke a scope's node workspace grant, if it holds one. */
   releaseWorkspaceGrant(scope: string): void;
+  /**
+   * Release a window's node scopes (`node-scopes.ts`): on close, and when its
+   * command node changes.
+   */
+  releaseNodeScopes?(context: T): void;
   releaseSlot(slot: number): void;
   setConnectionTitle(context: T): void;
   publishConnectionLists(): void;
@@ -122,6 +127,7 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       this.contexts.delete(webContentsId);
       this.dropRelayedListens(webContentsId);
       // Closing never stops the node's work; it only revokes the grant.
+      if (closing) this.options.releaseNodeScopes?.(closing);
       this.options.releaseWorkspaceGrant(scope);
       if (closing?.portalScope) this.options.connections()?.release(closing.portalScope);
       this.options.connections()?.release(scope);
@@ -344,7 +350,10 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       context,
       { kind: "use", connectionId },
       connections,
-      async () => this.options.closeRealms(context.contents.id),
+      async () => {
+        this.options.closeRealms(context.contents.id);
+        this.options.releaseNodeScopes?.(context);
+      },
     );
     this.followConnection(context);
     this.updateWindowTitle(event);

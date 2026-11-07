@@ -1,22 +1,15 @@
-import { randomUUID } from "node:crypto";
 import type { ConnectionManager } from "./connection-manager.js";
+import type { NodeWorkspaceScopes } from "./node-workspaces.js";
 import {
-  isDirectBinding,
-  openNodeWorkspace,
-  type NodeWorkspaceScopes,
-  type WorkspaceBinding,
-} from "./node-workspaces.js";
+  openWorkspaceScope,
+  type WorkspaceScopeManager,
+  type WorkspaceTarget,
+} from "./node-scopes.js";
 
 export interface WorkspaceContext {
   scope: string;
   portalScope: string | null;
-  target: {
-    nodeId: string;
-    nodeName: string;
-    path: "direct" | "relay";
-    routeKind?: "https" | "ssh";
-    via?: string;
-  } | null;
+  target: WorkspaceTarget | null;
   window: { isDestroyed(): boolean };
 }
 
@@ -27,19 +20,7 @@ export async function setDesktopWorkspaceTarget<T extends WorkspaceContext>(
   context: T,
   input: { nodeId: string | null },
   options: {
-    manager: Pick<
-      ConnectionManager,
-      | "bind"
-      | "getConnectionId"
-      | "invoke"
-      | "getGatewayBaseUrl"
-      | "getRendererRequestAuthorization"
-      | "retargetScopeToWorkspace"
-      | "restoreScopeFrom"
-      | "release"
-      | "epochOf"
-      | "rebindWorkspace"
-    >;
+    manager: WorkspaceScopeManager;
     scopes: NodeWorkspaceScopes;
     committed(context: T): void;
   },
@@ -69,99 +50,31 @@ async function applyTarget<T extends WorkspaceContext>(
     context.target = null;
   }
   if (input.nodeId !== null) {
-    const nodeId = input.nodeId;
     const existingPortal = context.portalScope;
     const portalScope = existingPortal ?? `${context.scope}:portal`;
     if (!existingPortal) await manager.bind(portalScope, manager.getConnectionId(context.scope));
-    const invoke = (command: string, args: Record<string, unknown>) =>
-      manager.invoke(command, args, portalScope);
-    const reopen = async (source = portalScope) => {
-      const call = (command: string, args: Record<string, unknown>) =>
-        manager.invoke(command, args, source);
-      const profile = (await call("get_backend_profile", {}).catch(() => null)) as {
-        displayName?: string;
-      } | null;
-      return openNodeWorkspace({
-        nodeId,
-        invoke: call,
-        commandNodeName: profile?.displayName ?? "command node",
-        relay: manager.getGatewayBaseUrl(source)
-          ? () => {
-              const baseUrl = manager.getGatewayBaseUrl(source);
-              const authorization =
-                baseUrl &&
-                manager.getRendererRequestAuthorization(`${baseUrl}/__orkestrator/invoke`, source);
-              return baseUrl && authorization ? { baseUrl, token: authorization.slice(7) } : null;
-            }
-          : undefined,
-      });
-    };
-    // Keep command access alive until a pending open settles, even if closing
-    // the window releases its normal scopes in the meantime.
-    const openingScope = `${context.scope}:workspace-open`;
-    let binding: WorkspaceBinding | null = null;
     try {
-      await manager.bind(openingScope, manager.getConnectionId(portalScope));
-      if (context.window.isDestroyed()) throw new Error("Window closed during workspace switch");
-      binding = await reopen(openingScope);
-      if (context.window.isDestroyed()) throw new Error("Window closed during workspace switch");
-      manager.retargetScopeToWorkspace(context.scope, {
-        ...binding,
-        onUnavailable: () => options.scopes.invalidate(context.scope),
-      });
-      options.scopes.release(context.scope);
-      options.scopes.track(context.scope, binding.workspaceId, {
-        invoke,
-        reopen: () => reopen(),
-        retain: async () => {
-          const retryScope = `${context.scope}:workspace-retry:${randomUUID()}`;
-          try {
-            await manager.bind(retryScope, manager.getConnectionId(portalScope));
-            return {
-              invoke: (command, args) => manager.invoke(command, args, retryScope),
-              reopen: () => reopen(retryScope),
-              release: () => manager.release(retryScope),
-            };
-          } catch (error) {
-            manager.release(retryScope);
-            throw error;
-          }
-        },
-        epoch: () => manager.epochOf(manager.getConnectionId(portalScope)),
-        retarget: (replacement) => {
-          manager.rebindWorkspace(context.scope, replacement);
-          context.target = workspaceTargetFrom(nodeId, replacement.params);
+      const target = await openWorkspaceScope({
+        scope: context.scope,
+        commandScope: portalScope,
+        nodeId: input.nodeId,
+        manager,
+        scopes: options.scopes,
+        closed: () => context.window.isDestroyed(),
+        closedMessage: "Window closed during workspace switch",
+        rebound: (replacement) => {
+          context.target = replacement;
           options.committed(context);
         },
-        relayed: !isDirectBinding(binding),
       });
       context.portalScope = portalScope;
-      context.target = workspaceTargetFrom(nodeId, binding.params);
+      context.target = target;
     } catch (error) {
-      if (binding)
-        await manager
-          .invoke("close_node_workspace", { workspaceId: binding.workspaceId }, openingScope)
-          .catch(() => undefined);
       if (!existingPortal) manager.release(portalScope);
       throw error;
-    } finally {
-      manager.release(openingScope);
     }
   }
   options.committed(context);
-}
-
-function workspaceTargetFrom(
-  nodeId: string,
-  params: Record<string, string>,
-): WorkspaceContext["target"] {
-  return {
-    nodeId,
-    nodeName: params.node ?? nodeId,
-    path: params.path === "direct" ? "direct" : "relay",
-    ...(params.route === "https" || params.route === "ssh" ? { routeKind: params.route } : {}),
-    ...(params.via ? { via: params.via } : {}),
-  };
 }
 
 /** Catalogue edits preserve a leaf until its command connection successfully changes. */

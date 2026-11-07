@@ -258,6 +258,80 @@ describe("backend previous-run", () => {
   });
 });
 
+describe("storage operation.slow and its stall context", () => {
+  test("keeps the database, kind, table and times, and never a store id or an id-shaped table", () => {
+    const projected = projectEssentialRecord(
+      record("storage", "operation.slow", "warn", {
+        database: "main",
+        op: "transaction",
+        table: "store_rows",
+        store: "native-agent-sessions",
+        mode: "immediate",
+        durationMs: 9_811,
+        beginMs: 9_811,
+        sqlMs: 0,
+        busy: true,
+      }),
+      TS,
+    );
+    expect(projected?.fields).toEqual({
+      database: "main",
+      op: "transaction",
+      table: "store_rows",
+      mode: "immediate",
+      durationMs: 9_811,
+      beginMs: 9_811,
+      sqlMs: 0,
+      busy: true,
+    });
+    const hostile = projectEssentialRecord(
+      record("storage", "operation.slow", "warn", {
+        database: "/Users/someone/orkestrator.sqlite",
+        op: "drop table",
+        table: "abc123def456",
+        mode: "sk-ant-secret",
+        durationMs: 300,
+      }),
+      TS,
+    );
+    expect(hostile?.fields).toMatchObject({ durationMs: 300 });
+    expect(hostile?.fields).not.toHaveProperty("database");
+    expect(hostile?.fields).not.toHaveProperty("op");
+    expect(hostile?.fields).not.toHaveProperty("table");
+    expect(hostile?.fields).not.toHaveProperty("mode");
+  });
+
+  test("a 10-second stall keeps the storage operation that ran during it", () => {
+    const projected = projectEssentialRecord(
+      record("event-loop", "stalled", "error", {
+        lagMs: 10_200,
+        intervalMs: 500,
+        storageMs: 9_811,
+        storageDatabase: "main",
+        storageOp: "transaction",
+        storageTable: "stores",
+        storageStore: "environments",
+        storageLongestMs: 9_811,
+        storageBusy: true,
+        commandsInFlight: 3,
+        commands: "get_projects",
+      }),
+      TS,
+    );
+    expect(projected?.fields).toEqual({
+      lagMs: 10_200,
+      intervalMs: 500,
+      storageMs: 9_811,
+      storageDatabase: "main",
+      storageOp: "transaction",
+      storageTable: "stores",
+      storageLongestMs: 9_811,
+      storageBusy: true,
+      commandsInFlight: 3,
+    });
+  });
+});
+
 describe("local-server bridge.orphans-reaped", () => {
   test("keeps its result, and refuses any other value", () => {
     const entry = (result: string) =>

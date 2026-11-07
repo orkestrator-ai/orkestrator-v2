@@ -132,6 +132,51 @@ mise exec -- bun test tests/unit/efficiency/harness.test.ts
   ceilings for Cursor and Pi, ACP's configurable 1 MiB floor (it cannot go
   lower), and `setTranscriptCacheLimitsForTesting` for Codex cache budgets.
 
+## Ledger at production scale
+
+`scripts/efficiency/ledger-scale.ts` is separate from the counters harness: it
+measures event-loop stalls of the change-tracking ledger at the size of a
+long-lived install, which a function-level case cannot reach. It builds a
+synthetic `change-tracking.sqlite` in a temporary data directory (2.8M rows,
+1.28 GB at `--scale 1`: the size of arktech-mini's ledger on 2026-11-06, with
+row shapes copied from real rows), runs the real `ChangeTrackingService` on it,
+and reports per phase the worst lateness of a 2 ms timer chain, plus the
+slowest statements and transactions. `bun:sqlite` is synchronous, so each of
+those is time the event loop could not run.
+
+```bash
+# Build once and keep it (about a minute), then run against APFS clones of it
+mise exec -- bun scripts/efficiency/ledger-scale.ts --only build --keep --agents 1
+cp -c -R "$TMPDIR/ork-ledger-scale-XXXX" "$TMPDIR/ork-ledger-scale-run"
+mise exec -- bun scripts/efficiency/ledger-scale.ts --dir "$TMPDIR/ork-ledger-scale-run" \
+  --agents 8 --seconds 20 --out output/efficiency/ledger-scale/run.json
+rm -rf "$TMPDIR/ork-ledger-scale-run"
+```
+
+| Phase | What runs |
+| --- | --- |
+| `ingest` | `--agents` agent loops: a turn frame, four edits and turn-diff revisions pulled through `pullEvidence`, then a 300-file environment scan, `--pace-ms` apart |
+| `queries` | Views, tool presentations, history, and measurement pages, counts and latest reads |
+| `retention` | Two hourly passes (90-day window) while three synthetic environments are purged |
+| `manifest` | Serializing, storing and cold-reading a `--manifest-entries` capture manifest; parsing measurement JSON |
+| `mixed` | Ingestion, queries and back-to-back passes together |
+| `window` | Passes with a `--window-days` window (default 7), retiring the half of the history past it |
+
+`--disk-writers N` adds N child processes that write and fsync 4 MiB blocks
+for the whole run (at most 256 MiB each, in the data directory), the disk
+contention of builds and other suites on the same host; with it, the
+commits' fsyncs dominate. Other benchmarks on the host add to that load, so
+note what else was running.
+
+It also prints every statement that scans a large table or took 10 ms or
+more, with its `EXPLAIN QUERY PLAN`. `--dir` reuses a ledger (the `window`
+phase deletes rows from it, so run against a clone); `--keep` leaves the
+directory. A just-written ledger, and on macOS apparently an APFS clone of a
+recently read one, is mostly in the page cache, so these figures are warm; the
+first read of a cold file is the worst case and was up to 150 times slower
+(the global prune query: 155 ms warm, 24 s cold). The process also runs the evidence recorder,
+which a bridge runs in production, so `ingest` stalls are an upper bound.
+
 ## Limitations
 
 - Function-level only. Bridges are called in-process, not over HTTP; provider

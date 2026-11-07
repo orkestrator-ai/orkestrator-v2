@@ -67,5 +67,5 @@ Analysed 2026-11-05 against `main` at `5467f6ccb`. These are what was left when 
 ## Related
 
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 7
-- [Efficiency report, E](../../reports/2026-10-27-efficiency.md#e-storage-change-tracking-git-and-files)
+- Efficiency report, E (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
 - [version-compatibility.md](../../architecture/version-compatibility.md#register): the environment-less stream fallback row

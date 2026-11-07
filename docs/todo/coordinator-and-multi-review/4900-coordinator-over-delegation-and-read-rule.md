@@ -53,6 +53,6 @@ Whether over-delegation happens in practice (task 1).
 
 ## Related
 
-- [Coordinator report, 4.3 (A7)](../../reports/2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)
+- Coordinator report, 4.3 (A7) (`git show 413bd6219:docs/reports/2026-10-27-coordinator.md`)
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
 - [Routing](../../architecture/coordinator.md#routing) and [The context block](../../architecture/coordinator.md#the-context-block)

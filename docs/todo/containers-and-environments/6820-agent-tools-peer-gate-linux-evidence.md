@@ -184,5 +184,5 @@ outstanding live topology evidence.
 ## Related
 
 - [Who may connect](../../architecture/container-lifecycle.md#who-may-connect)
-- [Security index, L15](../../reports/security/0000-index.md#status-of-every-finding)
+- Security index, L15 (`git show 413bd6219:docs/reports/security/0000-index.md`)
 - [Todo 0109](0109-rootless-linux-runtime-gaps.md)

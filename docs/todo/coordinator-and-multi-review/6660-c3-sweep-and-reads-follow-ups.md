@@ -54,7 +54,7 @@ So 1,400 finished records cost 5 to 8 ms on a sweep that runs every 60 s and abo
 
 ## Current state
 
-C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its measurement, task-by-task outcome table and main-opening paths are preserved in [C3: archived outcome](../../reports/2026-11-06-coordinator-batches-outcome.md#c3-archived-outcome).
+C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its measurement, task-by-task outcome table and main-opening paths are preserved in C3: archived outcome (`git show 413bd6219:docs/reports/2026-11-06-coordinator-batches-outcome.md`).
 
 ## Needs verification
 
@@ -62,7 +62,7 @@ C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, ma
 
 ## Related
 
-- [Coordinator batches outcome](../../reports/2026-11-06-coordinator-batches-outcome.md#status-of-every-finding), finding B1 ("list walked long before the cap")
+- Coordinator batches outcome (`git show 413bd6219:docs/reports/2026-11-06-coordinator-batches-outcome.md`), finding B1 ("list walked long before the cap")
 - [6360-c2-workflow-records-live-checks.md](6360-c2-workflow-records-live-checks.md): the store-full banner on a live stack, which needs the same kind of seeded store
 
 ## Assumptions and decisions

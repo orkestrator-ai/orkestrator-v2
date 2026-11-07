@@ -1,7 +1,7 @@
 # Backend stops answering under load or when its log reader stalls
 
 Checked against `main` at `7e3ceb7ce` (2026-10-28); tasks 3 to 5 updated
-against `79f3bc97e` (2026-10-29). This is task 3 of
+against `79f3bc97e` (2026-10-29), task 6 against `b0ad3f747` (2026-11-06). This is task 3 of
 [0734](../coordinator-and-multi-review/0734-codex-orkestrator-mcp-handshake-under-load.md)
 ("Find what makes the backend's `/mcp` handshake slow"), filed separately
 because it reaches beyond the handshake.
@@ -16,7 +16,8 @@ for one environment, and from 09:13Z Codex turns failed because the agent MCP
 
 ## Task analysis
 
-Analysed 2026-10-28 against `main` at `7e3ceb7ce`.
+Analysed 2026-10-28 against `main` at `7e3ceb7ce`; task 6 analysed again
+2026-11-06 against `main` at `b0ad3f747`.
 
 ### Tasks
 
@@ -25,7 +26,7 @@ Analysed 2026-10-28 against `main` at `7e3ceb7ce`.
 3. **Cut per-request work on the agent MCP endpoint**: every request rebuilt the tool server and parsed the whole mail store. Status: done (2026-10-29). No request parses the mail store any more; building the tool server per request stays, by decision, until task 6 shows it matters.
 4. **Find what held the desktop main thread from 02:22:55Z to 09:08:17Z**: Status: done as an investigation (2026-10-29). It was most likely a modal alert opened behind other windows; which dialog is not recorded anywhere. The fixes were made under 0880 (deleted 2026-11-06); its live check is task 7.
 5. **Stop parsing the whole mail store per mail call**: Status: done (2026-10-29). Reads use a shared read model that re-parses only changed rows; writes still parse once.
-6. **Qualify under load with the new stall log**: Status: open. Needs a live heavy run; the procedure is in task 6.
+6. **Qualify under load with the new stall log**: Status: open. Part A, the ledger at production scale, ran 2026-11-06. Four statements that read whole tables for about 1 to 24 s with a cold cache are fixed, and on a quiet disk a run at mini's size had no stall over 1 s. Under disk contention, commit fsyncs on the event loop still stall for 10 to 15 s; that is not fixed. Two open decisions wait for the user (task 6, Decisions): ledger `synchronous = NORMAL`, and lowering ledger retention from 90 to 30 days. Part B, the live heavy run on the production install, is still needed.
 7. **Modal-dialog routing on a production install**: real update, restart, toolchain and startup-failure dialogs open as sheets or on a host window, ask for attention, and do not hold the main thread. Moved from to-do 0880 (deleted 2026-11-06). Status: open (needs a production install).
 
 Evidence is labelled **measured** (read from logs, the power log, the unified
@@ -348,53 +349,318 @@ is 1.2 MiB today and may grow to its 32 MiB limit.
 
 ### 6. Qualify under load with the new stall log
 
-**Goal.** Determine why MCP handshakes or mail calls time out under heavy
-load. A timer-lateness log shows that the backend event loop did not run
-promptly, with cause unresolved. Backend work, host CPU starvation and
-suspension can all delay the timer. No covering stall is inconclusive:
-cumulative backend work can exhaust the 15 s budget of 0734 without one
-covering timer delay.
+**Problem.** Under heavy agent load, MCP handshakes and mail calls time out,
+and on 2026-11-05 the backend stopped running its event loop for up to 48.7 s
+at a time. A timer-lateness line shows that the loop did not run promptly; it
+does not say why. Backend work, host CPU starvation and suspension can all
+delay the timer. No covering stall is inconclusive: cumulative backend work
+can exhaust the 15 s budget of 0734 without one covering timer delay. Part A
+asks whether the change-tracking ledger's own work can hold the loop for
+seconds at production size. Part B is the live qualification on the
+production install.
 
-**How to run it.** Run it on the production install on a normal working day,
-not from an agent worktree: the run *is* the real workload. Collect logs,
-metrics, process CPU or profiling data, and host scheduling and sleep/wake
-diagnostics.
+**Context.**
 
-1. Install a build that contains tasks 1, 2, 3 and 5, and note the backend's
-   start time.
+- *Measured by the coordinator from arktech-mini's logs (read only), not
+  re-read for this task: stall history.* The worst stalls came
+  before the fixes, on v2.36.3, while the ledger was still inside
+  `orkestrator.sqlite`. From 12:35Z to 12:45Z on 2026-11-05 there were stalls of
+  13 to 30 s every 40 to 60 s, then 5 backend restarts. From 17:00Z to 18:59Z
+  there were 177 stalls, the longest 48.7 s, and about 226 loopback
+  `connect ECONNRESET` errors from the desktop. Logged stall lines per day:
+
+  | Day | Lines |
+  | --- | --- |
+  | 10-30 | 4 |
+  | 10-31 | 9 |
+  | 11-01 | 9 |
+  | 11-02 | 15 |
+  | 11-03 | 18 |
+  | 11-04 | 23 |
+  | 11-05 | about 190 (about 460 with folded repeats) |
+  | 11-06 | 181, all before 07:01Z |
+
+  There have been none since 07:01Z on 11-06, on v2.36.5 and v2.36.6.
+- *Measured by the coordinator, the same way: what the stalls lined up with.* Agent activity: an hour with no
+  prompts had no stalls. Not gateway bursts, and not the number of bridges.
+  Five `usage.source-stalled scope=disk kind=timeout` lines fell inside stall
+  hours. The desktop process on the same host never stalled.
+- *Measured by the coordinator, the same way: the ledger on 2026-11-06.* `change-tracking.sqlite`, 1.26 GB and
+  about 2.8M rows after about two weeks: `change_measurement_files` 482 MB,
+  `change_measurements` 159 MB, `change_frames` 107 MB plus a 96 MB unique
+  index, `change_evidence` 91 MB. It opens through `StorageDatabase`
+  (`ledger-schema.ts`), so every statement runs synchronously on the event
+  loop, with `synchronous = FULL`, `secure_delete = ON` and a 10 s busy
+  timeout.
+- Already ruled out as current causes: in-process upkeep (fixed by #1939) and
+  the free-page drain (finished).
+
+**Investigation, part A: the ledger at production scale (2026-11-06, done).**
+
+`scripts/efficiency/ledger-scale.ts` (method in
+[efficiency-harness.md](../../development/efficiency-harness.md#ledger-at-production-scale))
+built a synthetic ledger of 2,813,402 rows and 1.28 GB in a temporary
+directory on arktech-mini, with row shapes copied from real rows: 360
+environments, 1,080 conversations, 8,640 turns, 80,640 measurements with
+1.31M file rows. It
+ran the real `ChangeTrackingService` on it under 8 agent loops (tool, turn and
+turn-diff evidence through `pullEvidence`, 300-file environment scans), with
+reads, hourly passes and purges of three environments. No real ledger or data
+directory was opened, nothing was bound, and no provider was called. Host load
+average 3 to 14 during the runs.
+
+- *Measured, worst event-loop stall per operation, before → after the fix.*
+  Lateness of a 2 ms timer chain; 20 s phases; the after column is the final
+  code (`after-run2`):
+
+  | Operation | Before | After |
+  | --- | --- | --- |
+  | Evidence ingestion and commits (8 agents) | 278 ms, 87 stalls ≥ 100 ms, 124 turns | 155 ms, 1 stall ≥ 100 ms, 752 turns |
+  | Measurement queries (views, presentations, history, file pages) | 8 ms | 7 ms |
+  | Hourly retention pass with three purges | **1,378 ms** | 72 ms |
+  | Manifest JSON: 100,000-entry capture manifest (12.5 MB), serialize / store / cold read | 180 / 5 / 14 ms | 172 / 6 / 14 ms |
+  | Measurement JSON parse, 1,000 reads | 4 ms | 1 ms |
+  | All of the above together | 276 ms, 86 stalls ≥ 100 ms | 134 ms, 1 stall ≥ 100 ms |
+  | 7-day window: first passes retire the 773,000 rows past it | 177 ms | 120 ms |
+
+  With the fix, on a quiet disk, no ledger operation stalled for 1 s or more.
+  Before it, every hourly pass did. The longest single transaction after the fix was 155 ms
+  (one frame's ingestion). The serialize figure is a capture's own
+  `JSON.stringify`, not a ledger statement.
+- *Measured, the statements behind it.* Each was timed on a fresh APFS clone of
+  the synthetic ledger (cold page cache), then again warm:
+
+  | Statement (caller) | Plan | Cold | Warm |
+  | --- | --- | --- | --- |
+  | Superseded-measurement candidates over every owner (`pruneSupersededMeasurements` without an owner, from the hourly pass) | `SCAN change_measurements USING INDEX change_measurements_owner`, a table read per row for `id`, `SCAN change_selections` | **23,990 ms** | 155 ms |
+  | Provider turn diffs past the window (`retireExpiredProviderTurns`, every pass) | `SEARCH change_evidence USING INDEX change_evidence_owner (owner_kind=?)`, a table read per provider-turn row | **3,268 ms** | 18 ms |
+  | Open tool windows (`allOpenWindows`: every pass's sweep, startup reconciliation, diagnostics) | `SCAN change_tool_windows` | **1,229 ms** | 17 ms |
+  | A purged binding's provider turns (`retireBinding`, per binding) | `SEARCH change_evidence USING INDEX change_evidence_owner (owner_kind=?)` | 965 ms | 15 ms |
+  | One owner's prune candidates (every publication that supersedes) | `LIST SUBQUERY` over `SCAN change_selections` | not timed cold | 51 ms (worst in a run) |
+
+  The global query also ran once per batch of 64 measurements: a backlog of
+  superseded measurements meant one whole-table query per batch, with only a
+  zero-length yield between them. Statements over smaller tables stayed under
+  1 s cold: `snapshotAges` 203 ms, `finishPurge`'s outbox sweep 127 ms,
+  `worktreeUsedElsewhere` 104 ms, `referencedSnapshotIds` 72 ms,
+  `retireEmptyBindings` 71 ms.
+- *Measured, after the fix.* A full walk of the owner index is 155 pages of
+  512 owners, worst page 2.2 ms cold and 0.6 ms warm. A provider-turn page by
+  row id is 3 ms cold, the open windows 0.0 ms, a binding's provider turns
+  0.1 ms. Building the three new indexes on the 2.8M-row ledger took 326,
+  883 and 976 ms, once.
+- *Measured, commits under disk contention (after the fix).* The figures
+  above were taken on a quiet disk (all runs ended by 22:32Z). A second run of
+  the fixed code with `--disk-writers 2` (22:37Z to 22:41Z) overlapped another
+  worktree's benchmark, which ran four more fsync-loop writers from 22:33Z. So
+  it ran against six writers, a load this task did not control:
+
+  | Phase | Worst stall | Stalls ≥ 1 s | Longest transaction |
+  | --- | --- | --- | --- |
+  | Evidence ingestion and commits | 10,391 ms | 6 | 10,281 ms (`publish`) |
+  | Hourly retention pass with three purges | 14,729 ms | 17 | 14,730 ms (a retirement batch); `PRAGMA incremental_vacuum(128)` 6,672 ms |
+  | All together | 10,373 ms | 6 | 10,259 ms (`afterIngest`) |
+
+  No statement inside those transactions took more than 8 ms. The time is the
+  commit: with `synchronous = FULL` every commit fsyncs the WAL on the event
+  loop. A loop of one-row ledger commits on a fresh file measured p50 12 ms and
+  worst 2,598 ms with `FULL`, against p50 0.0 ms and worst 761 ms with
+  `NORMAL`, while another project's integration tests drove the disk at 340
+  to 990 MB/s. A second sample under the six writers gave `FULL` worst 352 ms
+  and `NORMAL` worst 934 ms; the worst case varies with what else writes. An
+  agent turn makes about 30 ledger commits (6,000 frame ingestions, 5,400
+  publications and 4,800 post-ingest transactions over 600 turns in
+  `after-run1`), so under contention they also add up.
+- *Inferred, the link to 2026-11-05.* A cold or partly cold page cache is
+  likely on a host running ten reviews and Docker. A pass draining a backlog
+  of superseded measurements then runs one 1 to 24 s query per batch, back to
+  back. That fits the 13 to 30 s stalls and their repetition, and the link
+  to agent activity, because publications create the superseded
+  measurements. Commit fsyncs under disk contention fit as well, and better
+  for the longest stalls: they reached 10 to 15 s here even with the scans
+  fixed, they grow with agent activity, and the five
+  `usage.source-stalled scope=disk kind=timeout` lines fell inside stall
+  hours. Neither is proven as the cause: the real ledger's backlog on
+  11-05 was not measured, and v2.36.3 also held the ledger in the main
+  database. Why the stalls stopped at 07:01Z on 11-06 is not explained by
+  this run. A drained backlog and a warm cache would fit, but neither was
+  observed.
+
+**Change (part A).**
+
+- The hourly pass finds superseded measurements with
+  `ChangeLedger.supersededOwnersPage`. It reads 512 owners at a time from the
+  covering owner index, yields between pages, and prunes each owner with more
+  than it keeps through its own index range. `pruneSupersededMeasurements`
+  now always takes an owner.
+- A pruning candidate's selection is checked with `NOT EXISTS` through
+  `change_selections_measurement`, not an `IN` list built from every
+  selection.
+- `retireExpiredProviderTurns` walks evidence in row order (ingestion order)
+  a page at a time, as operations already were, and stops at the first row
+  inside the window. A pass with nothing expired reads one row.
+- Two partial indexes: `change_tool_windows_open_only` (open windows only) and
+  `change_evidence_provider_turn_frames` (provider-turn evidence by frame key,
+  named in the purge query with `INDEXED BY`). All three new indexes are
+  created by `LedgerRetirement.ensureIndexes`, now also at service start before
+  reconciliation, without a schema version.
+- `ledger-scan-plans.test.ts` records every statement that a publication, a
+  pull, two passes and a purge prepare. It plans each one on a fresh ledger
+  and fails on any that walks a large table. Against the old code it names
+  exactly the five statements above. It also covers the owner walk and the
+  provider-turn walk.
+
+**Investigation, part B: the production heavy run (open).** Run it on the
+production install on a normal working day, not from an agent worktree: the
+run *is* the real workload.
+
+1. Install a build that contains tasks 1, 2, 3 and 5 and part A, and note the
+   backend's start time.
 2. Start the heavy run: ten or more Multi Reviews at once, plus several
-   Coordinator workers, so the load average passes the logical CPU count
-   (18 on arktech-mini). Record start and end times in UTC, with `uptime`
-   every minute (`while :; do date -u; uptime; sleep 60; done > load.txt`).
+   Coordinator workers, so the load average passes the logical CPU count (18
+   on arktech-mini). Record start and end times in UTC, with `uptime` every
+   minute (`while :; do date -u; uptime; sleep 60; done > load.txt`).
 3. During and after the run, collect:
    - timestamped backend process CPU samples or a CPU profile, host
-     scheduling evidence, and host sleep/wake records; load averages alone
-     cannot distinguish backend CPU work from CPU starvation or suspension;
+     scheduling evidence, and host sleep and wake records. Load averages
+     alone cannot tell backend CPU work from CPU starvation or suspension;
    - stall lines:
      `grep -h "\[Backend\] Event loop stalled" "$HOME/Library/Application Support/orkestrator-v2/logs/orkestrator-ai-$(date -u +%F).log"`;
    - dropped-console markers: `grep -h "\[Backend\] Dropped" <same file>`;
-   - the metrics snapshot, from the signed-in desktop or through the
-     gateway with the user's own session: `GET /__orkestrator/metrics`, the
+   - the metrics snapshot, from the signed-in desktop or through the gateway
+     with the user's own session: `GET /__orkestrator/metrics`, the
      `eventLoop` (tick count, max lag, late-tick buckets, last 20 stalls) and
      `consoleOutput` objects. Never paste the gateway token into logs or
      tickets;
-   - Codex handshake failures: `grep -h "timed out handshaking"` over the
-     same log, and each failing session's Codex log;
+   - the retention pass's report in the diagnostics bundle's `database.json`,
+     and the ledger's size;
+   - Codex handshake failures: `grep -h "timed out handshaking"` over the same
+     log, and each failing session's Codex log;
    - mail tool timeouts as workers report them (`send_message`,
      `check_inbox`).
-4. Line the times up. For each handshake or mail timeout, look for a
+4. **Only with the user's approval**, take a stack sample of the live backend
+   during a stall. It reads the process and does not signal it, but it is the
+   user's production backend.
+   1. Find the backend's pid and confirm it before use:
+      `ps -o pid,lstart,command -p <pid>`. The command line must be the
+      bundled backend, and the start time must match the one noted in step 1.
+   2. Start a watcher that samples only when the loop is late. Example, with
+      the gateway's own health route and the user's port:
+      `while :; do s=$(date +%s); curl -s -m 3 -o /dev/null http://127.0.0.1:<port>/health || sample <pid> 5 -file "stall-$(date -u +%H%M%S).txt"; sleep 5; done`.
+   3. In each sample, look for `sqlite3_step` / `sqlite3VdbeExec` under the JS
+      frames (ledger or main-store work), `JSON.parse` / `JSON.stringify`,
+      zlib, or nothing on the main thread (starvation or suspension). Match
+      the time against the stall line that covers it. The sample shows no SQL
+      text, so line it up with the pass report's times.
+   4. Stop the watcher and delete the samples after recording what they show:
+      they contain symbols and paths, not content, but stay on the host.
+5. Line the times up. For each handshake or mail timeout, look for a
    `stalled for N ms, ending T` line whose window covers it.
    - A covering stall establishes delayed event-loop execution, not its
      cause. Correlate process CPU or profiling data with host scheduling
-     and sleep/wake evidence before choosing the design note below or the
+     and sleep and wake evidence before choosing the design note below or the
      `tools/list` cache. The metrics' last stalls are timer delays, not CPU
      profiles.
-   - No covering stall does not exclude backend work or establish a host
-     or Codex cause. Examine the same correlated evidence and record the
-     load average at that minute. If evidence is missing, leave the cause
+   - No covering stall does not exclude backend work or establish a host or
+     Codex cause. Examine the same correlated evidence and record the load
+     average at that minute. If evidence is missing, leave the cause
      unresolved.
-5. Record the evidence here with *measured* and *inferred* labels, and set
+6. Record the evidence here with *measured* and *inferred* labels, and set
    this task's status.
+
+**Decisions.**
+
+- **How to keep ledger statements off whole tables?**
+  - **Indexes and paged walks in the ledger, with a plan test (chosen, recommended).**
+    - Pros: every periodic statement is now a seek or a bounded page (cold
+      worst 2 to 3 ms). Small diff. An older build still opens the file.
+      The plan test catches the next scan before it ships.
+    - Cons: three more indexes to keep up on writes, a few MB; a one-time
+      build at first start.
+  - **Move the ledger to a worker thread or a child process.**
+    - Pros: no ledger statement can stall the loop, whatever its plan.
+    - Cons: every ledger call becomes asynchronous across a message port, and
+      transactions span the ingestion and publication paths. A large
+      refactor, and the scans would still cost seconds of disk reads.
+  - **A covering index for the old window query only.**
+    - Pros: one line.
+    - Cons: still a whole-index scan per batch, and it leaves the other three
+      statements.
+- **Bound the ledger's size or retention?** At about 90 MB a day,
+  `archivedBodyRetentionDays` (90) lets the ledger reach about 8 GB before
+  anything ages out. Part A shows that size is no longer a stall source:
+  shortening the window to 7 days retired 773,000 rows with a worst stall of
+  120 ms.
+  - **Lower the window to 30 days (recommended).**
+    - Pros: one policy value (`policy-registry.ts`). The ledger levels off at
+      about 2.7 GB at mini's rate. The first pass after the change retires the
+      backlog in bounded batches (measured above).
+    - Cons: user-visible: turn diffs and tool measurements older than 30 days
+      answer `history-expired`. In the synthetic model, about three quarters of
+      the file rows belong to live environment and Git-scope views, which age does not
+      remove (inferred for mini, since the real share was not measured).
+  - **Keep 90 days.**
+    - Pros: no user-visible change; stall-safe after part A.
+    - Cons: an 8 GB ledger; more disk, longer backups, and cold reads of a
+      larger file.
+  - **A size budget that retires the oldest finished work first.**
+    - Pros: bounds the file directly, whatever the rate.
+    - Cons: new pressure logic beside the snapshot quota; history depth then
+      depends on activity.
+
+  Not implemented: the window is a retention promise to the user, so the
+  user decides. To-do
+  [5821](5821-ledger-retention-live-evidence.md) tasks 1 and 3 measure the
+  real table sizes and a real first run.
+- **How to keep commit fsyncs off the event loop?** Not decided here: it
+  changes the ledger's durability contract, and another worktree
+  (`storage-release-vs-writers`, with a script not on `main` at the time) was
+  measuring `synchronous = NORMAL` against disk writers at the same time, so
+  the two results should be read together. That worktree's result
+  ([7210](7210-storage-work-left-on-the-event-loop.md) task 4) does not
+  settle this one. For the free-page release child, `NORMAL` changed nothing
+  under four fsync writers (worst backend write 3.3 s and 3.4 s, against
+  1.5–4.2 s with `FULL`). Its long write-lock holds were cold page reads,
+  not commit fsyncs. A ledger commit is a small write with no such reads, and
+  there the measured `NORMAL` p50 was 0.0 ms, so the difference is specific to
+  ledger commits. Open: the user decides.
+  - **`synchronous = NORMAL` for the ledger file only (recommended).**
+    - Pros: one setting in `openChangeLedgerDatabase`. A commit no longer
+      fsyncs (p50 0.0 ms against 12 ms under contention). WAL mode keeps the
+      file consistent, and a process crash loses nothing.
+    - Cons: a power loss or an OS crash can lose the last commits, including
+      evidence frames already acknowledged to a bridge, which then drops them.
+      That breaks "every accepted frame is durable before it is acknowledged"
+      in `evidence-ingestion.ts`, so the contract and its documentation change
+      with it. WAL checkpoints still fsync on the loop (worst 761 to 934 ms
+      measured).
+  - **Fewer commits: one transaction per pull, not per frame and body.**
+    - Pros: keeps full durability; cuts the number of fsyncs per turn several
+      times.
+    - Cons: one fsync under contention still took 2.6 to 10 s, so it lowers
+      how often the loop stalls, not how long. Bodies must be fetched before
+      the transaction, which restructures ingestion.
+  - **Run the ledger's connection on a worker thread.**
+    - Pros: no ledger commit or statement can hold the event loop, durability
+      unchanged.
+    - Cons: every ledger call becomes asynchronous across a message port; a
+      large refactor of a synchronous API used by ingestion, publication,
+      projection and retention.
+- **When to build the new indexes?**
+  - **At service start, before reconciliation (chosen, recommended).**
+    - Pros: before the backend serves agent traffic; startup reconciliation
+      already scanned every tool window on every start, so this replaces a
+      recurring scan with a one-time build.
+    - Cons: on a ledger of mini's size the first start after the upgrade holds
+      the loop for about 2.2 s, once, and the stall log may record it.
+  - **In the first retention pass.**
+    - Pros: no startup cost.
+    - Cons: the same 2.2 s, during working hours, and the publication path
+      would run without its selection index until then.
+  - **In a child process.**
+    - Pros: no stall at all.
+    - Cons: a second writer on the ledger file during startup, for a one-time
+      cost.
 
 ### 7. Modal-dialog routing on a production install
 
@@ -540,12 +806,58 @@ stall is inconclusive, so task 6 remains open pending live evidence.
   (`runModal`) comes from Electron's source as remembered. Electron ships
   binaries only, and its docs say nothing about it. 0880 task 5 verifies it.
 
-### Task 6: left open
+### Task 6: part A on a synthetic ledger, part B left open
 
-- **Chose:** describe the run exactly and leave the task open.
-- **Why:** it needs a real heavy workload on the production install, and
-  this work must not run the backend or the app against the real data
-  directory.
+- **Chose:** measure the ledger with `scripts/efficiency/ledger-scale.ts` on a
+  synthetic copy of mini's size, and leave the live run (part B) open.
+- **Why:** the brief forbids opening mini's ledger or running the backend
+  against the real data directory, and part B needs the real workload.
+  The synthetic rows copy real row shapes and mini's table sizes, but
+  their mix (how many live environments, how many superseded measurements) is
+  assumed, not measured.
+
+### Task 6: one script beside the counters harness, not a new workload
+
+- **Chose:** a separate script in `scripts/efficiency/`, documented in
+  `efficiency-harness.md`, rather than a lettered workload.
+- **Why:** the harness repeats each case seven times and compares exact
+  counters; a 1.28 GB build takes a minute and stall figures are
+  machine-specific, so they would make every baseline run slow and add
+  nothing `--compare` could use.
+
+### Task 6: cold figures from the first read of a fresh clone
+
+- **Assumed:** the first statement on a freshly cloned file is a cold read.
+  A second clone of the same, recently read ledger answered warm, so later
+  clones appear to share the page cache on APFS. The bench's phase figures are
+  therefore warm, and the cold column comes from the first queries on the
+  first clone. No cache was purged (`purge` needs root).
+
+### Task 6: the window recommended, not changed
+
+- **Chose:** recommend 30 days and leave `archivedBodyRetentionDays` at 90.
+- **Why:** it is a one-line change and the bench shows it is stall-safe, but
+  it removes history users can open today. The brief allows a bound only if
+  it is small and safe, and safe includes not deleting what a user expects to
+  keep without asking.
+
+### Task 6: commit fsyncs measured, not changed
+
+- **Chose:** record the contention figures and the options, and change no
+  durability setting.
+- **Why:** every option either weakens the "durable before acknowledged"
+  contract or is a large refactor; the user decides the first, and a review
+  should see the second planned. The contention run overlapped another
+  worktree's four disk writers, which this task did not start and did not
+  stop; the figures are reported with that load named, and the run was not
+  repeated so as not to disturb that benchmark again.
+
+### Task 6: `pruneSupersededMeasurements` always takes an owner
+
+- **Chose:** make `owner` required and move the every-owner case to
+  `supersededOwnersPage` in the retention pass.
+- **Why:** an optional owner left the whole-table form callable. Its one other
+  caller was a test, which now names the owner it seeds.
 
 ### Benchmarks: one shared fixture
 

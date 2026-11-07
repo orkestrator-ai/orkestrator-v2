@@ -1,7 +1,7 @@
 # Measurement retention backlog times out in the aggregate
 
 - **ID:** 1222
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-28
 - **Tests:** `superseded measurements > retention prunes a backlog in batches, sparing selected and restorable ones`; followed by `superseded measurements > a single large measurement is pruned in strict row batches and reader pins are counted`.
 - **File:** `apps/backend/src/core/change-tracking/measurement-retention.test.ts`
@@ -38,3 +38,23 @@ queue time. This verifies the fixture repair under aggregate load; the
 broader run was later interrupted by the logged runner's 30-minute
 deadline while the unrelated bridges group was still queued; no backend
 failure occurred in the post-repair run. See [1223](../aggregate-validation-runs/1223-todo-number-guards-review-validation.md).
+
+## Ledger qualification observation, 2026-11-06
+
+Observed on `ledger-stall-qualification-a9ca4f9c771b` at `ae675f613`, based on
+`413bd6219a6c32f4fa586f8a5612355ad26c64a4`. The recurrence check
+`mise run flaky:recurrence -- 1222 --base 413bd6219a6c32f4fa586f8a5612355ad26c64a4`
+confirmed that the base contains the earlier fixture fix (`b6fb8c3ec9`), so this
+case is reopened. The fixture still seeds its 30,000 file rows atomically.
+
+- **Original command:** `mise run test:logged -- --name ledger-retention-owners -- bun test --cwd apps/backend ./src/core/change-tracking/retention-deletion.test.ts ./src/core/change-tracking/retention-store-walks.test.ts ./src/core/change-tracking/measurement-retention.test.ts ./src/core/change-tracking/service-retention-outcome.test.ts --parallel=2 --only-failures`.
+- **Worker configuration:** two isolated Bun workers; focused scan-plan, benchmark, type and source-guard checks were also running on the host.
+- **Failure:** backlog test timed out at 5278.30 ms against its 5000 ms budget; asynchronous retention subsequently used a closed database. The other failing case is tracked in [9897](9897-retirement-purge-pin-deadline.md).
+- **Suite counts:** 70 pass, 2 fail, 2 errors across 72 tests in four files; exit 1 after 60.0 s.
+- **Owning-file rerun:** `mise run test:logged -- --name measurement-retention-isolated -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-retention.test.ts --parallel=1 --only-failures` also failed: 10 pass, 2 fail, 2 errors across 12 tests in 8.0 s. The backlog timed out at 5612.35 ms and the following large-measurement case used the closed database.
+- **Evidence:** `output/agent-testing/ledger-review/ledger-retention-owners.log.gz` and `output/agent-testing/ledger-review/measurement-retention-isolated.log.gz` in the observing workspace; original runner artifacts `orkestrator-test-run.dLtPn3` and `orkestrator-test-run.xNHmCs`.
+
+This observation does **not** establish a flake: the complete owner failed in
+isolation as well. The deadline failure and cleanup cascade remain unresolved;
+no timeout, assertion or skip was changed. The new provider-evidence boundary
+and benchmark-report regressions passed separately.

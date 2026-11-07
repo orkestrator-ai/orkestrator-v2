@@ -155,4 +155,4 @@ Releases older than the lockfile still install with a plain `bun install`. The p
 - [5021](5021-publish-npm-from-ci-with-provenance.md)
 - [Releasing the desktop app](../../development/releasing.md)
 - [Host updates](../../architecture/host-updates.md)
-- [Security report, §5 Low severity](../../reports/2-26-10-27-security.md#5-low-severity) (L6)
+- Security report, §5 Low severity (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (L6)

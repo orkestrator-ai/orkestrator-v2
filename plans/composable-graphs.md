@@ -11,7 +11,7 @@ are built, 406 is dropped (D24); 501 waits on Phase 3 (D25).
 Work items and their status: [`plans/graphs/000-index.md`](graphs/000-index.md).
 Each Pn.m section below is one numbered file there (P1.7 is `107`).
 
-Source: [`docs/reports/2026-10-28-composable-graphs.md`](../docs/reports/2026-10-28-composable-graphs.md)
+Source: `git show a44641cbc^:docs/reports/2026-10-28-composable-graphs.md`
 (the report). The report explains why each decision below was taken; section
 references (§) point to it.
 

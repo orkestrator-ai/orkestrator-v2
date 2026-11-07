@@ -49,6 +49,6 @@ The list was made from a pass over the registry plus the renderer's callers. A r
 
 ## Related
 
-- [Security review: outstanding work](../../reports/security/0000-index.md) (I1)
+- Security review: outstanding work (`git show 413bd6219:docs/reports/security/0000-index.md`) (I1)
 - [command-nodes.md](../../architecture/command-nodes.md)
 - [version-compatibility.md](../../architecture/version-compatibility.md#register)

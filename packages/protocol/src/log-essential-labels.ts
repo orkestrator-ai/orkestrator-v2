@@ -117,6 +117,55 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const SOURCE = new RegExp(`^(?:claude|codex|opencode|cursor|grok|acp|pi):${UUID}$`, "i");
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-(?:alpha|beta|rc)\.\d{1,6})?$/;
+/** `storage-slow-operations.ts`: which file, the statement kind and a code-written table or pragma name. */
+const STORAGE_DATABASES = new Set(["main", "ledger", "other"]);
+const STORAGE_OPERATIONS = new Set([
+  "select",
+  "insert",
+  "update",
+  "delete",
+  "pragma",
+  "schema",
+  "vacuum",
+  "transaction",
+  "other",
+]);
+const TRANSACTION_MODES = new Set(["deferred", "immediate", "exclusive"]);
+/**
+ * The tables and pragmas the backend's statements name: the store schema
+ * (`storage-database.ts`), the pragmas it runs, and the change-tracking
+ * ledger's tables, which all start `change_`.
+ */
+const STORAGE_TABLES = new Set([
+  "stores",
+  "store_rows",
+  "storage_meta",
+  "leases",
+  "store_rows_owner",
+  "store_rows_position",
+  "sqlite_master",
+  "sqlite_schema",
+  "dbstat",
+  "analysis_limit",
+  "auto_vacuum",
+  "busy_timeout",
+  "foreign_keys",
+  "freelist_count",
+  "incremental_vacuum",
+  "integrity_check",
+  "journal_mode",
+  "journal_size_limit",
+  "optimize",
+  "page_count",
+  "page_size",
+  "quick_check",
+  "secure_delete",
+  "synchronous",
+  "user_version",
+  "wal_checkpoint",
+]);
+const LEDGER_TABLE = /^change_[a-z]{1,32}(?:_[a-z]{1,32}){0,4}$/;
+const isStorageTable = (value: string) => STORAGE_TABLES.has(value) || LEDGER_TABLE.test(value);
 const vocabulary = LOG_VOCABULARY as Readonly<Record<string, LogAreaSpec>>;
 
 export function isEssentialLabel(
@@ -164,6 +213,17 @@ export function isEssentialLabel(
     return ["queue-full", "write-failed", "rate-limited"].includes(value);
   if (area === "process" && field === "origin")
     return value === "uncaughtException" || value === "unhandledRejection";
+  if (area === "storage" && event === "operation.slow") {
+    if (field === "database") return STORAGE_DATABASES.has(value);
+    if (field === "op") return STORAGE_OPERATIONS.has(value);
+    if (field === "table") return isStorageTable(value);
+    if (field === "mode") return TRANSACTION_MODES.has(value);
+  }
+  if (area === "event-loop" && event === "stalled") {
+    if (field === "storageDatabase") return STORAGE_DATABASES.has(value);
+    if (field === "storageOp") return STORAGE_OPERATIONS.has(value);
+    if (field === "storageTable") return isStorageTable(value);
+  }
   if (area === "storage" && event === "snapshot.failed" && field === "retryAt")
     return TIMESTAMP.test(value);
   if (area === "storage" && event === "migration.failed" && field === "step")

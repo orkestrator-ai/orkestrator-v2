@@ -252,7 +252,10 @@ describe("database upkeep (reports 0760 and 0910)", () => {
       (main.db.query(`PRAGMA ${name}`).get() as Record<string, number>)[name]!;
     const pages = pragma("page_count");
     expect(pragma("freelist_count")).toBeGreaterThan(0);
-    await runDatabaseUpkeep(main);
+    // Every step must run here, however slow the host's disk is.
+    await runDatabaseUpkeep(main, {
+      release: (file) => releaseFreePagesInChildProcess(file, { slowStepMs: 60_000 }),
+    });
     expect(pragma("freelist_count")).toBe(0);
     expect(pragma("page_count")).toBeLessThan(pages / 2);
   });
@@ -263,7 +266,7 @@ describe("database upkeep (reports 0760 and 0910)", () => {
     const files: string[] = [];
     const release = async (file: string) => {
       files.push(file);
-      return { released: 0, left: 0 };
+      return { released: 0, left: 0, stop: "done" as const };
     };
     try {
       // Nothing free: no child is started.
@@ -277,6 +280,110 @@ describe("database upkeep (reports 0760 and 0910)", () => {
       expect(inProcess).not.toHaveBeenCalled();
     } finally {
       inProcess.mockRestore();
+    }
+  });
+
+  test("every upkeep pass writes its outcome: pages released and left, duration and stop", async () => {
+    const main = opened(openBackendDatabase(await dataDir()));
+    const logs = captureLogs();
+    let clock = 0;
+    const now = () => (clock += 10);
+    const finished = () =>
+      logs
+        .records()
+        .filter((row) => row.event === "upkeep.finished")
+        .map((row) => row.fields);
+    try {
+      // A new database starts with free pages; return them first, every step.
+      await releaseFreePagesInChildProcess(main.path, { slowStepMs: 60_000 });
+      await runDatabaseUpkeep(main, { now });
+      wastePages(main);
+      const releasable = main.releasableFreePages();
+      await runDatabaseUpkeep(main, {
+        now,
+        release: async () => ({ released: 7, left: releasable - 7, stop: "busy" }),
+      });
+      await runDatabaseUpkeep(main, {
+        now,
+        release: async () => ({ released: 3, left: releasable - 3, stop: "slow-step" }),
+      });
+      await runDatabaseUpkeep(main, {
+        now,
+        release: async () => {
+          throw Object.assign(new Error("PRIVATE"), { code: "SQLITE_IOERR" });
+        },
+      });
+      expect(finished()).toEqual([
+        {
+          durationMs: 20,
+          optimizeMs: 10,
+          releasable: 0,
+          released: null,
+          left: null,
+          releaseMs: null,
+          stop: "no-free-pages",
+        },
+        {
+          durationMs: 40,
+          optimizeMs: 10,
+          releasable,
+          released: 7,
+          left: releasable - 7,
+          releaseMs: 10,
+          stop: "busy",
+        },
+        {
+          durationMs: 40,
+          optimizeMs: 10,
+          releasable,
+          released: 3,
+          left: releasable - 3,
+          releaseMs: 10,
+          stop: "slow-step",
+        },
+        expect.objectContaining({ releasable, released: null, releaseMs: 10, stop: "failed" }),
+      ]);
+      expect(JSON.stringify(logs.records())).not.toContain("PRIVATE");
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("upkeep logs its finished outcome when the database closes after optimize", async () => {
+    const main = opened(openBackendDatabase(await dataDir()));
+    const logs = captureLogs();
+    const freePages = spyOn(main, "releasableFreePages");
+    const release = spyOn({ release: releaseFreePagesInChildProcess }, "release");
+    let clock = 0;
+    try {
+      await runDatabaseUpkeep(main, {
+        now: () => {
+          clock += 10;
+          if (clock === 20) main.close();
+          return clock;
+        },
+        release,
+      });
+      expect(main.isClosed()).toBe(true);
+      expect(freePages).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      expect(logs.records().filter((row) => row.event === "upkeep.finished")).toEqual([
+        expect.objectContaining({
+          fields: {
+            durationMs: 20,
+            optimizeMs: 10,
+            releasable: 0,
+            released: null,
+            left: null,
+            releaseMs: null,
+            stop: "closed",
+          },
+        }),
+      ]);
+    } finally {
+      freePages.mockRestore();
+      release.mockRestore();
+      logs.restore();
     }
   });
 
@@ -307,8 +414,14 @@ describe("database upkeep (reports 0760 and 0910)", () => {
     const before = main.releasableFreePages();
     expect(before).toBeGreaterThan(20);
     expect(
-      await releaseFreePagesInChildProcess(main.path, { maxPages: 10, stepPages: 4, pauseMs: 0 }),
-    ).toEqual({ released: 10, left: before - 10 });
+      await releaseFreePagesInChildProcess(main.path, {
+        maxPages: 10,
+        stepPages: 4,
+        pauseMs: 0,
+        // Every step must run here, however slow the host's disk is.
+        slowStepMs: 60_000,
+      }),
+    ).toEqual({ released: 10, left: before - 10, stop: "budget" });
     expect(main.releasableFreePages()).toBe(before - 10);
   });
 
@@ -323,6 +436,7 @@ describe("database upkeep (reports 0760 and 0910)", () => {
       expect(await releaseFreePagesInChildProcess(main.path)).toEqual({
         released: 0,
         left: before,
+        stop: "busy",
       });
       // The child's own one-second wait, then it stops; the backend never waits.
       expect(performance.now() - started).toBeLessThan(10_000);

@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from parts `0760` and `0800` of the E5 efficiency batch ("Needs verification" of each), whose batch file was deleted when E5 landed. Its outcome is in [the closing check of E5](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e5-database-upkeep); the original text stays in git history at `69a3b4ca5`. The code and its tests are built; what is left can only be proven on a real installation or another operating system.
+Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from parts `0760` and `0800` of the E5 efficiency batch ("Needs verification" of each), whose batch file was deleted when E5 landed. Its outcome is in the closing check of E5 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); the original text stays in git history at `69a3b4ca5`. The code and its tests are built; what is left can only be proven on a real installation or another operating system.
 
 ### Tasks
 
@@ -69,4 +69,4 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from parts `0760` and
 - [5180](5180-sqlite-durability-tiers.md), [5181](5181-sqlite-cache-sizes.md)
 - [4960 measurement rows live soak](4960-measurement-rows-live-soak.md)
 - [Backend storage: Snapshots](../../architecture/storage.md#snapshots)
-- [Logging and database report, R17 and D3](../../reports/2026-10-29-logging-and-database-efficiency.md#r17-take-the-ledger-out-of-hourly-snapshots-d3)
+- Logging and database report, R17 and D3 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)

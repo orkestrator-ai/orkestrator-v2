@@ -167,16 +167,18 @@ describe("PipelineKeyInformationTab", () => {
         />,
       );
 
-    test("places what needs a look under the summary, updating in place", () => {
+    test("leads with what needs a look, collapsed, updating in place", () => {
       seed({ ...pipeline, keyInformation, backendRevision: 2 });
       renderNotes();
       const tab = screen.getByTestId("pipeline-key-information-tab");
 
       expect(tab.textContent).toContain("Notes ·");
       const flagged = within(tab).getByRole("region", { name: "Needs a look" });
+      expect(within(flagged).queryByText("Rich text formatting") === null).toBe(true);
+      fireEvent.click(within(flagged).getByRole("button", { name: /^Needs a look/ }));
       expect(within(flagged).getByText("Rich text formatting")).toBeTruthy();
       expect(within(section(tab, "Solution")).getByText(keyInformation.solution!)).toBeTruthy();
-      expect(section(tab, "Summary").compareDocumentPosition(flagged)).toBe(
+      expect(flagged.compareDocumentPosition(section(tab, "Summary"))).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
 

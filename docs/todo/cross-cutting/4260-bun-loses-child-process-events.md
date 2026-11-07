@@ -646,7 +646,7 @@ E3 (#1833) merged, so the folder was re-checked on 2026-11-06. Its asynchronous 
 
 - Never raise a test deadline, skip or retry to hide this; see the [flake rules](../../tests/flaky-tests/0000-index.md).
 - Never settle a command as successful when its output may be missing.
-- Flake case 1537 and task 2 of [CI shard report 0010](../../reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md) were closed by task 3. Reopen the case if the test misses its deadline again.
+- Flake case 1537 and task 2 of CI shard report 0010 (`git show 413bd6219:docs/reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md`) were closed by task 3. Reopen the case if the test misses its deadline again.
 
 ## Needs verification
 
@@ -659,7 +659,7 @@ E3 (#1833) merged, so the folder was re-checked on 2026-11-06. Its asynchronous 
 ## Related
 
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
-- [CI shard report 0010](../../reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md)
+- CI shard report 0010 (`git show 413bd6219:docs/reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md`)
 - [0030 test suite and CI health](0030-test-suite-and-ci-health.md)
 - [To-do 6900](6900-reproduce-lost-child-event-on-pipe-capture.md): the next reduction attempt, on the old pipe capture
 

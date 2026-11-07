@@ -2,12 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `39c26627f`, plus the E11 build. Re-checked 2026-11-05 against `main` at `e6c3da899`, when tasks 1 and 2 were done. The E11 batch file (efficiency report 0210) is deleted; read it as built from with `git show 39c26627f:docs/reports/efficiency-logging-database/0210-e11-projection-hashing.md`. Its outcome table, and the figures for tasks 1 and 2, are in the efficiency outcome report's [closing check of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e11-projection-hashing).
+Analysed 2026-11-05 against `main` at `39c26627f`, plus the E11 build. Re-checked 2026-11-05 against `main` at `e6c3da899`, when tasks 1 and 2 were done. The E11 batch file (efficiency report 0210) is deleted; read it as built from with `git show 39c26627f:docs/reports/efficiency-logging-database/0210-e11-projection-hashing.md`. Its outcome table, and the figures for tasks 1 and 2, are in the efficiency outcome report's closing check of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
 
 ### Tasks
 
-1. **Decide whether the small projection scans matter**: from part 0380, task 1. Status: done (2026-11-05): closed without a change; each scan is under 0.1% of a changed read. Figures in [Measurement of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#measurement-of-e11-to-do-6260).
-2. **Measure what E11 saves on a changed read**: from the "Needs verification" of parts 0210, 0220, 0330 and 0350. Status: done (2026-11-05): 38–53% less CPU per changed progressive read. The legacy commit was 39% slower, which is now fixed. Figures in [Measurement of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#measurement-of-e11-to-do-6260); follow-ups are [6860](6860-splice-legacy-projection-response.md) and [6861](6861-raw-preview-window-serialisation.md).
+1. **Decide whether the small projection scans matter**: from part 0380, task 1. Status: done (2026-11-05): closed without a change; each scan is under 0.1% of a changed read. Figures in Measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
+2. **Measure what E11 saves on a changed read**: from the "Needs verification" of parts 0210, 0220, 0330 and 0350. Status: done (2026-11-05): 38–53% less CPU per changed progressive read. The legacy commit was 39% slower, which is now fixed. Figures in Measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); follow-ups are [6860](6860-splice-legacy-projection-response.md) and [6861](6861-raw-preview-window-serialisation.md).
 3. **How often a part-trimmed head streams, and whether one second suits it**: from part 0320's "Needs verification". Status: open.
 
 ### 3. How often a part-trimmed head streams, and whether one second suits it
@@ -54,7 +54,7 @@ The benchmark is committed as `scripts/benchmark-transcript-changed-read.ts`, be
 
 ## Related
 
-- [Efficiency outcome, closing check and measurement of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e11-projection-hashing)
+- Efficiency outcome, closing check and measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), tasks 1 and 5
 - [6860](6860-splice-legacy-projection-response.md) and [6861](6861-raw-preview-window-serialisation.md): costs the measurement found that E11 left
 - [5340](5340-transcript-reads-live-evidence.md): E9's live evidence, which a live run for task 3 can collect too

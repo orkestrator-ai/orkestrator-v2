@@ -14,7 +14,7 @@ Analysed 2026-11-05 against `main` at `41f9eb638`.
 
 **Context.** `isRunning` is `phase === "running"` in `AgentNativeTab.controller.tsx`, and `queuedSteerNote` in `auto-steer.ts` returns no note when it is false. The phase comes from the backend's projection. There it can be `recovering` while the bridge is reconnecting or unreachable, `cancelling`, `error` or `blocked` (`native-agent-transcript-projection.ts`). The renderer then merges what it receives, so its view can also differ from the backend's latest.
 
-**Investigation.** This was carried from 4700 because it cannot be logged cheaply. A `web.native-agent` line is a few lines of code, but it stays in the browser console: only the seven startup markers cross to the saved log (`docs/architecture/logging.md`, "What stays out of the persistent log"), and whether more may cross is undecided (R8 in the [logging review](../../reports/2026-10-29-logging-and-database-efficiency.md)). The backend can log its own phase, but it cannot see the renderer's merged state. None of the options below has been built or tried.
+**Investigation.** This was carried from 4700 because it cannot be logged cheaply. A `web.native-agent` line is a few lines of code, but it stays in the browser console: only the seven startup markers cross to the saved log (`docs/architecture/logging.md`, "What stays out of the persistent log"), and whether more may cross is undecided (R8 in the logging review (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)). The backend can log its own phase, but it cannot see the renderer's merged state. None of the options below has been built or tried.
 
 **Decisions.**
 

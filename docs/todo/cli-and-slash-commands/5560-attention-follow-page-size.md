@@ -78,7 +78,7 @@ A public API change follows `docs/architecture/public-cli.md`. An older backend 
 
 ## Related
 
-- [Efficiency report, G](../../reports/2026-10-27-efficiency.md#g-desktop-toolchain-docker-image-protocol-and-cli)
+- Efficiency report, G (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 16
 - [0017 CLI command surface](0017-cli-command-surface.md), task 1: a push follow would serve this command too, and its trigger measurement also names `attention --follow`.
 

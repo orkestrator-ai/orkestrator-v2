@@ -36,7 +36,12 @@ import {
   stopStandaloneBackendLogging,
 } from "./standalone-logging.js";
 import { installBoundedConsole } from "./bounded-console.js";
-import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
+import {
+  addEventLoopStallContext,
+  startEventLoopStallMonitor,
+} from "@orkestrator/protocol/event-loop-stall-monitor";
+import { commandTimings } from "./core/command-timing.js";
+import { slowStorageOperations } from "./core/storage-slow-operations.js";
 import {
   DESKTOP_SUPERVISED_ENV,
   readApplicationLogPolicy,
@@ -61,6 +66,9 @@ configureLoggerFromEnvironment(process.env, {
   relayToSupervisor: process.env[DESKTOP_SUPERVISED_ENV] === "1",
 });
 startEventLoopStallMonitor();
+// A stall line names the slow SQLite calls and the commands that ran during it.
+addEventLoopStallContext((window) => slowStorageOperations.stallContext(window));
+addEventLoopStallContext((window) => commandTimings.stallContext(window));
 // Before any other startup work: a rejection thrown while the backend is still
 // coming up would otherwise be fatal too, and this process is what the desktop
 // supervisor treats as the app itself.

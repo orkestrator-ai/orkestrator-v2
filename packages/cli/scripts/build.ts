@@ -113,6 +113,17 @@ await cp(
 
 const descriptors = await Promise.all(ON_DEMAND_BRIDGES.map((bridge) => stageRuntime(bridge.name)));
 
+// The backend looks for its preview worker and pinned diagram/HTML bundles in
+// `artifact-runtime/` beside `dist/main.js`. Without them every Mermaid fence
+// and HTML artifact reports the renderer unavailable on a standalone host.
+const { stageArtifactRuntime } = await import("../../../apps/backend/scripts/artifact-runtime.js");
+try {
+  await stageArtifactRuntime(outputRoot);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
 for (const result of builds) {
   for (const artifact of result.outputs) {
     console.log(`${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`);

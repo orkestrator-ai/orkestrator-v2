@@ -90,11 +90,11 @@ What was left of `docs/reports/efficiency-logging-database/0620-e23-renderer-pol
 ## Constraints and rationale
 
 - The read coordinator is read-only and must never own commands; upload retries in `useAnnotationCapture` stay on their own timer for that reason.
-- [Report invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep): only the view's reads pause, never the work they watch, and a missed event stays detectable through the list resync.
+- Report invariants (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`): only the view's reads pause, never the work they watch, and a missed event stays detectable through the list resync.
 - Use an isolated `dev:test` profile for anything run locally; never point a check at a production instance.
 
 ## Related
 
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 3
 - [Version compatibility](../../architecture/version-compatibility.md#register): rows for the single-environment read and the conditional folder reads
-- [Efficiency report, D](../../reports/2026-10-27-efficiency.md#d-renderer-appswebsrc)
+- Efficiency report, D (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)

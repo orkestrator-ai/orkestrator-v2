@@ -72,7 +72,7 @@ Analysed 2026-11-05 against `main` at `7347e5093`.
 
 ## Related
 
-- [Coordinator report, 4.3 (A2, A3, A5)](../../reports/2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)
+- Coordinator report, 4.3 (A2, A3, A5) (`git show 413bd6219:docs/reports/2026-10-27-coordinator.md`)
 - [4901-coordinator-waiting-on-cache-cost.md](4901-coordinator-waiting-on-cache-cost.md)
 - [0025-multi-review-panel-value.md](0025-multi-review-panel-value.md)
 - [The coordinator's tools](../../architecture/coordinator.md#multiple-machines)

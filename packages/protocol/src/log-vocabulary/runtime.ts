@@ -6,10 +6,22 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
       "This process's event loop. A stall of 10 seconds or more is written at error, so no level hides it.",
     events: {
       stalled: {
-        description: "A timer fired late, so every request in that window waited.",
+        description:
+          "A timer fired late, so every request in that window waited. In the backend the line also names what ran: `storageMs` and the `storage*` fields describe the slow SQLite calls in the window (`operation.slow` in `storage`), `commandsInFlight` and `commands` the commands running, and `blockingCommand` one whose synchronous part overlapped it.",
         essential: true,
         minLevel: "error",
-        fields: { lagMs: "number", intervalMs: "number" },
+        fields: {
+          lagMs: "number",
+          intervalMs: "number",
+          storageMs: "number",
+          storageDatabase: "label",
+          storageOp: "label",
+          storageTable: "label",
+          storageLongestMs: "number",
+          storageBusy: "boolean",
+          commandsInFlight: "number",
+          blockingCommandMs: "number",
+        },
       },
     },
   },

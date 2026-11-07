@@ -71,6 +71,43 @@ function stepGate(directory: string) {
   };
 }
 
+/**
+ * The real supervisor and helper, with only the selected vacuum or checkpoint
+ * taking `ms` longer, as it does when the disk is busy.
+ */
+function slowStepSpawn(operation: "vacuum" | "checkpoint", step: number, ms: number) {
+  return (command: string, args: string[], options: SpawnOptions) => {
+    const prelude = `
+      const slowSqlite = require("bun:sqlite");
+      const slowExec = slowSqlite.Database.prototype.exec;
+      let slowStep = 0;
+      if (${JSON.stringify(operation)} === "vacuum") slowSqlite.Database.prototype.exec = function (sql, ...rest) {
+        const result = slowExec.call(this, sql, ...rest);
+        if (String(sql).includes("incremental_vacuum") && ++slowStep === ${step}) Bun.sleepSync(${ms});
+        return result;
+      };
+      if (${JSON.stringify(operation)} === "checkpoint") {
+        const slowQuery = slowSqlite.Database.prototype.query;
+        slowSqlite.Database.prototype.query = function (sql, ...rest) {
+          const statement = slowQuery.call(this, sql, ...rest);
+          if (!String(sql).includes("wal_checkpoint")) return statement;
+          const get = statement.get.bind(statement);
+          statement.get = (...args) => {
+            const result = get(...args);
+            if (++slowStep === ${step}) Bun.sleepSync(${ms});
+            return result;
+          };
+          return statement;
+        };
+      }
+    `;
+    const slowed = args.slice();
+    // -e, supervisor, --, timeoutMs, helper, ...helperArgs
+    slowed[4] = prelude + args[4];
+    return spawn(command, slowed, options);
+  };
+}
+
 function checkRetainedData(file: string, title: string) {
   // Verify through a new connection after the worker has closed its own.
   const copy = new Database(file, { readonly: true });
@@ -103,6 +140,8 @@ describe("free-page release with live backend writes", () => {
       spawn: gate.spawn,
       maxPages: 12,
       stepPages: 4,
+      // Every step must run here, however slow the host's disk is.
+      slowStepMs: 60_000,
       timeoutMs: 20_000,
     });
     // Attach a rejection handler immediately, including if waiting for a gate fails.
@@ -117,7 +156,7 @@ describe("free-page release with live backend writes", () => {
         main.writeStore("kanban", [{ id: "live", projectId: "p1", title: `update-${step}` }]);
         await gate.resume(step);
       }
-      expect(await release).toEqual({ released: 12, left: before - 12 });
+      expect(await release).toEqual({ released: 12, left: before - 12, stop: "budget" });
       checkRetainedData(main.path, "update-3");
     } finally {
       await gate.unblock();
@@ -133,6 +172,7 @@ describe("free-page release with live backend writes", () => {
       spawn: gate.spawn,
       maxPages: 12,
       stepPages: 4,
+      slowStepMs: 60_000,
       timeoutMs: 20_000,
     });
     const outcome = release.then(
@@ -148,13 +188,16 @@ describe("free-page release with live backend writes", () => {
       await gate.resume(1);
       // Keep the writer lock until the child returns: its second vacuum must
       // encounter SQLITE_BUSY, rather than merely finding the lock released.
-      expect(await release).toEqual({ released: 4, left: before - 4 });
+      expect(await release).toEqual({ released: 4, left: before - 4, stop: "busy" });
       main.db.exec("COMMIT");
       locked = false;
       expect(main.releasableFreePages()).toBe(before - 4);
-      await expect(releaseFreePagesInChildProcess(main.path)).resolves.toEqual({
+      await expect(
+        releaseFreePagesInChildProcess(main.path, { slowStepMs: 60_000 }),
+      ).resolves.toEqual({
         released: before - 4,
         left: 0,
+        stop: "done",
       });
       checkRetainedData(main.path, "original");
     } finally {
@@ -164,6 +207,57 @@ describe("free-page release with live backend writes", () => {
     }
   }, 30_000);
 
+  for (const operation of ["vacuum", "checkpoint"] as const) {
+    test(`a slow ${operation} ends the run and the next check resumes it (to-do 7210 task 4)`, async () => {
+      const { main } = await fixture();
+      const before = main.releasableFreePages();
+      // Step 2 is slower than the threshold: its pages count, then the child stops
+      // instead of taking the write lock again while the disk is busy.
+      expect(
+        await releaseFreePagesInChildProcess(main.path, {
+          spawn: slowStepSpawn(operation, 2, 1_500),
+          maxPages: 12,
+          stepPages: 4,
+          pauseMs: 0,
+          slowStepMs: 1_000,
+          timeoutMs: 20_000,
+        }),
+      ).toEqual({ released: 8, left: before - 8, stop: "slow-step" });
+      expect(main.releasableFreePages()).toBe(before - 8);
+      main.writeStore("kanban", [{ id: "live", projectId: "p1", title: "after-slow-step" }]);
+      expect(
+        await releaseFreePagesInChildProcess(main.path, {
+          maxPages: 4,
+          stepPages: 4,
+          slowStepMs: 60_000,
+        }),
+      ).toEqual({ released: 4, left: before - 12, stop: "budget" });
+      checkRetainedData(main.path, "after-slow-step");
+    }, 30_000);
+
+    for (const terminal of ["done", "budget"] as const) {
+      test(`a slow final ${operation} preserves the ${terminal} outcome`, async () => {
+        const { main } = await fixture();
+        const before = main.releasableFreePages();
+        const pages = terminal === "done" ? before : 4;
+        expect(
+          await releaseFreePagesInChildProcess(main.path, {
+            spawn: slowStepSpawn(operation, 1, 1_500),
+            // Exhaustion also reaches maxPages: done must take precedence.
+            maxPages: pages,
+            stepPages: pages,
+            pauseMs: 0,
+            slowStepMs: 1_000,
+            timeoutMs: 20_000,
+          }),
+        ).toEqual({ released: pages, left: before - pages, stop: terminal });
+        expect(main.releasableFreePages()).toBe(before - pages);
+        main.writeStore("kanban", [{ id: "live", projectId: "p1", title: "after-final-step" }]);
+        checkRetainedData(main.path, "after-final-step");
+      }, 30_000);
+    }
+  }
+
   test("the release deadline kills and reaps a worker blocked between steps", async () => {
     const { directory, main } = await fixture();
     const gate = stepGate(directory);
@@ -171,6 +265,7 @@ describe("free-page release with live backend writes", () => {
       spawn: gate.spawn,
       maxPages: 12,
       stepPages: 4,
+      slowStepMs: 60_000,
       timeoutMs: 3_000,
     });
     const outcome = release.then(

@@ -511,8 +511,13 @@ that does not finish, `ChangeRetentionService.drainOwner` drains the rest right
 after the commit: one drain per owner and scope, in batches of at most 256 file
 rows, yielding between transactions, and it stops at shutdown. Its failure is
 logged and left to the retention pass. The retention pass (two minutes after
-start, then hourly) prunes any other backlog the same way, then releases free
-pages in 128-page steps, whoever freed them. Existing databases created
+start, then hourly) prunes any other backlog the same way: it walks the owner
+index 512 owners a page (`supersededOwnersPage`, which reads only that covering
+index), yielding between pages, and prunes each owner with more than it keeps
+through its own index range. It then releases free pages in 128-page steps,
+whoever freed them. One query over every measurement used to find the backlog;
+at 85,000 measurements it took 24 s with a cold page cache, once per batch
+([0741](../todo/cross-cutting/0741-backend-responsiveness-under-load.md) task 6). Existing databases created
 without incremental auto-vacuum reuse freed pages but do not physically shrink;
 backup headroom is calculated from live pages rather than allocated file size.
 
@@ -584,7 +589,8 @@ oldest first (row order is age order, so no index is needed), and the newest
 sequence deleted (`retention:expired-seq`) says which operations have had no frame
 inside the window. Such an operation goes with its evidence, chunks, windows,
 measurements and selections, unless its turn is still retained. Provider turn
-diffs age the same way, by their newest evidence. A transcript row whose operation
+diffs age the same way, by their newest evidence: the pass walks evidence in row
+order, which is ingestion order, and stops at the first row inside the window. A transcript row whose operation
 has gone reads as an untracked call. Capture attempts, gaps, restore tokens and
 finished restore operations, cursors with nothing left to acknowledge and bindings
 with nothing left under them go once they are past the window too.
@@ -607,9 +613,17 @@ A pass works through at most 4,096 batches, so a first run on an old ledger take
 several passes. Each transaction is bounded (256 rows, 32 snapshots, 16 quota
 releases, one page of diff identities) and followed by a yield. The indexes behind
 purges and the age walk (`change_turn_boundaries_environment`,
-`change_thread_segments_environment`, `change_turn_boundaries_age`) are created on
-first use without a schema version, as `store_rows_position` is
-([storage](storage.md#stores-and-layouts)), so an older build still opens the ledger.
+`change_thread_segments_environment`, `change_turn_boundaries_age`), and three that
+keep per-row checks off whole-table scans (`change_selections_measurement` for a
+pruning candidate's selection, the partial `change_tool_windows_open_only` for
+open windows, the partial `change_evidence_provider_turn_frames` for a purged
+binding's provider turns), are created at service start without a schema
+version, as `store_rows_position` is ([storage](storage.md#stores-and-layouts)),
+so an older build still opens the ledger. On a ledger of 2.8M rows the three
+took about 2.2 s together, once. `ledger-scan-plans.test.ts` plans every
+statement a publication, a pull, a pass and a purge issue and fails on any that
+walks a large table; `scripts/efficiency/ledger-scale.ts` measures the stalls at
+production size ([efficiency harness](../development/efficiency-harness.md#ledger-at-production-scale)).
 
 Backups must include both `orkestrator.sqlite` and
 `<dataDir>/change-tracking/` (objects and evidence bodies); metadata alone

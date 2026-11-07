@@ -70,4 +70,4 @@ certificate.
 - [Todo 0042](0042-service-preview-rollout.md), task 2
 - [Todo 2960](../cross-cutting/2960-host-prefixed-gateway-cookie.md)
 - [Browser previews: private HTTPS origins](../../architecture/browser-previews.md#private-https-origins)
-- [Security report, §6 Informational](../../reports/2-26-10-27-security.md#6-informational) (I5)
+- Security report, §6 Informational (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (I5)

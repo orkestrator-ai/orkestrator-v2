@@ -59,5 +59,5 @@ Captures hold page content. One spool serves every window of the process and has
 ## Related
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 12
-- [Efficiency report, G](../../reports/2026-10-27-efficiency.md#g-desktop-toolchain-docker-image-protocol-and-cli)
+- Efficiency report, G (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
 - [Web page annotations](../../architecture/web-page-annotations.md#pending-spool-and-acknowledged-transfer)

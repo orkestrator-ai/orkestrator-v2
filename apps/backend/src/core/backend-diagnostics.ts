@@ -7,6 +7,7 @@ import { DiagnosticsBundles } from "./diagnostics-bundle.js";
 import { HealthSummary, readHealthRows, type HealthRow } from "./health-summary.js";
 import type { StorageDatabase } from "./storage-database.js";
 import { leaseWaitMetrics } from "./storage-lease-metrics.js";
+import { slowStorageOperations } from "./storage-slow-operations.js";
 import { openBackendDatabase } from "./storage-stores.js";
 
 /**
@@ -57,7 +58,11 @@ export class BackendDiagnostics {
   }
 
   databaseStats(): DatabaseStats {
-    return { ...this.databaseSummary.read(), leaseWaits: leaseWaitMetrics.snapshot() };
+    return {
+      ...this.databaseSummary.read(),
+      leaseWaits: leaseWaitMetrics.snapshot(),
+      slowOperations: slowStorageOperations.snapshot(),
+    };
   }
 
   /** What `/metrics` answers: without a gateway, everything but its own counters. */

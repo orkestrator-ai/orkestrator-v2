@@ -1,6 +1,6 @@
 # Measure the retention pass on a large real store
 
-From [efficiency report](../../reports/2026-10-27-efficiency.md#e-storage-change-tracking-git-and-files) ST-20, part `0550` of batch E4 (Object store), its "Needs verification" item ("Real sweep duration on a large store; the report's impact is reasoned, not measured"). The batch file was deleted when E4 was built; it is in Git history at the base commit named in [Related](#related).
+From efficiency report (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) ST-20, part `0550` of batch E4 (Object store), its "Needs verification" item ("Real sweep duration on a large store; the report's impact is reasoned, not measured"). The batch file was deleted when E4 was built; it is in Git history at the base commit named in [Related](#related).
 
 ## Task analysis
 

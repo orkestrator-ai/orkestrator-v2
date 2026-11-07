@@ -93,9 +93,55 @@ export interface LeaseWaitSnapshot {
   transactionsBusy: number;
 }
 
+/**
+ * One synchronous SQLite call or transaction that held the event loop for at
+ * least the slow-operation threshold. Content-free: names, kinds and times
+ * only, never SQL text, parameters or rows.
+ */
+export interface SlowStorageOperation {
+  /** Wall-clock end of the operation, as an ISO string. */
+  at: string;
+  /** `main` (`orkestrator.sqlite`), `ledger` (`change-tracking.sqlite`) or `other`. */
+  database: string;
+  /** `transaction`, or the statement's kind (`select`, `insert`, `pragma`, …). */
+  op: string;
+  /** The statement's table (or pragma); for a transaction, its slowest statement's. */
+  table: string | null;
+  /** The store family a transaction worked on, when the caller named one. */
+  store: string | null;
+  /** A transaction's mode: `deferred`, `immediate` or `exclusive`. */
+  mode: string | null;
+  durationMs: number;
+  /** A transaction's wait to begin: the write lock, for an immediate one. */
+  beginMs: number | null;
+  /** A transaction's time in its own statements, summed. */
+  sqlMs: number | null;
+  /** A transaction's commit, which syncs the WAL. */
+  commitMs: number | null;
+  /** The call failed with `SQLITE_BUSY`: the busy timeout ran out. */
+  busy: boolean;
+}
+
+export interface SlowStorageOperationSeries {
+  count: number;
+  totalMs: number;
+  maxMs: number;
+}
+
+export interface SlowStorageOperationsSnapshot {
+  thresholdMs: number;
+  /** By `database:op:table`, capped; the rest is counted in `overflowed`. */
+  series: Record<string, SlowStorageOperationSeries>;
+  overflowed: number;
+  /** The most recent, oldest first. */
+  recent: SlowStorageOperation[];
+}
+
 /** `get_database_stats`: the cached summary plus the live lease counters. */
 export interface DatabaseStats extends DatabaseSummary {
   leaseWaits: LeaseWaitSnapshot;
+  /** Absent from a backend older than the slow-operation record. */
+  slowOperations?: SlowStorageOperationsSnapshot;
 }
 
 export const DIAGNOSTICS_MANIFEST_SCHEMA_VERSION = 1;

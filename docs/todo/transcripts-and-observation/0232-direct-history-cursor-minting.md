@@ -95,7 +95,7 @@ see **TX-10's interim map (task 4)**.
 
 **Problem.** Joined paging keeps `projectionHistory`, a byte-bounded per-session cache (`native-agent-transcript-projection.ts:770`), plus the v1 cursor namespace and `firstHistoryCursor` (`:1692`), all for compatibility only.
 
-**Context.** The retirement condition is in the register. Removal also needs the counter quiet on the machines the maintainer can reach. Efficiency finding TX-10 ([report](../../reports/2026-10-27-efficiency.md#b-native-agent-transcript-pipeline)) rates the cost of each joined page and proposed an interim fix; its report file 0385 was closed into this task on 2026-11-05.
+**Context.** The retirement condition is in the register. Removal also needs the counter quiet on the machines the maintainer can reach. Efficiency finding TX-10 (report (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)) rates the cost of each joined page and proposed an interim fix; its report file 0385 was closed into this task on 2026-11-05.
 
 **Investigation.** Re-checked against `cbe0f9a5b` on 2026-11-05.
 
@@ -112,7 +112,7 @@ see **TX-10's interim map (task 4)**.
     - Cons: a caller still on the path pays one whole read and a hashing scan per page until removal.
   - **Build the map now.**
     - Pros: removes the hashing scan.
-    - Cons: a new structure that needs byte and count bounds ([report invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep)) on a retiring path; it leaves the whole `sync-v1` read, the larger cost, untouched.
+    - Cons: a new structure that needs byte and count bounds (report invariants (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)) on a retiring path; it leaves the whole `sync-v1` read, the larger cost, untouched.
   - **When the map becomes worth building:** any of the three counters shows a `lastSeenAt` after 2026-11-03 (the first release that carries the split) on a machine running v2.36.0 or later, at a rate of more than an occasional page, and removal is still more than a few weeks off. Read the counters with the `get_compatibility_path_usage` backend command or the `compatibilityPaths` block of the gateway's `/__orkestrator/metrics` ([version-compatibility.md](../../architecture/version-compatibility.md#usage-counters)), on an isolated profile or a machine the maintainer owns. Read `lastSeenAt`, not `count`: the base id's older totals mix every cause. `unpaged-source` use is cured by the `/messages` fallback retiring and `unnamed-cursor` use by direct recovery, so either is a reason to do that work first; the map only helps if removal is blocked for long. If it is built, key it by the cursor's hashed id per `projectionHistory` epoch and bound it with that cache, so it is evicted and cleared with the entry.
 
 - **Keep this item here or move it?**
@@ -477,6 +477,6 @@ collecting with the first release that carries them.
 - [native-transcripts.md](../../architecture/native-transcripts.md#history-pages-and-cursors).
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window):
   the support window.
-- [Efficiency report, B](../../reports/2026-10-27-efficiency.md#b-native-agent-transcript-pipeline)
+- Efficiency report, B (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
   (TX-10), closed into task 4; see the
-  [closing note for 0385](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-0385-tx-10-joined-history-pages).
+  closing note for 0385 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).

@@ -536,6 +536,22 @@ describe("ChartFenceBlock", () => {
       <ChartFenceBlock source={'{"schemaVersion": 1,'} closed blockKey="k" />,
     );
     expect(container.querySelector('[role="note"]')?.textContent).toContain("invalid");
+    expect(container.querySelector('[role="note"]')?.getAttribute("data-rich-notice-tone")).toBe(
+      "error",
+    );
+    expect(container.textContent).toContain('{"schemaVersion": 1,');
+  });
+
+  test("a schema-invalid chart is an error notice with the exact source", () => {
+    const source = JSON.stringify({ schemaVersion: 1, kind: "unknown", title: "Invalid" });
+    const { container } = render(
+      <ChartFenceBlock source={source} closed blockKey="invalid-spec" />,
+    );
+    expect(container.querySelector('[role="note"]')?.getAttribute("data-rich-notice-tone")).toBe(
+      "error",
+    );
+    expect(container.textContent).toContain(source);
+    expect(container.querySelector("svg[data-chart-kind]")).toBeNull();
   });
 
   test("no network request, evaluation or markup can originate from a chart spec", () => {

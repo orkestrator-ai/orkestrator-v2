@@ -30,6 +30,6 @@ Analysed 2026-11-05 against `main` at `ce7989a50`.
 
 ## Related
 
-- [Coordinator report, 4.3 (A5)](../../reports/2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)
+- Coordinator report, 4.3 (A5) (`git show 413bd6219:docs/reports/2026-10-27-coordinator.md`)
 - [0025-multi-review-panel-value.md](0025-multi-review-panel-value.md)
 - [The context block](../../architecture/coordinator.md#the-context-block)

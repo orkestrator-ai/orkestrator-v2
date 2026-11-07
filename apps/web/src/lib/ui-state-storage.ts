@@ -1,5 +1,6 @@
 import type { StateStorage } from "zustand/middleware";
-import { desktopConnectionStorageKey, windowStorageKey } from "./desktop-storage-key";
+import { windowStorageKey } from "./desktop-storage-key";
+import { COMMAND_STORAGE_NODE, nodeStorageKey, type StorageNode } from "./persistence-keys";
 
 const PROJECT_FIELDS = [
   "collapsedProjects",
@@ -8,11 +9,11 @@ const PROJECT_FIELDS = [
   "recentProjectIds",
 ] as const;
 
-/** Window shape follows the command window; project IDs belong to the workspace node. */
-export function createUIStateStorage(): StateStorage {
+/** Window shape follows the command window; project IDs belong to `node`. */
+export function createUIStateStorage(node: StorageNode = COMMAND_STORAGE_NODE): StateStorage {
   const windowKey = windowStorageKey("ui-storage");
-  const projectKey = desktopConnectionStorageKey("ui-project-storage");
-  const oldWorkspaceKey = desktopConnectionStorageKey("ui-storage");
+  const projectKey = nodeStorageKey("ui-project-storage", node);
+  const oldWorkspaceKey = nodeStorageKey("ui-storage", node);
   return {
     getItem: () => {
       const presentation = JSON.parse(localStorage.getItem(windowKey) ?? "null");

@@ -1,8 +1,18 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { COMMAND_SCOPE_PROVISIONAL_NODE_ID } from "./node-scope/app-window-scope";
+import type { NodeScopeRole } from "./node-scope/node-scope";
 import { readStoredWorkspace } from "./portal/workspace-target-storage";
 
 /**
- * Keeps persisted presentation state separate per machine inside Electron.
- * Browser clients retain their established storage keys.
+ * Keeps persisted presentation state separate per node in one renderer
+ * (report §7.5). Browser clients retain their established storage keys.
+ *
+ * Every per-node key names its node (`StorageNode`: a `NodeScope` is one).
+ * The command node's key is the key this renderer used before keys took a
+ * node, so nothing moves for it. A leaf's key is the `:machine:<hash>` form a
+ * browser or iOS realm on that leaf already wrote in shared origin storage,
+ * so the leaf reads its existing state. Desktop realm data lived in per-realm
+ * partitions and is abandoned (decision 13.7 A).
  *
  * The namespace is the machine's identity, never a route: a proved backend
  * identity when there is one, otherwise the saved connection. An SSH
@@ -55,12 +65,46 @@ function browserWorkspaceNode(): string | null {
   return nodeId && nodeId.length <= 128 ? nodeId : null;
 }
 
-/** Presentation state of the machine the window's workspace is on. */
-export function desktopConnectionStorageKey(baseKey: string): string {
+/**
+ * The node a persisted key belongs to. Only the role decides the command
+ * node's key: the command scope's id is provisional until plan item 2010
+ * proves it, and its key must not change when the id does.
+ */
+export interface StorageNode {
+  readonly nodeId: BackendId;
+  readonly role: NodeScopeRole;
+}
+
+/**
+ * The command node, for module-level stores that are not scoped yet. Plan
+ * items 3006, 3007, 3012 and 3013 replace it with the store's own scope.
+ */
+export const COMMAND_STORAGE_NODE: StorageNode = Object.freeze({
+  nodeId: COMMAND_SCOPE_PROVISIONAL_NODE_ID,
+  role: "command",
+});
+
+function machineKey(baseKey: string, nodeId: string): string {
+  return `${baseKey}:machine:${hashIdentity(`machine:${nodeId}`)}`;
+}
+
+/**
+ * True in a hosted-browser realm whose workspace is on a leaf: its command
+ * node key is that leaf's, and the page's own (command) state is not its to
+ * migrate.
+ */
+export function isBrowserLeafRealm(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.orkestrator?.isolatedViewState !== true && browserWorkspaceNode() !== null;
+}
+
+/** Presentation state of `node` in this renderer. */
+export function desktopConnectionStorageKey(baseKey: string, node: StorageNode): string {
   if (typeof window === "undefined") return baseKey;
+  if (node.role !== "command") return machineKey(baseKey, node.nodeId);
   if (window.orkestrator?.isolatedViewState !== true) {
     const machine = browserWorkspaceNode();
-    return machine ? `${baseKey}:machine:${hashIdentity(`machine:${machine}`)}` : baseKey;
+    return machine ? machineKey(baseKey, machine) : baseKey;
   }
   return namespacedKey(baseKey, window.orkestratorDesktopIdentity);
 }

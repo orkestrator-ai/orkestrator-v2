@@ -1,6 +1,6 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import type { PaneNode } from "@/types/paneLayout";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { COMMAND_STORAGE_NODE, nodeStorageKey, type StorageNode } from "@/lib/persistence-keys";
 
 /**
  * Renderer-local pane presentation state.
@@ -8,6 +8,11 @@ import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
  * Shared selection is backend-owned, while Electron keeps a connection-scoped
  * window selection and one-shot presentation intents here. The legacy helpers
  * remain only to read/apply v1 records during migration and clean them up.
+ *
+ * Every record is a node's (`storageNode`, the command node by default until
+ * the pane layout store is scoped in plan item 3013): environment ids are
+ * only unique on their node. The un-namespaced v1 record was the command
+ * node's, so a leaf never reads it.
  *
  * Everything is best-effort. A browser that denies storage, a quota failure,
  * or a corrupt record costs the user remembered presentation state and nothing
@@ -26,11 +31,11 @@ const WINDOW_BUILD_PIPELINE_HANDOFF_KEY = "orkestrator.window-build-pipeline-han
 const MAX_ENVIRONMENTS = 64;
 const MAX_SERIALIZED_BYTES = 64 * 1024;
 
-function readStartupAgentActivations(): string[] {
+function readStartupAgentActivations(storageNode: StorageNode): string[] {
   const store = storage();
   if (!store) return [];
   try {
-    const raw = store.getItem(desktopConnectionStorageKey(WINDOW_STARTUP_AGENT_ACTIVATION_KEY));
+    const raw = store.getItem(nodeStorageKey(WINDOW_STARTUP_AGENT_ACTIVATION_KEY, storageNode));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || !Array.isArray(parsed.environmentIds)) return [];
@@ -43,13 +48,13 @@ function readStartupAgentActivations(): string[] {
   }
 }
 
-function writeStartupAgentActivations(environmentIds: string[]): void {
+function writeStartupAgentActivations(environmentIds: string[], storageNode: StorageNode): void {
   const store = storage();
   if (!store) return;
   const bounded = Array.from(new Set(environmentIds)).slice(-MAX_ENVIRONMENTS);
   try {
     store.setItem(
-      desktopConnectionStorageKey(WINDOW_STARTUP_AGENT_ACTIVATION_KEY),
+      nodeStorageKey(WINDOW_STARTUP_AGENT_ACTIVATION_KEY, storageNode),
       JSON.stringify({ version: 1, environmentIds: bounded }),
     );
   } catch {
@@ -77,11 +82,11 @@ function parseBuildPipelineActivation(value: unknown): BuildPipelineActivation |
   };
 }
 
-function readBuildPipelineActivations(): BuildPipelineActivation[] {
+function readBuildPipelineActivations(storageNode: StorageNode): BuildPipelineActivation[] {
   const store = storage();
   if (!store) return [];
   try {
-    const raw = store.getItem(desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_ACTIVATION_KEY));
+    const raw = store.getItem(nodeStorageKey(WINDOW_BUILD_PIPELINE_ACTIVATION_KEY, storageNode));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return [];
@@ -93,12 +98,15 @@ function readBuildPipelineActivations(): BuildPipelineActivation[] {
   }
 }
 
-function writeBuildPipelineActivations(entries: BuildPipelineActivation[]): void {
+function writeBuildPipelineActivations(
+  entries: BuildPipelineActivation[],
+  storageNode: StorageNode,
+): void {
   const store = storage();
   if (!store) return;
   try {
     store.setItem(
-      desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_ACTIVATION_KEY),
+      nodeStorageKey(WINDOW_BUILD_PIPELINE_ACTIVATION_KEY, storageNode),
       JSON.stringify({ version: 1, entries: entries.slice(-MAX_ENVIRONMENTS) }),
     );
   } catch {
@@ -157,11 +165,13 @@ function mergeBuildPipelineHandoffResolutions(
   }));
 }
 
-function readBuildPipelineHandoffResolutions(): BuildPipelineHandoffResolution[] {
+function readBuildPipelineHandoffResolutions(
+  storageNode: StorageNode,
+): BuildPipelineHandoffResolution[] {
   const store = storage();
   if (!store) return [];
   try {
-    const raw = store.getItem(desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_HANDOFF_KEY));
+    const raw = store.getItem(nodeStorageKey(WINDOW_BUILD_PIPELINE_HANDOFF_KEY, storageNode));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return [];
@@ -175,12 +185,15 @@ function readBuildPipelineHandoffResolutions(): BuildPipelineHandoffResolution[]
   }
 }
 
-function writeBuildPipelineHandoffResolutions(entries: BuildPipelineHandoffResolution[]): void {
+function writeBuildPipelineHandoffResolutions(
+  entries: BuildPipelineHandoffResolution[],
+  storageNode: StorageNode,
+): void {
   const store = storage();
   if (!store) return;
   try {
     store.setItem(
-      desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_HANDOFF_KEY),
+      nodeStorageKey(WINDOW_BUILD_PIPELINE_HANDOFF_KEY, storageNode),
       JSON.stringify({ version: 1, entries: entries.slice(-MAX_ENVIRONMENTS) }),
     );
   } catch {
@@ -276,32 +289,47 @@ function forEachLeaf(node: PaneNode, visit: (leaf: PaneNode) => void): void {
   forEachLeaf(node.children[1], visit);
 }
 
-export function readStoredPaneSelection(environmentId: string): StoredPaneSelection | null {
+export function readStoredPaneSelection(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): StoredPaneSelection | null {
+  if (storageNode.role !== "command") return null;
   const entry = readEntries().find((candidate) => candidate.environmentId === environmentId);
   if (!entry) return null;
   return { activePaneId: entry.activePaneId, activeTabIds: entry.activeTabIds };
 }
 
-export function clearStoredPaneSelection(environmentId: string): void {
+export function clearStoredPaneSelection(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): void {
+  if (storageNode.role !== "command") return;
   const entries = readEntries();
   const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
   if (remaining.length === entries.length) return;
   writeEntries(remaining);
 }
 
-export function readWindowPaneSelection(environmentId: string): StoredPaneSelection | null {
-  const entry = readEntries(desktopConnectionStorageKey(WINDOW_STORAGE_KEY)).find(
+export function readWindowPaneSelection(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): StoredPaneSelection | null {
+  const entry = readEntries(nodeStorageKey(WINDOW_STORAGE_KEY, storageNode)).find(
     (candidate) => candidate.environmentId === environmentId,
   );
   return entry ? { activePaneId: entry.activePaneId, activeTabIds: entry.activeTabIds } : null;
 }
 
-export function writeWindowPaneSelection(environmentId: string, state: EnvironmentPaneState): void {
+export function writeWindowPaneSelection(
+  environmentId: string,
+  state: EnvironmentPaneState,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): void {
   const activeTabIds: Record<string, string> = {};
   forEachLeaf(state.root, (leaf) => {
     if (leaf.kind === "leaf" && leaf.activeTabId) activeTabIds[leaf.id] = leaf.activeTabId;
   });
-  const storageKey = desktopConnectionStorageKey(WINDOW_STORAGE_KEY);
+  const storageKey = nodeStorageKey(WINDOW_STORAGE_KEY, storageNode);
   const entries = readEntries(storageKey).filter(
     (candidate) => candidate.environmentId !== environmentId,
   );
@@ -317,33 +345,51 @@ export function writeWindowPaneSelection(environmentId: string, state: Environme
  * environment is inactive and can outlive a renderer reload. Browser clients
  * adopt the backend's shared selection and never arm this intent.
  */
-export function armWindowStartupAgentActivation(environmentId: string): void {
+export function armWindowStartupAgentActivation(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): void {
   if (!environmentId) return;
-  const environmentIds = readStartupAgentActivations().filter(
+  const environmentIds = readStartupAgentActivations(storageNode).filter(
     (candidate) => candidate !== environmentId,
   );
   environmentIds.push(environmentId);
-  writeStartupAgentActivations(environmentIds);
+  writeStartupAgentActivations(environmentIds, storageNode);
 }
 
 /** Check a one-shot activation without retiring it before a layout is installed. */
-export function hasWindowStartupAgentActivation(environmentId: string): boolean {
-  return readStartupAgentActivations().includes(environmentId);
+export function hasWindowStartupAgentActivation(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): boolean {
+  return readStartupAgentActivations(storageNode).includes(environmentId);
 }
 
 /** Consume the one-shot activation once the provider-bound tab is observable. */
-export function consumeWindowStartupAgentActivation(environmentId: string): boolean {
-  const environmentIds = readStartupAgentActivations();
+export function consumeWindowStartupAgentActivation(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): boolean {
+  const environmentIds = readStartupAgentActivations(storageNode);
   if (!environmentIds.includes(environmentId)) return false;
-  writeStartupAgentActivations(environmentIds.filter((candidate) => candidate !== environmentId));
+  writeStartupAgentActivations(
+    environmentIds.filter((candidate) => candidate !== environmentId),
+    storageNode,
+  );
   return true;
 }
 
 /** Drop an activation whose environment failed to start or was deleted. */
-export function clearWindowStartupAgentActivation(environmentId: string): void {
-  const environmentIds = readStartupAgentActivations();
+export function clearWindowStartupAgentActivation(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): void {
+  const environmentIds = readStartupAgentActivations(storageNode);
   if (!environmentIds.includes(environmentId)) return;
-  writeStartupAgentActivations(environmentIds.filter((candidate) => candidate !== environmentId));
+  writeStartupAgentActivations(
+    environmentIds.filter((candidate) => candidate !== environmentId),
+    storageNode,
+  );
 }
 
 /** Remember the pipeline tab that should replace setup in the launching window. */
@@ -351,20 +397,25 @@ export function armWindowBuildPipelineActivation(
   environmentId: string,
   pipelineId: string,
   setupReadyAtArm = false,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
 ): void {
   if (!environmentId || !pipelineId) return;
-  const entries = readBuildPipelineActivations().filter(
+  const entries = readBuildPipelineActivations(storageNode).filter(
     (candidate) => candidate.environmentId !== environmentId,
   );
   entries.push({ environmentId, pipelineId, setupReadyAtArm });
-  writeBuildPipelineActivations(entries);
+  writeBuildPipelineActivations(entries, storageNode);
 }
 
 /** Read the one pending pipeline handoff for an environment without retiring it. */
-export function getWindowBuildPipelineActivation(environmentId: string): string | null {
+export function getWindowBuildPipelineActivation(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): string | null {
   return (
-    readBuildPipelineActivations().find((candidate) => candidate.environmentId === environmentId)
-      ?.pipelineId ?? null
+    readBuildPipelineActivations(storageNode).find(
+      (candidate) => candidate.environmentId === environmentId,
+    )?.pipelineId ?? null
   );
 }
 
@@ -373,10 +424,14 @@ export function getWindowBuildPipelineActivation(environmentId: string): string 
  * long setup whose user-chosen tab we must protect. A rebuild into an existing
  * environment is this case: the user just clicked Start Build.
  */
-export function wasWindowBuildPipelineSetupReadyAtArm(environmentId: string): boolean {
+export function wasWindowBuildPipelineSetupReadyAtArm(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): boolean {
   return (
-    readBuildPipelineActivations().find((candidate) => candidate.environmentId === environmentId)
-      ?.setupReadyAtArm === true
+    readBuildPipelineActivations(storageNode).find(
+      (candidate) => candidate.environmentId === environmentId,
+    )?.setupReadyAtArm === true
   );
 }
 
@@ -384,8 +439,9 @@ export function wasWindowBuildPipelineSetupReadyAtArm(environmentId: string): bo
 export function consumeWindowBuildPipelineActivation(
   environmentId: string,
   pipelineId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
 ): boolean {
-  const entries = readBuildPipelineActivations();
+  const entries = readBuildPipelineActivations(storageNode);
   if (
     !entries.some(
       (candidate) =>
@@ -396,16 +452,20 @@ export function consumeWindowBuildPipelineActivation(
   }
   writeBuildPipelineActivations(
     entries.filter((candidate) => candidate.environmentId !== environmentId),
+    storageNode,
   );
   return true;
 }
 
 /** Drop a pipeline handoff when its environment is deleted. */
-export function clearWindowBuildPipelineActivation(environmentId: string): void {
-  const entries = readBuildPipelineActivations();
+export function clearWindowBuildPipelineActivation(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): void {
+  const entries = readBuildPipelineActivations(storageNode);
   const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
   if (remaining.length === entries.length) return;
-  writeBuildPipelineActivations(remaining);
+  writeBuildPipelineActivations(remaining, storageNode);
 }
 
 /**
@@ -421,9 +481,10 @@ export function clearWindowBuildPipelineActivation(environmentId: string): void 
 export function markWindowBuildPipelineHandoffResolved(
   environmentId: string,
   pipelineId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
 ): void {
   if (!environmentId || !pipelineId) return;
-  const entries = readBuildPipelineHandoffResolutions();
+  const entries = readBuildPipelineHandoffResolutions(storageNode);
   const existing = entries.find((candidate) => candidate.environmentId === environmentId);
   const others = entries.filter((candidate) => candidate.environmentId !== environmentId);
   const pipelineIds = existing
@@ -434,26 +495,30 @@ export function markWindowBuildPipelineHandoffResolved(
     environmentId,
     pipelineIds: pipelineIds.slice(-MAX_RESOLVED_PIPELINES_PER_ENVIRONMENT),
   });
-  writeBuildPipelineHandoffResolutions(others);
+  writeBuildPipelineHandoffResolutions(others, storageNode);
 }
 
 /** Whether this window already resolved the backend handoff for this pipeline. */
 export function hasWindowBuildPipelineHandoffResolved(
   environmentId: string,
   pipelineId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
 ): boolean {
-  return readBuildPipelineHandoffResolutions().some(
+  return readBuildPipelineHandoffResolutions(storageNode).some(
     (candidate) =>
       candidate.environmentId === environmentId && candidate.pipelineIds.includes(pipelineId),
   );
 }
 
 /** Drop remembered handoff resolutions when their environment is deleted. */
-export function clearWindowBuildPipelineHandoffResolutions(environmentId: string): void {
-  const entries = readBuildPipelineHandoffResolutions();
+export function clearWindowBuildPipelineHandoffResolutions(
+  environmentId: string,
+  storageNode: StorageNode = COMMAND_STORAGE_NODE,
+): void {
+  const entries = readBuildPipelineHandoffResolutions(storageNode);
   const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
   if (remaining.length === entries.length) return;
-  writeBuildPipelineHandoffResolutions(remaining);
+  writeBuildPipelineHandoffResolutions(remaining, storageNode);
 }
 
 /**

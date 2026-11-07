@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { GitFileChange, FileNode, FileSubtree } from "@/lib/backend";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { COMMAND_STORAGE_NODE, nodeStorageKey } from "@/lib/persistence-keys";
 import type { CreateFileTabOptions } from "@/contexts/TerminalContext";
 import {
   gitHubPullRequestKey,
@@ -426,7 +426,8 @@ export const useFilesPanelStore = create<FilesPanelState>()(
         }),
     }),
     {
-      name: desktopConnectionStorageKey("files-panel-storage"),
+      // The command node until this store is scoped (plan items 3006, 3007, 3012).
+      name: nodeStorageKey("files-panel-storage", COMMAND_STORAGE_NODE),
       partialize: (state) => ({
         panelWidth: state.panelWidth,
         expandedFolders: state.expandedFolders,

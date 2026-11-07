@@ -1,6 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { createUIStore } from "./uiStore";
-import { desktopConnectionStorageKey, windowStorageKey } from "@/lib/desktop-storage-key";
+import {
+  COMMAND_STORAGE_NODE,
+  desktopConnectionStorageKey,
+  windowStorageKey,
+} from "@/lib/desktop-storage-key";
 import { writeRealmWorkspace } from "@/lib/portal/workspace-target-storage";
 import { portalStore } from "@/lib/portal/portal-store";
 
@@ -58,7 +62,7 @@ test("a realm hydrates its node's stores before gateway initialization, apart fr
   expect(a.getState().sidebarWidth).toBe(345);
   a.getState().selectProject("same-id");
   a.getState().setProjectFolderCollapsed("Folder", true);
-  const aKey = desktopConnectionStorageKey("ui-project-storage");
+  const aKey = desktopConnectionStorageKey("ui-project-storage", COMMAND_STORAGE_NODE);
   const b = visit("B");
   b.getState().selectProject("b-project");
   b.getState().setProjectCollapsed("same-id", true);

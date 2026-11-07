@@ -6,7 +6,7 @@ import {
   type GitHubPullRequestRef,
   type GitHubPullRequestViewTab,
 } from "@orkestrator/protocol/github-pull-requests";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { COMMAND_STORAGE_NODE, nodeStorageKey } from "@/lib/persistence-keys";
 import type { FilesPanelPullRequestTab } from "./filesPanelStore";
 
 const MAX_TABS_PER_PROJECT = 10;
@@ -155,7 +155,8 @@ export const useProjectPullRequestsStore = create<ProjectPullRequestsState>()(
         }),
     }),
     {
-      name: desktopConnectionStorageKey("project-pull-requests"),
+      // The command node until this store is scoped (plan items 3006, 3007, 3012).
+      name: nodeStorageKey("project-pull-requests", COMMAND_STORAGE_NODE),
       partialize: (state) => ({ projects: state.projects }),
       merge: (persisted, current) => ({
         ...current,

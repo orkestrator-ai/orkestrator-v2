@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { COMMAND_STORAGE_NODE, nodeStorageKey } from "@/lib/persistence-keys";
 
 /** Environments whose remembered destination is kept (oldest dropped first). */
 export const MAX_REMEMBERED_DESTINATIONS = 50;
@@ -42,7 +42,8 @@ export const useWebAnnotationPreferencesStore = create<WebAnnotationPreferencesS
         })),
     }),
     {
-      name: desktopConnectionStorageKey("web-annotation-preferences"),
+      // The command node until this store is scoped (plan items 3006, 3007, 3012).
+      name: nodeStorageKey("web-annotation-preferences", COMMAND_STORAGE_NODE),
       partialize: (state) => ({ destinations: state.destinations }),
     },
   ),

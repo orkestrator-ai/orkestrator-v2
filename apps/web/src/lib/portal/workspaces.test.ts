@@ -2,7 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { openLeafWorkspace } from "./workspaces";
 import { removeRealmWorkspace, writeRealmWorkspace } from "./workspace-target-storage";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { COMMAND_STORAGE_NODE, desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 import { createBrowserGatewayApi, workspaceTargetGatewayOptions } from "@/lib/native/web-gateway";
 
 const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
@@ -62,16 +62,16 @@ test("desktop storage uses verified leaf identity across new workspace IDs", () 
       backendId: "bk_leaf",
       legacyOrigin: null,
     };
-    const first = desktopConnectionStorageKey("workspace-draft");
+    const first = desktopConnectionStorageKey("workspace-draft", COMMAND_STORAGE_NODE);
     localStorage.setItem(first, "remembered draft");
     window.orkestratorDesktopIdentity = {
       ...window.orkestratorDesktopIdentity,
       connectionId: "workspace:two",
     };
-    expect(desktopConnectionStorageKey("workspace-draft")).toBe(first);
-    expect(localStorage.getItem(desktopConnectionStorageKey("workspace-draft"))).toBe(
-      "remembered draft",
-    );
+    expect(desktopConnectionStorageKey("workspace-draft", COMMAND_STORAGE_NODE)).toBe(first);
+    expect(
+      localStorage.getItem(desktopConnectionStorageKey("workspace-draft", COMMAND_STORAGE_NODE)),
+    ).toBe("remembered draft");
   } finally {
     window.orkestratorDesktopIdentity = originalIdentity;
   }

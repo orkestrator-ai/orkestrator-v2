@@ -203,6 +203,7 @@
     "e2e/agent-testing/design-canvas-packaged-electron.spec.ts": 1,
     "e2e/agent-testing/electron-main.spec.ts": 2,
     "e2e/agent-testing/log-controls-packaged-electron.spec.ts": 1,
+    "e2e/agent-testing/multi-node-window.spec.ts": 1,
     "e2e/agent-testing/packaged-security-electron.spec.ts": 2,
     "e2e/agent-testing/pull-request-pane-electron.spec.ts": 1,
     "e2e/agent-testing/relayed-events-electron.spec.ts": 1,

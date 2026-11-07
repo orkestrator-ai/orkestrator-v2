@@ -34,11 +34,20 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
   expect(result.status, `${command} ${args.join(" ")}: ${result.stderr}`).toBe(0);
 }
 
+/** Names for a leaf; the defaults are the single leaf the realm specs attach. */
+export interface LeafNames {
+  /** The leaf's display name (default `Leaf`), and its directory under `root` in lower case. */
+  readonly name?: string;
+  /** Its one environment's name (default `leaf-env`). */
+  readonly environmentName?: string;
+}
+
 /** A standalone backend from source: the leaf the desktop's command node attaches. */
-export async function startLeaf(root: string) {
+export async function startLeaf(root: string, names: LeafNames = {}) {
+  const name = names.name ?? "Leaf";
   const [port] = (await reserveLoopbackPorts(1)) as [number];
   const token = randomBytes(24).toString("base64url");
-  const dir = path.join(root, "leaf");
+  const dir = path.join(root, name.toLowerCase());
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const env = leafEnvironment(dir);
   const child = spawn(
@@ -123,13 +132,13 @@ export async function startLeaf(root: string) {
   const project = await invoke<Project>("add_project", { gitUrl: bare, localPath: repo });
   const environment = await invoke<Environment>("create_environment", {
     projectId: project.id,
-    name: "leaf-env",
+    name: names.environmentName ?? "leaf-env",
     environmentType: "local",
   });
   const profile = await invoke<{ revision: number }>("get_backend_profile");
   await invoke("update_backend_profile", {
     expectedRevision: profile.revision,
-    displayName: "Leaf",
+    displayName: name,
     colorToken: "blue",
   });
   const { nodeId } = await invoke<{ nodeId: string }>("get_node_status");

@@ -1289,7 +1289,11 @@ export class ConnectionManager {
   }
 
   private installWorkspace(scope: string, connectionId: string, input: WorkspaceScopeInput): void {
-    const client = new BackendHttpClient(input.baseUrl, input.token);
+    const client: BackendHttpClient = new BackendHttpClient(input.baseUrl, input.token, {
+      // The leaf refused the grant (revoked or expired): open a new one now,
+      // as a dropped stream does, rather than at the next renewal tick.
+      onCredentialRefused: () => this.workspaceUnavailable(connectionId, client),
+    });
     const remote: RemoteConnection = {
       connectionId,
       ...(input.nodeId ? { workspaceNodeId: input.nodeId } : {}),
@@ -1610,6 +1614,20 @@ export class ConnectionManager {
     );
   }
 
+  /**
+   * A workspace connection lost its grant or its route: park the client (no
+   * request reaches an unverified route; terminal input waits for the new
+   * credential) and have its owner reopen the grant, which retargets it. Once
+   * per lapse: a client already parked is waiting for that reopen.
+   */
+  private workspaceUnavailable(connectionId: string, client: BackendHttpClient): void {
+    const remote = this.remoteConnections.get(connectionId);
+    if (!remote || remote.client !== client || !remote.onWorkspaceUnavailable) return;
+    if (client.isSuspended) return;
+    client.suspend();
+    remote.onWorkspaceUnavailable();
+  }
+
   private handleStreamState(
     connectionId: string,
     client: BackendHttpClient,
@@ -1623,6 +1641,11 @@ export class ConnectionManager {
       this.setStatus(connectionId, { transport: "connected", detail: undefined });
       return;
     }
+    if (state === "unauthorized" && remote.onWorkspaceUnavailable) {
+      // A refused grant is reopened, never re-entered by the user.
+      this.workspaceUnavailable(connectionId, client);
+      return;
+    }
     if (state === "unauthorized") {
       remote.streamFailures = 0;
       this.setStatus(connectionId, {
@@ -1633,8 +1656,7 @@ export class ConnectionManager {
     }
     remote.streamFailures += 1;
     if (remote.onWorkspaceUnavailable) {
-      remote.client.suspend();
-      remote.onWorkspaceUnavailable();
+      this.workspaceUnavailable(connectionId, client);
       return;
     }
     this.setStatus(connectionId, {

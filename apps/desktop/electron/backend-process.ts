@@ -489,6 +489,29 @@ export function invokeEnvelopeFields(
   return Object.keys(fields).length > 0 ? fields : null;
 }
 
+/**
+ * A request the backend never ran: this client held it back while its route
+ * awaited verification, or the gateway refused the credential (HTTP 401)
+ * before dispatching it. Nothing of it reached a shell, so terminal input
+ * that failed this way may be sent again on the next credential.
+ */
+export class RequestNotSentError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "route-suspended" | "credential-refused",
+  ) {
+    super(message);
+    this.name = "RequestNotSentError";
+  }
+}
+
+/**
+ * How many new credentials one terminal send waits for after a refusal
+ * before it fails (and fences the terminal) as before. Each wait is bounded
+ * by the sequencer's send deadline too.
+ */
+const TERMINAL_SEND_CREDENTIAL_RETRIES = 3;
+
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
   private listener: {
@@ -514,6 +537,17 @@ export class BackendHttpClient {
   private suspended = false;
   /** Whether the event stream asks for terminal output; see `setTerminalOutputRelay`. */
   private relayTerminalOutput: boolean;
+  /**
+   * Set for a client whose credential is renewed for it (a workspace grant):
+   * told when the gateway refuses the current credential, so a new one is
+   * fetched. Terminal input refused this way waits for that credential.
+   */
+  private readonly onCredentialRefused: (() => void) | null;
+  /** Bumped by every `retarget`: a new route or credential. */
+  private credentialGeneration = 0;
+  /** The generation whose refusal was last reported, so one refusal opens one reopen. */
+  private reportedRefusal = -1;
+  private readonly credentialWaiters = new Set<() => void>();
 
   get isSuspended(): boolean {
     return this.suspended;
@@ -526,7 +560,11 @@ export class BackendHttpClient {
   }
 
   private endpoint(endpoint: string): URL {
-    if (this.suspended) throw new Error("The connection is awaiting a verified route.");
+    if (this.suspended)
+      throw new RequestNotSentError(
+        "The connection is awaiting a verified route.",
+        "route-suspended",
+      );
     return new URL(`${this.baseUrl.replace(/\/$/, "")}${endpoint}`);
   }
 
@@ -537,6 +575,8 @@ export class BackendHttpClient {
       terminalSendTimeoutMs?: number;
       eventReconnectDelayMs?: number;
       relayTerminalOutput?: boolean;
+      /** See the field: a workspace connection reopens its grant on a refusal. */
+      onCredentialRefused?: () => void;
     } = {},
   ) {
     const terminalSendTimeoutMs =
@@ -546,14 +586,80 @@ export class BackendHttpClient {
     }
     this.eventReconnectDelayMs = options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS;
     this.relayTerminalOutput = options.relayTerminalOutput ?? true;
+    this.onCredentialRefused = options.onCredentialRefused ?? null;
     this.relayedEvents = this.createRelayedEventStream();
     this.terminalInput = new TerminalInputSequencer({
       batchDelayMs: 0,
       sendTimeoutMs: terminalSendTimeoutMs,
       sendInput: (request, signal) =>
-        this.request(request.command, { sessionId: request.sessionId, data: request.data }, signal),
-      runLifecycle: (operation, signal) => this.request(operation.command, operation.args, signal),
+        this.sendTerminal(
+          request.command,
+          { sessionId: request.sessionId, data: request.data },
+          signal,
+        ),
+      runLifecycle: (operation, signal) =>
+        this.sendTerminal(operation.command, operation.args, signal),
     });
+  }
+
+  /**
+   * One terminal input or lifecycle request. On a client whose credential is
+   * renewed for it, a request the backend never ran (`RequestNotSentError`)
+   * waits for the next credential and is sent again, so a lapsed grant that
+   * main reopens does not fence the terminal: no part of it reached the
+   * shell, and the sequencer holds every later input behind it, so order is
+   * kept. Anything else (a lost response, a timeout) fails as before.
+   */
+  private async sendTerminal(
+    command: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    for (let retries = 0; ; retries++) {
+      const generation = this.credentialGeneration;
+      try {
+        return await this.request(command, args, signal);
+      } catch (error) {
+        if (
+          !(error instanceof RequestNotSentError) ||
+          !this.onCredentialRefused ||
+          retries >= TERMINAL_SEND_CREDENTIAL_RETRIES ||
+          signal.aborted
+        )
+          throw error;
+        await this.nextCredential(generation, signal);
+      }
+    }
+  }
+
+  /** Settles once `retarget` ran after `generation`, or rejects when `signal` aborts. */
+  private nextCredential(generation: number, signal: AbortSignal): Promise<void> {
+    if (this.credentialGeneration !== generation) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const done = () => {
+        this.credentialWaiters.delete(wake);
+        signal.removeEventListener("abort", abort);
+      };
+      const wake = () => {
+        if (this.credentialGeneration === generation) return;
+        done();
+        resolve();
+      };
+      const abort = () => {
+        done();
+        reject(signal.reason);
+      };
+      this.credentialWaiters.add(wake);
+      signal.addEventListener("abort", abort, { once: true });
+    });
+  }
+
+  /** Report a refusal of the current credential once; a renewed one may be refused again. */
+  private noteCredentialRefused(generation: number): void {
+    if (!this.onCredentialRefused || generation !== this.credentialGeneration) return;
+    if (this.reportedRefusal === generation) return;
+    this.reportedRefusal = generation;
+    this.onCredentialRefused();
   }
 
   /** Origin this client currently reaches. Ephemeral for a tunnelled route. */
@@ -599,6 +705,7 @@ export class BackendHttpClient {
     this.suspended = false;
     this.baseUrl = baseUrl;
     this.token = token;
+    this.credentialGeneration++;
     if (!options.preserveCursor) {
       this.eventStream = new GatewayEventStreamState();
       this.relayedEvents.forgetCursor();
@@ -606,6 +713,7 @@ export class BackendHttpClient {
     if (this.listener) this.listen(this.listener.onEvent, this.listener.options);
     this.relayedEvents.dropConnection();
     this.relayedEvents.retryWaiting();
+    for (const wake of Array.from(this.credentialWaiters)) wake();
   }
 
   /**
@@ -660,6 +768,7 @@ export class BackendHttpClient {
     signal?: AbortSignal,
     contract?: InvokeEnvelopeFields,
   ): Promise<T> {
+    const generation = this.credentialGeneration;
     const response = await fetch(this.endpoint("/__orkestrator/invoke"), {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
@@ -677,7 +786,13 @@ export class BackendHttpClient {
       // A typed incompatibility keeps its class, code and bounded details (1005).
       const incompatible = fromWire(payload);
       if (incompatible) throw incompatible;
-      throw new Error(payload.error ?? `Backend request failed with HTTP ${response.status}`);
+      const message = payload.error ?? `Backend request failed with HTTP ${response.status}`;
+      if (response.status === 401) {
+        // Refused before dispatch: the command did not run.
+        this.noteCredentialRefused(generation);
+        throw new RequestNotSentError(message, "credential-refused");
+      }
+      throw new Error(message);
     }
     return payload.result as T;
   }

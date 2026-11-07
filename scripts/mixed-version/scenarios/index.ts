@@ -23,6 +23,8 @@ import ticketSync from "./ticket-sync.ts";
 import transcriptArtifacts from "./transcript-artifacts.ts";
 import webAnnotations from "./web-annotations.ts";
 import system from "./system.ts";
+import config from "./config.ts";
+import projects from "./projects.ts";
 
 export const SCENARIOS: readonly ScenarioModule[] = [
   nodeMail,
@@ -45,4 +47,6 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   graphs,
   git,
   pullRequests,
+  projects,
+  config,
 ];

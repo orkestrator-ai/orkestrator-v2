@@ -158,10 +158,11 @@ supported peer already has the newer behaviour.
 | Nodes without `get_machine_load`: `list_nodes` shows their load as unavailable with reason `older-version` | `readNodeMachineLoad` (`control-mcp-machine-load.ts`) | `machine-load.older-node` (counts asks, up to one per node per `list_nodes` call) | Nodes before the machine-load change; the rest of `list_nodes` is unaffected | The floor is at or above the first Stable release with `get_machine_load`, and the counter is quiet | [1030](../todo/coordinator-and-multi-review/1030-coordinator-machine-load.md) |
 | Bridges without compaction instructions: `/compact <instructions>` on Claude or Pi sends `{ instructions }`, an older bridge ignores the body and compacts plainly, and the missing `instructions: "applied"` comes back as an applied outcome with `instructionsIgnored`; the composer clears the draft and says the instructions were not used (restart the environment). Never a failure, which would invite a second compaction | `compactBridgeSession` (`http-bridge/compact.ts`); the compact branch of `submitDraft` (`AgentNativeTab.controller.tsx`) | `compact.instructions-ignored` (counts compactions whose instructions were not confirmed) | Claude and Pi bridges before compaction instructions (0007 task 8, 2026-11-03), typically a container that predates the backend upgrade | The floor is at or above the first Stable release with compaction instructions and the counter is quiet | [0007](../todo/agent-engines/0007-provider-sdk-adoption-backlog.md) task 8 |
 | Container bridges holding a plain token: a bridge an older backend started, or any bridge on an image without `bridge-credential`, keeps its token in a `node`-readable `/tmp` file and in its environment, and its token may have no `okb_` prefix. The same goes for OpenCode's server password, which has its own file there. `BRIDGE_TOKEN_PATTERN` accepts both forms, `readContainerBridgeToken` falls back to the `/tmp` file, and each bridge still takes `<TOKEN_ENV>` from an older backend | `container-bridge-credential.ts`, `local-server-runtime.ts`, `loadBridgeCredential` (`bridge-credential.ts`) | `bridge-credential.token-file` (counts reads that found a token in `/tmp`) | Running bridges from before the verifier (2026-11-04), and images that predate it, whose containers keep the agent-readable token until rebuilt | The floor is at or above the first Stable release with `bridge-credential=1`, no supported backend starts a bridge with a plain token, and the counter is quiet. The `bridge-credential` image check stays for older images, as unmigrated state | To-do 3930 (deleted 2026-11-06) |
-| Realms from before `patch_global_config` saving a model favourite: a workspace client (a client grant, or the relay) may not change global settings, but an `update_global_config` or `patch_global_config` that would change nothing on the machine is answered with its current settings instead of refused. Any change is still refused with 403 | `GatewayHandlers.handleInvoke` (`gateway-handlers.ts`), `answerConfigEcho` (`nodes/node-relay.ts`), `isGlobalConfigEcho` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (counts answered echoes) | Command nodes through v2.35.1-beta, whose realms write a favourite to the command node and then send the leaf's own settings back unchanged with `preserveInheritedSettings` | The floor is at or above v2.36.0, the first Stable release whose realms use `patch_global_config`, and the counter is quiet; then the two config writes are refused outright | [command-nodes.md](command-nodes.md) |
+| Realms from before `patch_global_config` saving a model favourite: a workspace client (a client grant, or the relay) may not change global settings, but an `update_global_config` or `patch_global_config` that would change nothing on the machine is answered with its current settings instead of refused. Any change is still refused with 403 | `GatewayHandlers.handleInvoke` (`gateway-handlers.ts`), `answerConfigEcho` (`nodes/node-relay.ts`), `isGlobalConfigEcho` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (counts answered echoes) | Command nodes through v2.35.1-beta, whose realms write a favourite to the command node and then send the leaf's own settings back unchanged with `preserveInheritedSettings`. Unaffected by the `config` domain ([7005](../../plans/unified/7005-domain-projects-config.md), 2026-11-07): the gateway and the relay decide from the raw arguments before the registry runs, and both writes stay registered, now as defined `admin` commands | The floor is at or above v2.36.0, the first Stable release whose realms use `patch_global_config`, and the counter is quiet; then the two config writes are refused outright | [command-nodes.md](command-nodes.md) |
 | Clients that still send `experimentalCodexRawEventLogging`, the retired Codex raw event logging setting: a workspace client's write is not refused for that key alone, because an older form sends it whatever the machine stores. Nothing reads the key; a direct save stores it as it stores any unknown key, and a stored one stays in `config.json` for a downgrade | `RETIRED_GLOBAL_SETTING_KEYS` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (shared with the row above) | Clients from before the setting's removal (2026-11-05). A downgrade reads the key as before, and a client that finds none falls back to its old default, on, which captures nothing | The floor is at or above the first Stable release without the setting; then remove the set. The stored key is harmless and needs no migration | [logging.md](logging.md) |
 
-| Backends without `get_client_state_capabilities`: coordinator tab groups, upstream-merge declines and notice dismissals stay in the browser's copy, the renderer decides the merge question itself, and the "agent stopped" sound is inferred from `hasUnreadWork` edges | `coordinatorPaneLayoutStore.ts`, `coordinator-upstream-check.ts`, `nativeNoticeDismissalStore.ts`, `useNotificationSoundService.ts` | None (renderer side) | Backends before the client state repository (2026-11-01) | The floor is a release with the capability. The one-time import of browser copies is unmigrated user state, not skew, and goes separately once no supported renderer can hold one | Backend-owned client state ([storage.md](storage.md)) |
+| Backends without `get_client_state_capabilities`: coordinator tab groups, upstream-merge declines and notice dismissals stay in the browser's copy, the renderer decides the merge question itself, and the "agent stopped" sound is inferred from `hasUnreadWork` edges | `coordinatorPaneLayoutStore.ts`, `coordinator-upstream-check.ts`, `nativeNoticeDismissalStore.ts`, `useNotificationSoundService.ts` | `domain-adapter.renderer.config.v0` (renderer calls through that adapter) | Backends before the client state repository (2026-11-01). Mechanical since 2026-11-07 ([7005](../../plans/unified/7005-domain-projects-config.md)): the capabilities are part of `config` version 1 (`CONFIG_CLIENT_STATE_CAPABILITIES`), so only a pre-contract backend is asked `get_client_state_capabilities`, through the client's version-0 adapter | The floor is a release with the capability. The one-time import of browser copies is unmigrated user state, not skew, and goes separately once no supported renderer can hold one | Backend-owned client state ([storage.md](storage.md)) |
+| Renderers before `config` (pre-contract): the backend keeps `get_client_state_capabilities` registered, now as a defined command, although a renderer with the domain never calls it | `commands-registry-client-state.ts` | None (every renderer in the window is pre-contract and calls it; a renderer with `config` answers it from the version) | Renderers before `config` version 1 (2026-11-07, [7005](../../plans/unified/7005-domain-projects-config.md)) | The floor is at or above the first Stable release that advertises `config`; then the command goes with the client's version-0 adapter | Backend-owned client state ([storage.md](storage.md)) |
 | Preview registry snapshots without `entryServiceId`: the renderer resolves the entry service from `services` with the same protocol rule | `environmentBrowserTarget` (`preview-service-entry.ts`) | None (renderer side) | Backends before `entryServiceId` (2026-11-01). Mechanical since 2026-11-07 ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)): every backend that advertises `previews` sends it, so only answers through the `previews` client's version-0 adapter lack it (`domain-adapter.renderer.previews.v0`) | The floor is a release with `entryServiceId` | Preview services ([browser-previews.md](browser-previews.md)) |
 | Terminal WebSocket servers whose `ready` frame does not list the `ping` feature: on every return to the page the renderer replaces the terminal socket and reconciles every channel instead of probing it, and never sends such a server a `ping`, which it would close the socket for | `onVisibilityChange` (`apps/web/src/lib/native/terminal-websocket-client.ts`) | None (renderer side) | Backends before the terminal liveness probe (1202 task 3, 2026-11-04) | The floor is a release whose terminal server advertises `ping`; the replacement path itself stays for a probe that goes unanswered | [1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 3 |
 | Terminal WebSocket clients that offer only `orkestrator-terminal.v1`: the server answers each input with its own `operation-result` instead of a cumulative `input-results` frame | `ready`, `operationResult` (`terminal-websocket-server.ts`) | `terminal-websocket.per-input-results` (counts authenticated sockets) | Renderers before input results (1202 task 11, 2026-11-04): a browser tab that outlives the upgrade, or a desktop connected to a newer backend | The floor is at or above the first Stable release whose renderer offers the subprotocol, and the counter is quiet. `operation-result` itself stays for failures and resizes | [1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 11 |
@@ -726,6 +727,74 @@ export const nodeMailClient = domainClient(nodeMail, {
   version 1 answers itself. The renderer calls them through
   `lib/node-scope/domains/{previews,transcripts}.ts`,
   `lib/web-annotations/client.ts` and `lib/design-client.ts`.
+- **Projects and config**
+  ([7005](../../plans/unified/7005-domain-projects-config.md)): `projects`
+  (26 commands: the project list and its arrangement, adding, creating and
+  removing projects, the GitHub clone browser, the host folder picker and
+  icons, project copies between machines, the AGENTS.md proposals) and
+  `config` (31: global and repository settings, the four credentials, the
+  desktop catalogue, the shared client state and the permission rules), both
+  at version 1 (min 1). `Project` (`domains/projects/models.ts`) is the
+  single definition `models.ts` and the web types re-export; `AppConfig`, its
+  `global`, `RepositoryConfig` and the agent settings tier
+  (`domains/config/models.ts`) are field for field with `models.ts`, in the
+  stored form and the renderer's redacted form (`GlobalConfigSchema`:
+  `*Configured`/`*Source` instead of credentials). The settings records are
+  open (`openRecord`): a client decodes them keeping every key, so a
+  whole-object save (`save_config`, `update_global_config`) never deletes a
+  setting a newer node added. `access` is `admin` for exactly the settings
+  writes in `WORKSPACE_ADMINISTRATION_COMMANDS`, `internal` for
+  `request_coordinator_agents_md_update`. Critical keys: `cloneOnly` on
+  `add_project`, `requestKey` on `start_project_clone` and
+  `open_project_agents_md_pr`, `preserveInheritedSettings` on
+  `update_global_config`, `unset` on both patches, `expectedRevision` on
+  `save_coordinator_pane_layout`, `expiresInMs` on
+  `approve_native_agent_interaction_and_remember`. Each client's API is one
+  function per command, keyed by name; `config` version 1 answers
+  `clientStateCapabilities()` itself (`CONFIG_CLIENT_STATE_CAPABILITIES`),
+  version 0 asks `get_client_state_capabilities`. The web calls them through
+  `lib/node-scope/domains/{projects,config}.ts`, and the config layering
+  (`lib/portal/command-node-config.ts`) sends every `config` command on both
+  of its nodes through the client. The config-echo path
+  (`isGlobalConfigEcho`) is unchanged: it is decided from the raw arguments
+  before the registry runs.
+- **Git, GitHub, pull requests and changes**
+  ([7006](../../plans/unified/7006-domain-git-pull-requests.md)): `git` (23
+  commands: the changes ledger, diff-stat snapshots, the Files panel's git
+  status, the "Compare against" diff base and the build pipeline's worktree
+  probes) and `pull-requests` (42: GitHub issues, the pull request viewer,
+  and an environment's PR detection, verification, merge, monitor,
+  auto-merge, post-turn recheck and review packages), both at version 1
+  (min 1). GitHub issues are in `pull-requests` (Appendix E's grouping and
+  1006's mapping; `DOMAIN_NAMES` has no `github`). The change resources and
+  GitHub pull request records are model records (`modelRecord`, and
+  `variantRecord` in `domains/git/schemas.ts` for the `kind`-discriminated
+  change results): the routed-on fields are typed and every other key passes
+  through; the GitHub issue model (`domains/pull-requests/schemas.ts`) is
+  field for field, and `github.ts` and the web's `types/github.ts` take their
+  types from it. `access` is `admin` for `changes_get_diagnostics` and
+  `internal` for `pr_monitor_agent_turn_completed` and
+  `pr_monitor_probe_environment`. Critical keys: `pathIds` on
+  `changes_prepare_restore`; `expectedHeadSha`, `expectedPrUrl`,
+  `autoMergeEnabledAt`, `method` and `deleteBranch` on `merge_environment_pr`
+  (`method`, `deleteBranch` on `merge_pr`/`merge_pr_local`, `expectedHeadSha`
+  on `merge_github_pull_request`); `comments` and `commitId` on
+  `submit_github_pull_request_review`; `expectedHead`, `validationPlan` and
+  `additionalLimitations` on `generate_review_package`. The 29 formerly
+  strict commands drop unknown keys; nested values the handlers check
+  strictly (inline review comments, the review package's `preparation`) stay
+  strict. `changes_get_capabilities` is only partly folded: version 1
+  implies the `change-tracking-v1` protocol and its fixed features
+  (`GIT_CHANGE_TRACKING_PROTOCOL`), but `restore`, `strictCheckpoints` and
+  `policyVersion` are the backend's policy, so the client still asks for
+  them. Each client's API is one function per command (`commandApi`); the
+  web calls them through `lib/node-scope/domains/{git,pull-requests}.ts`
+  from `lib/backend/{changes,github-pull-requests,files-sessions,config-integrations}.ts`,
+  and `lib/federation/node-change-projections.ts` reads another machine's
+  change views through the git client over the routed call (version 0). No
+  register row serves these domains; the conditional snapshot reads
+  (`knownGeneration`/`knownRevision`, `knownDigest`) keep answering the
+  legacy bare shapes, which the result schemas include.
 - **Adapter list.** Every domain client is defined under
   `packages/protocol/src/contract/domains/`, one per domain, and listed in
   `DOMAIN_CLIENTS` (`contract/client-adapters.ts`).

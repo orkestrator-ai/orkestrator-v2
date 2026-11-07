@@ -117,11 +117,12 @@ test("an environment deleted before names were kept falls back to its PR tombsto
   });
 });
 
-test("clamps the range and refuses an unknown argument", async () => {
+// A defined command drops an unknown argument (§11.4, plan item 7008); it refused it before.
+test("clamps the range and drops an unknown argument", async () => {
   const { read } = await fixture();
   const report = await read({ days: 100_000 });
   expect(report.days.length).toBeLessThanOrEqual(401);
-  await expect(read({ nonsense: true })).rejects.toThrow();
+  expect((await read({ days: 7, nonsense: true })).days).toHaveLength(7);
 });
 
 for (const failure of ["stamping", "project loading"] as const) {

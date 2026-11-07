@@ -19,6 +19,14 @@ import {
   isResourceSnapshotRevision,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
+import {
+  cursorSdkLoginCancelCommand,
+  cursorSdkLoginStartCommand,
+  cursorSdkLoginStatusCommand,
+  cursorSdkLogoutCommand,
+  getPlanUsageCommand,
+} from "@orkestrator/protocol/contract/domains/accounts";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   addProjectCommand,
@@ -1048,13 +1056,16 @@ export function registerProjectCommands(
   register(getGlobalConfigCommand, async (_args, { storage }) =>
     redactGlobalConfig((await storage.loadConfig()).global),
   );
-  register("get_plan_usage", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "force"], "arguments");
-    const platform = asNonBlankString(args.platform, "platform");
-    if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
-    const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
-    return planUsageReader(context, platform, { force });
-  });
+  register(
+    getPlanUsageCommand,
+    async (args, context) => {
+      const platform = asNonBlankString(args.platform, "platform");
+      if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
+      const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
+      return planUsageReader(context, platform, { force });
+    },
+    ASYNC_HANDLER,
+  );
   const afterGlobalConfigSaved = async (updated: AppConfig, context: CommandContext) => {
     context.runtime.terminals.history.configureRetention({
       enabled: updated.global.terminalHistoryEnabled,
@@ -1121,33 +1132,49 @@ export function registerProjectCommands(
    * storing the credential, cancelling — stays here; the settings pane only
    * opens the returned URL and polls.
    */
-  register("cursor_sdk_login_start", async (payload, context) => {
-    return startCursorSdkLogin(context, {
-      bridgeEntrypoint: async () =>
-        nodePath.join(await prepareBridgePath(context, "cursor-bridge"), "dist", "index.js"),
-      runtime: resolveBunBinary(context),
-      // A client opens the link in its own browser, which may be on another
-      // machine. Without the flag (an older client) this machine's desktop
-      // opens it, as before.
-      openBrowser: payload.openBrowser !== false,
-    });
-  });
-  register("cursor_sdk_login_status", async (_payload, context) => {
-    const config = await context.storage.loadConfig();
-    // The stored key is read only to report *which* credential is in play; it
-    // is never returned.
-    return cursorSdkLoginProgress(context, config.global.cursorApiKey);
-  });
-  register("cursor_sdk_login_cancel", async (_payload, context) => {
-    cancelCursorSdkLogin(context);
-    return { cancelled: true };
-  });
-  register("cursor_sdk_logout", async (_payload, context) => {
-    cancelCursorSdkLogin(context);
-    await cursorSdkLogout(context);
-    const config = await context.storage.loadConfig();
-    return cursorSdkAuthStatus(context, config.global.cursorApiKey);
-  });
+  register(
+    cursorSdkLoginStartCommand,
+    async (payload, context) => {
+      return startCursorSdkLogin(context, {
+        bridgeEntrypoint: async () =>
+          nodePath.join(await prepareBridgePath(context, "cursor-bridge"), "dist", "index.js"),
+        runtime: resolveBunBinary(context),
+        // A client opens the link in its own browser, which may be on another
+        // machine. Without the flag (an older client) this machine's desktop
+        // opens it, as before.
+        openBrowser: payload.openBrowser !== false,
+      });
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLoginStatusCommand,
+    async (_payload, context) => {
+      const config = await context.storage.loadConfig();
+      // The stored key is read only to report *which* credential is in play; it
+      // is never returned.
+      return cursorSdkLoginProgress(context, config.global.cursorApiKey);
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLoginCancelCommand,
+    async (_payload, context) => {
+      cancelCursorSdkLogin(context);
+      return { cancelled: true };
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLogoutCommand,
+    async (_payload, context) => {
+      cancelCursorSdkLogin(context);
+      await cursorSdkLogout(context);
+      const config = await context.storage.loadConfig();
+      return cursorSdkAuthStatus(context, config.global.cursorApiKey);
+    },
+    ASYNC_HANDLER,
+  );
   register(setAnthropicApiKeyCommand, async ({ apiKey }, { storage }) => {
     const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
     if (nextApiKey !== null && !nextApiKey) {

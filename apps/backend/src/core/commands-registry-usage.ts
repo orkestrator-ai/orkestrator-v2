@@ -3,7 +3,8 @@ import {
   type UsageEnvironmentSummary,
   type UsageHistoryReport,
 } from "@orkestrator/protocol/usage-history";
-import { assertOnlyKeys } from "./commands-validation.js";
+import { getUsageHistoryCommand } from "@orkestrator/protocol/contract/domains/accounts";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 
 /**
@@ -20,51 +21,54 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  * Anything else is a deleted environment nobody recorded a name for.
  */
 export function registerUsageCommands(register: CommandRegistrar): void {
-  register("get_usage_history", async (args, context) => {
-    assertOnlyKeys(args, ["days", "platform", "environmentId"], "arguments");
-    const query = normalizeUsageHistoryQuery(args);
-    const report = context.storage.getAgentUsageHistory(query);
-    if (report.environments.length === 0) return report;
-    const environments = await context.storage.loadEnvironments();
-    const projects = await context.storage.loadProjects();
-    const projectNames = new Map(projects.map((project) => [project.id, project.name]));
-    const live = new Map(
-      environments.map((environment) => [
-        environment.id,
-        {
-          name: environment.name,
-          projectName: projectNames.get(environment.projectId),
-        },
-      ]),
-    );
-    const decorated: UsageHistoryReport = {
-      ...report,
-      environments: await Promise.all(
-        report.environments.map(async (entry): Promise<UsageEnvironmentSummary> => {
-          const match = live.get(entry.environmentId);
-          if (match) {
+  register(
+    getUsageHistoryCommand,
+    async (args, context) => {
+      const query = normalizeUsageHistoryQuery(args);
+      const report = context.storage.getAgentUsageHistory(query);
+      if (report.environments.length === 0) return report;
+      const environments = await context.storage.loadEnvironments();
+      const projects = await context.storage.loadProjects();
+      const projectNames = new Map(projects.map((project) => [project.id, project.name]));
+      const live = new Map(
+        environments.map((environment) => [
+          environment.id,
+          {
+            name: environment.name,
+            projectName: projectNames.get(environment.projectId),
+          },
+        ]),
+      );
+      const decorated: UsageHistoryReport = {
+        ...report,
+        environments: await Promise.all(
+          report.environments.map(async (entry): Promise<UsageEnvironmentSummary> => {
+            const match = live.get(entry.environmentId);
+            if (match) {
+              return {
+                ...entry,
+                ...(match.name ? { name: match.name } : {}),
+                ...(match.projectName ? { projectName: match.projectName } : {}),
+              };
+            }
+            if (entry.name && entry.projectName) return { ...entry, deleted: true };
+            const tombstone = await context.storage
+              .getFinalEnvironmentPr(entry.environmentId)
+              .catch(() => null);
+            const name = entry.name ?? tombstone?.name;
+            const projectName =
+              entry.projectName ?? (tombstone ? projectNames.get(tombstone.projectId) : undefined);
             return {
               ...entry,
-              ...(match.name ? { name: match.name } : {}),
-              ...(match.projectName ? { projectName: match.projectName } : {}),
+              ...(name ? { name } : {}),
+              ...(projectName ? { projectName } : {}),
+              deleted: true,
             };
-          }
-          if (entry.name && entry.projectName) return { ...entry, deleted: true };
-          const tombstone = await context.storage
-            .getFinalEnvironmentPr(entry.environmentId)
-            .catch(() => null);
-          const name = entry.name ?? tombstone?.name;
-          const projectName =
-            entry.projectName ?? (tombstone ? projectNames.get(tombstone.projectId) : undefined);
-          return {
-            ...entry,
-            ...(name ? { name } : {}),
-            ...(projectName ? { projectName } : {}),
-            deleted: true,
-          };
-        }),
-      ),
-    };
-    return decorated;
-  });
+          }),
+        ),
+      };
+      return decorated;
+    },
+    ASYNC_HANDLER,
+  );
 }

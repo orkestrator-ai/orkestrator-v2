@@ -5691,7 +5691,7 @@
     "preview_build_pipeline_code_rewind": {
       "domain": "pipelines",
       "untyped": true,
-      "read": false
+      "read": true
     },
     "preview_command_handover": {
       "domain": "nodes",
@@ -5710,7 +5710,7 @@
     "preview_multi_review_code_rewind": {
       "domain": "multi-review",
       "untyped": true,
-      "read": false
+      "read": true
     },
     "probe_node_host_key": {
       "domain": "nodes",

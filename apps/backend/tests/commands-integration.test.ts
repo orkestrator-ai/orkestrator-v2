@@ -499,9 +499,11 @@ describe("storage-backed command delegation", () => {
     await expect(
       commands.get("get_plan_usage")?.({ platform: "blackberry" }, context),
     ).rejects.toThrow("Unknown agent platform");
+    // An unknown key is dropped now (§11.4, plan item 7008), not refused.
     await expect(
       commands.get("get_plan_usage")?.({ platform: "opencode", extra: true }, context),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({ platform: "opencode" });
+    expect(planUsageReader).toHaveBeenLastCalledWith(context, "opencode", { force: false });
     await expect(commands.get("get_plan_usage")?.({ platform: "   " }, context)).rejects.toThrow();
     await expect(
       commands.get("get_plan_usage")?.({ platform: "opencode", force: "yes" }, context),

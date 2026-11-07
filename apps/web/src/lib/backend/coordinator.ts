@@ -5,21 +5,19 @@ import type {
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import {
-  COORDINATOR_ACTIVITY_COMMAND,
-  COORDINATOR_CHECKOUT_TURN_COMMAND,
   parseCoordinatorActivitySnapshot,
   parseCoordinatorCheckoutTurn,
   type CoordinatorActivitySnapshot,
   type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
 import {
-  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
   parseCoordinatorLaunchOverrides,
   type CoordinatorLaunchOverridesSnapshot,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { coordinatorApi as coordinatorDomainApi } from "@/lib/node-scope/domains/coordinator";
+import { commandBackendClient, type BackendClient } from "./client";
 
 export const COORDINATOR_VIEW_COMMAND = "get_project_coordinator_view";
 
@@ -38,7 +36,9 @@ export type CoordinatorPullRequestWatchResult =
  * over the window's command scope.
  */
 export function createCoordinatorApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  // The `coordinator` domain client (plan item 7009): version 1 sends the
+  // envelope and decodes results; version 0 is today's untyped call.
+  const domain = () => coordinatorDomainApi(client);
 
   /**
    * `keepConversationErrors`: this panel offers Retry for a conversation that
@@ -46,17 +46,17 @@ export function createCoordinatorApi(client: BackendClient) {
    * ignores the argument.
    */
   const ensureProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
-    invoke("ensure_project_coordinator", { projectId, keepConversationErrors: true });
+    domain().ensure_project_coordinator({ projectId, keepConversationErrors: true });
 
   /** Clears a conversation's startup failure so its pane can connect again. */
   const retryCoordinatorConversation = (
     projectId: string,
     conversationId: string,
   ): Promise<CoordinatorSnapshot> =>
-    invoke("retry_coordinator_conversation", { projectId, conversationId });
+    domain().retry_coordinator_conversation({ projectId, conversationId });
 
   const getProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot | null> =>
-    invoke("get_project_coordinator", { projectId });
+    domain().get_project_coordinator({ projectId });
 
   /**
    * Conditional coordinator read. With `known` (the stamp of the body this
@@ -67,24 +67,26 @@ export function createCoordinatorApi(client: BackendClient) {
     projectId: string,
     known: ViewRevisionStamp | null,
   ): Promise<unknown> =>
-    invoke(COORDINATOR_VIEW_COMMAND, {
+    domain().get_project_coordinator_view({
       projectId,
       ...(known ? { knownGeneration: known.generation, knownRevision: known.revision } : {}),
     });
 
   /** Every project whose coordinator is working or waiting. Older backends answer "Unknown backend command". */
   const listCoordinatorActivity = (): Promise<CoordinatorActivitySnapshot> =>
-    invoke<unknown>(COORDINATOR_ACTIVITY_COMMAND).then(parseCoordinatorActivitySnapshot);
+    domain()
+      .list_coordinator_activity(undefined as never)
+      .then(parseCoordinatorActivitySnapshot);
 
   /** Worker tabs whose launch overrode the default. Older backends answer "Unknown backend command". */
   const listCoordinatorLaunchOverrides = (): Promise<CoordinatorLaunchOverridesSnapshot> =>
-    invoke<unknown>(COORDINATOR_LAUNCH_OVERRIDES_COMMAND).then(parseCoordinatorLaunchOverrides);
+    domain()
+      .list_coordinator_launch_overrides(undefined as never)
+      .then(parseCoordinatorLaunchOverrides);
 
   /** The turn holding this project's checkout. Older backends answer "Unknown backend command". */
   const getCoordinatorCheckoutTurn = (projectId: string): Promise<CoordinatorCheckoutTurn | null> =>
-    invoke<unknown>(COORDINATOR_CHECKOUT_TURN_COMMAND, { projectId }).then(
-      parseCoordinatorCheckoutTurn,
-    );
+    domain().get_coordinator_checkout_turn({ projectId }).then(parseCoordinatorCheckoutTurn);
 
   /**
    * `closeUnused` names unassigned side agents whose composer is empty here; the
@@ -95,7 +97,7 @@ export function createCoordinatorApi(client: BackendClient) {
     title?: string,
     closeUnused?: readonly string[],
   ): Promise<CoordinatorSnapshot> =>
-    invoke("create_coordinator_conversation", {
+    domain().create_coordinator_conversation({
       projectId,
       title,
       ...(closeUnused?.length ? { closeUnused } : {}),
@@ -106,47 +108,47 @@ export function createCoordinatorApi(client: BackendClient) {
     conversationId: string,
     agent: AgentPlatform,
   ): Promise<CoordinatorSnapshot> =>
-    invoke("assign_coordinator_conversation_agent", { projectId, conversationId, agent });
+    domain().assign_coordinator_conversation_agent({ projectId, conversationId, agent });
 
   const selectCoordinatorConversation = (
     projectId: string,
     conversationId: string | null,
   ): Promise<CoordinatorSnapshot> =>
-    invoke("select_coordinator_conversation", { projectId, conversationId });
+    domain().select_coordinator_conversation({ projectId, conversationId });
 
   const closeCoordinatorConversation = (
     projectId: string,
     conversationId: string,
   ): Promise<CoordinatorSnapshot> =>
-    invoke("close_coordinator_conversation", { projectId, conversationId });
+    domain().close_coordinator_conversation({ projectId, conversationId });
 
   const pauseProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
-    invoke("pause_project_coordinator", { projectId });
+    domain().pause_project_coordinator({ projectId });
 
   const resumeProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
-    invoke("resume_project_coordinator", { projectId });
+    domain().resume_project_coordinator({ projectId });
 
   const getProjectGitStatus = (projectId: string): Promise<ProjectGitStatus> =>
-    invoke("get_project_git_status", { projectId });
+    domain().get_project_git_status({ projectId });
 
   const fetchProjectGit = (projectId: string, force = false): Promise<ProjectGitStatus> =>
-    invoke("fetch_project_git", { projectId, force });
+    domain().fetch_project_git({ projectId, force });
 
   const syncProjectGit = (projectId: string): Promise<ProjectGitStatus> =>
-    invoke("sync_project_git", { projectId });
+    domain().sync_project_git({ projectId });
 
   const prepareProjectGitBranchSwitch = (
     projectId: string,
     ref: string,
   ): Promise<ProjectGitSwitchConfirmation> =>
-    invoke("prepare_project_git_branch_switch", { projectId, ref });
+    domain().prepare_project_git_branch_switch({ projectId, ref });
 
   const switchProjectGitBranch = (
     projectId: string,
     ref: string,
     options: boolean | ProjectGitSwitchOptions = {},
   ): Promise<ProjectGitStatus> =>
-    invoke("switch_project_git_branch", {
+    domain().switch_project_git_branch({
       projectId,
       ref,
       ...(typeof options === "boolean"
@@ -162,7 +164,7 @@ export function createCoordinatorApi(client: BackendClient) {
     filename: string,
     base64Data: string,
   ): Promise<string> =>
-    invoke("write_coordinator_attachment", { environmentId, filename, base64Data });
+    domain().write_coordinator_attachment({ environmentId, filename, base64Data });
 
   /**
    * A coordinator conversation of `projectId` rendered or opened this pull
@@ -175,13 +177,15 @@ export function createCoordinatorApi(client: BackendClient) {
     ref: { owner: string; repo: string; number: number },
     source: "rendered" | "opened",
   ): Promise<CoordinatorPullRequestWatchResult> =>
-    invoke("watch_coordinator_pull_request", {
+    // The schema reads `reason` as a string (a newer backend may add one); the
+    // web's type names today's reasons.
+    domain().watch_coordinator_pull_request({
       projectId,
       owner: ref.owner,
       repo: ref.repo,
       number: ref.number,
       source,
-    });
+    }) as Promise<CoordinatorPullRequestWatchResult>;
 
   return {
     ensureProjectCoordinator,

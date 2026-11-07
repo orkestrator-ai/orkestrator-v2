@@ -1,3 +1,11 @@
+import {
+  listControllerWorkerCommandsCommand,
+  listCoordinatorWorkerCommandsCommand,
+  runControllerWorkerCommandCommand,
+  runCoordinatorWorkerCommandCommand,
+  stopControllerWorkerTurnCommand,
+  stopCoordinatorWorkerTurnCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { createHash } from "node:crypto";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";
@@ -176,7 +184,7 @@ export function registerCoordinatorWorkerTurnActions(
    * the user (`stoppedBy: "user"`), which only the Work panel sends; the
    * coordinator's tool schema does not admit it.
    */
-  register("stop_coordinator_worker_turn", async (args, context) => {
+  register(stopCoordinatorWorkerTurnCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the stop input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -252,7 +260,7 @@ export function registerCoordinatorWorkerTurnActions(
     );
   });
 
-  register("list_coordinator_worker_commands", async (args, context) => {
+  register(listCoordinatorWorkerCommandsCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the command list input");
     const { remote, environmentId, tabId } = await workerTarget(context, caller, input);
@@ -275,7 +283,7 @@ export function registerCoordinatorWorkerTurnActions(
    * coordinator is woken once when the turn ends; one that answers without a
    * turn opens none.
    */
-  register("run_coordinator_worker_command", async (args, context) => {
+  register(runCoordinatorWorkerCommandCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the command input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -347,12 +355,12 @@ export function registerCoordinatorWorkerTurnActions(
    * coordinator. Node-link only (never a workspace grant); the command node
    * checks its scope and keeps the receipt and the delegations.
    */
-  register("stop_controller_worker_turn", async (args, context) => {
+  register(stopControllerWorkerTurnCommand, async (args, context) => {
     const environment = await leafWorker(args, context);
     return stopWorkerTurn(context, run, environment.id, asNonBlankString(args.tabId, "tabId"));
   });
 
-  register("list_controller_worker_commands", async (args, context) => {
+  register(listControllerWorkerCommandsCommand, async (args, context) => {
     const environment = await leafWorker(args, context);
     return listWorkerCommands(
       context,
@@ -363,7 +371,7 @@ export function registerCoordinatorWorkerTurnActions(
     );
   });
 
-  register("run_controller_worker_command", async (args, context) => {
+  register(runControllerWorkerCommandCommand, async (args, context) => {
     const environment = await leafWorker(args, context);
     return runWorkerCommand(
       context,

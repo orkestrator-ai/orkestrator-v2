@@ -1,4 +1,10 @@
 import {
+  clearCoordinatorWorkerGoalCommand,
+  getCoordinatorWorkerGoalCommand,
+  pauseCoordinatorWorkerGoalCommand,
+  setCoordinatorWorkerGoalCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
+import {
   goalForModel,
   goalIsRunning,
   goalPublicView,
@@ -108,7 +114,7 @@ export function registerCoordinatorGoalActions(
   register: CommandRegistrar,
   dependencies: Pick<RegistryDependencies, "commands">,
 ): void {
-  register("set_coordinator_worker_goal", async (args, context) => {
+  register(setCoordinatorWorkerGoalCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the goal input");
     if (input.check !== undefined)
@@ -165,7 +171,7 @@ export function registerCoordinatorGoalActions(
     );
   });
 
-  register("get_coordinator_worker_goal", async (args, context) => {
+  register(getCoordinatorWorkerGoalCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the goal input");
     const tab = await ownedWorkerTab(context, caller, input);
@@ -184,7 +190,7 @@ export function registerCoordinatorGoalActions(
     };
   });
 
-  register("pause_coordinator_worker_goal", async (args, context) => {
+  register(pauseCoordinatorWorkerGoalCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const tab = await ownedWorkerTab(context, caller, record(args.input, "the goal input"));
     const session = await storedSession(context, tab);
@@ -198,7 +204,7 @@ export function registerCoordinatorGoalActions(
     return { ...tabResult(tab), goal: summaryOf(goal) };
   });
 
-  register("clear_coordinator_worker_goal", async (args, context) => {
+  register(clearCoordinatorWorkerGoalCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const tab = await ownedWorkerTab(context, caller, record(args.input, "the goal input"));
     const session = await storedSession(context, tab);

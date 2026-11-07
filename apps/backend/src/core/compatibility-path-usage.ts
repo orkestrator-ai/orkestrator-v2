@@ -127,6 +127,17 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "workspace-grant.config-echo",
   /**
+   * A retired coordinator command was called (plan item 7009):
+   * `hide_coordinator_work` (the Work panel's "Clear finished", removed in
+   * v2.36.5-beta), `associate_coordinator_workflow` (never called; launches
+   * record their own associations) or `start_coordinator_multi_review` (its
+   * last caller, Control MCP's `launch_multi_review`, moved off it in
+   * v2.36.4-beta).
+   */
+  "retired-command.hide-coordinator-work",
+  "retired-command.associate-coordinator-workflow",
+  "retired-command.start-coordinator-multi-review",
+  /**
    * A stream that did not say how it wants relayed node events got one under the
    * old shared name: a renderer or desktop from before per-node names.
    */

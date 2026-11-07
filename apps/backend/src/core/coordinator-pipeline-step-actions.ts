@@ -1,3 +1,7 @@
+import {
+  restartControllerBuildPipelineStepCommand,
+  restartCoordinatorBuildPipelineStepCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { createHash } from "node:crypto";
 import {
   isBuildPipelineRestartSelection,
@@ -171,7 +175,7 @@ async function reopenPipelineFollows(
 }
 
 export function registerCoordinatorPipelineStepActions(register: CommandRegistrar): void {
-  register("restart_coordinator_build_pipeline_step", async (args, context) => {
+  register(restartCoordinatorBuildPipelineStepCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the restart input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -250,7 +254,7 @@ export function registerCoordinatorPipelineStepActions(register: CommandRegistra
    * checks its scope and keeps the coordinator's receipt, and this receipt
    * makes a resent request replay instead of restarting again.
    */
-  register("restart_controller_build_pipeline_step", async (args, context) => {
+  register(restartControllerBuildPipelineStepCommand, async (args, context) => {
     const projectId = asNonBlankString(args.projectId, "projectId");
     const requestId = asNonBlankString(args.requestId, "requestId");
     const restart = restartInput(args);

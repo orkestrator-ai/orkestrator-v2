@@ -1,3 +1,4 @@
+import { askCoordinatorSuborksCommand } from "@orkestrator/protocol/contract/domains/coordinator";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { SUBORK_LIMITS, type SuborkTargetRequest } from "@orkestrator/protocol/suborks";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -55,7 +56,7 @@ export function registerCoordinatorSuborkActions(
   register: CommandRegistrar,
   dependencies: Pick<RegistryDependencies, "commands">,
 ): void {
-  register("ask_coordinator_suborks", async (args, context) => {
+  register(askCoordinatorSuborksCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the ask_agents input");
     if (!context.suborks) throw new Error("Suborks are unavailable on this backend");

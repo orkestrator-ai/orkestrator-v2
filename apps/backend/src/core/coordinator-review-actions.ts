@@ -1,3 +1,10 @@
+import {
+  addressCoordinatorMultiReviewActionCommand,
+  customFixCoordinatorMultiReviewActionCommand,
+  openCoordinatorMultiReviewCommand,
+  openCoordinatorMultiReviewFixCommand,
+  launchCoordinatorMultiReviewActionCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { COORDINATOR_REQUEST_ID_REUSED_ERROR } from "@orkestrator/protocol/coordinator";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -310,7 +317,7 @@ export function registerCoordinatorReviewActions(
     }
   };
 
-  register("launch_coordinator_multi_review_action", async ({ scope, input }, context) => {
+  register(launchCoordinatorMultiReviewActionCommand, async ({ scope, input }, context) => {
     const caller = await identity(scope, context);
     if (!isLaunchMultiReviewActionInput(input))
       throw new Error("Invalid Multi Review button action");
@@ -597,22 +604,21 @@ export function registerCoordinatorReviewActions(
     );
   };
 
-  for (const surface of ["root", "fix", "address"] as const) {
-    register(
-      surface === "root"
-        ? "open_coordinator_multi_review"
-        : surface === "fix"
-          ? "open_coordinator_multi_review_fix"
-          : "address_coordinator_multi_review_action",
-      (args, context) => surfaceCommand(surface, args, context),
-    );
-  }
+  register(openCoordinatorMultiReviewCommand, (args, context) =>
+    surfaceCommand("root", args, context),
+  );
+  register(openCoordinatorMultiReviewFixCommand, (args, context) =>
+    surfaceCommand("fix", args, context),
+  );
+  register(addressCoordinatorMultiReviewActionCommand, (args, context) =>
+    surfaceCommand("address", args, context),
+  );
 
   /**
    * The review tab's custom Address Findings ("…" beside Address Findings): a fix with the caller's
    * instruction and, optionally, another model. One run per `requestId`.
    */
-  register("custom_fix_coordinator_multi_review_action", async (args, context) => {
+  register(customFixCoordinatorMultiReviewActionCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const input = args.input;
     if (!input || typeof input !== "object" || Array.isArray(input))

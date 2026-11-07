@@ -11,6 +11,7 @@ import {
   type EncodedResultOf,
 } from "@orkestrator/protocol/contract/command";
 import type { InvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
+import { fromWire } from "@orkestrator/protocol/contract/errors";
 import {
   CONTROLLER_HEADER,
   NodeRefusalError,
@@ -607,6 +608,9 @@ export class NodeLink {
             : `The node answered HTTP ${response.status}.`;
         const refusal = parseNodeRefusal(message);
         if (refusal) throw new NodeRefusalError(refusal.code, refusal.message);
+        // A typed incompatibility keeps its class, code and bounded details (1005).
+        const incompatible = fromWire(payload);
+        if (incompatible) throw incompatible;
         const error = new Error(message);
         if (typeof payload.code === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(payload.code))
           Object.assign(error, { code: payload.code });

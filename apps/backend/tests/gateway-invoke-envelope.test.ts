@@ -9,7 +9,8 @@ import { describe, expect, test } from "bun:test";
 import * as Schema from "effect/Schema";
 import { buildInvokeEnvelope, defineCommand } from "@orkestrator/protocol/contract/command";
 import { defineDomain } from "@orkestrator/protocol/contract/domain";
-import { fromWire, incompatibility } from "@orkestrator/protocol/contract/errors";
+import { fromWire, incompatibility, unknownCommand } from "@orkestrator/protocol/contract/errors";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import type { CommandContext } from "../src/core/commands-context.js";
 import {
   CommandRegistry,
@@ -43,7 +44,9 @@ function contractBackend() {
       invoke: (command: string, args: Record<string, unknown>, ...rest: unknown[]) => {
         seen.push([command, args, ...rest]);
         const handler = commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        // As `OrkestratorBackend.invoke` does (plan item 1005).
+        if (!handler)
+          throw unknownCommand(command, (rest[0] as { domain?: string } | undefined)?.domain);
         return handler(args, {} as CommandContext, rest[0] as never);
       },
       hasCommand: (command: string) => commands.has(command),
@@ -103,12 +106,13 @@ describe("HTTP invoke envelope", () => {
     expect(answer.body).toEqual({
       error: expect.stringContaining("accepts versions 1 to 2"),
       code: "unsupported-version",
-      details: { domain: "system", range: { min: 1, max: 2 } },
+      details: { domain: "system", range: { min: 1, max: 2 }, command: "get_contract_probe" },
     });
     expect(incompatibility(fromWire(answer.body))).toEqual({
       code: "unsupported-version",
       domain: "system",
       range: { min: 1, max: 2 },
+      command: "get_contract_probe",
     });
   });
 
@@ -129,6 +133,37 @@ describe("HTTP invoke envelope", () => {
       details: { domain: "system", field: "steer" },
     });
     expect(JSON.stringify(answer.body)).not.toContain("secret-steer-value");
+  });
+
+  test("an unknown command answers coded, with the legacy text and the envelope's domain", async () => {
+    const { backend } = contractBackend();
+    const { info } = await startGateway({ backend });
+    const url = new URL("/__orkestrator/invoke", info.url).toString();
+    const plain = await invoke(url, info.token, { command: "get_missing", args: {} });
+    expect(plain).toEqual({
+      status: 500,
+      body: {
+        error: unknownBackendCommandMessage("get_missing"),
+        code: "unknown-command",
+        details: { command: "get_missing" },
+      },
+    });
+    const enveloped = await invoke(url, info.token, {
+      command: "get_missing",
+      args: {},
+      domain: "system",
+      version: 1,
+    });
+    expect(enveloped.body).toEqual({
+      error: unknownBackendCommandMessage("get_missing"),
+      code: "unknown-command",
+      details: { domain: "system", command: "get_missing" },
+    });
+    expect(incompatibility(fromWire(enveloped.body), "get_missing")).toEqual({
+      code: "unknown-command",
+      domain: "system",
+      command: "get_missing",
+    });
   });
 
   test("a schema failure keeps the existing validation text and carries no code", async () => {

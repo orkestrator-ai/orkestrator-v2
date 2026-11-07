@@ -1222,9 +1222,11 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
       // The status travels as a property, not just inside the message. A
       // gateway 502/503 during environment bring-up has to reach the startup
       // retry classifier, and it looks for `error.status`.
+      // So do its `code` and an incompatibility's bounded `details` (1005).
       throw new GatewayHttpError(
         response.status,
         payload.error ?? `${fallback} with HTTP ${response.status}`,
+        payload,
       );
     }
     return payload;

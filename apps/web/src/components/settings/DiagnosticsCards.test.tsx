@@ -220,7 +220,8 @@ test("a failed plan says why and offers the button again", async () => {
   mount(<DiagnosticsExportCard />);
   fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("too old");
+  // The one incompatibility text (plan item 1005), naming the chosen machine.
+  expect(alert.textContent).toBe("Not available on Selected. Update it.");
   expect(
     (screen.getByRole("button", { name: "Export diagnostics" }) as HTMLButtonElement).disabled,
   ).toBe(false);

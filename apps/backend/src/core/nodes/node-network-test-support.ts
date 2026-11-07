@@ -14,7 +14,11 @@ import {
   emptyControllerSettingsStore,
   type ControllerSettingsStore,
 } from "@orkestrator/protocol/controller-settings";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+import {
+  isIncompatibilityError,
+  toWire,
+  unknownCommand,
+} from "@orkestrator/protocol/contract/errors";
 
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
@@ -200,8 +204,8 @@ export class TestNodeNetwork {
       const extra = node.commands.get(body.command);
       const handler = this.commands.get(body.command);
       if (!handler && !extra) {
-        // A real gateway answers with the backend's own wording.
-        return json(500, { error: unknownBackendCommandMessage(body.command) });
+        // A real gateway answers with the backend's own wording, coded (plan item 1005).
+        return json(500, toWire(unknownCommand(body.command)));
       }
       try {
         const result = extra
@@ -216,6 +220,7 @@ export class TestNodeNetwork {
             } as unknown as CommandContext);
         return json(200, { result });
       } catch (error) {
+        if (isIncompatibilityError(error)) return json(500, toWire(error));
         return json(500, {
           error: error instanceof Error ? error.message : String(error),
           code: (error as { code?: string }).code,
@@ -251,7 +256,7 @@ export class TestNodeNetwork {
       local: {
         invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
           const handler = node.commands.get(command);
-          if (!handler) throw new Error(unknownBackendCommandMessage(command));
+          if (!handler) throw unknownCommand(command);
           return (await handler(args)) as T;
         },
       },

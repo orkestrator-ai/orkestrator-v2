@@ -15,15 +15,19 @@ import * as backend from "@/lib/backend";
 import { base64ToBytes, downloadBlob } from "@/lib/chat/artifact-download";
 import { sha256HexOfBytes } from "@/lib/chat/static-html-document";
 import { cn } from "@/lib/utils";
+import { describeIncompatibility } from "@/lib/describe-incompatibility";
 import { useAccountMachine } from "./account-machine";
 import { formatDiagnosticsBytes } from "./DatabaseStorageCard";
 
-function failureText(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : "";
-  if (/unknown (?:backend )?command/i.test(message)) {
-    return "This machine's backend is too old to export diagnostics. Update it, then try again.";
-  }
-  return message || fallback;
+function failureText(
+  error: unknown,
+  fallback: string,
+  machineName: string | null,
+  command: string,
+): string {
+  const tooOld = describeIncompatibility(error, machineName ?? "this machine", command);
+  if (tooOld) return tooOld;
+  return (error instanceof Error ? error.message : "") || fallback;
 }
 
 /** Reads a plan piece by piece and checks it adds up before anything is saved. */
@@ -54,7 +58,7 @@ async function fetchBundle(
  * bytes. It goes to a download here, and nowhere else.
  */
 export function DiagnosticsExportCard() {
-  const { machine } = useAccountMachine();
+  const { machine, name } = useAccountMachine();
   const [plan, setPlan] = useState<DiagnosticsBundlePlan | null>(null);
   const [isPlanning, setIsPlanning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -68,11 +72,18 @@ export function DiagnosticsExportCard() {
     try {
       setPlan(await backend.planDiagnosticsBundle(machine));
     } catch (planError) {
-      setError(failureText(planError, "The diagnostics bundle could not be built."));
+      setError(
+        failureText(
+          planError,
+          "The diagnostics bundle could not be built.",
+          name,
+          "plan_diagnostics_bundle",
+        ),
+      );
     } finally {
       setIsPlanning(false);
     }
-  }, [machine]);
+  }, [machine, name]);
 
   const save = useCallback(async () => {
     if (!plan) return;
@@ -83,11 +94,18 @@ export function DiagnosticsExportCard() {
       setSavedName(plan.fileName);
       setPlan(null);
     } catch (saveError) {
-      setError(failureText(saveError, "The diagnostics bundle could not be saved."));
+      setError(
+        failureText(
+          saveError,
+          "The diagnostics bundle could not be saved.",
+          name,
+          "read_diagnostics_bundle",
+        ),
+      );
     } finally {
       setIsSaving(false);
     }
-  }, [machine, plan]);
+  }, [machine, name, plan]);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">

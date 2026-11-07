@@ -6,6 +6,7 @@
  * contract's typed errors, and derives stable operation identities so a
  * retry after a lost response can be recognized instead of repeated.
  */
+import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
 import {
   WEB_ANNOTATION_CAPACITY,
   WEB_ANNOTATION_COMMANDS,
@@ -53,8 +54,9 @@ export function errorMessage(error: unknown): string {
 /** Typed codes from the error trailer, plus transport-level kinds. */
 export type WebAnnotationErrorKind = WebAnnotationErrorCode | "unsupported" | "other";
 
+/** Other wordings a non-Orkestrator or proxy answer may use; the backend's own is coded. */
 const UNSUPPORTED_COMMAND =
-  /unknown (backend )?command|unsupported command|command not found|no handler for|not a registered command/i;
+  /unsupported command|command not found|no handler for|not a registered command/i;
 
 /**
  * Typed detail of a failure (see `web-annotations-errors.ts`) and its human
@@ -83,7 +85,7 @@ export function webAnnotationErrorDetail(error: unknown): {
 export function classifyWebAnnotationError(error: unknown): WebAnnotationErrorKind {
   const { detail, message } = webAnnotationErrorDetail(error);
   if (detail) return detail.code;
-  if (UNSUPPORTED_COMMAND.test(message)) return "unsupported";
+  if (incompatibilityOfAnyCommand(error) || UNSUPPORTED_COMMAND.test(message)) return "unsupported";
   return "other";
 }
 

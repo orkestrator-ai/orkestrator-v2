@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
 import type { NodeRecord } from "@orkestrator/protocol/command-nodes";
+import {
+  UnsupportedVersionError,
+  incompatibility,
+  toWire,
+  unsupportedVersion,
+} from "@orkestrator/protocol/contract/errors";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { defineCommand } from "@orkestrator/protocol/contract/command";
 import { defineDomain } from "@orkestrator/protocol/contract/domain";
 import * as Schema from "effect/Schema";
@@ -202,3 +209,30 @@ for (const [label, domains, expected] of [
     expect(bodies[1]).toEqual({ command: "mutate", args: { value: "y" } });
     link.stop();
   });
+
+test("a typed incompatibility keeps its code and details through the link (plan item 1005)", async () => {
+  const body = toWire(
+    unsupportedVersion({ domain: "node-mail", range: { min: 2, max: 3 }, command: "deliver" }),
+  );
+  const { link } = await setup(async (_input, init) =>
+    init?.body && JSON.parse(String(init.body)).command === "deliver"
+      ? new Response(JSON.stringify(body), { status: 500 })
+      : null,
+  );
+  await link.start();
+  const failure = await link.invoke("deliver", {}).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(UnsupportedVersionError);
+  expect((failure as Error).message).toBe(body.error);
+  expect(incompatibility(failure, "deliver")).toEqual({
+    code: "unsupported-version",
+    domain: "node-mail",
+    range: { min: 2, max: 3 },
+    command: "deliver",
+  });
+  // A node without the command answers it coded; the legacy text is unchanged.
+  const unknown = await link.invoke("not_registered", {}).catch((error: unknown) => error);
+  expect((unknown as { code?: string }).code).toBe("unknown-command");
+  expect((unknown as Error).message).toBe(unknownBackendCommandMessage("not_registered"));
+  expect(incompatibility(unknown, "not_registered")?.command).toBe("not_registered");
+  link.stop();
+});

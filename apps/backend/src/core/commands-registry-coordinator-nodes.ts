@@ -29,7 +29,7 @@ import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
-import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
@@ -153,7 +153,7 @@ export async function coordinatorNodeTarget(
       })
       .catch((error: unknown) => {
         // An older node does not know the controller commands yet.
-        if (isUnknownCommandError(error, command)) {
+        if (incompatibility(error, command)?.code === "unknown-command") {
           throw new Error(
             `${node.view.displayName} runs an older Orkestrator that cannot do this yet; update it, then retry.`,
           );

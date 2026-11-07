@@ -29,6 +29,7 @@ import {
   type ArtifactHostApi,
   type ArtifactHostEvent,
 } from "@orkestrator/protocol/artifact-host-ipc";
+import { parseIpcIncompatibility } from "@orkestrator/protocol/contract/ipc-error";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -68,8 +69,14 @@ function readableInvokeError(error: unknown): unknown {
   delete diagnostics.stack;
   delete diagnostics.cause;
   Object.defineProperties(readable, diagnostics);
-  const code = REFUSAL_CODE_PREFIX.exec(message)?.[1];
+  // A typed incompatibility (plan item 1005) carries bounded details in the
+  // brackets too; it keeps its message form, the only part the bridge passes.
+  const incompatible = parseIpcIncompatibility(message);
+  const code = incompatible?.code ?? REFUSAL_CODE_PREFIX.exec(message)?.[1];
   if (code && !("code" in readable)) Object.defineProperty(readable, "code", { value: code });
+  if (incompatible && !("details" in readable)) {
+    Object.defineProperty(readable, "details", { value: incompatible.details });
+  }
   return readable;
 }
 

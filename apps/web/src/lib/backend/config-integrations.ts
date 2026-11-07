@@ -50,7 +50,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 import type { PrDetectionResult } from "./projects-environments";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
-import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 
 /**
  * Workspace machine settings with the command node's inherited preferences.
@@ -420,7 +420,8 @@ export async function patchRepositorySettings(
       ...(unset.length > 0 ? { unset: [...unset] } : {}),
     });
   } catch (error) {
-    if (!isUnknownBackendCommand(error, "patch_repository_settings")) throw error;
+    if (incompatibility(error, "patch_repository_settings")?.code !== "unknown-command")
+      throw error;
     return updateRepositoryConfig(projectId, fallback);
   }
 }

@@ -30,6 +30,7 @@ import type {
   DesignSnapshotResult,
   DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
+import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
 import { invoke } from "@/lib/native/backend";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import {
@@ -55,7 +56,7 @@ export function classifyTransportError(error: unknown): DesignTransportFailure {
   if (error instanceof DesignClientError) return "failed";
   const status = (error as { status?: number } | null)?.status;
   const message = error instanceof Error ? error.message : String(error);
-  if (message.startsWith("Unknown backend command:")) return "unsupported";
+  if (incompatibilityOfAnyCommand(error)) return "unsupported";
   if (status === 401 || status === 403 || /Authentication required/i.test(message))
     return "unauthorized";
   if (

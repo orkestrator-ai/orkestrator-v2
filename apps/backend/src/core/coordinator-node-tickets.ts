@@ -10,7 +10,7 @@ import {
   olderLeafTicketMessage,
   type TicketSyncNodeState,
 } from "@orkestrator/protocol/ticket-sync";
-import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
@@ -85,7 +85,7 @@ async function ticketNode(
     const routed = await portal
       .invokeOnNode({ nodeId, command, args, ...(requestKey ? { requestKey } : {}) })
       .catch((error: unknown) => {
-        if (isUnknownCommandError(error, command)) {
+        if (incompatibility(error, command)?.code === "unknown-command") {
           throw new Error(
             `${name} runs an older Orkestrator that cannot do this yet; update it, then retry.`,
           );

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 
 import { repositoryHint, type NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import {
@@ -50,9 +51,9 @@ function message(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300);
 }
 
+/** The node cannot serve `command` (it predates it, or the call's version): it needs an update. */
 function unknownCommand(error: unknown, command: string): boolean {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.includes(command) && /unknown|not found|unsupported/i.test(text);
+  return incompatibility(error, command) !== null;
 }
 
 function repositoryName(gitUrl: string, fallback: string): string {

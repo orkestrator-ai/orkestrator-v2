@@ -2,7 +2,7 @@ import { invoke } from "@/lib/native/backend";
 import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
 import { hydrationActivity } from "@/lib/hydration-activity";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
-import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type {
   ProjectArrangement,
   ProjectArrangementIntent,
@@ -177,7 +177,8 @@ export async function arrangeProjectsByIntent(
   try {
     return await invoke<Project[]>("arrange_projects_by_intent", { intent });
   } catch (error) {
-    if (!isUnknownBackendCommand(error, "arrange_projects_by_intent")) throw error;
+    if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
+      throw error;
     return arrangeProjects(preview.projectIds, preview.folders);
   }
 }

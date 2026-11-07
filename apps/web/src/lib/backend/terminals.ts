@@ -1,3 +1,4 @@
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { invoke } from "@/lib/native/backend";
 import {
   isTerminalHistoryPage,
@@ -243,18 +244,12 @@ export async function resumeTerminalInput(
   sessionId: string,
   { local = false }: { local?: boolean } = {},
 ): Promise<boolean> {
+  const command = local ? LOCAL_TERMINAL_INPUT_RESUME_COMMAND : TERMINAL_INPUT_RESUME_COMMAND;
   try {
-    const result = await invoke<TerminalInputResumeResult | null>(
-      local ? LOCAL_TERMINAL_INPUT_RESUME_COMMAND : TERMINAL_INPUT_RESUME_COMMAND,
-      { sessionId },
-    );
+    const result = await invoke<TerminalInputResumeResult | null>(command, { sessionId });
     return result?.resumed === true;
   } catch (error) {
-    if (
-      String(error instanceof Error ? error.message : error).includes("Unknown backend command")
-    ) {
-      return false;
-    }
+    if (incompatibility(error, command)?.code === "unknown-command") return false;
     throw error;
   }
 }

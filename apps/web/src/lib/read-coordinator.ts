@@ -71,6 +71,7 @@
  * in `view`, because a different subscriber's read would not be equivalent.
  */
 
+import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.read-coordinator");
@@ -349,8 +350,8 @@ export function classifyReadError(error: unknown): ReadErrorKind {
       ? (error as { status?: unknown }).status
       : undefined;
   if (status === 401 || status === 403) return "auth";
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("Unknown backend command")) return "unsupported";
+  // The command is not known here: read the code, or the backend's own direct answer.
+  if (incompatibilityOfAnyCommand(error)) return "unsupported";
   return "transient";
 }
 

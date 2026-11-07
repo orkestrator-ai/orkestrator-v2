@@ -1,6 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as realProjectIconImage from "@/lib/project-icon-image";
+
 const realProjectIconImageSnapshot = { ...realProjectIconImage };
 import * as realSelect from "@/components/ui/select";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
@@ -168,9 +169,13 @@ afterAll(() => {
 
 import { CODEX_MODELS } from "@/lib/codex-models";
 import { useConfigStore } from "@/stores/configStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
+
+/** The picker asks the node of the scope the dialog renders in: here the command scope (3017). */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -749,6 +754,7 @@ describe("RepositorySettings", () => {
         ).toBe(PICKED_ICON),
       );
       expect(mockOpenDialog).toHaveBeenCalledWith({
+        nodeId: commandNodeId(),
         mode: "file",
         title: "Select Icon Image",
         defaultPath: undefined,
@@ -924,6 +930,7 @@ describe("RepositorySettings", () => {
       await waitFor(() => expect(mockProjectIconFromFile).toHaveBeenCalledTimes(1));
       expect(mockFindProjectIcons).not.toHaveBeenCalled();
       expect(mockOpenDialog).toHaveBeenCalledWith({
+        nodeId: commandNodeId(),
         mode: "file",
         title: "Select Icon Image",
         defaultPath: "/repo",
@@ -944,6 +951,7 @@ describe("RepositorySettings", () => {
         "/repo/chosen.png",
       ]);
       expect(mockOpenDialog).toHaveBeenCalledWith({
+        nodeId: commandNodeId(),
         mode: "file",
         title: "Select Icon Image",
         defaultPath: "/repo",

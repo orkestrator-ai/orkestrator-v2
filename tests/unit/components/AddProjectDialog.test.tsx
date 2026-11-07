@@ -5,7 +5,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 import * as realBackend from "@/lib/backend";
 import * as realHostPathPicker from "@/lib/host-path-picker";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { type ControlledTimeout, installControlledTimeout } from "../../helpers/controlled-timeout";
+
+/** The picker asks the node of the scope the dialog renders in: here the command scope (3017). */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const realBackendSnapshot = { ...realBackend };
 const realHostPathPickerSnapshot = { ...realHostPathPicker };
@@ -673,6 +677,7 @@ describe("AddProjectDialog", () => {
 
     await waitFor(() =>
       expect(openDialogMock).toHaveBeenCalledWith({
+        nodeId: commandNodeId(),
         mode: "directory",
         title: "Choose an empty project folder",
         defaultPath: undefined,
@@ -695,6 +700,7 @@ describe("AddProjectDialog", () => {
 
     await waitFor(() =>
       expect(openDialogMock).toHaveBeenCalledWith({
+        nodeId: commandNodeId(),
         mode: "directory",
         title: "Choose an empty project folder",
         defaultPath: "/srv/projects/new-project",

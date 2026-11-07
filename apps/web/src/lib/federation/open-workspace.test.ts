@@ -12,6 +12,10 @@ import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { openMachineWorkspace } from "./open-workspace";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalViews = useMachineViewStore.getState();
 const originalPortal = portalStore.getState();
@@ -38,8 +42,8 @@ for (const dialog of ["delete-project", "repository-settings", "environment-sett
     });
     expect(useAppDialogStore.getState().request).toEqual(
       dialog === "environment-settings"
-        ? { kind: dialog, environmentId: "env" }
-        : { kind: dialog, projectId: "project" },
+        ? { nodeId: commandNodeId(), kind: dialog, environmentId: "env" }
+        : { nodeId: commandNodeId(), kind: dialog, projectId: "project" },
     );
     expect(useRemoteWorkspaceStore.getState().active).toBeNull();
     expect(useUIStore.getState().selectedProjectId).toBe("project");
@@ -58,6 +62,7 @@ test("an environment's rebuild opens its settings on the Container section", () 
     title: "Local",
   });
   expect(useAppDialogStore.getState().request).toEqual({
+    nodeId: commandNodeId(),
     kind: "environment-settings",
     environmentId: "env",
     section: "container",

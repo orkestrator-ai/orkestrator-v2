@@ -18,6 +18,7 @@ import {
   newWebAnnotationOperationId,
   webAnnotationCommand,
 } from "@/lib/web-annotations/client";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { openConversationAtMessage } from "@/lib/web-annotations/conversation-navigation";
 import { openConversationTab, openWebAnnotationRequest } from "@/lib/web-annotations/navigation";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
@@ -110,6 +111,8 @@ export function RequestCard({
   onFollowUp: (items: ComposerItem[], followUpOf: string) => void;
 }) {
   const { environmentId, announce, navigateToPage, features } = useAnnotationPanel();
+  // The annotation's environment is on the node of the scope this card renders in.
+  const scopeNodeId = useScopesWithCommandFallback().scope.nodeId;
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -189,7 +192,12 @@ export function RequestCard({
         : {}),
       ...(request.transcript.turnId ? { turnId: request.transcript.turnId } : {}),
     };
-    if (!openConversationAtMessage(environmentId, request.destination.tabId, target)) {
+    if (
+      !openConversationAtMessage(
+        { nodeId: scopeNodeId, environmentId, tabId: request.destination.tabId },
+        target,
+      )
+    ) {
       setMessage(
         "That chat tab is not open in this layout. The request continues in the background.",
       );

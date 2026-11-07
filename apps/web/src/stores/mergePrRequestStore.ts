@@ -1,3 +1,4 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { create } from "zustand";
 
 /**
@@ -9,9 +10,11 @@ import { create } from "zustand";
  * action bar drops a request it cannot honour (another environment selected,
  * or the button not pressable), so a stale request never opens a dialog later.
  *
- * Renderer-only view state: it carries an environment ID and nothing else.
+ * Renderer-only view state: it carries a node and environment ID and nothing
+ * else. The action bar honours only a request for its own node.
  */
 export interface MergePrRequest {
+  nodeId: BackendId;
   environmentId: string;
   /** Distinguishes repeated requests for the same environment. */
   nonce: number;
@@ -19,7 +22,7 @@ export interface MergePrRequest {
 
 interface MergePrRequestState {
   request: MergePrRequest | null;
-  requestMergePr: (environmentId: string) => void;
+  requestMergePr: (nodeId: BackendId, environmentId: string) => void;
   /** Clears the request, but only the one named, so a newer request survives. */
   clearMergePrRequest: (nonce: number) => void;
 }
@@ -28,7 +31,8 @@ let nextNonce = 1;
 
 export const useMergePrRequestStore = create<MergePrRequestState>((set) => ({
   request: null,
-  requestMergePr: (environmentId) => set({ request: { environmentId, nonce: nextNonce++ } }),
+  requestMergePr: (nodeId, environmentId) =>
+    set({ request: { nodeId, environmentId, nonce: nextNonce++ } }),
   clearMergePrRequest: (nonce) =>
     set((state) => (state.request?.nonce === nonce ? { request: null } : state)),
 }));

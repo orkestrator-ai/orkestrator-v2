@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import type { Environment } from "@/types";
 
 interface EnvironmentMoveSectionProps {
@@ -65,6 +65,8 @@ export function environmentMoveBlockedReason(environment: Environment): string |
  * everything shown here, so the disabled state is a courtesy, not the guard.
  */
 export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMoveSectionProps) {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const worktreePath = environment.worktreePath ?? "";
   const currentFolder = parentFolder(worktreePath);
   const [destination, setDestination] = useState(currentFolder);

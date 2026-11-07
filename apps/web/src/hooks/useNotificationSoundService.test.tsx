@@ -13,6 +13,10 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const playConfiguredNotificationSound = mock(async (_kind: string) => true);
 const primeNotificationSounds = mock(async () => true);
@@ -123,6 +127,7 @@ describe("when a coordinator is woken for its worker", () => {
     useUIStore.setState({ selectedProjectId: "project-1", projectBoardTab: "coordinator" });
     useActiveCoordinatorConversationStore.setState({
       active: {
+        nodeId: commandNodeId(),
         projectId: "project-1",
         tabId: "coordinator-tab",
         data: { platform: "claude", environmentId: "coordinator:c:c", isLocal: true },

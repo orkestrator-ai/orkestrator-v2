@@ -69,7 +69,12 @@ import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import {
+  flowAttemptKey,
+  flowGraphViewKey,
+  useFlowGraphViewStore,
+} from "@/stores/flowGraphViewStore";
 import { EMPTY_GRAPH_RUN, useGraphRunStore } from "@/stores/graphRunStore";
 import type { GraphRunTabData } from "@/types/paneLayout";
 import { useGraphRunCodeRewind } from "./GraphRunCodeRewindDialog";
@@ -269,7 +274,9 @@ function GraphRunView({
   const applyRun = useGraphRunStore((state) => state.applyRun);
   const modelCatalog = useReviewModelCatalog(run.projectId, true);
   const viewKey = `graph-run:${run.id}`;
-  const collapsed = useFlowGraphViewStore((state) => state.collapsed.has(viewKey));
+  // View state is remembered per node: run ids are only unique on theirs.
+  const storeViewKey = flowGraphViewKey(useScopesWithCommandFallback().scope.nodeId, viewKey);
+  const collapsed = useFlowGraphViewStore((state) => state.collapsed.has(storeViewKey));
   const setCollapsed = useFlowGraphViewStore((state) => state.setCollapsed);
   const expandedAttemptKeys = useFlowGraphViewStore((state) => state.expandedAttempts);
   const setAttemptExpanded = useFlowGraphViewStore((state) => state.setAttemptExpanded);
@@ -282,9 +289,9 @@ function GraphRunView({
       new Set(
         run.rewinds
           .map((rewind) => rewind.id)
-          .filter((id) => expandedAttemptKeys.has(flowAttemptKey(viewKey, id))),
+          .filter((id) => expandedAttemptKeys.has(flowAttemptKey(storeViewKey, id))),
       ),
-    [expandedAttemptKeys, run.rewinds, viewKey],
+    [expandedAttemptKeys, run.rewinds, storeViewKey],
   );
   const model = useMemo(
     () => graphRunFlowModel(run.plan, run, { expandedAttempts }),
@@ -366,7 +373,8 @@ function GraphRunView({
     switch (key) {
       case "expand-attempt":
       case "collapse-attempt":
-        if (node.attemptId) setAttemptExpanded(viewKey, node.attemptId, key === "expand-attempt");
+        if (node.attemptId)
+          setAttemptExpanded(storeViewKey, node.attemptId, key === "expand-attempt");
         return;
       case "open-session":
         openSession(node);
@@ -586,7 +594,7 @@ function GraphRunView({
                 className="h-7 gap-1.5 px-2 text-xs"
                 aria-expanded={!collapsed}
                 aria-controls={graphId}
-                onClick={() => setCollapsed(viewKey, !collapsed)}
+                onClick={() => setCollapsed(storeViewKey, !collapsed)}
               >
                 {collapsed ? (
                   <ChevronRight className="size-3.5" />
@@ -661,7 +669,7 @@ function GraphRunView({
                 onAnswer={answer}
                 onHumanAnswer={answerHuman}
                 onSelectActivation={(attemptId, activationKey) => {
-                  setAttemptExpanded(viewKey, attemptId, true);
+                  setAttemptExpanded(storeViewKey, attemptId, true);
                   setPinnedId(activationKey);
                 }}
               />

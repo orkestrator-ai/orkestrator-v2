@@ -1,7 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { ReactNode } from "react";
+import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import {
+  messagePartExpansionKey,
+  useMessagePartExpansionStore,
+} from "@/stores/messagePartExpansionStore";
 import { useMessagePartExpansion } from "./message-part-expansion";
+
+/** Outside a provider the hook qualifies keys with the app's command node. */
+const k = (key: string) => messagePartExpansionKey(getWindowScope().commandScope().nodeId, key);
 
 beforeEach(() => {
   useMessagePartExpansionStore.getState().reset();
@@ -22,13 +34,15 @@ describe("useMessagePartExpansion", () => {
       result.current[1](true);
     });
     expect(result.current[0]).toBe(true);
-    expect(useMessagePartExpansionStore.getState().expandedKeys.has("message-1/part-0")).toBe(true);
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has(k("message-1/part-0"))).toBe(
+      true,
+    );
 
     act(() => {
       result.current[1](false);
     });
     expect(result.current[0]).toBe(false);
-    expect(useMessagePartExpansionStore.getState().expandedKeys.has("message-1/part-0")).toBe(
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has(k("message-1/part-0"))).toBe(
       false,
     );
   });
@@ -62,7 +76,7 @@ describe("useMessagePartExpansion", () => {
     const { result } = renderHook(() => useMessagePartExpansion("message-1/part-0"));
 
     act(() => {
-      useMessagePartExpansionStore.getState().setExpanded("message-1/part-0", true);
+      useMessagePartExpansionStore.getState().setExpanded(k("message-1/part-0"), true);
     });
 
     expect(result.current[0]).toBe(true);
@@ -85,8 +99,8 @@ describe("useMessagePartExpansion", () => {
     });
 
     const keys = useMessagePartExpansionStore.getState().expandedKeys;
-    expect(keys.has("message-1/part-0")).toBe(false);
-    expect(keys.has("message-2/part-0")).toBe(true);
+    expect(keys.has(k("message-1/part-0"))).toBe(false);
+    expect(keys.has(k("message-2/part-0"))).toBe(true);
   });
 
   test("protects its key from cap eviction while mounted, and stops once unmounted", () => {
@@ -104,15 +118,15 @@ describe("useMessagePartExpansion", () => {
     });
 
     expect(mounted.result.current[0]).toBe(true);
-    expect(useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part")).toBe(true);
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has(k("mounted-part"))).toBe(true);
 
     mounted.unmount();
     act(() => {
-      store.setExpanded("later-key", true);
+      store.setExpanded(k("later-key"), true);
     });
 
     // Unmounted, it is the oldest key with nothing holding it on screen.
-    expect(useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part")).toBe(false);
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has(k("mounted-part"))).toBe(false);
   });
 
   test("moves its cap protection to the new key when the key changes", () => {
@@ -123,8 +137,8 @@ describe("useMessagePartExpansion", () => {
     );
 
     act(() => {
-      store.setExpanded("first-key", true);
-      store.setExpanded("second-key", true);
+      store.setExpanded(k("first-key"), true);
+      store.setExpanded(k("second-key"), true);
     });
     rerender({ expansionKey: "second-key" });
 
@@ -135,8 +149,8 @@ describe("useMessagePartExpansion", () => {
     });
 
     const keys = useMessagePartExpansionStore.getState().expandedKeys;
-    expect(keys.has("second-key")).toBe(true);
-    expect(keys.has("first-key")).toBe(false);
+    expect(keys.has(k("second-key"))).toBe(true);
+    expect(keys.has(k("first-key"))).toBe(false);
   });
 
   test("keeps the setter stable while the key is unchanged", () => {
@@ -146,5 +160,43 @@ describe("useMessagePartExpansion", () => {
     rerender();
 
     expect(result.current[1]).toBe(setter);
+  });
+
+  test("the same part id on two nodes is two disclosures", () => {
+    const windowScope = new WindowScope();
+    try {
+      const nodeA = windowScope.open({
+        role: "command",
+        client: new FakeNodeClient({ nodeId: "bk_node-a" as BackendId }),
+      });
+      const nodeB = windowScope.open({
+        role: "leaf",
+        client: new FakeNodeClient({ nodeId: "bk_node-b" as BackendId }),
+      });
+      const inScope =
+        (scope: typeof nodeA) =>
+        ({ children }: { children: ReactNode }) => (
+          <WindowScopeProvider windowScope={windowScope}>
+            <NodeScopeProvider scope={scope}>{children}</NodeScopeProvider>
+          </WindowScopeProvider>
+        );
+      const onA = renderHook(() => useMessagePartExpansion("message-1/part-0"), {
+        wrapper: inScope(nodeA),
+      });
+      const onB = renderHook(() => useMessagePartExpansion("message-1/part-0"), {
+        wrapper: inScope(nodeB),
+      });
+
+      act(() => onA.result.current[1](true));
+
+      expect(onA.result.current[0]).toBe(true);
+      expect(onB.result.current[0]).toBe(false);
+      const keys = useMessagePartExpansionStore.getState().expandedKeys;
+      expect(keys.has(messagePartExpansionKey(nodeA.nodeId, "message-1/part-0"))).toBe(true);
+      expect(keys.has(messagePartExpansionKey(nodeB.nodeId, "message-1/part-0"))).toBe(false);
+    } finally {
+      cleanup();
+      windowScope.dispose();
+    }
   });
 });

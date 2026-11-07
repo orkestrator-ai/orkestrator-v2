@@ -50,6 +50,10 @@ import { createSessionKey } from "@/lib/utils";
 import { portalStore } from "@/lib/portal/portal-store";
 import * as nodeEvents from "@/lib/federation/node-events";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
@@ -445,6 +449,7 @@ describe("CoordinatorPanel", () => {
     await screen.findByTestId("native-agent");
     await waitFor(() =>
       expect(useActiveCoordinatorConversationStore.getState().active).toEqual({
+        nodeId: commandNodeId(),
         projectId: "project-1",
         tabId: "coordinator-tab",
         data: {

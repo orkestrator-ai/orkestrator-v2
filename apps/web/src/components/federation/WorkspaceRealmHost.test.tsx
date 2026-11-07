@@ -24,6 +24,10 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
 import { RemoteProjectGroup } from "./RemoteMachineTree";
 import { WorkspaceRealmHost } from "./WorkspaceRealmHost";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
 const originalHref = window.location.href;
@@ -141,6 +145,7 @@ test("a project dialog asked of the realm opens once the node's projects have lo
   await act(async () => resolveProjects([project]));
   await waitFor(() =>
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "delete-project",
       projectId: project.id,
     }),
@@ -391,6 +396,7 @@ test("repository settings request waits for configuration after projects have lo
   act(() => useConfigStore.setState({ hasLoaded: true }));
   await waitFor(() =>
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "repository-settings",
       projectId: project.id,
     }),
@@ -434,6 +440,7 @@ test("environment settings waits for its environment and selects without startin
   await act(async () => finish([stopped]));
   await waitFor(() =>
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "environment-settings",
       environmentId: stopped.id,
     }),

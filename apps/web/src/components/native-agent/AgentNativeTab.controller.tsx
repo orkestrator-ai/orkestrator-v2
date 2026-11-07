@@ -16,6 +16,7 @@ import {
   type SuborkGroupActions,
 } from "@/components/chat/subork-context";
 import { SuborkTranscriptDialog } from "@/components/chat/SuborkTranscriptDialog";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { withSuborkGroupRows, withSuborkRequestText } from "@/lib/chat/subork-messages";
 import {
   createGoalTurnNativeMessage,
@@ -751,8 +752,15 @@ export function SharedNativeAgentController({
   );
   // An "open full conversation" request parked for this tab outranks the
   // activation policy, whichever effect happens to run first.
+  const scrollTargetNodeId = useScopesWithCommandFallback().scope.nodeId;
   const explicitScrollTargetPending = useConversationScrollTargetStore((state) =>
-    state.targets.has(conversationScrollTargetKey(data.environmentId, tabId)),
+    state.targets.has(
+      conversationScrollTargetKey({
+        nodeId: scrollTargetNodeId,
+        environmentId: data.environmentId,
+        tabId,
+      }),
+    ),
   );
   const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({

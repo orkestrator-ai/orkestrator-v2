@@ -9,9 +9,11 @@ import {
   type EnvironmentAttentionReason,
 } from "@orkestrator/protocol/environment-attention";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { BoundedKeySet } from "@/lib/bounded-hydration";
 import { clientStateCapabilities } from "@/lib/client-state-capabilities";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import {
@@ -34,15 +36,15 @@ export const ATTENTION_DEDUPE_LIMIT = 256;
 /** Several environments finishing together are one cue. */
 export const ATTENTION_COALESCE_MS = 500;
 
-/** This project's coordinator page is what the user is looking at right now. */
-function coordinatorOnScreen(projectId: string): boolean {
+/** This project (on `nodeId`) has its coordinator page on screen right now. */
+function coordinatorOnScreen(nodeId: BackendId, projectId: string): boolean {
   if (typeof document !== "undefined" && document.visibilityState !== "visible") return false;
   if (useRemoteWorkspaceStore.getState().active !== null) return false;
   const { selectedProjectId, projectBoardTab } = useUIStore.getState();
   const conversation = useActiveCoordinatorConversationStore.getState().active;
   return (
     selectedProjectId === projectId &&
-    coordinatorConversationTab(conversation, selectedProjectId, projectBoardTab) !== null
+    coordinatorConversationTab(conversation, { nodeId, projectId }, projectBoardTab) !== null
   );
 }
 
@@ -184,6 +186,12 @@ export function useNotificationSoundService(): void {
     kind: null,
   });
   const previousUnreadRef = useRef<Map<string, boolean> | null>(null);
+  // Wake events arrive on the window's own stream, so they are its command node's.
+  const commandNodeId = useScopesWithCommandFallback().windowScope.commandScope().nodeId;
+  const commandNodeIdRef = useRef(commandNodeId);
+  useEffect(() => {
+    commandNodeIdRef.current = commandNodeId;
+  }, [commandNodeId]);
   const visibleEnvironmentRef = useRef(selectedEnvironmentId);
   useEffect(() => {
     visibleEnvironmentRef.current = selectedEnvironmentId;
@@ -257,7 +265,8 @@ export function useNotificationSoundService(): void {
     void listen<unknown>(COORDINATOR_WAKE_ATTENTION_EVENT, (event) => {
       if (!isCoordinatorWakeAttentionEvent(event.payload)) return;
       const { attentionId, projectId } = event.payload;
-      if (!seen.add(attentionId) || coordinatorOnScreen(projectId)) return;
+      if (!seen.add(attentionId) || coordinatorOnScreen(commandNodeIdRef.current, projectId))
+        return;
       if (!soundSettings().coordinatorReport) return;
       if (!claimCue(lastCueRef, "coordinator-report")) return;
       void playConfiguredNotificationSound("coordinator-report");

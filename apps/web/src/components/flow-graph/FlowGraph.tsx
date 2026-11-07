@@ -40,7 +40,8 @@ import {
   type FlowNodeState,
   type FlowRect,
 } from "./flow-graph-model";
-import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { flowGraphViewKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { FlowHeightDivider, FlowZoomControls, useFlowViewport } from "./FlowViewport";
 import { FLOW_VIEWPORT_RESIZE_MIN_HEIGHT, resizedFlowViewportHeight } from "./flow-viewport";
 
@@ -803,6 +804,7 @@ export function FlowGraph({
   landOnSelection = false,
   onSelectionLanded,
 }: FlowGraphProps) {
+  const viewNodeId = useScopesWithCommandFallback().scope.nodeId;
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef, isActive);
   const overlayClass = fullscreenContainer ? "absolute inset-0 z-30" : "fixed inset-0 z-50";
@@ -914,7 +916,8 @@ export function FlowGraph({
       if (
         !last &&
         !landOnSelection &&
-        useFlowGraphViewStore.getState().views.get(viewKey)?.width === viewportWidth
+        useFlowGraphViewStore.getState().views.get(flowGraphViewKey(viewNodeId, viewKey))?.width ===
+          viewportWidth
       )
         return;
       const rect = nodeRect(selectedId);

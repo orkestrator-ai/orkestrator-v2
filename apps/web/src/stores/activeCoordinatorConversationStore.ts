@@ -1,9 +1,12 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { create } from "zustand";
 import type { NativeAgentData, TabInfo } from "@/types/paneLayout";
 import type { ProjectBoardTab } from "./uiStore";
 
 /** The conversation in a coordinator page's focused group, as the window's chrome sees it. */
 export interface ActiveCoordinatorConversation {
+  /** The node the coordinator page's project is on. */
+  nodeId: BackendId;
   projectId: string;
   /** The conversation's own tab id, which its session key is built from. */
   tabId: string;
@@ -14,7 +17,7 @@ interface ActiveCoordinatorConversationState {
   active: ActiveCoordinatorConversation | null;
   publish: (conversation: ActiveCoordinatorConversation) => void;
   /** Clears only the page's own entry, so a remounting page cannot erase its successor's. */
-  clear: (projectId: string, tabId?: string) => void;
+  clear: (nodeId: BackendId, projectId: string, tabId?: string) => void;
 }
 
 function sameConversation(
@@ -23,6 +26,7 @@ function sameConversation(
 ): boolean {
   return (
     a !== null &&
+    a.nodeId === b.nodeId &&
     a.projectId === b.projectId &&
     a.tabId === b.tabId &&
     a.data.platform === b.data.platform &&
@@ -51,9 +55,9 @@ export const useActiveCoordinatorConversationStore = create<ActiveCoordinatorCon
       if (sameConversation(get().active, conversation)) return;
       set({ active: conversation });
     },
-    clear: (projectId, tabId) => {
+    clear: (nodeId, projectId, tabId) => {
       const current = get().active;
-      if (!current || current.projectId !== projectId) return;
+      if (!current || current.nodeId !== nodeId || current.projectId !== projectId) return;
       if (tabId !== undefined && current.tabId !== tabId) return;
       set({ active: null });
     },
@@ -63,18 +67,20 @@ export const useActiveCoordinatorConversationStore = create<ActiveCoordinatorCon
 /**
  * The tab the agent information button reads while a coordinator page is
  * shown: its focused conversation, as a native agent tab. Null when the
- * selected project's coordinator page is not the one on screen, so the window
- * falls back to the environment's own active tab.
+ * selected project's coordinator page is not the one on screen (including
+ * the same project id on another node), so the window falls back to the
+ * environment's own active tab.
  */
 export function coordinatorConversationTab(
   conversation: ActiveCoordinatorConversation | null,
-  selectedProjectId: string | null,
+  selected: { nodeId: BackendId; projectId: string | null },
   projectBoardTab: ProjectBoardTab,
 ): TabInfo | null {
   if (
     !conversation ||
     projectBoardTab !== "coordinator" ||
-    conversation.projectId !== selectedProjectId
+    conversation.nodeId !== selected.nodeId ||
+    conversation.projectId !== selected.projectId
   ) {
     return null;
   }

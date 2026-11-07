@@ -1,7 +1,20 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { pickHostPath, useHostPathPickerStore } from "@/lib/host-path-picker";
+import {
+  pickHostPath,
+  useHostPathPickerStore,
+  type HostPathPickerOptions,
+} from "@/lib/host-path-picker";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import {
+  cleanupNodeScopes,
+  FAKE_NODE_ID,
+  FakeNodeClient,
+  renderInNodeScope,
+} from "@/test/render-in-node-scope";
+import { HostPathPickerDialog } from "./HostPathPickerDialog";
 
 type Listing = {
   path: string;
@@ -70,9 +83,28 @@ const defaultInvoke = async (
 };
 const invoke = mock(defaultInvoke);
 
-mock.module("@/lib/native/backend", () => ({ invoke }));
+/** A node whose host answers through `invoke`, so calls can be asserted on it. */
+function hostClient(nodeId: BackendId = FAKE_NODE_ID) {
+  return new FakeNodeClient({
+    nodeId,
+    invoke: {
+      list_host_directory: (args: Record<string, unknown>) =>
+        invoke("list_host_directory", { ...args }),
+      create_host_directory: (args: Record<string, unknown>) =>
+        invoke("create_host_directory", { ...args }),
+    },
+  });
+}
 
-const { HostPathPickerDialog } = await import("./HostPathPickerDialog");
+/** The picker mounted in a window whose only node is `FAKE_NODE_ID`. */
+function renderPicker() {
+  return renderInNodeScope(<HostPathPickerDialog />, { client: hostClient() });
+}
+
+/** A request from a component on `FAKE_NODE_ID`. */
+function pick(options: Omit<HostPathPickerOptions, "nodeId">) {
+  return pickHostPath({ ...options, nodeId: FAKE_NODE_ID });
+}
 
 beforeEach(() => {
   createdFolders.clear();
@@ -83,6 +115,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => useHostPathPickerStore.getState().settle(null));
   cleanup();
+  cleanupNodeScopes();
 });
 
 function submitPath(path: string) {
@@ -106,18 +139,12 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-afterAll(() => {
-  mock.module("@/lib/native/backend", () => ({
-    invoke: mock(() => Promise.resolve()),
-  }));
-});
-
 describe("HostPathPickerDialog", () => {
   test("selects the folder being browsed after navigating into a subfolder", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let result!: Promise<string | null>;
     act(() => {
-      result = pickHostPath({ mode: "directory", title: "Pick a repo" });
+      result = pick({ mode: "directory", title: "Pick a repo" });
     });
 
     expect(await screen.findByText("Pick a repo")).toBeTruthy();
@@ -138,10 +165,10 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("file mode needs a file selected before it can confirm", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let result!: Promise<string | null>;
     act(() => {
-      result = pickHostPath({ mode: "file", defaultPath: "/home/me" });
+      result = pick({ mode: "file", defaultPath: "/home/me" });
     });
 
     const confirm = await screen.findByRole("button", { name: "Select file" });
@@ -161,10 +188,10 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("resolves null when cancelled", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let result!: Promise<string | null>;
     act(() => {
-      result = pickHostPath({ mode: "directory" });
+      result = pick({ mode: "directory" });
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
@@ -173,34 +200,34 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("a newer request cancels the one still open", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let first!: Promise<string | null>;
     act(() => {
-      first = pickHostPath({ mode: "directory" });
+      first = pick({ mode: "directory" });
     });
     await screen.findByRole("button", { name: "Select this folder" });
 
     act(() => {
-      void pickHostPath({ mode: "file" });
+      void pick({ mode: "file" });
     });
 
     await expect(first).resolves.toBeNull();
   });
 
   test("shows a listing failure instead of a stale folder", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "directory", defaultPath: "/nope" });
+      void pick({ mode: "directory", defaultPath: "/nope" });
     });
 
     expect((await screen.findByRole("alert")).textContent).toContain("not found");
   });
   for (const mode of ["directory", "file"] as const) {
     test(`${mode} mode cannot confirm a previous path after failed navigation`, async () => {
-      render(<HostPathPickerDialog />);
+      renderPicker();
       let result!: Promise<string | null>;
       act(() => {
-        result = pickHostPath({ mode });
+        result = pick({ mode });
       });
       await screen.findByRole("button", { name: "repo" });
       if (mode === "file") fireEvent.click(screen.getByRole("button", { name: "notes.txt" }));
@@ -219,9 +246,9 @@ describe("HostPathPickerDialog", () => {
   }
 
   test("blocks stale file row clicks and double-clicks while navigation is pending", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "file" });
+      void pick({ mode: "file" });
     });
     const row = await screen.findByRole("button", { name: "notes.txt" });
     fireEvent.click(row);
@@ -238,12 +265,12 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("a path typed while the first listing loads survives that listing (flake 0208)", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let result!: Promise<string | null>;
     const initial = deferred<Listing>();
     invoke.mockImplementationOnce(() => initial.promise);
     act(() => {
-      result = pickHostPath({ mode: "file" });
+      result = pick({ mode: "file" });
     });
     const input = (await screen.findByLabelText("Path")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "/home/me/notes.txt" } });
@@ -266,10 +293,10 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("double-clicking a current file settles the request", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let result!: Promise<string | null>;
     act(() => {
-      result = pickHostPath({ mode: "file" });
+      result = pick({ mode: "file" });
     });
     fireEvent.doubleClick(await screen.findByRole("button", { name: "notes.txt" }));
     await expect(result).resolves.toBe("/home/me/notes.txt");
@@ -277,10 +304,10 @@ describe("HostPathPickerDialog", () => {
 
   for (const typed of ["~/notes.txt", "/home/me/repo/../notes.txt"]) {
     test(`selects the backend-normalized typed file ${typed} outside the capped entries`, async () => {
-      render(<HostPathPickerDialog />);
+      renderPicker();
       let result!: Promise<string | null>;
       act(() => {
-        result = pickHostPath({ mode: "file" });
+        result = pick({ mode: "file" });
       });
       await screen.findByText("notes.txt");
       invoke.mockImplementationOnce(async () => ({
@@ -303,9 +330,9 @@ describe("HostPathPickerDialog", () => {
   }
 
   test("hidden toggle refreshes the current folder and shows the truncation notice", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "file" });
+      void pick({ mode: "file" });
     });
     await screen.findByText("notes.txt");
     invoke.mockImplementationOnce(async () => ({
@@ -334,9 +361,9 @@ describe("HostPathPickerDialog", () => {
       path: (args?.path as string) || "/home/me/repo",
       roots: ["C:\\", "D:\\"],
     }));
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "directory" });
+      void pick({ mode: "directory" });
     });
     await screen.findByText("repo");
     for (const [button, destination] of [
@@ -352,9 +379,9 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("late successful and failed responses cannot replace a newer navigation", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "directory" });
+      void pick({ mode: "directory" });
     });
     await screen.findByText("repo");
     const older = deferred<Listing>();
@@ -378,14 +405,14 @@ describe("HostPathPickerDialog", () => {
   test("a cancelled request's late response cannot affect its replacement", async () => {
     const old = deferred<Listing>();
     invoke.mockImplementationOnce(() => old.promise);
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let first!: Promise<string | null>;
     let replacement!: Promise<string | null>;
     act(() => {
-      first = pickHostPath({ mode: "file" });
+      first = pick({ mode: "file" });
     });
     act(() => {
-      replacement = pickHostPath({ mode: "directory", defaultPath: "/home/me/repo" });
+      replacement = pick({ mode: "directory", defaultPath: "/home/me/repo" });
     });
     await expect(first).resolves.toBeNull();
     await waitFor(() =>
@@ -400,10 +427,10 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("creates a folder in the listed folder, opens it and can select it", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let result!: Promise<string | null>;
     act(() => {
-      result = pickHostPath({ mode: "directory", title: "Where should the project live?" });
+      result = pick({ mode: "directory", title: "Where should the project live?" });
     });
     await screen.findByRole("button", { name: "repo" });
 
@@ -430,9 +457,9 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("file mode can create a folder too and browses into it", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "file" });
+      void pick({ mode: "file" });
     });
     await screen.findByText("notes.txt");
     const input = openNewFolderForm();
@@ -445,9 +472,9 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("a failed create keeps the form and the current folder", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "directory" });
+      void pick({ mode: "directory" });
     });
     await screen.findByRole("button", { name: "repo" });
 
@@ -466,10 +493,10 @@ describe("HostPathPickerDialog", () => {
   });
 
   test("escape and cancel close the new-folder form without closing the picker", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     let result!: Promise<string | null>;
     act(() => {
-      result = pickHostPath({ mode: "directory" });
+      result = pick({ mode: "directory" });
     });
     await screen.findByRole("button", { name: "repo" });
 
@@ -490,10 +517,10 @@ describe("HostPathPickerDialog", () => {
 
   for (const outcome of ["success", "failure"] as const) {
     test(`a stale create ${outcome} cannot clear a newer request's busy state`, async () => {
-      render(<HostPathPickerDialog />);
+      renderPicker();
       let first!: Promise<string | null>;
       act(() => {
-        first = pickHostPath({ mode: "directory" });
+        first = pick({ mode: "directory" });
       });
       await screen.findByRole("button", { name: "repo" });
       const old = deferred<{ path: string }>();
@@ -506,7 +533,7 @@ describe("HostPathPickerDialog", () => {
 
       let second!: Promise<string | null>;
       act(() => {
-        second = pickHostPath({ mode: "directory", defaultPath: "/home/me/repo" });
+        second = pick({ mode: "directory", defaultPath: "/home/me/repo" });
       });
       await waitFor(() =>
         expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo"),
@@ -544,9 +571,9 @@ describe("HostPathPickerDialog", () => {
   }
 
   test("a create that finishes after navigating away does not move the picker", async () => {
-    render(<HostPathPickerDialog />);
+    renderPicker();
     act(() => {
-      void pickHostPath({ mode: "directory" });
+      void pick({ mode: "directory" });
     });
     await screen.findByRole("button", { name: "repo" });
     const pending = deferred<{ path: string }>();
@@ -564,5 +591,39 @@ describe("HostPathPickerDialog", () => {
     await act(async () => pending.resolve({ path: "/home/me/slow" }));
     expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo");
     expect(screen.getByRole("button", { name: "New folder" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("browses the host of the node that asked, not the command node's", async () => {
+    const windowScope = new WindowScope();
+    const commandClient = hostClient();
+    const leafClient = hostClient("bk_leaf-b" as BackendId);
+    renderInNodeScope(<HostPathPickerDialog />, { client: commandClient, windowScope });
+    windowScope.open({ role: "leaf", client: leafClient });
+    let result!: Promise<string | null>;
+    act(() => {
+      result = pickHostPath({ mode: "directory", nodeId: leafClient.nodeId });
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "repo" }));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select this folder" }));
+
+    await expect(result).resolves.toBe("/home/me/repo");
+    expect(leafClient.calls("list_host_directory").length).toBeGreaterThan(0);
+    expect(commandClient.calls("list_host_directory")).toEqual([]);
+  });
+
+  test("cancels a request for a node this window has no scope for", async () => {
+    renderPicker();
+    let result!: Promise<string | null>;
+    act(() => {
+      result = pickHostPath({ mode: "directory", nodeId: "bk_unopened" as BackendId });
+    });
+
+    await expect(result).resolves.toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+    expectDomAbsent(screen.queryByLabelText("Path"), "picker for an unopened node");
   });
 });

@@ -1,3 +1,4 @@
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   isWorkspaceRealm,
@@ -135,14 +136,17 @@ export function openRepository(spec: {
 /** Opens one of this window's own node's dialogs, as its sidebar menus do. */
 export function openDialog(dialog: RealmDialog, projectId: string, environmentId?: string): void {
   const dialogs = useAppDialogStore.getState();
+  // This window's own node is its command scope's.
+  const nodeId = getWindowScope().commandScope().nodeId;
   if (dialog === "environment-settings" || dialog === "environment-rebuild") {
     if (environmentId)
       dialogs.open({
         kind: "environment-settings",
+        nodeId,
         environmentId,
         ...(dialog === "environment-rebuild" ? { section: "container" as const } : {}),
       });
     return;
   }
-  dialogs.open({ kind: dialog, projectId });
+  dialogs.open({ kind: dialog, nodeId, projectId });
 }

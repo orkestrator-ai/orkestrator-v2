@@ -3,6 +3,7 @@ import { Bug, Container, FolderGit2, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useHostMaintenance } from "@/components/settings/useHostMaintenance";
 import { openBugReport } from "@/lib/bug-report/open-bug-report";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
@@ -57,6 +58,7 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
   const { snapshot } = useHostMaintenance();
   const updateAvailable = snapshot?.updater.updateAvailable === true;
   const openAppDialog = useAppDialogStore((state) => state.open);
+  const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const remote = useRemoteWorkspaceStore((state) => state.active);
@@ -85,9 +87,9 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
         });
       }
     } else if (dialog === "repository-settings" && hasLocalProject && selectedProjectId) {
-      openAppDialog({ kind: dialog, projectId: selectedProjectId });
+      openAppDialog({ kind: dialog, nodeId, projectId: selectedProjectId });
     } else if (dialog === "environment-settings" && hasLocalEnvironment && selectedEnvironmentId) {
-      openAppDialog({ kind: dialog, environmentId: selectedEnvironmentId });
+      openAppDialog({ kind: dialog, nodeId, environmentId: selectedEnvironmentId });
     }
   }
 

@@ -8,6 +8,12 @@ import {
 import { useEnvironments } from "@/hooks";
 import { useProjects } from "@/hooks/useProjects";
 import * as backend from "@/lib/backend";
+import {
+  NodeScopeProvider,
+  useScopesWithCommandFallback,
+  useSignal,
+  WindowScopeProvider,
+} from "@/lib/node-scope/providers";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -25,8 +31,36 @@ const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
 }));
 
-/** Renders the dialog `useAppDialogStore` holds, outside every drawer and row. */
+/**
+ * Renders the dialog `useAppDialogStore` holds, outside every drawer and row,
+ * inside the scope of the node the request names. A request for a node this
+ * window has no scope for is dropped rather than shown against another
+ * node's data.
+ */
 export function AppDialogHost() {
+  const request = useAppDialogStore((state) => state.request);
+  const close = useAppDialogStore((state) => state.close);
+  const { windowScope } = useScopesWithCommandFallback();
+  // Re-resolve when scopes open or close, so a closed node's request is dropped.
+  useSignal(windowScope.nodeScopes);
+  const scope = request ? windowScope.get(request.nodeId) : null;
+  const unresolved = request !== null && scope === null;
+  useEffect(() => {
+    if (unresolved) close();
+  }, [close, unresolved]);
+
+  if (!scope) return null;
+  // Keyed by node: the same id on another node is another dialog.
+  return (
+    <WindowScopeProvider windowScope={windowScope}>
+      <NodeScopeProvider key={scope.nodeId} scope={scope}>
+        <AppDialogContent />
+      </NodeScopeProvider>
+    </WindowScopeProvider>
+  );
+}
+
+function AppDialogContent() {
   const request = useAppDialogStore((state) => state.request);
   const requestSequence = useAppDialogStore((state) => state.requestSequence);
   switch (request?.kind) {

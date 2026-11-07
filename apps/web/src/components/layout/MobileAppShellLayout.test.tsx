@@ -18,6 +18,10 @@ import {
   MOBILE_TOOLS_TRIGGER_SELECTOR,
   MobileAppShellLayout,
 } from "./MobileAppShellLayout";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
@@ -529,7 +533,11 @@ describe("MobileAppShellLayout", () => {
       {
         actionBar: <MergeConfirmation />,
         sidebar: (
-          <button onClick={() => useMergePrRequestStore.getState().requestMergePr("environment-1")}>
+          <button
+            onClick={() =>
+              useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "environment-1")
+            }
+          >
             Merge selected PR
           </button>
         ),
@@ -552,9 +560,11 @@ describe("MobileAppShellLayout", () => {
 
     try {
       act(() => {
-        useAppDialogStore
-          .getState()
-          .open({ kind: "environment-settings", environmentId: "environment-1" });
+        useAppDialogStore.getState().open({
+          nodeId: commandNodeId(),
+          kind: "environment-settings",
+          environmentId: "environment-1",
+        });
       });
       dialogControl.focus();
 
@@ -616,7 +626,9 @@ describe("MobileAppShellLayout", () => {
     try {
       act(() => useGlobalSettingsStore.getState().openSection("machines"));
       act(() =>
-        useAppDialogStore.getState().open({ kind: "repository-settings", projectId: "project-1" }),
+        useAppDialogStore
+          .getState()
+          .open({ nodeId: commandNodeId(), kind: "repository-settings", projectId: "project-1" }),
       );
       surfaceControl.focus();
       act(() => useAppDialogStore.getState().close());
@@ -655,9 +667,11 @@ describe("MobileAppShellLayout", () => {
     const menuButton = getTitleBarSidebarTrigger(container);
 
     act(() => {
-      useAppDialogStore
-        .getState()
-        .open({ kind: "environment-settings", environmentId: "environment-1" });
+      useAppDialogStore.getState().open({
+        nodeId: commandNodeId(),
+        kind: "environment-settings",
+        environmentId: "environment-1",
+      });
     });
     const settings = await screen.findByRole("dialog", { name: "Environment Settings" });
     await waitFor(() => expect(settings.contains(document.activeElement)).toBe(true));
@@ -677,9 +691,11 @@ describe("MobileAppShellLayout", () => {
     try {
       opener.focus();
       act(() => {
-        useAppDialogStore
-          .getState()
-          .open({ kind: "environment-settings", environmentId: "environment-1" });
+        useAppDialogStore.getState().open({
+          nodeId: commandNodeId(),
+          kind: "environment-settings",
+          environmentId: "environment-1",
+        });
       });
       act(() => useAppDialogStore.getState().close());
       expect(document.activeElement).toBe(opener);

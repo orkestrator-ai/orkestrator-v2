@@ -35,6 +35,10 @@ import { useUIStore as realUIStore } from "@/stores/uiStore";
 import type { TabInfo } from "@/types/paneLayout";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 let realInfo = false;
 /** Renders of the stubbed button, which re-renders only when AppShell does. */
@@ -747,6 +751,7 @@ describe("AppShell", () => {
     invokeMock.mockImplementation(async () => null);
     uiStore.setState({ projectBoardTab: "coordinator" });
     useActiveCoordinatorConversationStore.getState().publish({
+      nodeId: commandNodeId(),
       projectId: "project-1",
       tabId: "coordinator-tab",
       data: {
@@ -780,6 +785,7 @@ describe("AppShell", () => {
     seedPaneLayout([CLAUDE_TAB], "claude-tab");
     uiStore.setState({ projectBoardTab: "coordinator" });
     useActiveCoordinatorConversationStore.getState().publish({
+      nodeId: commandNodeId(),
       projectId: "project-1",
       tabId: "coordinator-tab",
       data: { platform: "claude", environmentId: "coordinator:workspace-1:conversation-1" },
@@ -796,7 +802,9 @@ describe("AppShell", () => {
     act(() => uiStore.setState({ projectBoardTab: "coordinator" }));
     expect(button.getAttribute("data-active-tab-id")).toBe("coordinator-tab");
     act(() =>
-      useActiveCoordinatorConversationStore.getState().clear("project-1", "coordinator-tab"),
+      useActiveCoordinatorConversationStore
+        .getState()
+        .clear(commandNodeId(), "project-1", "coordinator-tab"),
     );
     expect(button.getAttribute("data-active-tab-id")).toBe("claude-tab");
   });

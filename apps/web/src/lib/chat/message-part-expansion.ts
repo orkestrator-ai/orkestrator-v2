@@ -12,11 +12,14 @@
  * Where a part carries a durable provider id (a tool use id, a subagent id)
  * that is the anchor, because a streaming turn can shift a part's index out
  * from under it; the stable `partKey` is the fallback for parts that have no
- * such id.
+ * such id. Keys are qualified with the node of the scope the transcript
+ * renders in, so the same ids on another node are other disclosures.
  */
 
 import { useCallback, useEffect, useMemo } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
+  messagePartExpansionKey,
   retainExpansionKey,
   useMessagePartExpansionStore,
 } from "@/stores/messagePartExpansionStore";
@@ -29,7 +32,12 @@ export function useMessagePartExpansion(
   const serializedKeys = JSON.stringify(
     typeof expansionKey === "string" ? [expansionKey] : expansionKey,
   );
-  const keys = useMemo(() => JSON.parse(serializedKeys) as string[], [serializedKeys]);
+  const nodeId = useScopesWithCommandFallback().scope.nodeId;
+  const keys = useMemo(
+    () =>
+      (JSON.parse(serializedKeys) as string[]).map((key) => messagePartExpansionKey(nodeId, key)),
+    [nodeId, serializedKeys],
+  );
   // Tell the store this disclosure is on screen for as long as the row is
   // mounted. The remembered-key set is capped, and evicting a key the reader
   // can currently see would collapse it under them — the very failure the

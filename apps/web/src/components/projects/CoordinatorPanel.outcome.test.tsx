@@ -29,6 +29,10 @@ import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabil
 import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
 import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
 import { createSessionKey } from "@/lib/utils";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
@@ -1256,6 +1260,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       render(<CoordinatorPanel projectId="project-1" />);
       fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
       expect(useAppDialogStore.getState().request).toEqual({
+        nodeId: commandNodeId(),
         kind: "repository-settings",
         projectId: "project-1",
       });

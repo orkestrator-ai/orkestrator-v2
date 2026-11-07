@@ -11,6 +11,10 @@ import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { SidebarBottomBar } from "./SidebarBottomBar";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalGateway = window.orkestratorGateway;
 const originalOrkestrator = window.orkestrator;
@@ -107,6 +111,7 @@ describe("SidebarBottomBar", () => {
     expect(repository.getAttribute("title")).toBe("Repository settings");
     fireEvent.click(repository);
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "repository-settings",
       projectId: "project-1",
     });
@@ -115,6 +120,7 @@ describe("SidebarBottomBar", () => {
     expect(environment.getAttribute("title")).toBe("Environment settings");
     fireEvent.click(environment);
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "environment-settings",
       environmentId: "env-1",
     });
@@ -172,11 +178,13 @@ describe("SidebarBottomBar", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "environment-settings",
       environmentId: "env-1",
     });
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "repository-settings",
       projectId: "project-1",
     });

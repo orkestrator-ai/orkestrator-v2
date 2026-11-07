@@ -1,3 +1,4 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { create } from "zustand";
 
 /**
@@ -8,7 +9,16 @@ import { create } from "zustand";
  * open/closed flag in component state would silently collapse a block the user
  * expanded and scrolled past, so the authoritative state lives here and the
  * component rehydrates from it on mount.
+ *
+ * Keys are node-qualified (`messagePartExpansionKey`): message and part ids
+ * are only unique on their node, so the same id on two nodes is two
+ * disclosures.
  */
+
+/** The store key of a disclosure `key` in a transcript on `nodeId`. */
+export function messagePartExpansionKey(nodeId: BackendId, key: string): string {
+  return `${nodeId}\u0000${key}`;
+}
 
 /**
  * Upper bound on remembered keys. Expanding is a deliberate user action, so

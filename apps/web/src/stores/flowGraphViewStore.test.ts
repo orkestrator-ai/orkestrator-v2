@@ -1,7 +1,9 @@
 import { beforeEach, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   MAX_REMEMBERED_FLOW_VIEWS,
   flowAttemptKey,
+  flowGraphViewKey,
   useFlowGraphViewStore,
 } from "./flowGraphViewStore";
 
@@ -78,4 +80,15 @@ test("remembers expanded previous attempts per pipeline, bounded, oldest dropped
   expect(
     useFlowGraphViewStore.getState().expandedAttempts.has(flowAttemptKey("other", "rewind-1")),
   ).toBe(false);
+});
+
+test("the same workflow id on two nodes is two views", () => {
+  const onA = flowGraphViewKey("bk_node-a" as BackendId, "build");
+  const onB = flowGraphViewKey("bk_node-b" as BackendId, "build");
+  const store = useFlowGraphViewStore.getState();
+  store.saveView(onA, view(1.5));
+  store.setCollapsed(onA, true);
+  expect(onA).not.toBe(onB);
+  expect(useFlowGraphViewStore.getState().views.has(onB)).toBe(false);
+  expect(useFlowGraphViewStore.getState().collapsed.has(onB)).toBe(false);
 });

@@ -34,6 +34,10 @@ import {
   seedBrowserLayout,
   useAnnotationUiTestBudget,
 } from "@/test/web-annotation-harness";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 let backend: FakeWebAnnotationBackend;
 let bus: ReturnType<typeof installFakeOrkestrator>;
@@ -282,7 +286,11 @@ describe("request card execution details", () => {
     const article = await card();
     fireEvent.click(await within(article).findByRole("button", { name: "Open full conversation" }));
     expect(
-      useConversationScrollTargetStore.getState().peek("env-1", fixtureDestination.tabId),
+      useConversationScrollTargetStore.getState().peek({
+        nodeId: commandNodeId(),
+        environmentId: "env-1",
+        tabId: fixtureDestination.tabId,
+      }),
     ).toMatchObject({ messageId: "message-42", turnId: "turn-7" });
   });
 

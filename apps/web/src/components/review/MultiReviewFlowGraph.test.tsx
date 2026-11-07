@@ -19,7 +19,14 @@ import {
 } from "@/contexts";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useFlowGraphViewStore as useMultiReviewFlowViewStore } from "@/stores/flowGraphViewStore";
+import {
+  flowGraphViewKey,
+  useFlowGraphViewStore as useMultiReviewFlowViewStore,
+} from "@/stores/flowGraphViewStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a provider, flow views are remembered under the app's command node. */
+const viewKeyOf = (key: string) => flowGraphViewKey(getWindowScope().commandScope().nodeId, key);
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -1270,7 +1277,7 @@ describe("zoom and pan", () => {
     globalThis.ResizeObserver = undefined as unknown as typeof ResizeObserver;
     useMultiReviewFlowViewStore
       .getState()
-      .saveView("workflow-zoom", { zoom: 1.25, scrollLeft: 37, scrollTop: 12, width });
+      .saveView(viewKeyOf("workflow-zoom"), { zoom: 1.25, scrollLeft: 37, scrollTop: 12, width });
     const view = render(<MultiReviewFlowGraph {...panel(4)} selectedId="pr" />);
     try {
       expect(viewport().scrollLeft).toBe(37);
@@ -1605,8 +1612,8 @@ describe("zoom and pan", () => {
     wide.unmount();
 
     const views = useMultiReviewFlowViewStore.getState().views;
-    expect(views.get("workflow-zoom")?.zoom).toBe(0.8);
-    expect(views.get("workflow-zoom\u0000stacked")?.zoom).toBe(1.25);
+    expect(views.get(viewKeyOf("workflow-zoom"))?.zoom).toBe(0.8);
+    expect(views.get(viewKeyOf("workflow-zoom\u0000stacked"))?.zoom).toBe(1.25);
     const again = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
     expect(zoomLevel()).toBe("125%");
     again.unmount();
@@ -1675,11 +1682,15 @@ describe("zoom and pan", () => {
     );
     act(() => hook.result.current.zoomBy(1));
     expect(hook.result.current.zoom).toBe(1.25);
-    expect(useMultiReviewFlowViewStore.getState().views.get("workflow-resize")?.width).toBe(1200);
+    expect(
+      useMultiReviewFlowViewStore.getState().views.get(viewKeyOf("workflow-resize"))?.width,
+    ).toBe(1200);
 
     hook.rerender({ width: 1000 });
     expect(hook.result.current.zoom).toBe(1);
-    expect(useMultiReviewFlowViewStore.getState().views.has("workflow-resize")).toBe(false);
+    expect(useMultiReviewFlowViewStore.getState().views.has(viewKeyOf("workflow-resize"))).toBe(
+      false,
+    );
 
     // Going back to the old width does not bring the old view back.
     hook.rerender({ width: 1200 });
@@ -1687,9 +1698,12 @@ describe("zoom and pan", () => {
   });
 
   test("restores a remembered view only at the width it was taken at", () => {
-    useMultiReviewFlowViewStore
-      .getState()
-      .saveView("workflow-restore", { zoom: 0.5, scrollLeft: 0, scrollTop: 40, width: 1200 });
+    useMultiReviewFlowViewStore.getState().saveView(viewKeyOf("workflow-restore"), {
+      zoom: 0.5,
+      scrollLeft: 0,
+      scrollTop: 40,
+      width: 1200,
+    });
     const content = { width: 1440, height: 2_400 };
     const before = renderHook(
       ({ width }: { width: number | null }) =>
@@ -1703,7 +1717,9 @@ describe("zoom and pan", () => {
     before.unmount();
 
     renderHook(() => useFlowViewport({ viewKey: "workflow-restore", measuredWidth: 900, content }));
-    expect(useMultiReviewFlowViewStore.getState().views.has("workflow-restore")).toBe(false);
+    expect(useMultiReviewFlowViewStore.getState().views.has(viewKeyOf("workflow-restore"))).toBe(
+      false,
+    );
   });
 });
 

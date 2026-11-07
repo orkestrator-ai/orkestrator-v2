@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { flowGraphViewKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { useFlowViewport } from "./FlowViewport";
 
 const viewKey = "viewport-attachment";
+/** Outside a provider the viewport remembers its view under the app's command node. */
+const storeKey = () => flowGraphViewKey(getWindowScope().commandScope().nodeId, viewKey);
 const content = { width: 2000, height: 1200 };
 
 beforeEach(() => useFlowGraphViewStore.setState({ views: new Map() }));
@@ -14,7 +17,7 @@ describe("viewport attachment", () => {
     test(`does not restore a view saved at another width (measured: ${measuredWidth})`, () => {
       const { result } = renderHook(() => useFlowViewport({ viewKey, measuredWidth, content }));
       act(() => {
-        useFlowGraphViewStore.getState().saveView(viewKey, {
+        useFlowGraphViewStore.getState().saveView(storeKey(), {
           width: 900,
           zoom: 1,
           scrollLeft: 250,
@@ -57,7 +60,7 @@ describe("viewport attachment", () => {
     expect(writes).toHaveLength(2);
     expect(replacement.scrollLeft).toBeGreaterThan(0);
     expect(replacement.scrollTop).toBeGreaterThan(0);
-    const saved = useFlowGraphViewStore.getState().views.get(viewKey)!;
+    const saved = useFlowGraphViewStore.getState().views.get(storeKey())!;
     expect(replacement.scrollLeft).toBe(saved.scrollLeft);
     expect(replacement.scrollTop).toBe(saved.scrollTop);
   });

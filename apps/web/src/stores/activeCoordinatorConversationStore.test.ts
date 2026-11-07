@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { getNativeAgentData } from "@/types/paneLayout";
 import {
   coordinatorConversationTab,
@@ -6,7 +7,11 @@ import {
   type ActiveCoordinatorConversation,
 } from "./activeCoordinatorConversationStore";
 
+const NODE_A = "bk_node-a" as BackendId;
+const NODE_B = "bk_node-b" as BackendId;
+
 const conversation: ActiveCoordinatorConversation = {
+  nodeId: NODE_A,
   projectId: "project-1",
   tabId: "coordinator-tab",
   data: {
@@ -23,16 +28,54 @@ afterEach(() => {
 
 describe("activeCoordinatorConversationStore", () => {
   test("reads the shown coordinator conversation as a native agent tab", () => {
-    const tab = coordinatorConversationTab(conversation, "project-1", "coordinator");
+    const tab = coordinatorConversationTab(
+      conversation,
+      { nodeId: NODE_A, projectId: "project-1" },
+      "coordinator",
+    );
     expect(tab?.id).toBe("coordinator-tab");
     expect(tab && getNativeAgentData(tab)).toEqual(conversation.data);
   });
 
   test("falls back when another project or board tab is shown", () => {
-    expect(coordinatorConversationTab(conversation, "project-2", "coordinator")).toBe(null);
-    expect(coordinatorConversationTab(conversation, "project-1", "kanban")).toBe(null);
-    expect(coordinatorConversationTab(conversation, "project-1", "home")).toBe(null);
-    expect(coordinatorConversationTab(null, "project-1", "coordinator")).toBe(null);
+    expect(
+      coordinatorConversationTab(
+        conversation,
+        { nodeId: NODE_A, projectId: "project-2" },
+        "coordinator",
+      ),
+    ).toBe(null);
+    expect(
+      coordinatorConversationTab(
+        conversation,
+        { nodeId: NODE_A, projectId: "project-1" },
+        "kanban",
+      ),
+    ).toBe(null);
+    expect(
+      coordinatorConversationTab(conversation, { nodeId: NODE_A, projectId: "project-1" }, "home"),
+    ).toBe(null);
+    expect(
+      coordinatorConversationTab(null, { nodeId: NODE_A, projectId: "project-1" }, "coordinator"),
+    ).toBe(null);
+  });
+
+  test("a conversation on node A is not the tab while node B's project is selected", () => {
+    expect(
+      coordinatorConversationTab(
+        conversation,
+        { nodeId: NODE_B, projectId: "project-1" },
+        "coordinator",
+      ),
+    ).toBe(null);
+  });
+
+  test("a conversation on another node is a different entry", () => {
+    const store = useActiveCoordinatorConversationStore.getState();
+    store.publish(conversation);
+    const onB = { ...conversation, nodeId: NODE_B };
+    store.publish(onB);
+    expect(useActiveCoordinatorConversationStore.getState().active).toBe(onB);
   });
 
   test("keeps the same entry for an unchanged conversation", () => {
@@ -57,7 +100,7 @@ describe("activeCoordinatorConversationStore", () => {
     };
     store.publish(sideAgent);
     // Cleanup from the previously focused conversation must not erase the new one.
-    store.clear(conversation.projectId, conversation.tabId);
+    store.clear(NODE_A, conversation.projectId, conversation.tabId);
     expect(useActiveCoordinatorConversationStore.getState().active).toEqual(sideAgent);
 
     const attached = {
@@ -67,7 +110,7 @@ describe("activeCoordinatorConversationStore", () => {
     store.publish(attached);
     const tab = coordinatorConversationTab(
       useActiveCoordinatorConversationStore.getState().active,
-      "project-1",
+      { nodeId: NODE_A, projectId: "project-1" },
       "coordinator",
     );
     expect(tab?.id).toBe("side-agent-tab");
@@ -77,10 +120,12 @@ describe("activeCoordinatorConversationStore", () => {
   test("clears only its own entry", () => {
     const store = useActiveCoordinatorConversationStore.getState();
     store.publish(conversation);
-    store.clear("project-2");
-    store.clear("project-1", "another-tab");
+    store.clear(NODE_A, "project-2");
+    store.clear(NODE_A, "project-1", "another-tab");
+    // The same project and tab ids on another node are another page.
+    store.clear(NODE_B, "project-1", "coordinator-tab");
     expect(useActiveCoordinatorConversationStore.getState().active).toEqual(conversation);
-    store.clear("project-1", "coordinator-tab");
+    store.clear(NODE_A, "project-1", "coordinator-tab");
     expect(useActiveCoordinatorConversationStore.getState().active).toBe(null);
   });
 });

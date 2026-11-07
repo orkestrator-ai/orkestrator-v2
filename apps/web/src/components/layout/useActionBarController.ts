@@ -46,6 +46,7 @@ import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/envir
 import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { onAppShortcut } from "@/lib/app-shortcuts";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { beginTabLaunch, claimTabLaunch, type TabLaunchHandle } from "@/lib/tab-launch";
 import type { TabLaunchSurface } from "@/stores/tabLaunchStore";
 import { getReviewAgent, type ReviewLaunchSelection } from "@/components/review/ReviewLaunchDialog";
@@ -195,6 +196,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // dialog the green button opens. Eligibility is checked once on admission;
   // an admitted dialog has the same lifetime as one opened with the button.
   const mergePrRequest = useMergePrRequestStore((state) => state.request);
+  // The selected environment is on this action bar's node; a request for the
+  // same id on another node is not for it.
+  const actionBarNodeId = useScopesWithCommandFallback().scope.nodeId;
   const selectedMergePrControl = selectedEnvironment
     ? mergePrControl(selectedEnvironment, {
         dockerAvailable,
@@ -203,6 +207,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     : null;
   const mergePrRequested =
     mergePrRequest !== null &&
+    mergePrRequest.nodeId === actionBarNodeId &&
     mergePrRequest.environmentId === selectedEnvironmentId &&
     selectedMergePrControl?.disabled === false;
   const [handledMergePrNonce, setHandledMergePrNonce] = useState<number | null>(null);

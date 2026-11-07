@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
   handTabInitialPromptToBackend,
@@ -165,6 +165,8 @@ export function DesignWorkspaceDialog({
   loadReadiness?: (probe: boolean) => Promise<DesignReadinessView>;
   initialMode?: DesignWorkspaceMode;
 }) {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const backendKey = designBackendKey();
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);

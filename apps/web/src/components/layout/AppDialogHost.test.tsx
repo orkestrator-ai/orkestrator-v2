@@ -13,8 +13,29 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useProjectStore } from "@/stores/projectStore";
 import type { Environment, Project } from "@/types";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { useNodeScope, WindowScopeProvider } from "@/lib/node-scope/providers";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const realEnvironmentSettingsDialogSnapshot = { ...realEnvironmentSettingsDialog };
+
+/** Stands in for a dialog that acts through its scope's client (plan item 5003). */
+function ActOnNode({ environmentId }: { environmentId: string }) {
+  const scope = useNodeScope();
+  return (
+    <button
+      type="button"
+      onClick={() => void scope.client.invokeRaw("act_on_environment", { environmentId })}
+    >
+      Act on {scope.nodeId}
+    </button>
+  );
+}
 const nativeInvoke = invoke as ReturnType<typeof mock>;
 const initialProjects = useProjectStore.getState();
 const project = { id: "project-1", name: "app", gitUrl: "", order: 0 } as unknown as Project;
@@ -56,6 +77,7 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
         {(active) => (
           <>
             <span>Settings for {environment.name}</span>
+            <ActOnNode environmentId={environment.id} />
             <span>Section: {active}</span>
             <button type="button" onClick={() => onUpdate({ ...environment, status: "stopping" })}>
               Stop from settings
@@ -94,7 +116,9 @@ function environment(id: string, name: string): Environment {
 
 function requestSettings(environmentId: string) {
   act(() => {
-    useAppDialogStore.getState().open({ kind: "environment-settings", environmentId });
+    useAppDialogStore
+      .getState()
+      .open({ nodeId: commandNodeId(), kind: "environment-settings", environmentId });
   });
 }
 
@@ -134,9 +158,12 @@ describe("AppDialogHost", () => {
   test("opens an environment's settings on the section the request names", async () => {
     render(<AppDialogHost />);
     act(() => {
-      useAppDialogStore
-        .getState()
-        .open({ kind: "environment-settings", environmentId: "env-1", section: "container" });
+      useAppDialogStore.getState().open({
+        nodeId: commandNodeId(),
+        kind: "environment-settings",
+        environmentId: "env-1",
+        section: "container",
+      });
     });
     expect(await screen.findByText("Section: container")).toBeTruthy();
   });
@@ -214,7 +241,9 @@ describe("AppDialogHost", () => {
     });
     render(<AppDialogHost />);
     act(() => {
-      useAppDialogStore.getState().open({ kind: "delete-project", projectId: "project-1" });
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: commandNodeId(), kind: "delete-project", projectId: "project-1" });
     });
 
     const dialog = await screen.findByRole("alertdialog");
@@ -227,6 +256,73 @@ describe("AppDialogHost", () => {
     expectDomAbsent(screen.queryByRole("alertdialog"));
     expect(useAppDialogStore.getState().request).toBeNull();
     expect(nativeInvoke.mock.calls.some(([command]) => command === "remove_project")).toBe(false);
+  });
+});
+
+describe("a dialog request names its node", () => {
+  const scopes: WindowScope[] = [];
+  afterEach(() => {
+    cleanup();
+    for (const scope of scopes.splice(0)) scope.dispose();
+  });
+
+  function windowWithTwoNodes() {
+    const windowScope = new WindowScope();
+    scopes.push(windowScope);
+    const clientA = new FakeNodeClient({
+      nodeId: "bk_node-a" as BackendId,
+      invoke: { act_on_environment: null },
+    });
+    const clientB = new FakeNodeClient({
+      nodeId: "bk_node-b" as BackendId,
+      invoke: { act_on_environment: null },
+    });
+    windowScope.open({ role: "command", client: clientA });
+    const nodeB = windowScope.open({ role: "leaf", client: clientB });
+    render(
+      <WindowScopeProvider windowScope={windowScope}>
+        <AppDialogHost />
+      </WindowScopeProvider>,
+    );
+    return { windowScope, clientA, clientB, nodeB };
+  }
+
+  test("a dialog opened for node B acts on B", async () => {
+    const { clientA, clientB } = windowWithTwoNodes();
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: clientB.nodeId, kind: "environment-settings", environmentId: "env-1" });
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Act on bk_node-b" }));
+    expect(clientB.calls("act_on_environment")).toEqual([
+      { command: "act_on_environment", args: { environmentId: "env-1" } },
+    ]);
+    expect(clientA.calls("act_on_environment")).toEqual([]);
+  });
+
+  test("a request for a node with no open scope is dropped, and so is one whose scope closes", async () => {
+    const { clientB, nodeB } = windowWithTwoNodes();
+    act(() => {
+      useAppDialogStore.getState().open({
+        nodeId: "bk_unopened" as BackendId,
+        kind: "environment-settings",
+        environmentId: "env-1",
+      });
+    });
+    await waitFor(() => expect(useAppDialogStore.getState().request).toBeNull());
+    expectDomAbsent(screen.queryByRole("dialog"));
+
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: clientB.nodeId, kind: "environment-settings", environmentId: "env-1" });
+    });
+    await screen.findByRole("button", { name: "Act on bk_node-b" });
+    act(() => nodeB.dispose());
+    await waitFor(() => expect(useAppDialogStore.getState().request).toBeNull());
+    expectDomAbsent(screen.queryByRole("dialog"));
   });
 });
 
@@ -257,7 +353,11 @@ for (const failSnapshot of [false, true]) {
     useProjectStore.setState({ projects: [project], hasLoaded: true });
     useEnvironmentStore.setState({ environments: [] });
     render(<AppDialogHost />);
-    act(() => useAppDialogStore.getState().open({ kind: "delete-project", projectId: project.id }));
+    act(() =>
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: commandNodeId(), kind: "delete-project", projectId: project.id }),
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
     expect(calls).toEqual([]);
     await act(async () => {
@@ -303,7 +403,11 @@ test("partial deletion keeps the project and dialog and retries only remaining e
   useProjectStore.setState({ projects: [project], hasLoaded: true });
   useEnvironmentStore.setState({ environments: Array.from(remaining.values()) });
   render(<AppDialogHost />);
-  act(() => useAppDialogStore.getState().open({ kind: "delete-project", projectId: project.id }));
+  act(() =>
+    useAppDialogStore
+      .getState()
+      .open({ nodeId: commandNodeId(), kind: "delete-project", projectId: project.id }),
+  );
   fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
   await waitFor(() =>
     expect(useProjectStore.getState().deletingProjects.has(project.id)).toBe(false),
@@ -334,7 +438,9 @@ test("repository settings waits for saved config, saves through the owner's proj
     useProjectStore.setState({ projects: [project], hasLoaded: true });
     render(<AppDialogHost />);
     act(() =>
-      useAppDialogStore.getState().open({ kind: "repository-settings", projectId: project.id }),
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: commandNodeId(), kind: "repository-settings", projectId: project.id }),
     );
     expectDomAbsent(screen.queryByLabelText("Name"));
     act(() => useConfigStore.getState().setConfig(savedConfig));
@@ -363,7 +469,9 @@ test("repository settings waits for saved config, saves through the owner's proj
     });
     await waitFor(() => expect(useAppDialogStore.getState().request).toBeNull());
     act(() =>
-      useAppDialogStore.getState().open({ kind: "repository-settings", projectId: project.id }),
+      useAppDialogStore
+        .getState()
+        .open({ nodeId: commandNodeId(), kind: "repository-settings", projectId: project.id }),
     );
     await screen.findByLabelText("Name");
     act(() => useProjectStore.setState({ projects: [] }));
@@ -406,6 +514,7 @@ test("a repeated Rebuild returns from Ports to Container", async () => {
   render(<AppDialogHost />);
   const rebuild = () =>
     useAppDialogStore.getState().open({
+      nodeId: commandNodeId(),
       kind: "environment-settings",
       environmentId: "env-1",
       section: "container",

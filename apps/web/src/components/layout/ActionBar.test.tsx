@@ -53,6 +53,10 @@ import {
   installControlledTimeout,
   type ControlledTimeout,
 } from "../../../../../tests/helpers/controlled-timeout";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realContextMenuSnapshot = { ...realContextMenu };
@@ -7133,7 +7137,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       render(<ActionBar />);
       expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
 
-      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
 
       expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
         "Merge Pull Request",
@@ -7191,7 +7195,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("keeps an admitted dialog open when readiness and conflict data change", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       const { rerender } = render(<ActionBar />);
-      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
       currentEnvironment = { ...currentEnvironment, status: "stopped", hasMergeConflicts: true };
       rerender(<ActionBar />);
       expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
@@ -7203,7 +7207,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("Merge refused"));
       render(<ActionBar />);
-      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
       fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
       await waitFor(() =>
         expect(screen.getByTestId("alert-dialog-content").textContent).toContain("Merge refused"),
@@ -7214,7 +7218,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("cancelling closes the dialog for good", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       const { rerender } = render(<ActionBar />);
-      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
 
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       rerender(<ActionBar />);
@@ -7228,7 +7232,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open", status: "stopped" };
       const { rerender } = render(<ActionBar />);
 
-      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
       expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
       expect(useMergePrRequestStore.getState().request).toBeNull();
 
@@ -7242,10 +7246,22 @@ describe("ActionBar successful cleanup and merge actions", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       render(<ActionBar />);
 
-      act(() => useMergePrRequestStore.getState().requestMergePr("env-other"));
+      act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-other"));
 
       expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
       expect(useMergePrRequestStore.getState().request).toBeNull();
+    });
+
+    test("ignores a request for the same environment id on another node", () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      render(<ActionBar />);
+
+      act(() =>
+        useMergePrRequestStore.getState().requestMergePr("bk_other-node" as never, "env-1"),
+      );
+
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+      expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
     });
   });
 

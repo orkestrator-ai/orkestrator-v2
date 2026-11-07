@@ -47,6 +47,7 @@ import {
   FloatingNoticeLayer,
 } from "@/components/ui/floating-notice";
 import * as backend from "@/lib/backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -61,6 +62,8 @@ interface CoordinatorPanelProps {
 }
 
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
+  // The project is on the node of the scope this page renders in.
+  const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
   const {
     snapshot,
@@ -191,6 +194,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     if (!workspaceId || !selectedId || !selectedTabId) return;
     const store = useActiveCoordinatorConversationStore.getState();
     store.publish({
+      nodeId,
       projectId,
       tabId: selectedTabId,
       data: {
@@ -200,8 +204,16 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         sessionId: selectedProviderSessionId,
       },
     });
-    return () => store.clear(projectId, selectedTabId);
-  }, [projectId, selectedAgent, selectedId, selectedProviderSessionId, selectedTabId, workspaceId]);
+    return () => store.clear(nodeId, projectId, selectedTabId);
+  }, [
+    nodeId,
+    projectId,
+    selectedAgent,
+    selectedId,
+    selectedProviderSessionId,
+    selectedTabId,
+    workspaceId,
+  ]);
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)
@@ -251,7 +263,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             className="mt-4"
             variant="outline"
             onClick={() =>
-              useAppDialogStore.getState().open({ kind: "repository-settings", projectId })
+              useAppDialogStore.getState().open({ kind: "repository-settings", nodeId, projectId })
             }
           >
             Repository settings

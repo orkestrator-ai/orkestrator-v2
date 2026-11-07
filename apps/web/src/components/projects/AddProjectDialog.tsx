@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FolderGit2, FolderOpen, GitBranch, Loader2, LockKeyhole, Plus } from "lucide-react";
 import { GithubIcon } from "@/components/icons/GithubIcon";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import {
   getGitRemoteUrl,
   listGitHubCloneAccounts,
@@ -57,6 +57,8 @@ export function AddProjectDialog({
   loadGitHubAccounts = listGitHubCloneAccounts,
   loadGitHubRepositories = listGitHubCloneRepositories,
 }: AddProjectDialogProps) {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const [source, setSource] = useState<ProjectSource>("existing");
   const [isBrowsingGitHub, setIsBrowsingGitHub] = useState(false);
   const [gitUrl, setGitUrl] = useState("");
@@ -171,7 +173,7 @@ export function AddProjectDialog({
     } catch (browseError) {
       log.error("directory-picker.failed", { error: formatLogError(browseError) });
     }
-  }, [localPath]);
+  }, [localPath, pickHostPath]);
 
   // Picker requests inspect immediately; typed paths wait until the user pauses.
   // Both share cancellation so an old lookup cannot replace a newer form value.
@@ -260,7 +262,7 @@ export function AddProjectDialog({
     } catch (browseError) {
       log.error("directory-picker.failed", { error: formatLogError(browseError) });
     }
-  }, [newProjectPath]);
+  }, [newProjectPath, pickHostPath]);
 
   const handleSubmit = useCallback(
     async (event: React.FormEvent) => {

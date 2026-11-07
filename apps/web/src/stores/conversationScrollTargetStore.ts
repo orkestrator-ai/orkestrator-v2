@@ -1,8 +1,9 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { create } from "zustand";
 
 /**
- * Pending "scroll this chat to a message" requests, keyed by environment and
- * tab.
+ * Pending "scroll this chat to a message" requests, keyed by node,
+ * environment and tab.
  *
  * A request is made by navigation (e.g. "Open full conversation" on a web
  * annotation) before the destination chat is necessarily mounted, active, or
@@ -12,7 +13,17 @@ import { create } from "zustand";
  * expires, so a stale request can never yank a reader around later.
  *
  * Renderer-only view state: it carries identifiers, never message content.
+ * Environment and tab ids are only unique on their node, so a chat reads only
+ * the requests for its own scope's node: a request for node A is ignored
+ * while node B's chat is shown.
  */
+
+/** The chat a request is for. */
+export interface ConversationScrollTargetRef {
+  nodeId: BackendId;
+  environmentId: string;
+  tabId: string;
+}
 
 export interface ConversationScrollTarget {
   /** Transcript message id (`NativeMessage.id` / projection message id). */
@@ -39,30 +50,25 @@ export const CONVERSATION_SCROLL_TARGET_SETTLED_GRACE_MS = 3_000;
 /** Bounded: one request per tab, and at most this many tabs at once. */
 export const MAX_PENDING_CONVERSATION_SCROLL_TARGETS = 32;
 
-export function conversationScrollTargetKey(environmentId: string, tabId: string): string {
-  return `${environmentId}\u0000${tabId}`;
+export function conversationScrollTargetKey(ref: ConversationScrollTargetRef): string {
+  return `${ref.nodeId}\u0000${ref.environmentId}\u0000${ref.tabId}`;
 }
 
 interface ConversationScrollTargetState {
   targets: Map<string, PendingConversationScrollTarget>;
   /** Replaces any earlier request for this tab (the "next attempt" wins). */
   request: (
-    environmentId: string,
-    tabId: string,
+    ref: ConversationScrollTargetRef,
     target: ConversationScrollTarget,
     now?: number,
   ) => PendingConversationScrollTarget | null;
   /** Unexpired request for this tab, if any. */
-  peek: (
-    environmentId: string,
-    tabId: string,
-    now?: number,
-  ) => PendingConversationScrollTarget | null;
+  peek: (ref: ConversationScrollTargetRef, now?: number) => PendingConversationScrollTarget | null;
   /**
    * Clears the request, but only if it is still the one identified by
    * `nonce` — a newer request made meanwhile is left alone.
    */
-  clear: (environmentId: string, tabId: string, nonce?: number) => void;
+  clear: (ref: ConversationScrollTargetRef, nonce?: number) => void;
 }
 
 let nextNonce = 1;
@@ -75,10 +81,10 @@ export const useConversationScrollTargetStore = create<ConversationScrollTargetS
   (set, get) => ({
     targets: new Map(),
 
-    request: (environmentId, tabId, target, now = Date.now()) => {
+    request: (ref, target, now = Date.now()) => {
       const messageId = nonBlank(target.messageId);
       const turnId = nonBlank(target.turnId);
-      const key = conversationScrollTargetKey(environmentId, tabId);
+      const key = conversationScrollTargetKey(ref);
       const targets = new Map(get().targets);
       // Prune expired requests on every write so the map stays bounded even
       // for tabs that never mounted to consume theirs.
@@ -107,13 +113,13 @@ export const useConversationScrollTargetStore = create<ConversationScrollTargetS
       return pending;
     },
 
-    peek: (environmentId, tabId, now = Date.now()) => {
-      const pending = get().targets.get(conversationScrollTargetKey(environmentId, tabId));
+    peek: (ref, now = Date.now()) => {
+      const pending = get().targets.get(conversationScrollTargetKey(ref));
       return pending && pending.expiresAt > now ? pending : null;
     },
 
-    clear: (environmentId, tabId, nonce) => {
-      const key = conversationScrollTargetKey(environmentId, tabId);
+    clear: (ref, nonce) => {
+      const key = conversationScrollTargetKey(ref);
       const current = get().targets.get(key);
       if (!current || (nonce !== undefined && current.nonce !== nonce)) return;
       const targets = new Map(get().targets);

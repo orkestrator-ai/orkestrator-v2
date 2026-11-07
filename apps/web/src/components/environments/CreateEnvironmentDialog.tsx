@@ -61,7 +61,7 @@ import {
   resizeCanvasToMaxDimension,
 } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { toast } from "sonner";
 import type {
@@ -274,6 +274,8 @@ export function CreateEnvironmentDialog({
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
   localEnvironmentAvailable = true,
 }: CreateEnvironmentDialogProps) {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const federation = useFederation();
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
@@ -726,7 +728,7 @@ export function CreateEnvironmentDialog({
       defaultPath,
     });
     if (chosen) setWorktreeBaseDir(chosen);
-  }, [worktreeBaseDir]);
+  }, [pickHostPath, worktreeBaseDir]);
 
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;

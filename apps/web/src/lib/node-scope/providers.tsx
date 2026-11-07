@@ -101,6 +101,19 @@ export function useNodeScope(): NodeScope {
   return getWindowScope().commandScope();
 }
 
+/**
+ * The nearest window and node scope without the strict check: outside a
+ * provider they are the app's window scope and its command scope, in every
+ * mode. Only for window-level stores whose producers and readers still render
+ * in trees with no provider (plan item 3017: dialogs, merge PR, scroll
+ * targets, the host path picker); new code uses `useNodeScope()`.
+ */
+export function useScopesWithCommandFallback(): { windowScope: WindowScope; scope: NodeScope } {
+  const windowScope = useContext(WindowScopeContext) ?? getWindowScope();
+  const scope = useContext(NodeScopeContext);
+  return { windowScope, scope: scope ?? windowScope.commandScope() };
+}
+
 /** Reads a signal and re-renders when it changes. */
 export function useSignal<T>(signal: ReadableSignal<T>): T {
   return useSyncExternalStore(signal.subscribe, signal.get, signal.get);

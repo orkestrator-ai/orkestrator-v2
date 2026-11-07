@@ -1,3 +1,4 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { create } from "zustand";
 
 /**
@@ -9,7 +10,15 @@ import { create } from "zustand";
  * never sent to the backend. A view entry remembers the viewport width it was
  * taken at, because the layout depends on that width; a graph shown at another
  * width starts from 100% again.
+ *
+ * Every key is node-qualified (`flowGraphViewKey`): workflow and run ids are
+ * only unique on their node, so one id on two nodes is two views.
  */
+
+/** The store key of the flow graph view `viewKey` on `nodeId`. */
+export function flowGraphViewKey(nodeId: BackendId, viewKey: string): string {
+  return `${nodeId}\u0000${viewKey}`;
+}
 
 export interface FlowGraphViewEntry {
   zoom: number;

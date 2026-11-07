@@ -57,6 +57,7 @@ import {
 } from "@/components/federation/RealmTitleBar";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { retainAppShortcutRouter, setUnhandledAppShortcut } from "@/lib/app-shortcuts";
 import {
   useRemoteWorkspaceStore,
@@ -236,9 +237,16 @@ export function AppShell({ children }: AppShellProps) {
   );
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const coordinatorConversation = useActiveCoordinatorConversationStore((state) => state.active);
+  // The selection is this shell's node's, so a conversation must be on it too.
+  const shellNodeId = useScopesWithCommandFallback().scope.nodeId;
   const coordinatorTab = useMemo(
-    () => coordinatorConversationTab(coordinatorConversation, selectedProjectId, projectBoardTab),
-    [coordinatorConversation, selectedProjectId, projectBoardTab],
+    () =>
+      coordinatorConversationTab(
+        coordinatorConversation,
+        { nodeId: shellNodeId, projectId: selectedProjectId },
+        projectBoardTab,
+      ),
+    [coordinatorConversation, shellNodeId, selectedProjectId, projectBoardTab],
   );
   // Keep the coordinator descriptor stable when unrelated pane layouts change.
   const activeTab = coordinatorTab ?? paneActiveTab;

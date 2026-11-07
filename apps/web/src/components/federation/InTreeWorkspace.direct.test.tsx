@@ -40,6 +40,7 @@ import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
 import { REALM_DIALOGS } from "@orkestrator/protocol/realm-request";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
@@ -273,16 +274,18 @@ test("select: ⌘K's project result lands on the asked tab of the node's project
   const scope = await openLeaf({ projectId: project.id });
   const ui = scope.store(uiStore);
   await waitFor(() => expect(ui.getState().selectedProjectId).toBe(project.id));
-  // The search's result for another node's project (`ProjectSearchBar`).
+  act(() => ui.getState().setProjectBoardTab("kanban"));
+  // The search's result for another node's project, as `ProjectSearchBar`
+  // opens it grouped by machine: on its coordinator.
   act(() =>
     openMachineWorkspace({
       connectionId: LEAF,
       projectId: project.id,
-      boardTab: "kanban",
+      boardTab: projectLandingBoardTab("machine", false),
       title: project.name,
     }),
   );
-  await waitFor(() => expect(ui.getState().projectBoardTab).toBe("kanban"));
+  await waitFor(() => expect(ui.getState().projectBoardTab).toBe("coordinator"));
   expect(ui.getState().selectedProjectId).toBe(project.id);
   expect(exchanged("select")).toEqual([]);
 });

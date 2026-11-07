@@ -240,7 +240,7 @@ None of this is live evidence. Whether terminal output matches the exact snapsho
 
 **Problem.** Terminal WebSocket frames are uncompressed, which matters only if they turn out to be large on remote links.
 
-**Context.** Code item 6. Behind an explicit setting, bounded, and with fallback. This task also owns efficiency finding GW-7, whose report (`docs/reports/efficiency-logging-database/0390-gw-7-websocket-compression.md`) was checked back and deleted on 2026-11-05; its requirements are carried below. The [efficiency report's invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep) apply: every compression buffer has byte and count bounds.
+**Context.** Code item 6. Behind an explicit setting, bounded, and with fallback. This task also owns efficiency finding GW-7, whose report (`docs/reports/efficiency-logging-database/0390-gw-7-websocket-compression.md`) was checked back and deleted on 2026-11-05; its requirements are carried below. The efficiency report's invariants (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) apply: every compression buffer has byte and count bounds.
 
 **Investigation.** The backend pins `ws` 8.22.0 (`apps/backend/package.json:35`). No compression option is set on the terminal WebSocket server. The terminal WebSocket is still opt-in, so few users would be affected either way.
 
@@ -934,7 +934,7 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
   shared prerequisites for remote and iOS runs.
 - `../architecture/event-snapshot-recovery.md` (read coordinator, quiet
   backoff contract).
-- [Efficiency, logging and database outcome](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e-0390-websocket-compression):
+- Efficiency, logging and database outcome (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`):
   GW-7 and the closing note for report 0390, which task 8 now owns.
 
 ## Replaces

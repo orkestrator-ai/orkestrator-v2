@@ -14,7 +14,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 3. **`marked` 18**: move once `@tiptap/markdown` accepts it. Status: blocked (`@tiptap/markdown` 3.32.0, still latest, depends on `marked ^17.0.1`).
 4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is 5.0.0-rc.1).
 5. **`@dnd-kit/react` 1.0**: rewrite the drag-and-drop users once 1.0 ships. Status: blocked (latest is 0.5.1).
-6. **Accepted advisories**: `postcss-selector-parser` via `@tailwindcss/typography`, `undici` 8.10.2 via the Pi SDK. Status: blocked (on `@tailwindcss/typography` and the Pi SDK; both still latest).
+6. **Accepted advisories**: `postcss-selector-parser` via `@tailwindcss/typography`, `undici` 8.10.2 via the Pi SDK. Status: moved to [7541](7541-clear-current-dependency-advisories.md) (2026-11-07): Pi 1.5.0 now ships `undici` 8.12.3, so the `undici` half is unblocked; `@tailwindcss/typography` is still 0.5.20. 7541 also holds the newer `@hono/node-server`, `qs` and `minimatch` advisories and Electron 45.2.3.
 7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); 24.22.2 done 2026-11-02; amd64 image smoke and `test:agent:docker` passed (20 passed, 4 live-provider skips).
 
 ### 1. Electron 46
@@ -442,6 +442,16 @@ None. The update-manifest key question is decided below.
    - Pros: the security release is closed without a separate rebuild.
    - Cons: if the image change regresses, the Node bump and the layer changes
      have to be told apart.
+7. **Task 6: move the advisories to their own to-do (2026-11-07).**
+   - Options: (a) keep them here as task 6; (b) move them to a new to-do,
+     7541, with the advisories `bun audit` added since.
+   - Choice: (b).
+   - Why: Pi 1.5.0 unblocked the `undici` half, which now carries four high
+     advisories, and `docs/reports/` (which held L18's file) was retired the
+     same day. The Pi bump is an agent upgrade, which this file excludes.
+   - Pros: the actionable advisory work sits in one file with its own rating.
+   - Cons: `postcss-selector-parser` is now tracked in 7541 rather than beside
+     the other blocked upgrades here.
 
 ## Related
 

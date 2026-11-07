@@ -13,7 +13,7 @@ Analysed 2026-11-05 against `main` at `cbe0f9a5b`.
 
 **Problem.** Every image carries two copies of the same 298 MB Claude Code native binary: the global CLI's and the one the Claude Agent SDK vendors into the Claude bridge.
 
-**Context.** This is efficiency finding DK-10 ([report, section G](../../reports/2026-10-27-efficiency.md#g-desktop-toolchain-docker-image-protocol-and-cli)), carried by [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 14 and then by efficiency report 0693, which was checked back and deleted on 2026-11-05 (its last version is in the commit before the one that deleted it). [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, and the Dockerfile says the same at `docker/Dockerfile:205-206`, so the two pins can diverge.
+**Context.** This is efficiency finding DK-10 (report, section G (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)), carried by [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 14 and then by efficiency report 0693, which was checked back and deleted on 2026-11-05 (its last version is in the commit before the one that deleted it). [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, and the Dockerfile says the same at `docker/Dockerfile:205-206`, so the two pins can diverge.
 
 Where the two copies come from, on `main` at `cbe0f9a5b`:
 
@@ -80,5 +80,5 @@ This check also found that **the container bridge never runs the SDK's copy**. E
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 14
 - [0022 container resource budgets](0022-container-resource-budgets-and-performance.md)
-- [Efficiency, logging and database outcome](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-note-for-0693-dk-10-second-claude-binary), closing note for 0693
+- Efficiency, logging and database outcome (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), closing note for 0693
 - [`upgrade-agents.md`](../../development/upgrade-agents.md)

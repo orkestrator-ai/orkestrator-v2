@@ -1,6 +1,6 @@
 # Prove the measurement row cap on a busy live profile
 
-From [efficiency report](../../reports/2026-10-29-logging-and-database-efficiency.md#r14-bound-measurement-file-rows-d1-highest-value) R14, part 0700 of batch E2, task 4 ("Prove the size curve flattens"). The batch file was deleted when E2 was built; it is in Git history at base commit `e198fd4a7`.
+From efficiency report (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`) R14, part 0700 of batch E2, task 4 ("Prove the size curve flattens"). The batch file was deleted when E2 was built; it is in Git history at base commit `e198fd4a7`.
 
 ## Task analysis
 

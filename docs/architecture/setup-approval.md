@@ -5,7 +5,7 @@ in the environment's own worktree, so from whatever branch it was created on,
 and they run in the user's login shell (`$SHELL -ilc`) on the host. Without a
 check, a branch a container agent pushed, or a stranger's pull request, turns
 "contained in Docker" into "runs on the host" (security review finding M5,
-[2-26-10-27-security.md](../reports/2-26-10-27-security.md)).
+2-26-10-27-security.md (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)).
 
 Container environments are not gated: their setup runs inside the container.
 Project-home environments never run setup.

@@ -53,5 +53,5 @@ Every web client shares one terminal stream; the bearer and cross-origin paths r
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 4 (GW-3)
 - [0052 remote client bandwidth](0052-remote-client-bandwidth.md)
-- [Efficiency report, A](../../reports/2026-10-27-efficiency.md#a-gateway-and-transport), GW-3
+- Efficiency report, A (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), GW-3
 - [Remote gateway, event stream reconnects](../../architecture/remote-gateway.md#event-stream-reconnects)

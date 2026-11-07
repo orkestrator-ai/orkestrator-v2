@@ -4,7 +4,7 @@
 
 Analysed 2026-11-05 against `main` at `69a3b4ca5`.
 
-Left over from the security report's [§8 dynamic testing](../../reports/2-26-10-27-security.md#8-not-covered--follow-up). The report's other live checks ran on 2026-11-05 ([record](../../development/container-qualification.md#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05)).
+Left over from the security report's §8 dynamic testing (`git show 413bd6219:docs/reports/2-26-10-27-security.md`). The report's other live checks ran on 2026-11-05 ([record](../../development/container-qualification.md#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05)).
 
 ### Tasks
 
@@ -14,7 +14,7 @@ Left over from the security report's [§8 dynamic testing](../../reports/2-26-10
 
 **Problem.** The H1, M1 and M2 fixes rely on what a browser does with cookies and the sandbox header, and Safari has its own cookie policy on top of the WebKit engine.
 
-**Context.** `e2e/preview/gateway-browser-security.spec.ts` covers cookie scope across ports, `SameSite=Strict` on typed and cross-site navigations, the sandbox header on a top-level load, and credentials from `Origin: null`. It is part of `mise run test:preview:browser`. Shipping Safari is also open in [todo 0042](0042-service-preview-rollout.md) task 3. A pass or a failure here also answers the Safari line under Needs verification in [security report 0020](../../reports/security/0020-m1-isolated-preview-default.md).
+**Context.** `e2e/preview/gateway-browser-security.spec.ts` covers cookie scope across ports, `SameSite=Strict` on typed and cross-site navigations, the sandbox header on a top-level load, and credentials from `Origin: null`. It is part of `mise run test:preview:browser`. Shipping Safari is also open in [todo 0042](0042-service-preview-rollout.md) task 3. A pass or a failure here also answers the Safari line under Needs verification in security report 0020 (`git show 413bd6219:docs/reports/security/0020-m1-isolated-preview-default.md`).
 
 **Investigation.** On 2026-11-04 all 21 cases passed: seven each in Chromium, Firefox and WebKit, on macOS. Safari itself was not run. No harness in this repository drives it, and `safaridriver` needs **Allow Remote Automation** turned on in Safari's settings. This needs a Mac: the run that closed the rest of the report on 2026-11-05 was on a Linux host.
 
@@ -30,7 +30,7 @@ Left over from the security report's [§8 dynamic testing](../../reports/2-26-10
 
 ## Related
 
-- [Security report, §8](../../reports/2-26-10-27-security.md#8-not-covered--follow-up)
+- Security report, §8 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)
 - [Todo 0042](0042-service-preview-rollout.md), task 3
 - `docs/architecture/remote-gateway.md`, Security notes
 

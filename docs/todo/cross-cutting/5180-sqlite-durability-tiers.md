@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0920` of the E5 efficiency batch (R18's tiers, D5), whose batch file was deleted when E5 landed. Its outcome is in [the closing check of E5](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e5-database-upkeep); the original text stays in git history at `69a3b4ca5`. The maintainer's deferral in [1202](1202-efficiency-review-follow-ups.md) task 2 (ST-12, "decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task") is kept: nothing here has been measured on a real session, which the deferral needs.
+Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0920` of the E5 efficiency batch (R18's tiers, D5), whose batch file was deleted when E5 landed. Its outcome is in the closing check of E5 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); the original text stays in git history at `69a3b4ca5`. The maintainer's deferral in [1202](1202-efficiency-review-follow-ups.md) task 2 (ST-12, "decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task") is kept: nothing here has been measured on a real session, which the deferral needs.
 
 ### Tasks
 
@@ -80,4 +80,4 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0920` of t
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md) tasks 1 and 2 (ST-12)
 - [5181](5181-sqlite-cache-sizes.md), [5182](5182-database-upkeep-live-evidence.md)
 - [Backend storage: Durability and deletion](../../architecture/storage.md#durability-and-deletion)
-- [Logging and database report, R18 and D5](../../reports/2026-10-29-logging-and-database-efficiency.md#r18-tier-durability-and-maintenance-settings-d5-d6)
+- Logging and database report, R18 and D5 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)

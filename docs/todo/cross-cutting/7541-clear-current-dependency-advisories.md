@@ -1,0 +1,179 @@
+# Clear the dependency advisories `bun audit` reports
+
+## Task analysis
+
+Analysed 2026-11-07 against `main` at `413bd6219`. Upstream versions were read
+from the npm registry the same day, and `bun audit` was run on that commit.
+
+This replaces the security report's file `0110-l18-dependency-advisories.md`
+(finding L18), deleted with the rest of `docs/reports/` on 2026-11-07. Read it
+with `git show 413bd6219:docs/reports/security/0110-l18-dependency-advisories.md`.
+That file treated the advisories as accepted until upstream moved. Upstream has
+now moved for the worst of them, and `bun audit` reports more than L18 named.
+
+### Tasks
+
+1. **Move Pi to 1.5.0**: clears all four high and four moderate `undici` advisories, and the `minimatch` one on Pi's side. Status: open (unblocked upstream 2026-11-07).
+2. **Take Electron 45.2.3**: the latest 45.x patch release; the lockfile still has 45.0.0. Status: open.
+3. **Refresh the in-range MCP transitive pins**: `@hono/node-server` 1.19.17 and 2.1.1, and `qs` 6.16.0. Status: open.
+4. **`minimatch` under electron-builder**: build-time only. Status: open (depends on 0032 task 2 if no in-range fix exists).
+5. **`postcss-selector-parser` 6.0.10**: dev only, through `@tailwindcss/typography`. Status: open (blocked upstream; `@tailwindcss/typography` 0.5.20 is still latest and still pins 6.0.10 exactly).
+
+### 1. Move Pi to 1.5.0
+
+**Problem.** `bun audit` reports `undici` 8.10.2 with four high advisories
+(cache poisoning and cross-user disclosure on cross-origin redirects, TLS
+certificate validation bypass via dropped `tls` options in `Agent`, DoS on
+excessive content-encodings, DoS on TLS 1.2 renegotiation) and four moderate
+ones, all fixed in 8.12.2. It reaches the Pi bridge through
+`@earendil-works/pi-coding-agent` 1.4.0 (`bun.lock:441`, `undici` at
+`bun.lock:2389`). `minimatch` 10.2.6 (moderate, globparts DoS, fixed in 11.0.1)
+comes the same way.
+
+**Context.** The Pi bridge talks to the model providers the user chose, with the
+user's credentials, so the redirect and TLS advisories are on a path that
+carries those credentials. To-do
+[0032](0032-dependency-upgrades.md) task 6 accepted the pin while Pi 1.4.0 was
+the latest release. On 2026-11-07 npm's `latest` for
+`@earendil-works/pi-coding-agent` is 1.5.0, which depends on `undici` 8.12.3,
+`minimatch` 11.0.3 and `@earendil-works/pi-ai` 1.5.0.
+
+**Investigation.** Pi is pinned in three places that must move together (the
+SDK, `@earendil-works/pi-ai` and the `pi` binary), in `bridges/pi-bridge/package.json`,
+`packages/cli/bridge-runtimes/pi-bridge/package.json`, the toolchain manifest
+and `PI_CLI_VERSION` in `docker/Dockerfile`. `tests/unit/version-drift.test.ts`
+enforces the SDK and binary pairing. The procedure is
+[upgrade-agents.md](../../development/upgrade-agents.md). Not read yet: Pi
+1.5.0's changelog, and whether `models.test.ts`'s ChatGPT-backend premise
+still holds on it (`AGENTS.md`, Pi bridge, asks for that check on every bump).
+
+**Decisions.**
+
+- **How to clear the `undici` advisories?**
+  - **Bump Pi to 1.5.0 through `upgrade-agents.md` (recommended).**
+    - Pros: clears every `undici` 8.x advisory and Pi's `minimatch` with the versions Pi itself was built and tested against; keeps the SDK and binary paired.
+    - Cons: an agent upgrade, with its live checks and a new container image; Pi's behaviour may change.
+  - **A root `overrides.undici` at 8.12.x, keeping Pi 1.4.0.**
+    - Pros: smallest change.
+    - Cons: runs the Pi SDK on an `undici` it was not built against, and the `pi` binary in containers keeps its own bundled copy, so a Pi terminal tab stays affected.
+
+### 2. Take Electron 45.2.3
+
+**Problem.** The lockfile resolves `electron@45.0.0` (`bun.lock:1583`). 45.1.0,
+45.2.0, 45.2.1, 45.2.2 and 45.2.3 have been published since, and 45.2.3 is
+npm's `latest`. L18 asked to take any later 45.x security release.
+
+**Context.** `package.json` and `apps/desktop/package.json` already declare
+`^45.0.0`, so this is a lockfile refresh with no manifest change.
+[0032](0032-dependency-upgrades.md) task 1 tracks the move to 46, which is a
+separate, later change.
+
+**Investigation.** Electron's release notes for 45.1.0 to 45.2.3 were not read.
+An Electron patch changes the shipped Chromium, so it needs the Electron suite
+(`mise run test:agent:electron`) and a packaged build, not only the default
+suite.
+
+**Decisions.**
+
+- **When to take it?**
+  - **Now, as its own change with the Electron suite (recommended).**
+    - Pros: picks up Chromium security fixes in the shipped app; no API change inside a major.
+    - Cons: needs the Electron suite under a display and a packaged smoke run.
+  - **With the move to 46.**
+    - Pros: one Electron change instead of two.
+    - Cons: 46 is not stable until 2027-01-05, so users run an unpatched 45.0.0 until then.
+
+### 3. Refresh the in-range MCP transitive pins
+
+**Problem.** `@hono/node-server` 1.19.17 (through `@modelcontextprotocol/node`
+2.1.1 in the backend) and 2.1.1 (through `@modelcontextprotocol/sdk` 1.32.1 in
+the root lockfile) are in the range of a moderate advisory (`serveStatic`
+decodes the path twice and bypasses middleware, fixed in 2.1.3). `qs` 6.16.0,
+the root lockfile's top-level copy, is in the range of a moderate DoS in
+`qs.stringify` (fixed after 6.16.0).
+
+**Context.** The gateway's own `serveStatic` (`apps/backend/src/gateway-proxy.ts`)
+is not Hono's middleware, so the advisory's path is not known to be reached; it
+was not traced through the MCP packages. `@modelcontextprotocol/node` 2.1.2
+accepts `@hono/node-server` `^1.19.9 || ^2.1.3`, and `@modelcontextprotocol/sdk`
+1.32.2 accepts `^1.19.9 || ^2.0.5`. The bridges' own `@hono/node-server` is
+already 2.1.5, and the Claude bridge's standalone lockfile already has `qs`
+6.16.1.
+
+**Investigation.** None beyond the above. Lockfile changes follow **Updating
+Bun and lockfiles** in `AGENTS.md`, for both tracked lockfiles.
+
+**Decisions.**
+
+- **How to move them?**
+  - **Bump `@modelcontextprotocol/node` to 2.1.2 and re-resolve, checking `bun audit` afterwards (recommended).**
+    - Pros: fixes through the declared ranges; no override.
+    - Cons: a lockfile churn that touches MCP, which the backend and bridges both serve.
+  - **`bun audit fix`.**
+    - Pros: one command.
+    - Cons: upgrades everything it can in range, which is a wider change than the advisories need and harder to review.
+
+### 4. `minimatch` under electron-builder
+
+**Problem.** `minimatch` 9.0.9 under
+`electron-builder > dmg-builder > app-builder-lib > @electron/universal`
+(`bun.lock:2515`) is in the advisory's range (`>=7.0.0 <11.0.1`). The 3.1.5
+and 5.1.9 copies the audit lists beside it are below that range.
+
+**Context.** These run only when packaging the app, on input this repository
+controls. electron-builder 27 is [0032](0032-dependency-upgrades.md) task 2,
+blocked on its stable release.
+
+**Investigation.** Whether electron-builder 26.x has a later patch that moves
+`minimatch` was not checked.
+
+**Decisions.**
+
+- **What to do?**
+  - **Take an in-range electron-builder patch if one moves it, otherwise leave it to 0032 task 2 (recommended).**
+    - Pros: no override on the release toolchain.
+    - Cons: the advisory stays listed until then.
+  - **Override `minimatch` for the build chain.**
+    - Pros: clears the listing now.
+    - Cons: a major-version override on packaging code for a build-time-only DoS.
+
+### 5. `postcss-selector-parser` 6.0.10
+
+**Problem.** A moderate quadratic-complexity advisory (fixed in 6.1.5) through
+`@tailwindcss/typography` 0.5.20 (`bun.lock:1015`, `bun.lock:2117`).
+
+**Context.** Dev and build only, on CSS this repository writes. This is the
+same item as [0032](0032-dependency-upgrades.md) task 6's first half.
+
+**Investigation.** On 2026-11-07 `@tailwindcss/typography` `latest` is still
+0.5.20 and still depends on `postcss-selector-parser` `6.0.10` exactly.
+
+**Decisions.**
+
+- **Keep accepting it?**
+  - **Yes, until `@tailwindcss/typography` moves (recommended).**
+    - Pros: no override of a plugin's exact pin; the input is our own CSS.
+    - Cons: stays listed by `bun audit`.
+  - **Override to 6.1.5.**
+    - Pros: clears the listing.
+    - Cons: runs the plugin on a parser version it does not declare.
+
+## Current state
+
+`bun audit` on `413bd6219` (2026-11-07): 12 vulnerabilities, 4 high and 8
+moderate, in `@hono/node-server`, `minimatch`, `postcss-selector-parser`, `qs`
+and `undici`. `undici` 7.30.1 and 6.29.1 under Electron's `@electron/get` are
+listed in the same entry but are outside the affected `>=8.0.0` range.
+
+## Constraints and rationale
+
+- Pi's SDK and binary move together; a bump follows
+  [upgrade-agents.md](../../development/upgrade-agents.md).
+- Regenerate every tracked lockfile with the Bun version `mise.toml` pins, then
+  prove both in frozen mode and run `tests/unit/version-drift.test.ts`.
+
+## Related
+
+- [0032 Dependency upgrades](0032-dependency-upgrades.md), tasks 1, 2 and 6.
+- Security report, §5 Low severity (L18):
+  `git show 413bd6219:docs/reports/2-26-10-27-security.md`.

@@ -74,5 +74,5 @@ A tab reopen reads one bounded page; earlier history pages in; the task list and
 ## Related
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 8
-- [Efficiency report, F](../../reports/2026-10-27-efficiency.md#f-background-loops-and-external-processes), BG-14
+- Efficiency report, F (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), BG-14
 - [Version compatibility register](../../architecture/version-compatibility.md#register)

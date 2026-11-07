@@ -86,7 +86,7 @@ What was left of `docs/reports/efficiency-logging-database/0100-e19-terminal-web
 ## Constraints and rationale
 
 - Terminal input must stay as responsive as it is today, so no batching may wait for a later keystroke.
-- [Report invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep): live events stay incremental with missed events detectable, and metrics stay content-free.
+- Report invariants (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`): live events stay incremental with missed events detectable, and metrics stay content-free.
 - Use an isolated `dev:test` profile for anything run locally; never point a check at a production instance.
 
 ## Related

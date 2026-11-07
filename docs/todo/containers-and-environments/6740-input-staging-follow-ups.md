@@ -4,7 +4,7 @@
 
 Analysed 2026-11-05 against `main` at `cbe0f9a5b`.
 
-What E25 (DK-14, report part `0490`) left after the host staging copy learned to reflink. See [Portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs) and the [closing check of E25](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e25-container-start), which holds the measurements.
+What E25 (DK-14, report part `0490`) left after the host staging copy learned to reflink. See [Portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs) and the closing check of E25 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which holds the measurements.
 
 ### Tasks
 

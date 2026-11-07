@@ -3,7 +3,7 @@
 - **ID:** 1537
 - **Status:** resolved
 - **Observed:** 2026-10-31
-- **Resolved:** 2026-11-04, locally; no CI run has exercised the fix yet
+- **Resolved:** 2026-11-04, locally; confirmed on CI 2026-11-07 (see [CI confirmation](#ci-confirmation-2026-11-07))
 - **Test:** `saved/reset overrides retarget real scans and reverts; replacement drops an unpushed base`
 - **File:** `apps/backend/src/core/diff-base-override.integration.test.ts`
 
@@ -51,8 +51,9 @@ The owning file passed alone at `a2bba9d80` on the Linux worktree host:
 (2 pass, 0 fail, 0.56 s).
 
 A shared Orkestrator host is therefore not required for the miss. Why it stalls
-is still unknown. The work to find out is in
-[`docs/reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md`](../../../reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md).
+is still unknown. The work to find out was CI shard report 0010, since deleted
+with the rest of `docs/reports/`; read it with
+`git show 413bd6219:docs/reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md`.
 
 ## Diagnostics (2026-11-04)
 
@@ -202,10 +203,8 @@ defect is still in Bun, other `node:child_process` captures in the backend can s
 hit it, and a child whose exit Bun lost stays a zombie.
 
 **Reopen this case** if the test misses its deadline again. The report names the step:
-that identifies a wait this fix did not remove. CI has not run the fix yet, CI is
-x86-64 and the local evidence is aarch64 and macOS, so that CI's misses have this
-cause is still an assumption. One green run proves little for a failure seen in about
-one run in ten.
+that identifies a wait this fix did not remove. CI has since run the fix in 91
+backend jobs without a miss ([CI confirmation](#ci-confirmation-2026-11-07)).
 
 ## Independent incoming mitigation (2026-11-04)
 
@@ -213,5 +212,24 @@ The merged main branch independently reproduced five misses in 203 loaded runs,
 then recorded none in 435 runs with a 5 s post-exit Git pipe-close bound. Of
 those fixed runs, 22 took over 3 s (maximum 5,969 ms), showing the condition still
 occurred. Those results describe that earlier mitigation, not the final merged
-code. File capture supersedes it here; [report 0020](../../../reports/ci-shard-validation/0020-git-output-lost-after-exit.md)
-retains its investigation and the remaining runtime-trigger work.
+code. File capture supersedes it here. Its investigation was CI shard report
+0020 (`git show 413bd6219:docs/reports/ci-shard-validation/0020-git-output-lost-after-exit.md`);
+the remaining runtime-trigger work is in
+[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md) and
+[todo 6900](../../../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md).
+
+## CI confirmation (2026-11-07)
+
+The fix has now run on CI. Of the 100 most recent `ci.yml` runs on `main`
+(created 2026-11-05 23:02 to 2026-11-07 00:01 UTC, commits `3cdfd98d2` to
+`124259a30`), 91 completed the `Tests (backend)` job: 19 passed and 72 failed
+on other tests. The failed-job logs of all 93 failed runs (`gh run view <id>
+--log-failed`) contain neither this test's name nor its file, and no
+`waiting on #` step report. Before the fix it missed in 4 of the 40 runs on
+2026-11-03. So the CI misses have stopped with the local cause removed, which
+supports, without proving, that they had the same cause: no CI miss ever
+reported its step.
+
+`main` was red through this window for unrelated reasons (most often
+`test suite ownership`, `bounded test diagnostics` and `native-agent activity
+reconciliation lifecycle`), which is why most backend jobs failed.

@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `cbe0f9a5b`. From efficiency report part `0560` (ST-9's rest), which was checked back against the code, measured and deleted; see its [closing check](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e-0560-agent-mail-store).
+Analysed 2026-11-05 against `main` at `cbe0f9a5b`. From efficiency report part `0560` (ST-9's rest), which was checked back against the code, measured and deleted; see its closing check (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
 
 ### Tasks
 
@@ -112,7 +112,7 @@ One run's 1.85 MB retained reading came out at 0.3 MB, an accounting lag the scr
 
 ## Constraints and rationale
 
-Stored-format changes follow the migration rules in `AGENTS.md` ("Storage rules": one migration in `storage-record-upgrades.ts`, not a reader upgrade on every load) and need tests for old rows. Queue and cache bounds apply, per the efficiency report's [invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep): the 2,000-entry pending-inject cap and the 32 MiB store bound must hold across any split.
+Stored-format changes follow the migration rules in `AGENTS.md` ("Storage rules": one migration in `storage-record-upgrades.ts`, not a reader upgrade on every load) and need tests for old rows. Queue and cache bounds apply, per the efficiency report's invariants (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`): the 2,000-entry pending-inject cap and the 32 MiB store bound must hold across any split.
 
 ## Needs verification
 
@@ -125,7 +125,7 @@ Stored-format changes follow the migration rules in `AGENTS.md` ("Storage rules"
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 2.
 - 5100 prompt queue row writes (done 2026-11-05, deleted 2026-11-06; see git history): the row-write pattern task 2 recommends.
 - [6144 per-store sizes](6144-per-store-sizes.md).
-- [Efficiency report, E](../../reports/2026-10-27-efficiency.md#e-storage-change-tracking-git-and-files), ST-9.
+- Efficiency report, E (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), ST-9.
 
 ## Replaces
 

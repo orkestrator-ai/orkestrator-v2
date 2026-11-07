@@ -215,6 +215,17 @@ the point.
   so a test that mixes them sees nothing change. Seed state through
   `scope.store(def)`.
 
+  A test-support module shared by several suites can own one scope per test
+  and hand the suites accessors instead of statics, as
+  `components/build-pipeline/build-chat-tab-test-support.tsx` does (plan item
+  3011): `buildChatScope()` opens it on first use, `pipelineStore()` is its
+  pipeline store, `renderInBuildChat(ui)` renders into it (`renderInNodeScope`
+  with that scope's window and client), and `cleanupBuildChatScope()` in
+  `afterEach` drops it. Its `FakeNodeClient` answers the reads that now go to
+  the scope's node (`get_build_pipeline`) by calling the suite's existing
+  stubs, so their assertions keep working. Actions that still use the
+  `@/lib/backend` named exports reach the module mocks as before.
+
 - **Tests that render without a provider** (plain `render`) still work while
   the shim is in place. The hook falls back to the app's command scope, which
   is the same instance the statics use. They may keep `useFooStore.setState(…)`
@@ -264,7 +275,10 @@ imports back is an import cycle (`import/no-cycle`). Such a module imports the
 framework's types only (`import type { StoreResourceHandlers }`) and exports a
 frozen `{ name, runsOn, register }` object, the shape the function returns:
 see `lib/project-environment-resource-handlers.ts` (plan item 3004), which also
-keeps the backend out of the store modules. Inside a registration, read with
+keeps the backend out of the store modules, and `lib/workflow-resource-handlers.ts`
+(plan item 3011), whose build-pipeline and Multi Review handlers share one
+registration because they share the hidden-window deferral and its retry
+timer; each scope gets its own. Inside a registration, read with
 `backendApiForScope(context.scope, createXApi, backend)` (`* as backend` from
 `@/lib/backend`) and let a test's `context.options` override win.
 `context` also gives `listen` (the scope's events), `onStop`, `disposed()`,

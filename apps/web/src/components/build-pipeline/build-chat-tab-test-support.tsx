@@ -4,10 +4,26 @@
  *
  * Importing this module registers the stubs, so a suite imports it before it
  * loads `./BuildChatTab`, and calls {@link restoreBuildChatTabMocks} after.
+ *
+ * The tab renders inside a node scope of its own ({@link renderInBuildChat},
+ * plan item 3011): seed and read its stores through {@link pipelineStore} or
+ * `buildChatScope().store(def)`, and call {@link cleanupBuildChatScope} after
+ * each test. The scope's node answers `get_build_pipeline` through the
+ * `getBuildPipelineControlMock`/`getBuildPipelineConditionalMock` stubs.
  */
 import { mock } from "bun:test";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { fireEvent, screen, within } from "@testing-library/react";
+import type { ReactElement } from "react";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInNodeScope,
+  type RenderInNodeScopeOptions,
+} from "@/test/render-in-node-scope";
+import { buildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import type {
   BuildPipelineCodeRewindPreview,
   PipelineQueuedSteerDelivery,
@@ -63,23 +79,23 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   },
 }));
 export const pauseBuildPipelineMock = mock(async (pipelineId: string) => ({
-  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  ...pipelineStore().getState().pipelines.get(pipelineId)!,
   phase: "paused" as const,
   backendRevision: 9,
 }));
 export const resumeBuildPipelineMock = mock(async (pipelineId: string) => ({
-  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  ...pipelineStore().getState().pipelines.get(pipelineId)!,
   phase: "building" as const,
   backendRevision: 10,
 }));
 export const cancelBuildPipelineMock = mock(async (pipelineId: string) => ({
-  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  ...pipelineStore().getState().pipelines.get(pipelineId)!,
   phase: "failed" as const,
   error: "Build cancelled",
   backendRevision: 11,
 }));
 export const sendMessageMock = mock(async (pipelineId: string, text: string) => ({
-  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  ...pipelineStore().getState().pipelines.get(pipelineId)!,
   pendingUserMessages: [{ id: "queued-1", text, createdAt: "2026-07-29T00:02:00.000Z" }],
   backendRevision: 12,
 }));
@@ -92,7 +108,7 @@ export const steerPipelineMock = mock(
     delivery: "steered" | "queued";
   }> => ({
     pipeline: {
-      ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+      ...pipelineStore().getState().pipelines.get(pipelineId)!,
       backendRevision: 13,
     },
     delivery: "steered",
@@ -107,7 +123,7 @@ export const steerQueuedMock = mock(
     delivery: PipelineQueuedSteerDelivery;
     notice?: string;
   }> => {
-    const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+    const current = pipelineStore().getState().pipelines.get(pipelineId)!;
     return {
       pipeline: {
         ...current,
@@ -123,7 +139,7 @@ export const removeQueuedMock = mock(
     pipelineId: string,
     messageId: string,
   ): Promise<{ pipeline: BuildPipeline; removed: boolean }> => {
-    const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+    const current = pipelineStore().getState().pipelines.get(pipelineId)!;
     return {
       pipeline: {
         ...current,
@@ -135,11 +151,11 @@ export const removeQueuedMock = mock(
   },
 );
 export const restartCurrentStepMock = mock(async (pipelineId: string) => ({
-  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  ...pipelineStore().getState().pipelines.get(pipelineId)!,
   backendRevision: 13,
 }));
 export const retryStageMock = mock(async (pipelineId: string): Promise<BuildPipeline> => ({
-  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  ...pipelineStore().getState().pipelines.get(pipelineId)!,
   phase: "building" as const,
   error: undefined,
   failureContext: undefined,
@@ -147,40 +163,40 @@ export const retryStageMock = mock(async (pipelineId: string): Promise<BuildPipe
 }));
 export const restartStepMock = mock(
   async (pipelineId: string, _stageId: string, _selection?: unknown): Promise<BuildPipeline> => ({
-    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    ...pipelineStore().getState().pipelines.get(pipelineId)!,
     phase: "building" as const,
     backendRevision: 15,
   }),
 );
 export const skipStepMock = mock(
   async (pipelineId: string, _stageId: string): Promise<BuildPipeline> => ({
-    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    ...pipelineStore().getState().pipelines.get(pipelineId)!,
     phase: "reviewing" as const,
     backendRevision: 17,
   }),
 );
 export const retryInteractionFailureMock = mock(async (pipelineId: string) => ({
-  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  ...pipelineStore().getState().pipelines.get(pipelineId)!,
   phase: "building" as const,
   error: undefined,
   failureContext: undefined,
-  backendRevision: useBuildPipelineStore.getState().pipelines.get(pipelineId)!.backendRevision + 1,
+  backendRevision: pipelineStore().getState().pipelines.get(pipelineId)!.backendRevision + 1,
 }));
 export const retryReviewerMock = mock(
   async (pipelineId: string, _reviewerId: string): Promise<BuildPipeline> => ({
-    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    ...pipelineStore().getState().pipelines.get(pipelineId)!,
     backendRevision: 16,
   }),
 );
 export const restartReviewerMock = mock(
   async (pipelineId: string, _reviewerId: string): Promise<BuildPipeline> => ({
-    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    ...pipelineStore().getState().pipelines.get(pipelineId)!,
     backendRevision: 17,
   }),
 );
 export const stopReviewerMock = mock(
   async (pipelineId: string, _reviewerId: string): Promise<BuildPipeline> => ({
-    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    ...pipelineStore().getState().pipelines.get(pipelineId)!,
     backendRevision: 17,
   }),
 );
@@ -195,13 +211,73 @@ export const previewCodeRewindMock = mock(
 );
 export const rewindCodeMock = mock(
   async (pipelineId: string, _stageId: string, _expectedHead: string): Promise<BuildPipeline> => ({
-    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    ...pipelineStore().getState().pipelines.get(pipelineId)!,
     phase: "building" as const,
     backendRevision: 18,
   }),
 );
-export const getBuildPipelineConditionalMock = mock(async (_pipelineId: string) => null as unknown);
-export const getBuildPipelineControlMock = mock(async (_pipelineId: string) => null as unknown);
+export const getBuildPipelineConditionalMock = mock(
+  async (_pipelineId: string, ..._rest: unknown[]) => null as unknown,
+);
+export const getBuildPipelineControlMock = mock(
+  async (_pipelineId: string, ..._rest: unknown[]) => null as unknown,
+);
+
+const BUILD_CHAT_NODE = "bk_build-chat-node" as BackendId;
+
+let buildChat: { windowScope: WindowScope; client: FakeNodeClient; scope: NodeScope } | null = null;
+
+/**
+ * The node scope the build tab renders in, created on first use. Its node
+ * answers the pipeline point reads (`get_build_pipeline`, with
+ * `knownSessions` for a transcript read) through the two stubs above.
+ */
+export function buildChatScope(): NodeScope {
+  if (!buildChat) {
+    const client = new FakeNodeClient({
+      nodeId: BUILD_CHAT_NODE,
+      invoke: {
+        get_build_pipeline: (args: Readonly<Record<string, unknown>>) =>
+          "knownSessions" in args
+            ? getBuildPipelineConditionalMock(
+                args.pipelineId as string,
+                args.knownRevision,
+                args.knownSessions,
+                args.prioritySessionKey,
+              )
+            : getBuildPipelineControlMock(args.pipelineId as string, args.knownRevision),
+      },
+    });
+    const windowScope = new WindowScope();
+    buildChat = { windowScope, client, scope: windowScope.open({ role: "command", client }) };
+  }
+  return buildChat.scope;
+}
+
+/** The rendered scope's pipelines. */
+export function pipelineStore() {
+  return buildChatScope().store(buildPipelineStore);
+}
+
+/** Renders `ui` inside {@link buildChatScope}. */
+export function renderInBuildChat(
+  ui: ReactElement,
+  options: Omit<RenderInNodeScopeOptions, "client" | "windowScope" | "nodeId" | "role"> = {},
+) {
+  buildChatScope();
+  return renderInNodeScope(ui, {
+    ...options,
+    windowScope: buildChat!.windowScope,
+    client: buildChat!.client,
+  });
+}
+
+/** Unmounts what was rendered and drops the scope, so the next test starts empty. */
+export function cleanupBuildChatScope(): void {
+  cleanupNodeScopes();
+  buildChat?.windowScope.dispose();
+  buildChat = null;
+}
 export const stopReviewValidationCommandMock = mock(
   async (_environmentId: string, run: NonNullable<BuildPipeline["validationRun"]>) => run,
 );
@@ -409,12 +485,12 @@ export function renderPipelineTab(
   next: BuildPipeline,
   props: { isActive?: boolean; ownsGlobalShortcuts?: boolean } = {},
 ) {
-  useBuildPipelineStore.setState({
+  pipelineStore().setState({
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
     viewedSessionIds: new Map(),
   });
-  return render(
+  return renderInBuildChat(
     <BuildChatTab
       data={{
         pipelineId: next.id,
@@ -466,11 +542,11 @@ export const reviewed: BuildPipeline = {
 };
 
 export function renderTab(next: BuildPipeline) {
-  useBuildPipelineStore.setState({
+  pipelineStore().setState({
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
   });
-  render(
+  renderInBuildChat(
     <BuildChatTab
       data={{
         pipelineId: next.id,

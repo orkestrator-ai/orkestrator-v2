@@ -8,14 +8,7 @@ import { isUnknownViewCommandError } from "@orkestrator/protocol/view-sync";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createCoordinatorApi } from "@/lib/backend/coordinator";
-import {
-  createNativeObservationEvents,
-  subscribeNativeObservationInvalidations,
-  type NativeObservationInvalidation,
-} from "@/lib/native-observation-events";
-import type { NativeEvent, UnlistenFn } from "@/lib/native/events";
-import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { isAppCommandScope, listenInScope } from "@/lib/node-scope-slots";
+import { subscribeNativeObservationInvalidations } from "@/lib/native-observation-events";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
@@ -41,28 +34,6 @@ function sameProjects(
   if (a.size !== b.size) return false;
   for (const [projectId, state] of a) if (b.get(projectId) !== state) return false;
   return true;
-}
-
-/**
- * `scope`'s native observation invalidations: the app's command scope shares
- * the window's one listener; another scope listens on its own node until the
- * returned function stops it.
- */
-function subscribeObservationInvalidations(
-  scope: NodeScope,
-  listener: (invalidation: NativeObservationInvalidation) => void,
-): () => void {
-  if (isAppCommandScope(scope)) return subscribeNativeObservationInvalidations(listener);
-  const listen = <T>(
-    event: string,
-    handler: (message: NativeEvent<T>) => unknown,
-  ): Promise<UnlistenFn> => listenInScope<T>(scope, event, (payload) => handler({ payload }));
-  const events = createNativeObservationEvents(listen);
-  const unsubscribe = events.subscribe(listener);
-  return () => {
-    unsubscribe();
-    events.dispose();
-  };
 }
 
 /**
@@ -127,11 +98,12 @@ export const coordinatorActivityStore = defineScopedStore<CoordinatorActivitySto
     }
 
     const subscribe = (): Array<() => void> => [
-      subscribeObservationInvalidations(scope, (invalidation) => {
+      // The node's own observation announcements (plan item 3009).
+      subscribeNativeObservationInvalidations((invalidation) => {
         if (invalidation.kind === "all" || coordinatorIdFromRuntimeId(invalidation.environmentId)) {
           schedule();
         }
-      }),
+      }, scope),
       onResourceChanged(
         "native-agent-session",
         (change) => {

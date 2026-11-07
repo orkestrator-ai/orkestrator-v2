@@ -1,12 +1,12 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import {
   BUILD_PIPELINE_AGENTS,
   REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewLabel,
 } from "@orkestrator/protocol/build-pipeline";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { nativeAgentAdapters } from "@/components/native-agent/adapter";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
@@ -28,6 +28,10 @@ import {
   validationRun,
   visibleTextContents,
   visibleToolInvocations,
+  buildChatScope,
+  cleanupBuildChatScope,
+  pipelineStore,
+  renderInBuildChat,
 } from "./build-chat-tab-test-support";
 
 /**
@@ -35,6 +39,7 @@ import {
  */
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 
 describe("BuildChatTab presentation", () => {
   beforeEach(() => {
@@ -45,17 +50,19 @@ describe("BuildChatTab presentation", () => {
   });
 
   test("shows each reviewer with its friendly model name, elapsed time, and tokens", () => {
-    const previousModels = useAgentModelCatalogStore.getState().codexModels;
-    useAgentModelCatalogStore.setState({
-      codexModels: [
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT 5.6 Sol",
-          description: "Frontier coding model",
-          reasoningEfforts: ["high"],
-        },
-      ],
-    });
+    const previousModels = buildChatScope().store(agentModelCatalogStore).getState().codexModels;
+    buildChatScope()
+      .store(agentModelCatalogStore)
+      .setState({
+        codexModels: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT 5.6 Sol",
+            description: "Frontier coding model",
+            reasoningEfforts: ["high"],
+          },
+        ],
+      });
     const reviewA = {
       ...reviewSession,
       agent: "codex" as const,
@@ -92,7 +99,7 @@ describe("BuildChatTab presentation", () => {
       );
     } finally {
       cleanup();
-      useAgentModelCatalogStore.setState({ codexModels: previousModels });
+      buildChatScope().store(agentModelCatalogStore).setState({ codexModels: previousModels });
     }
   });
 
@@ -130,14 +137,14 @@ describe("BuildChatTab presentation", () => {
         { agent: "claude" as const, model: "opus" },
       ],
     };
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[running.id, running]]),
       buildEnvironmentIds: new Set([running.environmentId]),
       viewedSessionIds: new Map(),
     });
 
     try {
-      render(
+      renderInBuildChat(
         <BuildChatTab
           data={{
             pipelineId: running.id,
@@ -163,23 +170,25 @@ describe("BuildChatTab presentation", () => {
   });
 
   test("keeps a surviving Review 2 in its own slot with its configured model", () => {
-    const previousModels = useAgentModelCatalogStore.getState().codexModels;
-    useAgentModelCatalogStore.setState({
-      codexModels: [
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT 5.6 Sol",
-          description: "Frontier coding model",
-          reasoningEfforts: ["high"],
-        },
-        {
-          id: "opus",
-          name: "Opus",
-          description: "Claude reviewer",
-          reasoningEfforts: ["high"],
-        },
-      ],
-    });
+    const previousModels = buildChatScope().store(agentModelCatalogStore).getState().codexModels;
+    buildChatScope()
+      .store(agentModelCatalogStore)
+      .setState({
+        codexModels: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT 5.6 Sol",
+            description: "Frontier coding model",
+            reasoningEfforts: ["high"],
+          },
+          {
+            id: "opus",
+            name: "Opus",
+            description: "Claude reviewer",
+            reasoningEfforts: ["high"],
+          },
+        ],
+      });
     const reviewTwo = {
       ...reviewSession,
       agent: "codex" as const,
@@ -208,28 +217,30 @@ describe("BuildChatTab presentation", () => {
       expect(screen.queryByText(/Opus/) === null).toBe(true);
     } finally {
       cleanup();
-      useAgentModelCatalogStore.setState({ codexModels: previousModels });
+      buildChatScope().store(agentModelCatalogStore).setState({ codexModels: previousModels });
     }
   });
 
   test("shows the live retry pair once per slot and keeps each slot's configured model", () => {
-    const previousModels = useAgentModelCatalogStore.getState().codexModels;
-    useAgentModelCatalogStore.setState({
-      codexModels: [
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT 5.6 Sol",
-          description: "Frontier coding model",
-          reasoningEfforts: ["high"],
-        },
-        {
-          id: "opus",
-          name: "Opus",
-          description: "Claude reviewer",
-          reasoningEfforts: ["high"],
-        },
-      ],
-    });
+    const previousModels = buildChatScope().store(agentModelCatalogStore).getState().codexModels;
+    buildChatScope()
+      .store(agentModelCatalogStore)
+      .setState({
+        codexModels: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT 5.6 Sol",
+            description: "Frontier coding model",
+            reasoningEfforts: ["high"],
+          },
+          {
+            id: "opus",
+            name: "Opus",
+            description: "Claude reviewer",
+            reasoningEfforts: ["high"],
+          },
+        ],
+      });
     const staleA = {
       ...reviewSession,
       agent: "codex" as const,
@@ -309,7 +320,7 @@ describe("BuildChatTab presentation", () => {
       expect(within(inspector()).getByText("1 earlier attempt in this pass")).toBeTruthy();
     } finally {
       cleanup();
-      useAgentModelCatalogStore.setState({ codexModels: previousModels });
+      buildChatScope().store(agentModelCatalogStore).setState({ codexModels: previousModels });
     }
   });
 
@@ -375,14 +386,14 @@ describe("BuildChatTab presentation", () => {
       currentSessionIndex: 0,
       reviewers: [{ agent: "codex" as const, model: "gpt-5.4" }],
     };
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[running.id, running]]),
       buildEnvironmentIds: new Set([running.environmentId]),
       viewedSessionIds: new Map(),
     });
 
     try {
-      const view = render(
+      const view = renderInBuildChat(
         <BuildChatTab
           data={{
             pipelineId: running.id,

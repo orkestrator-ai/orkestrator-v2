@@ -10,12 +10,14 @@ import {
   restoreBuildChatTabMocks,
   rewindCodeMock,
   selectNode,
+  cleanupBuildChatScope,
 } from "./build-chat-tab-test-support";
 
 const START = "a".repeat(40);
 const HEAD = "c".repeat(40);
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 beforeEach(() => {
   previewCodeRewindMock.mockClear();
   rewindCodeMock.mockClear();

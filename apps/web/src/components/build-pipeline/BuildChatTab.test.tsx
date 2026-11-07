@@ -1,7 +1,7 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { REVIEW_PACKAGE_SESSION_LABEL } from "@orkestrator/protocol/build-pipeline";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { setMobileViewport } from "../../../../../tests/mocks/match-media";
 import {
@@ -30,6 +30,9 @@ import {
   stopReviewValidationCommandMock,
   validationResult,
   validationRun,
+  cleanupBuildChatScope,
+  pipelineStore,
+  renderInBuildChat,
 } from "./build-chat-tab-test-support";
 
 /**
@@ -37,6 +40,7 @@ import {
  */
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 
 describe("BuildChatTab backend projection", () => {
   beforeEach(() => {
@@ -55,7 +59,7 @@ describe("BuildChatTab backend projection", () => {
     mockToastSuccess.mockClear();
     getBuildPipelineConditionalMock.mockClear();
     getBuildPipelineConditionalMock.mockImplementation(async () => null);
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
       viewedSessionIds: new Map(),
@@ -63,7 +67,7 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("renders the same backend sessions and transcripts for every client", () => {
-    render(
+    renderInBuildChat(
       <BuildChatTab
         isActive
         data={{
@@ -80,13 +84,11 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     selectNode("Build");
     expect(screen.getByText("Implementation complete")).toBeTruthy();
-    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
-      "build-session",
-    );
+    expect(pipelineStore().getState().viewedSessionIds.get(pipeline.id)).toBe("build-session");
   });
 
   test("offers restart from a graph node's context menu", async () => {
-    render(<BuildChatTab data={tabData} />);
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     fireEvent.contextMenu(graphNode("Build"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart from here" }));
@@ -100,18 +102,20 @@ describe("BuildChatTab backend projection", () => {
     async (title) => {
       const phase = title === "Build" ? "build" : "review";
       const label = title === "Reviewer 1" ? "Review 1" : title;
-      useBuildPipelineStore.getState().replacePipeline({
-        ...pipeline,
-        reviewers: [
-          { agent: "claude", model: "opus" },
-          { agent: "codex", model: "gpt-test" },
-        ],
-        sessions: [
-          { ...pipeline.sessions[0]!, phase, label, agent: "opencode", model: "old-model" },
-        ],
-        currentSessionIndex: 0,
-      });
-      render(<BuildChatTab data={tabData} />);
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...pipeline,
+          reviewers: [
+            { agent: "claude", model: "opus" },
+            { agent: "codex", model: "gpt-test" },
+          ],
+          sessions: [
+            { ...pipeline.sessions[0]!, phase, label, agent: "opencode", model: "old-model" },
+          ],
+          currentSessionIndex: 0,
+        });
+      renderInBuildChat(<BuildChatTab data={tabData} />);
 
       fireEvent.contextMenu(graphNode(title));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
@@ -156,7 +160,7 @@ describe("BuildChatTab backend projection", () => {
     restartStepMock.mockImplementationOnce(async () => {
       throw new Error("This build's pull request has been merged.");
     });
-    render(<BuildChatTab data={tabData} />);
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     fireEvent.contextMenu(graphNode("Build"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
@@ -169,11 +173,13 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("offers validation restart from a touch long press", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      validationRun: validationRun({ id: "validation-long-press" }),
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        validationRun: validationRun({ id: "validation-long-press" }),
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     fireEvent.pointerDown(graphNode("Prepare"), {
       pointerType: "touch",
@@ -194,17 +200,19 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("skips running validation from the node menu and the Tests view", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "building",
-      validationRun: validationRun({
-        id: "validation-skip",
-        status: "running",
-        completedAt: undefined,
-        results: [{ ...validationResult("passed"), status: "running", exitCode: null }],
-      }),
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "building",
+        validationRun: validationRun({
+          id: "validation-skip",
+          status: "running",
+          completedAt: undefined,
+          results: [{ ...validationResult("passed"), status: "running", exitCode: null }],
+        }),
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     fireEvent.contextMenu(graphNode("Prepare"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Skip validation" }));
@@ -214,11 +222,13 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("Step skipped");
 
     skipStepMock.mockClear();
-    useBuildPipelineStore.getState().replacePipeline({
-      ...useBuildPipelineStore.getState().pipelines.get(pipeline.id)!,
-      phase: "building",
-      backendRevision: 18,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipelineStore().getState().pipelines.get(pipeline.id)!,
+        phase: "building",
+        backendRevision: 18,
+      });
     selectNode("Prepare");
     fireEvent.click(screen.getByRole("button", { name: /Stop tests and continue/ }));
     await waitFor(() =>
@@ -227,12 +237,14 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("skips the running stage to the next one, but not a finished stage", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "verifying",
-      sessions: [pipeline.sessions[0]!, { ...pipeline.sessions[1]!, status: "running" }],
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "verifying",
+        sessions: [pipeline.sessions[0]!, { ...pipeline.sessions[1]!, status: "running" }],
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     fireEvent.contextMenu(graphNode("Build"));
     await screen.findByRole("menuitem", { name: "Restart from here" });
@@ -245,18 +257,22 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("renders loading and not-yet-started states from incomplete snapshots", () => {
-    useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
-    const { rerender } = render(<BuildChatTab data={{ ...tabData, pipelineId: "missing" }} />);
+    pipelineStore().setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+    const { rerender } = renderInBuildChat(
+      <BuildChatTab data={{ ...tabData, pipelineId: "missing" }} />,
+    );
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
 
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      id: "empty",
-      phase: "building",
-      sessions: [],
-      currentSessionIndex: -1,
-      backendRevision: 9,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        id: "empty",
+        phase: "building",
+        sessions: [],
+        currentSessionIndex: -1,
+        backendRevision: 9,
+      });
     rerender(<BuildChatTab data={{ ...tabData, pipelineId: "empty" }} />);
     // Nothing has run yet, so every step ahead is a placeholder.
     expect(nodeTitles()).toEqual([
@@ -286,24 +302,26 @@ describe("BuildChatTab backend projection", () => {
       return 44;
     }) as typeof window.setInterval;
     window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "building",
-      validationRun: validationRun({
-        status: "running",
-        completedAt: undefined,
-        results: [
-          {
-            ...validationResult("passed"),
-            status: "running",
-            exitCode: null,
-            startedAt: "2026-09-08T20:00:05.000Z",
-          },
-        ],
-      }),
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "building",
+        validationRun: validationRun({
+          status: "running",
+          completedAt: undefined,
+          results: [
+            {
+              ...validationResult("passed"),
+              status: "running",
+              exitCode: null,
+              startedAt: "2026-09-08T20:00:05.000Z",
+            },
+          ],
+        }),
+      });
 
-    const view = render(<BuildChatTab data={tabData} isActive />);
+    const view = renderInBuildChat(<BuildChatTab data={tabData} isActive />);
     try {
       selectNode("Prepare");
       expect(screen.getByText(/Validation: 6\.0s\./)).toBeTruthy();
@@ -339,15 +357,17 @@ describe("BuildChatTab backend projection", () => {
       sdkSessionId: "review-2-session",
       label: "Review 2",
     };
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "reviewing",
-      sessions: [pipeline.sessions[0]!, packageSession, reviewOne, reviewTwo],
-      currentSessionIndex: 3,
-      validationRun: validationRun({ id: "validation-ordered" }),
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "reviewing",
+        sessions: [pipeline.sessions[0]!, packageSession, reviewOne, reviewTwo],
+        currentSessionIndex: 3,
+        validationRun: validationRun({ id: "validation-ordered" }),
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     expect(nodeTitles().slice(0, 6)).toEqual([
       "Ticket",
@@ -384,13 +404,15 @@ describe("BuildChatTab backend projection", () => {
         },
       ],
     });
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "building",
-      validationRun: run,
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "building",
+        validationRun: run,
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     selectNode("Prepare");
     fireEvent.click(screen.getByRole("button", { name: "Stop mise run test" }));
@@ -412,12 +434,14 @@ describe("BuildChatTab backend projection", () => {
     ],
     ["skipped", validationResult("skipped", 0)],
   ] as const)("shows a %s command on the Prepare node's checks", (status, result) => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      validationRun: validationRun({ results: [result] }),
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        validationRun: validationRun({ results: [result] }),
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     const chip = graphNode("Prepare").querySelector("[data-validation-status]")!;
     expect(chip.getAttribute("data-validation-status")).toBe(status);
@@ -427,12 +451,14 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("marks a run-level validation fault as a failed Prepare node with its error", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      validationRun: validationRun({ status: "failed", error: "HEAD moved during validation" }),
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        validationRun: validationRun({ status: "failed", error: "HEAD moved during validation" }),
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     const node = graphNode("Prepare");
     expect(node.getAttribute("data-flow-state")).toBe("failed");
@@ -442,12 +468,14 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("marks a cancelled validation run as stopped, not failed", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      validationRun: validationRun({ status: "cancelled" }),
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        validationRun: validationRun({ status: "cancelled" }),
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     expect(graphNode("Prepare").getAttribute("data-flow-state")).toBe("cancelled");
   });
@@ -460,15 +488,17 @@ describe("BuildChatTab backend projection", () => {
       sdkSessionId: "review-1-session",
       label: "Review 1",
     };
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "reviewing",
-      sessions: [pipeline.sessions[0]!, reviewOne, pipeline.sessions[1]!],
-      currentSessionIndex: 2,
-      validationRun: validationRun({ id: "validation-fallback" }),
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "reviewing",
+        sessions: [pipeline.sessions[0]!, reviewOne, pipeline.sessions[1]!],
+        currentSessionIndex: 2,
+        validationRun: validationRun({ id: "validation-fallback" }),
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     expect(nodeTitles().slice(2, 6)).toEqual(["Build", "Prepare", "Reviewer 1", "Verify"]);
   });
@@ -485,15 +515,17 @@ describe("BuildChatTab backend projection", () => {
       sdkSessionId: "review-1-session",
       label: "Review 1",
     };
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "reviewing",
-      sessions: [preparedBuild, reviewOne],
-      currentSessionIndex: 1,
-      validationRun: validationRun({ id: "validation-reused" }),
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "reviewing",
+        sessions: [preparedBuild, reviewOne],
+        currentSessionIndex: 1,
+        validationRun: validationRun({ id: "validation-reused" }),
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     expect(nodeTitles().slice(2, 5)).toEqual(["Build", "Prepare", "Reviewer 1"]);
   });
@@ -506,7 +538,7 @@ describe("BuildChatTab backend projection", () => {
       sdkSessionId: "package-session",
       label: REVIEW_PACKAGE_SESSION_LABEL,
     };
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([
         [
           pipeline.id,
@@ -522,7 +554,7 @@ describe("BuildChatTab backend projection", () => {
       ]),
       viewedSessionIds: new Map(),
     });
-    render(<BuildChatTab data={tabData} />);
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     expect(selectedTitle()).toBe("Prepare");
     showInspectorTab("Tests");
@@ -536,8 +568,8 @@ describe("BuildChatTab backend projection", () => {
       validationRun: validationRun({ id: "validation-pin" }),
       backendRevision: 9,
     };
-    useBuildPipelineStore.getState().replacePipeline(withRun);
-    render(<BuildChatTab data={tabData} />);
+    pipelineStore().getState().replacePipeline(withRun);
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     selectNode("Prepare");
     expect(screen.getByLabelText("Review validation")).toBeTruthy();
@@ -545,7 +577,7 @@ describe("BuildChatTab backend projection", () => {
     act(() => {
       const next = { ...withRun, backendRevision: 10 };
       delete next.validationRun;
-      useBuildPipelineStore.getState().replacePipeline(next);
+      pipelineStore().getState().replacePipeline(next);
     });
 
     await waitFor(() => expect(queryGraphNode("Prepare")).toBeNull());
@@ -568,11 +600,11 @@ describe("BuildChatTab backend projection", () => {
       validationRun: validationRun({ id: "validation-old" }),
       backendRevision: 9,
     };
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[pipeline.id, withRun]]),
       viewedSessionIds: new Map(),
     });
-    render(<BuildChatTab data={tabData} />);
+    renderInBuildChat(<BuildChatTab data={tabData} />);
 
     selectNode("Build");
     selectNode("Prepare");
@@ -580,11 +612,13 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByLabelText("Review validation")).toBeTruthy();
 
     act(() => {
-      useBuildPipelineStore.getState().replacePipeline({
-        ...withRun,
-        validationRun: validationRun({ id: "validation-new", status: "running" }),
-        backendRevision: 10,
-      });
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...withRun,
+          validationRun: validationRun({ id: "validation-new", status: "running" }),
+          backendRevision: 10,
+        });
     });
 
     await waitFor(() => expect(selectedTitle()).toBe("Prepare"));
@@ -592,22 +626,24 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("ignores malformed transcript entries and renders terminal errors", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      id: "malformed",
-      phase: "failed",
-      error: "Verification crashed",
-      sessions: [
-        {
-          ...pipeline.sessions[0]!,
-          status: "error",
-          messages: [null, 42, {}, { content: [] }] as unknown[],
-        },
-      ],
-      currentSessionIndex: 0,
-      backendRevision: 9,
-    });
-    render(<BuildChatTab data={{ ...tabData, pipelineId: "malformed" }} />);
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        id: "malformed",
+        phase: "failed",
+        error: "Verification crashed",
+        sessions: [
+          {
+            ...pipeline.sessions[0]!,
+            status: "error",
+            messages: [null, 42, {}, { content: [] }] as unknown[],
+          },
+        ],
+        currentSessionIndex: 0,
+        backendRevision: 9,
+      });
+    renderInBuildChat(<BuildChatTab data={{ ...tabData, pipelineId: "malformed" }} />);
 
     expect(screen.getAllByText("Verification crashed").length).toBeGreaterThan(0);
     expect(graphNode("Build").getAttribute("data-flow-state")).toBe("failed");
@@ -622,18 +658,20 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("runs pause, resume, and cancel controls against authoritative backend snapshots", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "building",
-      backendRevision: 9,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "building",
+        backendRevision: 9,
+      });
     const data = {
       pipelineId: pipeline.id,
       environmentId: pipeline.environmentId,
       taskId: pipeline.taskId,
       isLocal: true,
     };
-    render(<BuildChatTab data={data} />);
+    renderInBuildChat(<BuildChatTab data={data} />);
 
     expect(screen.getByRole("button", { name: "Pause" }).getAttribute("data-variant")).toBe(
       "outline",
@@ -659,33 +697,35 @@ describe("BuildChatTab backend projection", () => {
     setMobileViewport(true);
     try {
       pauseBuildPipelineMock.mockImplementationOnce(async (pipelineId: string) => ({
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         phase: "paused" as const,
         backendRevision: 14,
       }));
       resumeBuildPipelineMock.mockImplementationOnce(async (pipelineId: string) => ({
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         phase: "building" as const,
         backendRevision: 15,
       }));
       cancelBuildPipelineMock.mockImplementationOnce(async (pipelineId: string) => ({
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         phase: "failed" as const,
         error: "Build cancelled",
         backendRevision: 16,
       }));
-      useBuildPipelineStore.getState().replacePipeline({
-        ...pipeline,
-        phase: "building",
-        backendRevision: 9,
-      });
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...pipeline,
+          phase: "building",
+          backendRevision: 9,
+        });
       const data = {
         pipelineId: pipeline.id,
         environmentId: pipeline.environmentId,
         taskId: pipeline.taskId,
         isLocal: true,
       };
-      render(<BuildChatTab data={data} />);
+      renderInBuildChat(<BuildChatTab data={data} />);
 
       fireEvent.click(screen.getByRole("button", { name: "Restart Build Stage" }));
       await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(pipeline.id));
@@ -713,18 +753,20 @@ describe("BuildChatTab backend projection", () => {
   test("routes the mobile failed-stage icon through the retry action", async () => {
     setMobileViewport(true);
     try {
-      useBuildPipelineStore.getState().replacePipeline({
-        ...pipeline,
-        phase: "failed",
-        error: "Verification did not complete",
-        failureContext: {
-          phase: "verifying",
-          kind: "stage-transition",
-          sessionId: "verify-session",
-        },
-        backendRevision: 9,
-      });
-      render(
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...pipeline,
+          phase: "failed",
+          error: "Verification did not complete",
+          failureContext: {
+            phase: "verifying",
+            kind: "stage-transition",
+            sessionId: "verify-session",
+          },
+          backendRevision: 9,
+        });
+      renderInBuildChat(
         <BuildChatTab
           data={{
             pipelineId: pipeline.id,
@@ -743,13 +785,15 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("re-enables a control when the backend rejects it", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "building",
-      backendRevision: 9,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "building",
+        backendRevision: 9,
+      });
     pauseBuildPipelineMock.mockRejectedValueOnce(new Error("pause unavailable"));
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: pipeline.id,
@@ -767,17 +811,19 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to pause build", {
       description: "pause unavailable",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("building");
+    expect(pipelineStore().getState().pipelines.get(pipeline.id)?.phase).toBe("building");
   });
 
   test("reports a non-Error resume rejection and re-enables the control", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "paused",
-      backendRevision: 9,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "paused",
+        backendRevision: 9,
+      });
     resumeBuildPipelineMock.mockRejectedValueOnce("resume unavailable");
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: pipeline.id,
@@ -796,17 +842,19 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to resume build", {
       description: "resume unavailable",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("paused");
+    expect(pipelineStore().getState().pipelines.get(pipeline.id)?.phase).toBe("paused");
   });
 
   test("reports a cancelled-control failure without replacing the snapshot", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "building",
-      backendRevision: 9,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "building",
+        backendRevision: 9,
+      });
     cancelBuildPipelineMock.mockRejectedValueOnce(503);
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: pipeline.id,
@@ -825,7 +873,7 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to cancel build", {
       description: "503",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("building");
+    expect(pipelineStore().getState().pipelines.get(pipeline.id)?.phase).toBe("building");
   });
 
   test("sends one control request however fast the button is clicked", async () => {
@@ -835,17 +883,19 @@ describe("BuildChatTab backend projection", () => {
         release = resolve;
       });
       return {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         phase: "paused" as const,
         backendRevision: 14,
       };
     });
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "building",
-      backendRevision: 9,
-    });
-    render(
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "building",
+        backendRevision: 9,
+      });
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: pipeline.id,
@@ -868,25 +918,27 @@ describe("BuildChatTab backend projection", () => {
     await act(async () => {
       release?.();
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("paused");
+    expect(pipelineStore().getState().pipelines.get(pipeline.id)?.phase).toBe("paused");
   });
 
   test("surfaces persisted GitHub completion-comment recovery in the build tab", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      source: {
-        type: "github",
-        repositoryOwner: "acme",
-        repositoryName: "widget",
-        issueNumber: 42,
-        issueUrl: "https://github.com/acme/widget/issues/42",
-        status: "closed",
-      },
-      completionCommentStatus: "failed",
-      completionCommentError: "GitHub unavailable",
-      backendRevision: 9,
-    });
-    render(
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        source: {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 42,
+          issueUrl: "https://github.com/acme/widget/issues/42",
+          status: "closed",
+        },
+        completionCommentStatus: "failed",
+        completionCommentError: "GitHub unavailable",
+        backendRevision: 9,
+      });
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: pipeline.id,
@@ -906,19 +958,21 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("offers only the interaction retry and renders its failure message once", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      phase: "failed",
-      error: "Unexpected authorization",
-      failureContext: {
-        phase: "building",
-        kind: "interactive-request",
-        sessionId: "build-session",
-        requestId: "permission-1",
-      },
-      backendRevision: 15,
-    });
-    render(
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        phase: "failed",
+        error: "Unexpected authorization",
+        failureContext: {
+          phase: "building",
+          kind: "interactive-request",
+          sessionId: "build-session",
+          requestId: "permission-1",
+        },
+        backendRevision: 15,
+      });
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: pipeline.id,
@@ -946,7 +1000,7 @@ describe("BuildChatTab backend projection", () => {
 
     await waitFor(() => {
       expect(retryInteractionFailureMock).toHaveBeenCalledWith(pipeline.id);
-      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("building");
+      expect(pipelineStore().getState().pipelines.get(pipeline.id)?.phase).toBe("building");
     });
   });
 });

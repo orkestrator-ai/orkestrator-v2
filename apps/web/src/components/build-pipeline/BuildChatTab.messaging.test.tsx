@@ -1,6 +1,6 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import {
   TerminalProvider,
   useTerminalContext,
@@ -12,8 +12,8 @@ import {
   REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewLabel,
 } from "@orkestrator/protocol/build-pipeline";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { mockToastError, mockToastInfo, mockToastSuccess } from "../../../../../tests/mocks/sonner";
@@ -42,6 +42,10 @@ import {
   sendMessageMock,
   steerPipelineMock,
   validationRun,
+  buildChatScope,
+  cleanupBuildChatScope,
+  pipelineStore,
+  renderInBuildChat,
 } from "./build-chat-tab-test-support";
 
 /**
@@ -49,26 +53,31 @@ import {
  */
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 
 describe("BuildChatTab transcript wiring", () => {
   beforeEach(() => {
     cleanup();
     resetListProps();
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
     });
-    useEnvironmentStore.setState({
-      environments: [{ id: "env-1", containerId: "container-1" }],
-    } as never);
+    buildChatScope()
+      .store(environmentStore)
+      .setState({
+        environments: [{ id: "env-1", containerId: "container-1" }],
+      } as never);
   });
 
   afterAll(() => {
-    useEnvironmentStore.setState({ environments: [] } as never);
+    buildChatScope()
+      .store(environmentStore)
+      .setState({ environments: [] } as never);
   });
 
   function renderTab(props: { isActive?: boolean; ownsGlobalShortcuts?: boolean } = {}) {
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: pipeline.id,
@@ -149,7 +158,9 @@ describe("BuildChatTab transcript wiring", () => {
     // A local environment has no container, and a Dockerised one is absent from
     // the store until it has been hydrated. Passing `null` through would make
     // the renderer try to read files out of a container called "null".
-    useEnvironmentStore.setState({ environments: [] } as never);
+    buildChatScope()
+      .store(environmentStore)
+      .setState({ environments: [] } as never);
     renderTab();
 
     const row = listProps.renderMessage(0, listProps.messages[0], null);
@@ -163,11 +174,13 @@ describe("BuildChatTab transcript wiring", () => {
       ["opencode", "OpenCode"],
     ] as const) {
       cleanup();
-      useBuildPipelineStore.getState().replacePipeline({
-        ...pipeline,
-        agentType,
-        backendRevision: 44 + label.length,
-      });
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...pipeline,
+          agentType,
+          backendRevision: 44 + label.length,
+        });
       renderTab();
 
       const row = listProps.renderMessage(0, listProps.messages[0], null);
@@ -263,11 +276,11 @@ describe("BuildChatTab per-step harnesses", () => {
   };
 
   function renderTab(next: BuildPipeline) {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[next.id, next]]),
       buildEnvironmentIds: new Set([next.environmentId]),
     });
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           pipelineId: next.id,
@@ -364,7 +377,7 @@ describe("BuildChatTab rehydration", () => {
     getBuildPipelineConditionalMock.mockClear();
     getBuildPipelineControlMock.mockClear();
     getBuildPipelineControlMock.mockImplementation(async () => null);
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -384,7 +397,7 @@ describe("BuildChatTab rehydration", () => {
       updatedAt: "2026-07-29T00:00:00.000Z",
     }));
 
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           environmentId: "env-1",
@@ -405,7 +418,7 @@ describe("BuildChatTab rehydration", () => {
   });
 
   test("does not refetch in a loop when the pipeline genuinely does not exist", async () => {
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           environmentId: "env-1",
@@ -428,7 +441,7 @@ describe("BuildChatTab rehydration", () => {
     getBuildPipelineControlMock.mockRejectedValueOnce(hydrationError);
 
     try {
-      render(
+      renderInBuildChat(
         <BuildChatTab
           data={{
             environmentId: "env-1",
@@ -457,10 +470,10 @@ describe("BuildChatTab rehydration", () => {
       // Make the effect observe both a present and then absent snapshot. The
       // per-pipeline attempt guard must still prevent a second backend read.
       act(() => {
-        useBuildPipelineStore.getState().replacePipeline(pipeline);
+        pipelineStore().getState().replacePipeline(pipeline);
       });
       act(() => {
-        useBuildPipelineStore.setState({
+        pipelineStore().setState({
           pipelines: new Map(),
           buildEnvironmentIds: new Set(),
         });
@@ -475,12 +488,12 @@ describe("BuildChatTab rehydration", () => {
   });
 
   test("does not fetch when the store already has the snapshot", async () => {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
 
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           environmentId: "env-1",
@@ -499,7 +512,7 @@ describe("BuildChatTab rehydration", () => {
 
 describe("BuildChatTab stage following", () => {
   function renderWith(next: BuildPipeline) {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[next.id, next]]),
       buildEnvironmentIds: new Set([next.environmentId]),
     });
@@ -518,7 +531,7 @@ describe("BuildChatTab stage following", () => {
       currentSessionIndex: 0,
     };
     renderWith(building);
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           environmentId: "env-1",
@@ -540,7 +553,7 @@ describe("BuildChatTab stage following", () => {
 
   test("holds a stage the user selected even as the pipeline advances", async () => {
     renderWith({ ...pipeline, phase: "verifying" });
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           environmentId: "env-1",
@@ -563,7 +576,7 @@ describe("BuildChatTab stage following", () => {
   });
 
   test("resumes following when the selected stage leaves the snapshot", async () => {
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           environmentId: "env-1",
@@ -602,14 +615,14 @@ describe("BuildChatTab agent messaging", () => {
     restartCurrentStepMock.mockClear();
     retryStageMock.mockClear();
     mockToastError.mockClear();
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[running.id, running]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
   });
 
   function renderTab() {
-    render(
+    renderInBuildChat(
       <BuildChatTab
         data={{
           environmentId: "env-1",
@@ -659,7 +672,7 @@ describe("BuildChatTab agent messaging", () => {
   test("reports queued steering without claiming the running agent is idle", async () => {
     steerPipelineMock.mockImplementationOnce(async (pipelineId: string, text: string) => ({
       pipeline: {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         pendingUserMessages: [{ id: "queued-2", text, createdAt: "2026-07-29T00:02:00.000Z" }],
         backendRevision: 14,
       },
@@ -740,7 +753,7 @@ describe("BuildChatTab agent messaging", () => {
         release = resolve;
       });
       return {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         pendingUserMessages: [],
         backendRevision: 53,
       };
@@ -819,11 +832,13 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   test("hides the compose box while the validation run is shown", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...running,
-      validationRun: validationRun({ id: "validation-composer" }),
-      backendRevision: 9,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...running,
+        validationRun: validationRun({ id: "validation-composer" }),
+        backendRevision: 9,
+      });
     renderTab();
 
     selectNode("Verify");
@@ -834,7 +849,7 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   test("hides the compose box once the build has finished", () => {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -844,7 +859,7 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   test("hides the compose box while multi-model review owns the phase", () => {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([
         [
           running.id,
@@ -866,7 +881,7 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   test("keeps the compose box hidden when multi-model review is paused", () => {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([
         [
           running.id,
@@ -895,17 +910,19 @@ describe("BuildChatTab agent messaging", () => {
 
     await waitFor(() => expect(restartCurrentStepMock).toHaveBeenCalledWith(running.id));
     await waitFor(() =>
-      expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.backendRevision).toBe(13),
+      expect(pipelineStore().getState().pipelines.get(running.id)?.backendRevision).toBe(13),
     );
     expect(mockToastSuccess).toHaveBeenCalledWith("Build Stage restarted");
   });
 
   test("names the stage the pipeline is on rather than the review", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...running,
-      phase: "verifying",
-      backendRevision: 60,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...running,
+        phase: "verifying",
+        backendRevision: 60,
+      });
     renderTab();
 
     expect(screen.queryByRole("button", { name: /^(Retry|Restart) Review/ }) === null).toBe(true);
@@ -915,12 +932,14 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   test("restarts the stage a paused pipeline paused in", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...running,
-      phase: "paused",
-      pausedFromPhase: "verifying",
-      backendRevision: 61,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...running,
+        phase: "paused",
+        pausedFromPhase: "verifying",
+        backendRevision: 61,
+      });
     renderTab();
 
     expect(screen.getByRole("button", { name: "Restart Verification Stage" })).toBeTruthy();
@@ -933,18 +952,22 @@ describe("BuildChatTab agent messaging", () => {
     ["creating-pr", "Restart PR Stage"],
     ["resolving-conflicts", "Restart Conflict Resolution"],
   ] as const)("names the %s header restart", (phase, label) => {
-    useBuildPipelineStore.getState().replacePipeline({ ...running, phase });
+    pipelineStore()
+      .getState()
+      .replacePipeline({ ...running, phase });
     renderTab();
 
     expect(screen.getByRole("button", { name: label })).toBeTruthy();
   });
 
   test.each(["building", "fixing"] as const)("names validation during the %s phase", (phase) => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...running,
-      phase,
-      validationRun: validationRun({ status: "running" }),
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...running,
+        phase,
+        validationRun: validationRun({ status: "running" }),
+      });
     renderTab();
 
     expect(screen.getByRole("button", { name: "Restart Validation" })).toBeTruthy();
@@ -958,12 +981,16 @@ describe("BuildChatTab agent messaging", () => {
   test.each(["cancelled", "retry"] as const)(
     "names review preparation after a %s validation run",
     (reason) => {
-      useBuildPipelineStore.getState().replacePipeline({
-        ...running,
-        phase: "fixing",
-        validationRun: validationRun({ status: reason === "cancelled" ? "cancelled" : "running" }),
-        ...(reason === "retry" ? { reviewRetryRequested: true } : {}),
-      });
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...running,
+          phase: "fixing",
+          validationRun: validationRun({
+            status: reason === "cancelled" ? "cancelled" : "running",
+          }),
+          ...(reason === "retry" ? { reviewRetryRequested: true } : {}),
+        });
       renderTab();
 
       expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
@@ -971,34 +998,38 @@ describe("BuildChatTab agent messaging", () => {
   );
 
   test("names the dedicated preparation session during a fix", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...running,
-      phase: "fixing",
-      sessions: [
-        ...running.sessions,
-        {
-          ...running.sessions[0]!,
-          phase: "fix",
-          sessionKey: "preparation-key",
-          sdkSessionId: "preparation-session",
-          status: "running",
-          label: REVIEW_PACKAGE_SESSION_LABEL,
-        },
-      ],
-      currentSessionIndex: 2,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...running,
+        phase: "fixing",
+        sessions: [
+          ...running.sessions,
+          {
+            ...running.sessions[0]!,
+            phase: "fix",
+            sessionKey: "preparation-key",
+            sdkSessionId: "preparation-session",
+            status: "running",
+            label: REVIEW_PACKAGE_SESSION_LABEL,
+          },
+        ],
+        currentSessionIndex: 2,
+      });
     renderTab();
 
     expect(screen.getByRole("button", { name: "Restart Review Preparation" })).toBeTruthy();
   });
 
   test("offers review restart when a multi-review pipeline is paused", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...running,
-      phase: "paused",
-      pausedFromPhase: "reviewing",
-      reviewers: [{ agent: "claude" }, { agent: "codex" }],
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...running,
+        phase: "paused",
+        pausedFromPhase: "reviewing",
+        reviewers: [{ agent: "claude" }, { agent: "codex" }],
+      });
     renderTab();
 
     expect(screen.getByRole("button", { name: "Restart Review Stage" })).toBeTruthy();
@@ -1015,11 +1046,11 @@ describe("BuildChatTab agent messaging", () => {
       pendingUserMessages: [{ id: "q1", text: "one", createdAt: "2026-07-29T00:02:00.000Z" }],
       backendRevision: 50,
     };
-    useBuildPipelineStore.getState().replacePipeline(waiting);
+    pipelineStore().getState().replacePipeline(waiting);
     renderTab();
     expect(screen.getByRole("status").textContent).toContain("Background work must finish or stop");
     act(() =>
-      useBuildPipelineStore
+      pipelineStore()
         .getState()
         .replacePipeline({ ...waiting, sessions: running.sessions, backendRevision: 51 }),
     );
@@ -1027,14 +1058,16 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   test("reports a queue of more than one message as a queue", () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...running,
-      pendingUserMessages: [
-        { id: "q1", text: "one", createdAt: "2026-07-29T00:02:00.000Z" },
-        { id: "q2", text: "two", createdAt: "2026-07-29T00:03:00.000Z" },
-      ],
-      backendRevision: 50,
-    });
+    pipelineStore()
+      .getState()
+      .replacePipeline({
+        ...running,
+        pendingUserMessages: [
+          { id: "q1", text: "one", createdAt: "2026-07-29T00:02:00.000Z" },
+          { id: "q2", text: "two", createdAt: "2026-07-29T00:03:00.000Z" },
+        ],
+        backendRevision: 50,
+      });
     renderTab();
 
     expect(screen.getByText("2 queued")).toBeTruthy();
@@ -1051,7 +1084,7 @@ describe("BuildChatTab agent messaging", () => {
         release = resolve;
       });
       return {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         pendingUserMessages: [],
         backendRevision: 51,
       };
@@ -1097,7 +1130,7 @@ describe("BuildChatTab agent messaging", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
       description: "no running stage",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("building");
+    expect(pipelineStore().getState().pipelines.get(running.id)?.phase).toBe("building");
   });
 
   test("formats a non-Error stage restart rejection", async () => {
@@ -1111,7 +1144,7 @@ describe("BuildChatTab agent messaging", () => {
         description: "provider offline",
       });
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("building");
+    expect(pipelineStore().getState().pipelines.get(running.id)?.phase).toBe("building");
   });
 
   test("follows the restarted stage instead of the stage the user was reading", async () => {
@@ -1122,7 +1155,7 @@ describe("BuildChatTab agent messaging", () => {
     // A retry appends a new stage. Holding the pinned one would leave the user
     // watching a transcript that has stopped moving.
     restartCurrentStepMock.mockImplementationOnce(async (pipelineId: string) => {
-      const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+      const current = pipelineStore().getState().pipelines.get(pipelineId)!;
       return {
         ...current,
         phase: "reviewing" as const,
@@ -1156,7 +1189,7 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   test("does not offer a stage restart before the first stage exists", () => {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([
         [
           running.id,
@@ -1189,12 +1222,12 @@ describe("BuildChatTab graph", () => {
   }
 
   function renderWithTabs(next: BuildPipeline) {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[next.id, next]]),
       buildEnvironmentIds: new Set([next.environmentId]),
       viewedSessionIds: new Map(),
     });
-    return render(
+    return renderInBuildChat(
       <TerminalProvider>
         <TabOpener />
         <BuildChatTab data={tabData} />
@@ -1345,15 +1378,17 @@ describe("BuildChatTab graph", () => {
       expect(runtime()).toBe("2m 5s · —");
 
       act(() => {
-        useBuildPipelineStore.getState().replacePipeline({
-          ...running,
-          phase: "paused",
-          pausedFromPhase: "building",
-          sessions: [
-            { ...running.sessions[0]!, status: "idle", completedAt: new Date(now).toISOString() },
-          ],
-          backendRevision: 71,
-        });
+        pipelineStore()
+          .getState()
+          .replacePipeline({
+            ...running,
+            phase: "paused",
+            pausedFromPhase: "building",
+            sessions: [
+              { ...running.sessions[0]!, status: "idle", completedAt: new Date(now).toISOString() },
+            ],
+            backendRevision: 71,
+          });
       });
       expect(clearIntervalSpy).toHaveBeenCalled();
       expect(graphNode("Build").getAttribute("data-flow-state")).toBe("paused");
@@ -1555,11 +1590,13 @@ describe("BuildChatTab graph", () => {
   });
 
   test("the PR node shows the environment's pull request once the pipeline shipped", () => {
-    useEnvironmentStore.setState({
-      environments: [
-        { id: "env-1", prUrl: "https://github.com/acme/widget/pull/7", prState: "open" },
-      ],
-    } as never);
+    buildChatScope()
+      .store(environmentStore)
+      .setState({
+        environments: [
+          { id: "env-1", prUrl: "https://github.com/acme/widget/pull/7", prState: "open" },
+        ],
+      } as never);
     try {
       renderPipelineTab({
         ...pipeline,
@@ -1580,7 +1617,9 @@ describe("BuildChatTab graph", () => {
       selectNode("PR");
       expect(screen.getByTestId("pipeline-pr-state").textContent).toBe("Open");
     } finally {
-      useEnvironmentStore.setState({ environments: [] } as never);
+      buildChatScope()
+        .store(environmentStore)
+        .setState({ environments: [] } as never);
     }
   });
 });

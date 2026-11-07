@@ -795,8 +795,8 @@ export const listEnvironments = defineCommand({
   since: 1,                         // domain version that introduced it
   access: "workspace",              // workspace | admin | internal → grant allow-list
   read: true,                       // routing classification, replaces the regex
-  args: z.object({ projectId: z.string() }),
-  result: z.array(EnvironmentSchema),
+  args: Schema.Struct({ projectId: Schema.String }),   // import * as Schema from "effect/Schema"
+  result: Schema.Array(EnvironmentSchema),
   critical: [],                     // must-understand arg fields
 });
 
@@ -810,7 +810,10 @@ export const environmentChanged = defineEvent({
 - Schemas live in `packages/protocol` (browser-safe top level), so backend,
   web, desktop and CLI share one definition. `models.ts` and
   `apps/web/src/types/index.ts` converge on the protocol schemas.
-- Library choice: see [Decision 13.8](#138-schema-library).
+- Library: Effect Schema (`effect/Schema`, `effect` 4.1.2), see
+  [Decision 13.8](#138-schema-library). Its default decode drops unknown keys
+  (`onExcessProperty: "ignore"`), which is the tolerant parsing that
+  `register` needs (next point).
 - The backend registers through `defineCommand`: `register(listEnvironments,
   handler)` parses args with the schema (tolerant: unknown fields stripped,
   not rejected, unless critical), and in development and tests validates the
@@ -1005,7 +1008,8 @@ Exit: bug fixed with a test; measurements recorded.
 Runs in parallel with Phase 2.
 
 1. `packages/protocol/src/contract/`: `defineDomain`, `defineCommand`,
-   `defineEvent`, envelope and typed errors. Schema library per §13.8.
+   `defineEvent`, envelope and typed errors. Schemas use Effect Schema
+   (§13.8).
 2. Backend: `register(def, handler)` overload in `createCommandRegistry`;
    envelope parsing in `gateway-handlers.ts`; `domains` in the hello
    (`gateway-auth.ts:595-611` emits it, `backend-profile.ts` parses it, ignored
@@ -1138,6 +1142,12 @@ accounts, Docker → coordinator/controller, agent servers/tooling, admin last
 
 About 630 client-facing commands need schemas (design, web annotations,
 transcript artifacts, graphs and the 121 public actions already have some).
+The existing Zod schemas (design and web-annotation command guards, and the
+backend's MCP tool schemas in about 30 files) are converted to Effect Schema
+with their domain, or bridged where conversion is not worth it: both
+libraries implement Standard Schema (`Schema.toStandardSchemaV1`), so a
+`defineCommand` adapter could accept a Zod schema meanwhile. Zod stays a
+backend-only dependency until the last of them is converted.
 Fold each domain's existing capability command into its domain version. When
 every grant-reachable command has `access`, switch grants to the derived
 allow-list (fail closed) and delete the deny-lists.
@@ -1239,14 +1249,76 @@ Then delete the `persist:orkestrator-realm-*` partitions after one release.
 
 ### 13.8 Schema library
 
-- **A. Zod 4 in `packages/protocol` (recommended).** Pros: already a backend
-  dependency and used in two command families; static types; JSON Schema
-  export for manifests. Cons: adds to the browser bundle (`zod/mini` can limit
-  it); must be measured.
-- **B. Hand-written validators** like `public-api-inputs*.ts` (~3,000 lines).
-  Pros: no dependency. Cons: no schema export; manifests must be hand-kept.
-- **C. JSON Schema / TypeBox.** Pros: schema-first. Cons: new dependency; less
-  ergonomic types.
+Measured on 2026-11-07 by plan item
+[1001](../../plans/unified/1001-schema-library-spike.md). Each variant defined
+20 representative schemas (args and result of 10 commands) in
+`packages/protocol` and was imported by a production `vite build` of
+`apps/web`. Sizes are the added bytes in the entry chunk, which matched the
+total-JS delta to within about 100 bytes. Compression used the settings of
+`apps/web/scripts/precompress.ts` (gzip 9, brotli 11). The baseline entry chunk
+is 6.5 KB gzip, the lazily loaded `renderer-entry` chunk is about 457 KB gzip,
+and total JS is about 5.97 MB gzip.
+
+| Variant | + raw | + gzip | + brotli |
+|---|---:|---:|---:|
+| A. Effect Schema | 80,305 | 26,027 | 23,377 |
+| B. Zod 4 classic | 88,354 | 25,006 | 21,858 |
+| C. `zod/mini` | 25,185 | 7,783 | 7,000 |
+| D. Hand-written guards | 5,318 | 1,708 | 1,549 |
+| Effect runtime only (`Effect`, `Scope`, `Exit`, `Context`, `Layer`) | 33,018 | 11,509 | 10,434 |
+| A + Effect runtime | 87,229 | 28,466 | 25,560 |
+
+No budget had been set. The threshold used was at most 50 KB gzip added to
+startup JS for the schema library and the runtime together: about 10% of the
+`renderer-entry` chunk, under 1% of total JS, and a one-time cached cost.
+Parse time on iPad Safari was not measured, because no iPad was reachable
+(§15).
+
+- **A. Effect Schema (`effect/Schema`, `effect` 4.1.2) in `packages/protocol`.**
+  Pros: one library for the schemas and for the Effect runtime that later
+  items use in the renderer; the two share about 9 KB gzip of core, so both
+  together cost +28.5 KB gzip. Static `Type` and `Encoded` types. A
+  deterministic draft 2020-12 export (`Schema.toJsonSchemaDocument`) for the
+  manifest digests, pinned by `packages/protocol/src/effect-json-schema.test.ts`.
+  `Arbitrary.schema` generates the argument fixtures the contract CI job in
+  §11.3 needs, without another dependency. Decoding drops unknown keys by
+  default, which is the tolerant reading §11.2 wants, and
+  `onExcessProperty: "error"` gives strict mode. Standard Schema adapters
+  (`Schema.toStandardSchemaV1`, `Schema.toStandardJSONSchemaV1`). Cons: the
+  largest of the four for schemas alone (+26.0 KB gzip, about 1 KB more than
+  Zod). Version 4 is recent and differs from v3, which most examples still
+  show. The backend carries both Effect and Zod until Phase 7 converts or
+  bridges the existing Zod code. Export rules contract schemas must follow:
+  `Schema.Finite` rather than `Schema.Number` for wire numbers, because
+  `Number` exports non-finite string encodings; `Schema.optionalKey` rather
+  than `Schema.optional`, because `optional` exports `anyOf [T, null]`; a
+  `u` flag on any `isPattern` RegExp, because a pattern without it is not
+  exported; and one shared constant per schema with an `identifier`.
+  Digests must be taken over a canonical form, with keys and `required`
+  sorted, because the output follows declaration order.
+- **B. Zod 4 classic.** Pros: already a backend dependency (4.6.7) and used by
+  the design and web-annotation command guards and about 30 MCP tool schema
+  files; static types; `z.toJSONSchema`. Cons: +25.0 KB gzip with no runtime
+  to share it with; method chaining defeats tree-shaking.
+- **C. `zod/mini`.** Pros: +7.8 KB gzip, the smallest option that keeps a JSON
+  Schema export (`z.toJSONSchema` works on mini schemas). Cons: a functional
+  API that is less ergonomic (`z.optional(…)`, `.check(z.maxLength(…))`); no
+  runtime; the existing backend code uses classic Zod.
+- **D. Hand-written guards** like `public-api-inputs*.ts` and
+  `commands-validation.ts` (~3,000 lines). Pros: +1.7 KB gzip; no dependency.
+  Cons: no schema export, so manifests need hand-kept schema digests (1006);
+  types and guards are written twice; about 630 commands to cover.
+
+JSON Schema or TypeBox was also listed earlier. It was dropped without being
+measured: it is a new dependency with less ergonomic types, and A to C already
+export JSON Schema.
+
+Decision: **A, Effect Schema.** This is the user's choice, approved by the user
+on 2026-11-07, in one combined PR. It replaces the earlier recommendation of
+Zod 4. The measured cost (+28.5 KB gzip with the runtime) is within the 50 KB
+threshold, and one library serves both the contracts and the renderer's Effect
+runtime. D remains the fallback if the bundle cost later proves unacceptable;
+taking it changes this decision and needs the user's approval.
 
 ### 13.9 Domain granularity
 
@@ -1296,7 +1368,8 @@ depends on it.
 - That a notification click from a hidden realm fails to bring it forward
   (inferred from `question-desktop-notification.ts:58-69`).
 - Grant command scope between two real backends (todo 5740, task 1).
-- Bundle size impact of Zod in the renderer.
+- Parse time of the Effect Schema and runtime code on iPad Safari. The bundle
+  size was measured (§13.8); the parse time needs an iPad.
 - All effort sizes in §12 are estimates, not measurements.
 
 ---

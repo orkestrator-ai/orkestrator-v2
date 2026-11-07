@@ -46,6 +46,9 @@ import { systemClient } from "./domains/system/client.js";
 import { ticketSyncClient } from "./domains/ticket-sync/client.js";
 import { transcriptsClient } from "./domains/transcripts/client.js";
 import { webAnnotationsClient } from "./domains/web-annotations/client.js";
+import { kanbanClient } from "./domains/kanban/client.js";
+import { accountsClient } from "./domains/accounts/client.js";
+import { mcpClient } from "./domains/mcp/client.js";
 
 /**
  * Every domain client definition. The pilot domains (plan item 1010) were the
@@ -74,6 +77,9 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   ticketSyncClient,
   transcriptsClient,
   webAnnotationsClient,
+  kanbanClient,
+  accountsClient,
+  mcpClient,
 ] as readonly DomainClientDef[]);
 
 /** The committed list, relative to the repository root. */

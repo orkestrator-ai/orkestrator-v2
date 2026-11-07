@@ -25,6 +25,9 @@ import webAnnotations from "./web-annotations.ts";
 import system from "./system.ts";
 import config from "./config.ts";
 import projects from "./projects.ts";
+import kanban from "./kanban.ts";
+import accounts from "./accounts.ts";
+import mcp from "./mcp.ts";
 
 export const SCENARIOS: readonly ScenarioModule[] = [
   nodeMail,
@@ -49,4 +52,7 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   pullRequests,
   projects,
   config,
+  kanban,
+  accounts,
+  mcp,
 ];

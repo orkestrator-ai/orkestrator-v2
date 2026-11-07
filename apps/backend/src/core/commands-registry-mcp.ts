@@ -17,6 +17,22 @@ import {
   type McpManagementRolloutSettings,
 } from "@orkestrator/protocol/mcp-management";
 
+import {
+  applyMcpConfigurationCommand,
+  cancelMcpApplyCommand,
+  getMcpDefinitionCommand,
+  getMcpManagementRolloutCommand,
+  getMcpManagementSnapshotCommand,
+  getMcpOperationCommand,
+  listMcpManagementTargetsCommand,
+  mutateMcpDefinitionCommand,
+  previewMcpEnvironmentDefaultsCommand,
+  refreshMcpEnvironmentDefaultsCommand,
+  resolveMcpEnvironmentOverlayCommand,
+  setMcpManagementRolloutCommand,
+  validateMcpMutationCommand,
+} from "@orkestrator/protocol/contract/domains/mcp";
+
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { wrapRegistrar } from "./commands-registry-contracts.js";
@@ -581,40 +597,45 @@ export function mcpCorrelatedRegistrar(register: CommandRegistrar): CommandRegis
 /**
  * MCP configuration management. Administrative UI commands only: they are not
  * exposed as Control MCP tools, and none of them accepts a filesystem path.
+ * Each is registered with its `mcp` definition (plan item 7008); every
+ * argument is `optionalKey(Unknown)`, so the service still checks each one and
+ * answers its own structured error under the correlation id.
  */
 export function registerMcpManagementCommands(register: CommandRegistrar): void {
   const correlated = mcpCorrelatedRegistrar(register);
-  const route = (
-    name: string,
-    run: (args: Record<string, unknown>, context: CommandContext) => Promise<unknown>,
-  ) => correlated(name, run);
-  route("list_mcp_management_targets", (args, context) => mcpManagement(context).listTargets(args));
-  route("get_mcp_management_snapshot", (args, context) => mcpManagement(context).snapshot(args));
-  route("get_mcp_definition", (args, context) => mcpManagement(context).getDefinition(args));
-  route("validate_mcp_mutation", (args, context) => mcpManagement(context).validate(args));
-  route("mutate_mcp_definition", (args, context) => mcpManagement(context).mutate(args));
-  route("apply_mcp_configuration", (args, context) => mcpManagement(context).apply(args));
-  route("get_mcp_operation", (args, context) => mcpManagement(context).getOperation(args));
-  route("cancel_mcp_apply", (args, context) => mcpManagement(context).cancelApply(args));
+  correlated(listMcpManagementTargetsCommand, (args, context) =>
+    mcpManagement(context).listTargets(args),
+  );
+  correlated(getMcpManagementSnapshotCommand, (args, context) =>
+    mcpManagement(context).snapshot(args),
+  );
+  correlated(getMcpDefinitionCommand, (args, context) =>
+    mcpManagement(context).getDefinition(args),
+  );
+  correlated(validateMcpMutationCommand, (args, context) => mcpManagement(context).validate(args));
+  correlated(mutateMcpDefinitionCommand, (args, context) => mcpManagement(context).mutate(args));
+  correlated(applyMcpConfigurationCommand, (args, context) => mcpManagement(context).apply(args));
+  correlated(getMcpOperationCommand, (args, context) => mcpManagement(context).getOperation(args));
+  correlated(cancelMcpApplyCommand, (args, context) => mcpManagement(context).cancelApply(args));
   // Environment overlays: a container's own MCP changes and its inherited defaults.
-  route("resolve_mcp_environment_overlay", (args, context) =>
+  correlated(resolveMcpEnvironmentOverlayCommand, (args, context) =>
     mcpManagement(context).resolveOverlay(args),
   );
-  route("preview_mcp_environment_defaults", (args, context) =>
+  correlated(previewMcpEnvironmentDefaultsCommand, (args, context) =>
     mcpManagement(context).previewDefaultsRefresh(args),
   );
-  route("refresh_mcp_environment_defaults", (args, context) =>
+  correlated(refreshMcpEnvironmentDefaultsCommand, (args, context) =>
     mcpManagement(context).refreshDefaults(args),
   );
 
   // Backend-owned rollout gate / kill switch (`global.mcpManagement`). An
   // operator surface, not a user preference; see McpManagementRolloutSettings.
-  route("get_mcp_management_rollout", async (_args, context) =>
+  correlated(getMcpManagementRolloutCommand, async (_args, context) =>
     normalizeMcpManagementRolloutSettings(
       (await context.storage.loadConfig()).global.mcpManagement,
     ),
   );
-  route("set_mcp_management_rollout", async (args, context) => {
+  correlated(setMcpManagementRolloutCommand, async (args, context) => {
     if (args.enabled !== undefined && typeof args.enabled !== "boolean")
       throw mcpFailure("invalid-request", { message: "enabled must be a boolean." });
     const writeProviders = parseProviders(args.writeProviders, "writeProviders");

@@ -12,11 +12,13 @@ import type {
   McpValidationResult,
 } from "@orkestrator/protocol/mcp-management";
 
+import { mcpOn } from "@/lib/node-scope/domains/mcp";
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 // `machine` names the node whose MCP configuration is read or written,
-// through the command node; omitted, this view's own backend.
+// through the command node; omitted, this view's own backend. Every call goes
+// through the `mcp` domain client (plan item 7008, `lib/node-scope/domains/mcp.ts`).
 
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
@@ -24,18 +26,14 @@ import { commandBackendClient, machineInvoker, type BackendClient } from "./clie
  * over the window's command scope.
  */
 export function createMcpManagementApi(client: BackendClient) {
-  const machineInvoke = machineInvoker(client);
+  const mcp = mcpOn(client);
 
   /** Backend and environment targets for MCP server management. */
   function listMcpManagementTargets(
     environmentId?: string,
     machine?: AccountMachine,
   ): Promise<McpTargetList> {
-    return machineInvoke(
-      machine,
-      "list_mcp_management_targets",
-      environmentId ? { environmentId } : {},
-    );
+    return mcp(machine).list_mcp_management_targets(environmentId ? { environmentId } : {});
   }
 
   /** Passive catalog: reads files, never starts a server or touches a session. */
@@ -43,7 +41,7 @@ export function createMcpManagementApi(client: BackendClient) {
     targetId: string,
     machine?: AccountMachine,
   ): Promise<McpManagementSnapshot> {
-    return machineInvoke(machine, "get_mcp_management_snapshot", { targetId });
+    return mcp(machine).get_mcp_management_snapshot({ targetId });
   }
 
   /** Editable, redacted view of one saved definition. */
@@ -52,7 +50,7 @@ export function createMcpManagementApi(client: BackendClient) {
     entryId: string,
     machine?: AccountMachine,
   ): Promise<McpEditableDefinition> {
-    return machineInvoke(machine, "get_mcp_definition", { targetId, entryId });
+    return mcp(machine).get_mcp_definition({ targetId, entryId });
   }
 
   /** Field errors and an impact preview; writes nothing. */
@@ -60,7 +58,7 @@ export function createMcpManagementApi(client: BackendClient) {
     mutation: McpMutation,
     machine?: AccountMachine,
   ): Promise<McpValidationResult> {
-    return machineInvoke(machine, "validate_mcp_mutation", { mutation });
+    return mcp(machine).validate_mcp_mutation({ mutation });
   }
 
   /** Conflict-checked save; `save-and-apply` also schedules runtime application. */
@@ -68,7 +66,7 @@ export function createMcpManagementApi(client: BackendClient) {
     mutation: McpMutation,
     machine?: AccountMachine,
   ): Promise<McpMutationResult> {
-    return machineInvoke(machine, "mutate_mcp_definition", { mutation });
+    return mcp(machine).mutate_mcp_definition({ mutation });
   }
 
   /** Retry runtime application of an already saved change. Never re-saves. */
@@ -76,14 +74,14 @@ export function createMcpManagementApi(client: BackendClient) {
     operationId: string,
     machine?: AccountMachine,
   ): Promise<McpOperationSnapshot> {
-    return machineInvoke(machine, "apply_mcp_configuration", { operationId });
+    return mcp(machine).apply_mcp_configuration({ operationId });
   }
 
   function getMcpOperation(
     operationId: string,
     machine?: AccountMachine,
   ): Promise<McpOperationSnapshot> {
-    return machineInvoke(machine, "get_mcp_operation", { operationId });
+    return mcp(machine).get_mcp_operation({ operationId });
   }
 
   /** Cancel queued application; the saved configuration is kept. */
@@ -91,7 +89,7 @@ export function createMcpManagementApi(client: BackendClient) {
     operationId: string,
     machine?: AccountMachine,
   ): Promise<McpOperationSnapshot> {
-    return machineInvoke(machine, "cancel_mcp_apply", { operationId });
+    return mcp(machine).cancel_mcp_apply({ operationId });
   }
 
   /**
@@ -102,7 +100,7 @@ export function createMcpManagementApi(client: BackendClient) {
     resolution: McpOverlayResolution,
     machine?: AccountMachine,
   ): Promise<McpOverlayResolutionResult> {
-    return machineInvoke(machine, "resolve_mcp_environment_overlay", { resolution });
+    return mcp(machine).resolve_mcp_environment_overlay({ resolution });
   }
 
   /** What re-importing the backend user's servers into a container source would change. Names only. */
@@ -110,7 +108,7 @@ export function createMcpManagementApi(client: BackendClient) {
     request: Omit<McpDefaultsRefreshRequest, "previewToken">,
     machine?: AccountMachine,
   ): Promise<McpDefaultsRefreshPreview> {
-    return machineInvoke(machine, "preview_mcp_environment_defaults", { request });
+    return mcp(machine).preview_mcp_environment_defaults({ request });
   }
 
   /** Apply a previewed refresh; a stale `previewToken` fails with `revision-conflict`. */
@@ -120,7 +118,7 @@ export function createMcpManagementApi(client: BackendClient) {
   ): Promise<
     McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" | "not-needed" }
   > {
-    return machineInvoke(machine, "refresh_mcp_environment_defaults", { request });
+    return mcp(machine).refresh_mcp_environment_defaults({ request });
   }
 
   return {

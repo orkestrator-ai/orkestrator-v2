@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { TabInfo } from "@/types/paneLayout";
@@ -33,6 +33,7 @@ import {
 import { createSessionKey } from "@/lib/utils";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
+import { appCommandStore } from "@/test/app-command-store";
 
 /*
  * No provider has a renderer-side client: every control on a native tab goes
@@ -529,10 +530,10 @@ afterEach(() => {
 
 describe("AgentInfoButton popover lifecycle", () => {
   test("shows the tab messages action only while agent messaging is enabled", () => {
-    const original = structuredClone(useConfigStore.getState().config);
+    const original = structuredClone(appCommandStore(configStore).getState().config);
     const disabled = structuredClone(original);
     disabled.global.agentMessaging = { ...disabled.global.agentMessaging!, enabled: false };
-    useConfigStore.setState({ config: disabled });
+    appCommandStore(configStore).setState({ config: disabled });
     try {
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
@@ -540,10 +541,10 @@ describe("AgentInfoButton popover lifecycle", () => {
 
       const enabled = structuredClone(disabled);
       enabled.global.agentMessaging = { ...enabled.global.agentMessaging!, enabled: true };
-      act(() => useConfigStore.setState({ config: enabled }));
+      act(() => appCommandStore(configStore).setState({ config: enabled }));
       expect(screen.getByRole("button", { name: "Messages…" })).toBeTruthy();
     } finally {
-      act(() => useConfigStore.setState({ config: original }));
+      act(() => appCommandStore(configStore).setState({ config: original }));
     }
   });
 
@@ -4731,9 +4732,10 @@ describe("AgentInfoButton ACP agents", () => {
   // The config store is module-global. Restore the shipped default so a test
   // that enables Cursor and Grok cannot change what a later file expects the
   // transfer list to contain.
-  const enabledPlatformsBeforeSuite = useConfigStore.getState().config.global.enabledAgentPlatforms;
+  const enabledPlatformsBeforeSuite =
+    appCommandStore(configStore).getState().config.global.enabledAgentPlatforms;
   afterEach(() => {
-    useConfigStore.getState().updateGlobalConfig({
+    appCommandStore(configStore).getState().updateGlobalConfig({
       enabledAgentPlatforms: enabledPlatformsBeforeSuite,
     });
   });
@@ -5628,9 +5630,11 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("offers every enabled agent except the source as a transfer destination", () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+      });
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
@@ -5645,7 +5649,9 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("hides the transfer when no other agent is enabled", () => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["cursor"] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["cursor"] });
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
@@ -5657,9 +5663,11 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("transfers an ACP conversation through the backend", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
+      });
     const projection = acpProjection("cursor", { title: "Cursor investigated the flake" });
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
     const created: Array<Record<string, unknown>> = [];

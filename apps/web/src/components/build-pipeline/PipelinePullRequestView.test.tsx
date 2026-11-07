@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
@@ -13,19 +13,20 @@ import {
 } from "./PipelinePullRequestView";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 afterEach(() => {
   cleanup();
   useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
 });
 
 function renderShippedPullRequest() {
   const url = "https://github.com/acme/app/pull/1";
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: "pipeline-env", projectId: "project-1", prUrl: url } as Environment],
   });
   useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "pipeline-env" });

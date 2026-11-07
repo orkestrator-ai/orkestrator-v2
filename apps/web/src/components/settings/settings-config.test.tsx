@@ -1,10 +1,11 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as backend from "@/lib/backend";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { MachineConfigProvider, useSettingsConfig } from "./settings-config";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initial = useConfigStore.getState().config;
+const initial = appCommandStore(configStore).getState().config;
 function config(owner: string) {
   return {
     ...initial,
@@ -27,11 +28,11 @@ function Child() {
 afterEach(() => {
   cleanup();
   mock.restore();
-  useConfigStore.setState({ config: initial });
+  appCommandStore(configStore).setState({ config: initial });
 });
 
 test("implicit workspace config uses the window store without an independent read", () => {
-  useConfigStore.setState({ config: config("workspace") });
+  appCommandStore(configStore).setState({ config: config("workspace") });
   const read = spyOn(backend, "getConfig");
   render(
     <MachineConfigProvider machine={undefined}>
@@ -45,7 +46,7 @@ test("implicit workspace config uses the window store without an independent rea
 // The command node itself is this window's own machine.
 for (const machine of ["other"]) {
   test(`explicit ${machine ?? "command-node"} config stays isolated and refreshes effective workspace after save`, async () => {
-    useConfigStore.setState({ config: config("leaf") });
+    appCommandStore(configStore).setState({ config: config("leaf") });
     const read = spyOn(backend, "getConfig").mockImplementation(async (target) =>
       config(target === undefined ? "leaf-refreshed" : "selected"),
     );
@@ -56,12 +57,14 @@ for (const machine of ["other"]) {
     );
     await screen.findByText("selected");
     expect(read).toHaveBeenCalledWith(machine);
-    expect(useConfigStore.getState().config.version).toBe("leaf");
+    expect(appCommandStore(configStore).getState().config.version).toBe("leaf");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(useConfigStore.getState().config.version).toBe("leaf-refreshed"));
+    await waitFor(() =>
+      expect(appCommandStore(configStore).getState().config.version).toBe("leaf-refreshed"),
+    );
     expect(read).toHaveBeenLastCalledWith();
     expect(screen.getByRole("status").textContent).toBe("selected-saved");
-    expect(useConfigStore.getState().config.repositories).toEqual({
+    expect(appCommandStore(configStore).getState().config.repositories).toEqual({
       "leaf-refreshed": { defaultBranch: "main", prBaseBranch: "main" },
     });
   });
@@ -113,5 +116,5 @@ test("changing target cancels late reads and does not expose the previous config
   await screen.findByText("second");
   await act(async () => resolve(config("first")));
   expect(screen.getByRole("status").textContent).toBe("second");
-  expect(useConfigStore.getState().config).toBe(initial);
+  expect(appCommandStore(configStore).getState().config).toBe(initial);
 });

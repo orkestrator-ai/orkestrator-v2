@@ -1,7 +1,7 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, useFilesPanelStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
 import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
@@ -13,6 +13,7 @@ import {
   resetChangeProjectionStore,
 } from "@/components/files-panel/change-projection-test-fixture";
 import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const copyExternalFileMock = mock(
@@ -99,9 +100,9 @@ beforeEach(() => {
   ensureProjectHomeEnvironmentMock.mockClear();
   refreshChangesMock.mockClear();
   resetChangeProjectionStore();
-  useProjectStore.setState({ projects: [] });
+  appCommandStore(projectStore).setState({ projects: [] });
   useUIStore.setState({ selectedEnvironmentId: "environment-1", selectedProjectId: null });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "environment-1",
@@ -268,11 +269,11 @@ describe("useFilesPanel external file copies", () => {
 
 describe("useFilesPanel on the project root", () => {
   beforeEach(() => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", name: "Project", localPath: "/checkout" } as Project],
     });
     useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   test("reads the project's own checkout when no environment is selected", async () => {
@@ -306,15 +307,17 @@ describe("useFilesPanel on the project root", () => {
       expect.any(String),
     );
     // The home is now visible to the sidebar and the rest of the renderer.
-    expect(useEnvironmentStore.getState().environments.map((e) => e.id)).toEqual([
-      "project-home-1",
-    ]);
+    expect(
+      appCommandStore(environmentStore)
+        .getState()
+        .environments.map((e) => e.id),
+    ).toEqual(["project-home-1"]);
     expect(getLocalGitStatusSnapshotMock).toHaveBeenCalled();
     expect(mockToastSuccess).toHaveBeenCalledWith("File copied", { description: "notes.txt" });
   });
 
   test("an existing project home is reconciled before mutations", async () => {
-    useEnvironmentStore.setState({ environments: [projectHome] });
+    appCommandStore(environmentStore).setState({ environments: [projectHome] });
     const { result } = renderHook(() => useFilesPanel());
 
     await act(async () => {
@@ -333,7 +336,7 @@ describe("useFilesPanel on the project root", () => {
   test.each(["deletionError", "cleanupAfterMergeError"] as const)(
     "a failed %s home cannot admit project file actions",
     async (field) => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...projectHome,
@@ -380,7 +383,7 @@ describe("useFilesPanel on the project root", () => {
   });
 
   test("a project without a checkout has nothing to show", () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", name: "Project", localPath: null } as Project],
     });
     const { result } = renderHook(() => useFilesPanel());
@@ -873,9 +876,11 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 });
 
 test("the board follows a changed checkout and stops reading or mutating when it is cleared", async () => {
-  useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project-1", localPath: "/checkout" } as Project],
+  });
   useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
-  useEnvironmentStore.setState({ environments: [projectHome] });
+  appCommandStore(environmentStore).setState({ environments: [projectHome] });
   setFilesPanelTestState({ isOpen: true });
   const { result } = renderHook(() => useFilesPanel());
   await act(async () => {
@@ -886,7 +891,7 @@ test("the board follows a changed checkout and stops reading or mutating when it
     worktreePath: "/checkout-B",
   }));
   await act(async () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", localPath: "/checkout-B" } as Project],
     });
   });
@@ -895,11 +900,15 @@ test("the board follows a changed checkout and stops reading or mutating when it
     await result.current.copyExternalFiles([droppedFile("B.txt", [1])], ".");
   });
   expect(ensureProjectHomeEnvironmentMock).toHaveBeenCalledWith("project-1");
-  expect(useEnvironmentStore.getState().environments[0]?.worktreePath).toBe("/checkout-B");
+  expect(appCommandStore(environmentStore).getState().environments[0]?.worktreePath).toBe(
+    "/checkout-B",
+  );
   expect(getLocalFileTreeSnapshotMock.mock.calls.at(-1)?.[0]).toBe("/checkout-B");
   const staleAction = result.current.copyExternalFiles;
   await act(async () => {
-    useProjectStore.setState({ projects: [{ id: "project-1", localPath: null } as Project] });
+    appCommandStore(projectStore).setState({
+      projects: [{ id: "project-1", localPath: null } as Project],
+    });
   });
   expect(result.current.isAvailable).toBe(false);
   expect(result.current.worktreePath).toBeNull();

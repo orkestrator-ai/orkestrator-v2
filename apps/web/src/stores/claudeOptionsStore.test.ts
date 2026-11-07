@@ -4,11 +4,8 @@ import type { StoreApi } from "zustand/vanilla";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
-import {
-  claudeOptionsStore,
-  useClaudeOptionsStore,
-  type ClaudeOptionsState,
-} from "./claudeOptionsStore";
+import { type ClaudeOptionsState, claudeOptionsStore } from "./claudeOptionsStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const NODE_A = "bk_claude-options-a" as BackendId;
 const NODE_B = "bk_claude-options-b" as BackendId;
@@ -113,7 +110,7 @@ describe("claudeOptionsStore", () => {
 
   test("the deprecated statics reach the app's command scope", () => {
     resetWindowScopeForTests(new FakeNodeClient({ nodeId: NODE_A }));
-    useClaudeOptionsStore.getState().setOptions("env-1", {
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-1", {
       launchAgent: false,
       agentType: "codex",
       initialPrompt: "",

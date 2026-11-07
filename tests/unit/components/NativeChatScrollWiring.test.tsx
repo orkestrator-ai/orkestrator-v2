@@ -3,10 +3,11 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import * as realHooks from "@/hooks";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
@@ -135,7 +136,7 @@ describe("native chat scroll wiring", () => {
     scrollToBottomMock.mockClear();
     isAtBottom = true;
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [],
       isLoading: false,
       error: null,

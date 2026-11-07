@@ -2,13 +2,14 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import * as backend from "@/lib/backend";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { AccountMachineProvider } from "./account-machine";
 import { MachineConfigProvider } from "./settings-config";
 import { GlobalSettings } from "./GlobalSettings";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initial = useConfigStore.getState().config;
+const initial = appCommandStore(configStore).getState().config;
 let selected = structuredClone(initial);
 beforeEach(() => {
   selected = structuredClone(initial);
@@ -23,7 +24,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mock.restore();
-  useConfigStore.setState({ config: initial });
+  appCommandStore(configStore).setState({ config: initial });
 });
 function mount(section: GlobalSettingsSection, machine: string | null = "other") {
   return render(
@@ -182,7 +183,7 @@ for (const machine of ["leaf", "other", null]) {
 
 for (const inherited of [false, true]) {
   test(`a direct leaf window adopts inherited Auto-steer ${inherited} after one masked save`, async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: { ...initial, global: { ...initial.global, autoSteer: inherited } },
     });
     const save = spyOn(backend, "patchGlobalConfig").mockResolvedValue({
@@ -207,7 +208,7 @@ for (const inherited of [false, true]) {
 }
 
 test("an Auto-steer edit made during a save survives the earlier response", async () => {
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config: { ...initial, global: { ...initial.global, autoSteer: false } },
   });
   let finishSave!: (config: typeof initial) => void;

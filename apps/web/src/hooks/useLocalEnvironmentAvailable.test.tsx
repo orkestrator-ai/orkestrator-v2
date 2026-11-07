@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { useLocalEnvironmentAvailable } from "./useLocalEnvironmentAvailable";
 import type { Project } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {
@@ -25,18 +26,18 @@ const readAvailable = () => screen.getByTestId("available").textContent;
 
 describe("useLocalEnvironmentAvailable", () => {
   beforeEach(() => {
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
   });
   afterEach(cleanup);
 
   test("reports availability from the project's local checkout", () => {
-    useProjectStore.setState({ projects: [makeProject()] });
+    appCommandStore(projectStore).setState({ projects: [makeProject()] });
     render(<Probe projectId="project-1" />);
     expect(readAvailable()).toBe("true");
   });
 
   test("reports unavailable for a known project with no checkout", () => {
-    useProjectStore.setState({ projects: [makeProject({ localPath: null })] });
+    appCommandStore(projectStore).setState({ projects: [makeProject({ localPath: null })] });
     render(<Probe projectId="project-1" />);
     expect(readAvailable()).toBe("false");
   });
@@ -50,7 +51,7 @@ describe("useLocalEnvironmentAvailable", () => {
     expect(readAvailable()).toBe("true");
 
     act(() => {
-      useProjectStore.setState({ projects: [makeProject({ localPath: null })] });
+      appCommandStore(projectStore).setState({ projects: [makeProject({ localPath: null })] });
     });
     expect(readAvailable()).toBe("false");
   });

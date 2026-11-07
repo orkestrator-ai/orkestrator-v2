@@ -14,9 +14,9 @@ import {
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import {
   selectCoordinatorPaneLayout,
@@ -38,7 +38,7 @@ import { createSessionKey } from "@/lib/utils";
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
-const initialConfig = useConfigStore.getState().config;
+const initialConfig = appCommandStore(configStore).getState().config;
 let useRealAgentTab = false;
 
 const gitStatus: ProjectGitStatus = {
@@ -242,12 +242,13 @@ mock.module("@/components/native-agent", () => ({
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("CoordinatorPanel tab strip", () => {
   beforeEach(() => {
     useRealAgentTab = false;
     resetNativeAgentSyncCapabilityForTests();
-    useConfigStore.setState({ config: initialConfig });
+    appCommandStore(configStore).setState({ config: initialConfig });
     useNativeComposeStore.getState().clearDraft(sessionKey);
     useNativeAgentProjectionStore.getState().reset();
     useCoordinatorPaneLayoutStore.getState().reset();
@@ -270,7 +271,7 @@ describe("CoordinatorPanel tab strip", () => {
     ensuredSnapshot = baseSnapshot;
     ensuredGit = gitStatus;
     agentProjection = projection();
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",

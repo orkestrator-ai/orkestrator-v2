@@ -6,7 +6,8 @@ import * as realEnvironmentItem from "@/components/environments/EnvironmentItem"
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../mocks/sonner";
 import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
-import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { configStore } from "../../../apps/web/src/stores/configStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realSortableSnapshot = { ...realSortable };
 const realEnvironmentItemSnapshot = { ...realEnvironmentItem };
@@ -307,9 +308,9 @@ describe("sortable sidebar items", () => {
   });
 
   test("SortableProjectGroup aggregates unseen and failed agent mail", () => {
-    const config = structuredClone(useConfigStore.getInitialState().config);
+    const config = structuredClone(appCommandStore(configStore).getInitialState().config);
     config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     useAgentMailStore.setState({
       summary: new Map([
         [

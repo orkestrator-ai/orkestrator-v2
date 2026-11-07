@@ -26,7 +26,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import type { AgentAccountLoginProgress } from "@orkestrator/protocol/agent-accounts";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -38,6 +38,7 @@ import {
 } from "@/lib/agent-handoff";
 import { FakeClock } from "@/lib/testing/read-coordinator";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -340,7 +341,7 @@ beforeEach(() => {
   resumeSessionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   stopNativeAgentBackgroundTaskMock.mockClear();
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",

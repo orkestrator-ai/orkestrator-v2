@@ -12,9 +12,9 @@ import {
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
@@ -53,6 +53,7 @@ import {
   promptQueueKey,
   resetPromptQueueRevisions,
 } from "@/lib/prompt-queue-persistence";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 
@@ -628,7 +629,7 @@ function seedPane(
 }
 
 function seedEnvironment(overrides: Partial<Environment> = {}) {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -854,7 +855,7 @@ describe("ClaudeTmuxChatTab", () => {
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
     useAgentModelCatalogStore.setState({ claudeModels: [], claudeModelCatalogs: new Map() });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -867,7 +868,7 @@ describe("ClaudeTmuxChatTab", () => {
     }));
     clearPersistedVirtuosoState("claude-tmux-tab-1");
     clearPersistedVirtuosoState("claude-tmux-env:env-1:tab:tab-1");
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [],
       isLoading: false,
       error: null,
@@ -1519,7 +1520,7 @@ Running 1 Explore agent...
       resumed: false,
       busy: false,
     }));
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -1857,7 +1858,7 @@ Running 1 Explore agent...
         fast_mode: true,
       };
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2986,7 +2987,7 @@ Running 1 Explore agent...
 
   test("passes a pre-launch fast-mode selection to the new tmux session", async () => {
     seedPane();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3037,7 +3038,7 @@ Running 1 Explore agent...
   test("locks competing tmux controls while a fast-mode switch is pending", async () => {
     const pendingSwitch = deferred<void>();
     switchFastModeMock.mockImplementationOnce(async () => await pendingSwitch.promise);
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,

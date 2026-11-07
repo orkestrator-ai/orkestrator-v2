@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment } from "@/types";
 import { useEnvironmentIdNameSignal } from "./useEnvironmentNameSignal";
+import { appCommandStore } from "@/test/app-command-store";
 
 const environment: Environment = {
   id: "env",
@@ -26,12 +27,15 @@ const environment: Environment = {
   agentActivityState: "waiting",
   agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
 };
-const initialEnvironment = useEnvironmentStore.getState();
+const initialEnvironment = appCommandStore(environmentStore).getState();
 const initialActivity = useAgentActivityStore.getState();
 const initialBuild = useBuildPipelineStore.getState();
 const initialMonitor = usePrMonitorStore.getState();
 beforeEach(() => {
-  useEnvironmentStore.setState({ environments: [environment], deletingEnvironments: new Set() });
+  appCommandStore(environmentStore).setState({
+    environments: [environment],
+    deletingEnvironments: new Set(),
+  });
   useAgentActivityStore.setState({ containerStates: {}, containerStateUpdatedAt: {} });
   useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
   usePrMonitorStore.setState({
@@ -57,7 +61,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  useEnvironmentStore.setState(initialEnvironment, true);
+  appCommandStore(environmentStore).setState(initialEnvironment, true);
   useAgentActivityStore.setState(initialActivity, true);
   useBuildPipelineStore.setState(initialBuild, true);
   usePrMonitorStore.setState(initialMonitor, true);
@@ -80,7 +84,7 @@ test("Docker and stopped-container gates suppress waiting; local worktrees stay 
   });
   expect(result.current).toBe("merge-ready");
   act(() =>
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ ...environment, environmentType: "local", status: "stopped" }],
     }),
   );
@@ -89,7 +93,7 @@ test("Docker and stopped-container gates suppress waiting; local worktrees stay 
 });
 
 test("stopped containers suppress signals and live activity updates restore priority", () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       { ...environment, status: "stopped", hasMergeConflicts: true, prMergeability: "dirty" },
     ],
@@ -100,7 +104,7 @@ test("stopped containers suppress signals and live activity updates restore prio
   const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
   expect(result.current).toBeNull();
   act(() =>
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ ...environment, hasMergeConflicts: true, prMergeability: "dirty" }],
     }),
   );
@@ -117,7 +121,7 @@ test("stopped containers suppress signals and live activity updates restore prio
 for (const signal of ["waiting", "ready", "conflicts"] as const) {
   test(`deletion suppresses ${signal}, including persisted lifecycle state`, () => {
     if (signal !== "waiting")
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment,
@@ -139,10 +143,10 @@ for (const signal of ["waiting", "ready", "conflicts"] as const) {
           ? "merge-ready"
           : "merge-conflicts",
     );
-    act(() => useEnvironmentStore.getState().setDeleting("env", true));
+    act(() => appCommandStore(environmentStore).getState().setDeleting("env", true));
     expect(result.current).toBeNull();
     act(() =>
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         deletingEnvironments: new Set(),
         environments: [{ ...environment, lifecycleOperation: "deleting" }],
       }),

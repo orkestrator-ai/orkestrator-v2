@@ -5,13 +5,13 @@ import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { configStore } from "@/stores/configStore";
+import { projectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { mockToastError } from "../../mocks/sonner";
@@ -71,6 +71,7 @@ const {
   resolveEnvironmentCreateRequest,
 } = await import("@/components/environments/CreateEnvironmentFlowDialog");
 import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const baseOptions: ClaudeOptions = {
   environmentType: "containerized",
@@ -137,16 +138,16 @@ describe("CreateEnvironmentFlowDialog", () => {
       source: "host-cli",
       available: true,
     });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
     useAgentModelCatalogStore.setState({ claudeModels: [] });
     useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
-    useEnvironmentStore.setState({ environments: [] });
-    useConfigStore.setState({
-      config: structuredClone(useConfigStore.getInitialState().config),
+    appCommandStore(environmentStore).setState({ environments: [] });
+    appCommandStore(configStore).setState({
+      config: structuredClone(appCommandStore(configStore).getInitialState().config),
       isLoading: false,
       error: null,
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -166,7 +167,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("does not submit a forced local fallback for a remote-only project", async () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -619,7 +620,9 @@ describe("CreateEnvironmentFlowDialog", () => {
       });
     });
     await waitFor(() =>
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toMatchObject({
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toMatchObject({
         id: "env-feature",
         projectId: "project-1",
       }),
@@ -656,15 +659,21 @@ describe("CreateEnvironmentFlowDialog", () => {
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeUndefined();
 
       act(() => {
-        useEnvironmentStore.getState().addEnvironment({
-          id: "env-feature",
-          projectId: "project-1",
-        } as Environment);
+        appCommandStore(environmentStore)
+          .getState()
+          .addEnvironment({
+            id: "env-feature",
+            projectId: "project-1",
+          } as Environment);
       });
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeTruthy();
     } finally {
       logs.restore();
     }
@@ -705,15 +714,21 @@ describe("CreateEnvironmentFlowDialog", () => {
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeUndefined();
 
       act(() => {
-        useEnvironmentStore.getState().addEnvironment({
-          id: "env-feature",
-          projectId: "project-1",
-        } as Environment);
+        appCommandStore(environmentStore)
+          .getState()
+          .addEnvironment({
+            id: "env-feature",
+            projectId: "project-1",
+          } as Environment);
       });
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toMatchObject({
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toMatchObject({
         projectId: "project-1",
       });
     } finally {
@@ -753,15 +768,21 @@ describe("CreateEnvironmentFlowDialog", () => {
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeUndefined();
 
       act(() => {
-        useEnvironmentStore.getState().addEnvironment({
-          id: "env-feature",
-          projectId: "project-1",
-        } as Environment);
+        appCommandStore(environmentStore)
+          .getState()
+          .addEnvironment({
+            id: "env-feature",
+            projectId: "project-1",
+          } as Environment);
       });
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeTruthy();
     } finally {
       logs.restore();
     }
@@ -807,7 +828,9 @@ describe("CreateEnvironmentFlowDialog", () => {
       selectedEnvironmentId: "env-eventual",
     });
     await waitFor(() =>
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-eventual")).toMatchObject({
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-eventual"),
+      ).toMatchObject({
         id: "env-eventual",
         projectId: "project-1",
       }),
@@ -921,12 +944,12 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("arms the creating Electron window for the post-setup agent handoff", async () => {
-    const config = structuredClone(useConfigStore.getState().config);
+    const config = structuredClone(appCommandStore(configStore).getState().config);
     config.global.agentSettings = {
       ...config.global.agentSettings,
       defaultAgent: "codex",
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
     Object.defineProperty(window, "orkestrator", {
@@ -944,7 +967,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("does not arm the native-tab handoff for a terminal agent launch", async () => {
-    const config = structuredClone(useConfigStore.getState().config);
+    const config = structuredClone(appCommandStore(configStore).getState().config);
     config.global.agentSettings = {
       ...config.global.agentSettings,
       defaultAgent: "claude",
@@ -956,7 +979,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
     Object.defineProperty(window, "orkestrator", {
@@ -1140,7 +1163,9 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[2]).toBe(true);
     expect(call[3]).toBe("gpt-5.4-mini");
     expect(call[4]).toBe("high");
-    expect(useClaudeOptionsStore.getState().getOptions("env-selected-options")).toEqual(
+    expect(
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-selected-options"),
+    ).toEqual(
       expect.objectContaining({
         agentType: "codex",
         model: "gpt-5.4-mini",
@@ -1151,7 +1176,8 @@ describe("CreateEnvironmentFlowDialog", () => {
     // tab and nothing else. Creating must not write repository-scoped state
     // that would then outrank the configured default for the next create.
     expect(
-      useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
+      appCommandStore(configStore).getState().config.repositories["project-1"]
+        ?.lastEnvironmentAgentSelection,
     ).toBeUndefined();
   });
 
@@ -1179,7 +1205,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog") === null).toBe(true);
     act(() => {
-      const config = structuredClone(useConfigStore.getState().config);
+      const config = structuredClone(appCommandStore(configStore).getState().config);
       config.global.enabledAgentPlatforms = ["claude", "codex", "pi"];
       config.global.agentSettings = {
         ...config.global.agentSettings,
@@ -1196,7 +1222,7 @@ describe("CreateEnvironmentFlowDialog", () => {
           mode: "native",
         },
       };
-      useConfigStore.getState().setConfig(config);
+      appCommandStore(configStore).getState().setConfig(config);
     });
     fireEvent.click(screen.getByRole("button", { name: "Reopen creator" }));
     const picker = await screen.findByRole("combobox", { name: "Agent, model and reasoning" });
@@ -1252,7 +1278,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   // catalogues load asynchronously.
   test("applies a configured default once a late catalog makes it resolvable", async () => {
     act(() => {
-      const config = structuredClone(useConfigStore.getState().config);
+      const config = structuredClone(appCommandStore(configStore).getState().config);
       config.repositories["project-1"] = {
         defaultBranch: "main",
         prBaseBranch: "main",
@@ -1268,7 +1294,7 @@ describe("CreateEnvironmentFlowDialog", () => {
           newProject: { platform: "claude", model: "late-claude" },
         },
       };
-      useConfigStore.getState().setConfig(config);
+      appCommandStore(configStore).getState().setConfig(config);
     });
 
     render(
@@ -1365,14 +1391,14 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
-    const stored = useClaudeOptionsStore.getState().getOptions("env-agent-off");
+    const stored = appCommandStore(claudeOptionsStore).getState().getOptions("env-agent-off");
     expect(stored?.launchAgent).toBe(false);
     expect(stored?.model).toBeUndefined();
     expect(stored?.reasoningEffort).toBeUndefined();
   });
 
   test("falls back to no project name when the id matches no known project", () => {
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
     const operations = {
       createEnvironment: mock(async () => ({ id: "unused" }) as Environment),
       updateEnvironment: () => {},
@@ -1393,7 +1419,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("uses the stored project name unless an explicit name is provided", () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",

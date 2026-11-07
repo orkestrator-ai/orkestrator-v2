@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, type Mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores";
+import { environmentStore, useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<(...args: unknown[]) => Promise<unknown>>;
 
@@ -38,14 +39,14 @@ function Harness() {
 
 beforeEach(() => {
   invokeMock.mockReset();
-  useEnvironmentStore.getState().setEnvironments([environment()]);
+  appCommandStore(environmentStore).getState().setEnvironments([environment()]);
 });
 
 afterEach(() => {
   cleanup();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
-  useEnvironmentStore.getState().setEnvironments([]);
+  appCommandStore(environmentStore).getState().setEnvironments([]);
 });
 
 test("turning auto-merge on persists it and mirrors the backend's answer", async () => {
@@ -66,7 +67,7 @@ test("turning auto-merge on persists it and mirrors the backend's answer", async
     environmentId: "env-1",
     enabled: true,
   });
-  expect(useEnvironmentStore.getState().environments[0]?.autoMerge).toBe(true);
+  expect(appCommandStore(environmentStore).getState().environments[0]?.autoMerge).toBe(true);
   expect(button.getAttribute("aria-pressed")).toBe("true");
 
   await act(async () => {
@@ -90,7 +91,7 @@ test("a failed save leaves the switch where it was", async () => {
     fireEvent.click(button);
   });
 
-  expect(useEnvironmentStore.getState().environments[0]?.autoMerge).toBeUndefined();
+  expect(appCommandStore(environmentStore).getState().environments[0]?.autoMerge).toBeUndefined();
   expect(button.getAttribute("aria-pressed")).toBe("false");
   expect(button.hasAttribute("disabled")).toBe(false);
 });

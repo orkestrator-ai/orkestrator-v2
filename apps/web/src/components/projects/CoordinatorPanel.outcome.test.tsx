@@ -19,9 +19,9 @@ import { dispatchResourceChange } from "@/lib/resource-sync";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
@@ -36,7 +36,7 @@ const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
-const initialConfig = useConfigStore.getState().config;
+const initialConfig = appCommandStore(configStore).getState().config;
 let useRealAgentTab = false;
 
 const gitStatus: ProjectGitStatus = {
@@ -253,6 +253,7 @@ import { COORDINATOR_COMMAND_HINT, COORDINATOR_STARTER_PROMPTS } from "./Coordin
 import { COORDINATOR_INTRO_LINES } from "./CoordinatorIntro";
 import { FIRST_MESSAGE_COMMAND_RULE } from "@/components/native-agent/AgentNativeTab.helpers";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { appCommandStore } from "@/test/app-command-store";
 
 async function openBadgeDetails(): Promise<Element> {
   return waitFor(() => {
@@ -356,7 +357,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     useAgentMailStore.setState(useAgentMailStore.getInitialState());
     useUIChromeStore.setState({ coordinatorIntroDismissed: false });
     resetNativeAgentSyncCapabilityForTests();
-    useConfigStore.setState({ config: initialConfig });
+    appCommandStore(configStore).setState({ config: initialConfig });
     useNativeComposeStore.getState().clearDraft(sessionKey);
     useNativeAgentProjectionStore.getState().reset();
     useCoordinatorPaneLayoutStore.getState().reset();
@@ -375,7 +376,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     ensuredSnapshot = baseSnapshot;
     ensuredGit = gitStatus;
     agentProjection = projection();
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -450,10 +451,12 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   test("the first-run card explains the coordinator until dismissed, and ? shows it again", async () => {
     useUIChromeStore.setState({ coordinatorIntroDismissed: false });
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
     const view = render(<CoordinatorPanel projectId="project-1" />);
 
@@ -494,10 +497,12 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("a first message starting with ! shows the rule under the composer, not only a toast", async () => {
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
     render(<CoordinatorPanel projectId="project-1" />);
     const input = await screen.findByRole("textbox", { name: "What would you like to get done?" });
@@ -530,10 +535,12 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("an empty conversation's starter prompt fills the real message box without sending", async () => {
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
     render(<CoordinatorPanel projectId="project-1" />);
 
@@ -992,7 +999,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       "$cause: loads the saved transcript after a reload, establishing nothing and sending nothing",
       async ({ enabled, reason, action }) => {
         useRealAgentTab = true;
-        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: [...enabled] });
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ enabledAgentPlatforms: [...enabled] });
         ensuredSnapshot = unavailableCodex("Why it is unavailable.");
         agentProjection = projection([
           { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
@@ -1015,7 +1024,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("turning the platform back on connects the same pane and sends", async () => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       ensuredSnapshot = unavailableCodex("This agent platform is turned off in settings.");
       agentProjection = projection([
         { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
@@ -1026,7 +1037,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       expect(ensureSession).not.toHaveBeenCalled();
 
       // What saving the setting does: the panel learns from the config change.
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       ensuredSnapshot = baseSnapshot;
       act(() => {
         dispatchResourceChange({ resource: "config", id: "app", revision: 2 });
@@ -1050,7 +1063,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("an assigned platform missing from an older snapshot holds sending too", async () => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       ensuredSnapshot = withWorkspace({}, { providerAvailability: {} });
       render(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(/Codex is unavailable for Coordinator/);
@@ -1062,7 +1077,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("mail on a platform-held pane waits for settings even with another platform available", async () => {
       ensuredSnapshot = unavailableCodex("Off.");
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       const environmentId = "coordinator:coordinator-1:conversation-1";
       const mailboxId = `${environmentId}\0coordinator-tab`;
       useAgentMailStore.setState({
@@ -1099,7 +1116,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       async (phase) => {
         useRealAgentTab = true;
         ensuredSnapshot = unavailableCodex("Off.");
-        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
         agentProjection = { ...projection(), turn: { phase } };
         const stop = spyOn(realBackend, "stopNativeAgentSession").mockImplementation(async <
           TMessage,
@@ -1120,7 +1139,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("an unavailable platform takes precedence over pause until settings allow it", async () => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       ensuredSnapshot = withWorkspace(
         { lifecycleState: "paused" },
         { providerAvailability: unavailableCodex("Off.").providerAvailability },
@@ -1131,7 +1152,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         "Codex is turned off. Turn it on to send.",
       );
       ensuredSnapshot = withWorkspace({ lifecycleState: "paused" });
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       act(() => dispatchResourceChange({ resource: "config", id: "app", revision: 2 }));
       await waitFor(() =>
         expect(placeholder(screen.getByRole("textbox"))).toBe(
@@ -1197,7 +1220,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("a platform held by the safety level links Coordinator settings", async () => {
       const { sections, off } = settingsRequests();
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       ensuredSnapshot = withWorkspace(
         {},
         {
@@ -1219,7 +1244,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("a platform turned off links Platforms", async () => {
       const { sections, off } = settingsRequests();
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       ensuredSnapshot = withWorkspace(
         {},
         {
@@ -1254,7 +1281,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     });
 
     test("no local checkout opens Repository settings", async () => {
-      useProjectStore.setState((state) => ({
+      appCommandStore(projectStore).setState((state) => ({
         projects: state.projects.map((project) => ({ ...project, localPath: null })),
       }));
       render(<CoordinatorPanel projectId="project-1" />);

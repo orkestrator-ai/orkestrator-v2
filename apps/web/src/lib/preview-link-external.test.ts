@@ -9,9 +9,10 @@ import {
   listenForTerminalBrowserTabRequests,
   type TerminalBrowserTabRequest,
 } from "@/lib/terminal-links";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -62,7 +63,7 @@ describe("openLinkExternally", () => {
       desktop: true,
       baseUrl: "https://workstation.tailnet.ts.net",
     };
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         { id: "env-local", environmentType: "local" },
         { id: "env-box", environmentType: "containerized" },
@@ -87,7 +88,7 @@ describe("openLinkExternally", () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
     usePreviewServiceStore.setState({ status: "idle", capabilities: null });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
     window.orkestrator = originalOrkestrator;
     window.orkestratorGateway = originalGateway;
   });

@@ -17,6 +17,7 @@ import {
   reorderFavoriteModels,
   useAgentModelFavorites,
 } from "./useAgentModelFavorites";
+import { appCommandStore } from "@/test/app-command-store";
 
 type FakeArgs = Readonly<Record<string, unknown>>;
 
@@ -59,7 +60,7 @@ function renderHook(): { current: HookValue } {
 }
 
 function globalConfig() {
-  return useConfigStore.getState().config.global;
+  return appCommandStore(configStore).getState().config.global;
 }
 
 describe("useAgentModelFavorites", () => {
@@ -69,11 +70,11 @@ describe("useAgentModelFavorites", () => {
     mockToastError.mockClear();
     invokeMock.mockImplementation((_command: string, args: { patch: object }) =>
       Promise.resolve({
-        ...useConfigStore.getState().config,
-        global: { ...useConfigStore.getState().config.global, ...args.patch },
+        ...appCommandStore(configStore).getState().config,
+        global: { ...appCommandStore(configStore).getState().config.global, ...args.patch },
       }),
     );
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -88,7 +89,7 @@ describe("useAgentModelFavorites", () => {
   afterEach(cleanup);
 
   test("exposes the persisted favorites and enabled platforms", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -105,7 +106,7 @@ describe("useAgentModelFavorites", () => {
   });
 
   test("falls back to the legacy platform set when none is configured", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -136,7 +137,7 @@ describe("useAgentModelFavorites", () => {
   });
 
   test("removes only the matching platform/model pair when toggled off", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -167,9 +168,9 @@ describe("useAgentModelFavorites", () => {
     // response is what the picker must end up showing.
     invokeMock.mockImplementation(() =>
       Promise.resolve({
-        ...useConfigStore.getState().config,
+        ...appCommandStore(configStore).getState().config,
         global: {
-          ...useConfigStore.getState().config.global,
+          ...appCommandStore(configStore).getState().config.global,
           favoriteModels: [{ platform: "claude", modelId: "claude-opus-normalized" }],
         },
       }),
@@ -186,7 +187,7 @@ describe("useAgentModelFavorites", () => {
   });
 
   test("rolls back to the previous list and reports a failed save", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -209,7 +210,7 @@ describe("useAgentModelFavorites", () => {
   });
 
   test("rolls back a failed removal too", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -239,7 +240,7 @@ describe("useAgentModelFavorites", () => {
     const claude = { platform: "claude" as const, modelId: "claude-opus" };
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
     const grok = { platform: "grok" as const, modelId: "grok-4" };
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -262,7 +263,7 @@ describe("useAgentModelFavorites", () => {
 
   test("does not persist when the favourite order is unchanged", async () => {
     const claude = { platform: "claude" as const, modelId: "claude-opus" };
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, favoriteModels: [claude] },
@@ -280,7 +281,7 @@ describe("useAgentModelFavorites", () => {
   test("rolls back a failed reorder", async () => {
     const claude = { platform: "claude" as const, modelId: "claude-opus" };
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, favoriteModels: [claude, codex] },
@@ -302,7 +303,7 @@ describe("useAgentModelFavorites", () => {
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
     const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
     const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, favoriteModels: [claude, codex] },
@@ -323,7 +324,7 @@ describe("useAgentModelFavorites", () => {
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
     firstWrite.resolve({
-      ...useConfigStore.getState().config,
+      ...appCommandStore(configStore).getState().config,
       global: { ...globalConfig(), favoriteModels: [codex, claude] },
     });
     await act(async () => {
@@ -336,7 +337,7 @@ describe("useAgentModelFavorites", () => {
     expect(globalConfig().favoriteModels).toEqual([claude, codex]);
 
     secondWrite.resolve({
-      ...useConfigStore.getState().config,
+      ...appCommandStore(configStore).getState().config,
       global: { ...globalConfig(), favoriteModels: [claude, codex] },
     });
     await act(async () => {
@@ -353,7 +354,7 @@ describe("useAgentModelFavorites", () => {
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
     const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
     const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, favoriteModels: [claude, codex] },
@@ -380,7 +381,7 @@ describe("useAgentModelFavorites", () => {
     expect(invokeMock).toHaveBeenCalledTimes(2);
 
     secondWrite.resolve({
-      ...useConfigStore.getState().config,
+      ...appCommandStore(configStore).getState().config,
       global: { ...globalConfig(), favoriteModels: [claude, codex] },
     });
     await act(async () => {
@@ -397,7 +398,7 @@ describe("useAgentModelFavorites", () => {
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
     const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
     const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, favoriteModels: [claude, codex] },
@@ -417,7 +418,7 @@ describe("useAgentModelFavorites", () => {
     });
 
     firstWrite.resolve({
-      ...useConfigStore.getState().config,
+      ...appCommandStore(configStore).getState().config,
       global: { ...globalConfig(), favoriteModels: [codex, claude] },
     });
     await act(async () => {
@@ -439,7 +440,7 @@ describe("useAgentModelFavorites", () => {
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
     const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
     const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, favoriteModels: [claude, codex] },
@@ -519,7 +520,7 @@ describe("useAgentModelFavorites under a leaf scope", () => {
   afterEach(cleanupNodeScopes);
 
   function nodeClient(nodeId: string, options: { patch: boolean }): FakeNodeClient {
-    let stored = structuredClone(useConfigStore.getInitialState().config);
+    let stored = structuredClone(appCommandStore(configStore).getInitialState().config);
     const save = (global: GlobalConfig) => {
       stored = { ...stored, global };
       return stored;

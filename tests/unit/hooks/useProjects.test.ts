@@ -1,6 +1,6 @@
 import { afterAll, describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import { projectStore } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 import { createMockProject } from "../utils/testFactories";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
@@ -64,6 +64,7 @@ mock.module("@/lib/resource-sync", () => ({
 
 // Import hook AFTER mocking
 import { useProjects } from "../../../apps/web/src/hooks/useProjects";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const { dispatchResourceChange, requestResourceResync, resetResourceSync } =
   realResourceSyncSnapshot;
@@ -79,7 +80,7 @@ describe("useProjects", () => {
     resetResourceSync();
     capturedResyncHandlers.clear();
     // Reset store between tests
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [],
       isLoading: false,
       error: null,
@@ -312,7 +313,7 @@ describe("useProjects", () => {
       gitUrl: "git@github.com:test/repo1.git",
     });
 
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [existingProject],
       isLoading: false,
       error: null,
@@ -347,7 +348,7 @@ describe("useProjects", () => {
       gitUrl: "git@github.com:test/repo1.git",
     });
 
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [existingProject],
       isLoading: false,
       error: null,
@@ -387,7 +388,7 @@ describe("useProjects", () => {
       order: 0,
     });
     const updatedProject = { ...existingProject, name: "after", localPath: "/repos/after" };
-    useProjectStore.setState({ projects: [existingProject] });
+    appCommandStore(projectStore).setState({ projects: [existingProject] });
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
     mockUpdateProject.mockImplementation(() => Promise.resolve(updatedProject));
 
@@ -441,7 +442,7 @@ describe("useProjects", () => {
       snapshot.resolve([original]);
       await snapshot.promise;
     });
-    expect(useProjectStore.getState().projects[0]).toEqual(cleared);
+    expect(appCommandStore(projectStore).getState().projects[0]).toEqual(cleared);
   });
 
   test("updateProject forwards a changed Git URL", async () => {
@@ -453,7 +454,7 @@ describe("useProjects", () => {
       order: 0,
     });
     const updatedProject = { ...existingProject, gitUrl: "git@github.com:new-owner/repo.git" };
-    useProjectStore.setState({ projects: [existingProject] });
+    appCommandStore(projectStore).setState({ projects: [existingProject] });
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
     mockUpdateProject.mockImplementation(() => Promise.resolve(updatedProject));
 
@@ -479,7 +480,7 @@ describe("useProjects", () => {
 
   test("updateProject preserves the store entry and reports backend failures", async () => {
     const existingProject = createMockProject({ id: "project-1", name: "before", order: 0 });
-    useProjectStore.setState({ projects: [existingProject] });
+    appCommandStore(projectStore).setState({ projects: [existingProject] });
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
     mockUpdateProject.mockImplementation(() => Promise.reject(new Error("Update failed")));
 
@@ -511,7 +512,7 @@ describe("useProjects", () => {
       { ...second, order: 0 },
       { ...first, order: 1 },
     ];
-    useProjectStore.setState({ projects: [first, second] });
+    appCommandStore(projectStore).setState({ projects: [first, second] });
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     mockReorderProjects.mockImplementation(() => Promise.resolve(confirmed));
 
@@ -529,7 +530,7 @@ describe("useProjects", () => {
   test("reorderProjects reloads the authoritative order after failure", async () => {
     const first = createMockProject({ id: "first", name: "first", order: 0 });
     const second = createMockProject({ id: "second", name: "second", order: 1 });
-    useProjectStore.setState({ projects: [first, second] });
+    appCommandStore(projectStore).setState({ projects: [first, second] });
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     mockReorderProjects.mockImplementation(() => Promise.reject(new Error("Reorder failed")));
 
@@ -559,11 +560,11 @@ describe("useProjects", () => {
       { ...second, order: 0, folder: "Work" },
       { ...first, order: 1 },
     ];
-    useProjectStore.setState({ projects: [first, second] });
+    appCommandStore(projectStore).setState({ projects: [first, second] });
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     let observedDuringRequest: Project[] = [];
     mockArrangeProjectsByIntent.mockImplementation(() => {
-      observedDuringRequest = useProjectStore.getState().projects;
+      observedDuringRequest = appCommandStore(projectStore).getState().projects;
       return Promise.resolve(confirmed);
     });
 
@@ -571,7 +572,7 @@ describe("useProjects", () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     const intent = { kind: "move", activeId: "second", overId: "first" } as const;
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         { ...first, folder: "Work" },
         { ...second, order: 1 },
@@ -596,7 +597,7 @@ describe("useProjects", () => {
   test("a gesture that changes nothing is not sent", async () => {
     const alpha = createMockProject({ id: "alpha", name: "Alpha", order: 0, folder: "Work" });
     const zulu = createMockProject({ id: "zulu", name: "Zulu", order: 1, folder: "Work" });
-    useProjectStore.setState({ projects: [alpha, zulu] });
+    appCommandStore(projectStore).setState({ projects: [alpha, zulu] });
     mockGetProjects.mockImplementation(() => Promise.resolve([alpha, zulu]));
     mockArrangeProjectsByIntent.mockClear();
 
@@ -613,7 +614,7 @@ describe("useProjects", () => {
   test("a failed gesture rolls back to the authoritative tree", async () => {
     const first = createMockProject({ id: "first", name: "first", order: 0 });
     const second = createMockProject({ id: "second", name: "second", order: 1 });
-    useProjectStore.setState({ projects: [first, second] });
+    appCommandStore(projectStore).setState({ projects: [first, second] });
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     mockArrangeProjectsByIntent.mockImplementation(() =>
       Promise.reject(new Error("Arrange failed")),
@@ -645,7 +646,7 @@ describe("useProjects", () => {
   test("a failed gesture names folders in its toast only when folders changed", async () => {
     const first = createMockProject({ id: "first", name: "first", order: 0 });
     const second = createMockProject({ id: "second", name: "second", order: 1 });
-    useProjectStore.setState({ projects: [first, second] });
+    appCommandStore(projectStore).setState({ projects: [first, second] });
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     mockArrangeProjectsByIntent.mockImplementation(() =>
       Promise.reject(new Error("Arrange failed")),
@@ -728,7 +729,7 @@ describe("useProjects", () => {
       gitUrl: "git@github.com:test/repo1.git",
     });
 
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [project],
       isLoading: false,
       error: null,
@@ -931,7 +932,7 @@ describe("useProjects", () => {
     expect(mockGetProjects).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useProjectStore
+      appCommandStore(projectStore)
         .getState()
         .addProject(createMockProject({ id: "locally-added", name: "local", order: 0 }));
     });

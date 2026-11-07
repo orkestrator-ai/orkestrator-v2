@@ -8,9 +8,10 @@ import { portalStore } from "@/lib/portal/portal-store";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 const playConfiguredNotificationSound = mock(async (_kind: string) => true);
 const primeNotificationSounds = mock(async () => true);
@@ -122,15 +123,17 @@ beforeEach(() => {
   playConfiguredNotificationSound.mockResolvedValue(true);
   primeNotificationSounds.mockReset();
   primeNotificationSounds.mockResolvedValue(true);
-  useConfigStore.getState().updateGlobalConfig({
-    notificationSounds: {
-      agentStopped: true,
-      prMerged: true,
-      coordinatorReport: true,
-      agentQuestion: true,
-      questionDesktopNotification: true,
-    },
-  });
+  appCommandStore(configStore)
+    .getState()
+    .updateGlobalConfig({
+      notificationSounds: {
+        agentStopped: true,
+        prMerged: true,
+        coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
+      },
+    });
   shown.length = 0;
   desktopNotifications.reset();
   FakeNotification.permission = "granted";
@@ -269,15 +272,17 @@ describe("through the notification sound service", () => {
   });
 
   test("respects the agent-stopped, agent-question and desktop-notification settings", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: false,
-        prMerged: true,
-        coordinatorReport: true,
-        agentQuestion: false,
-        questionDesktopNotification: false,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: false,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: false,
+          questionDesktopNotification: false,
+        },
+      });
     await mounted();
     deliver("bk_leaf", attention("a1"));
     deliver("bk_leaf", attention("q1", "agent_question"));
@@ -287,15 +292,17 @@ describe("through the notification sound service", () => {
   });
 
   test("a question notification still shows with its own sound off, and is not silent", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: true,
-        prMerged: true,
-        coordinatorReport: true,
-        agentQuestion: false,
-        questionDesktopNotification: true,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: true,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: false,
+          questionDesktopNotification: true,
+        },
+      });
     await mounted();
     deliver("bk_leaf", attention("q1", "agent_waiting"));
     await flush();

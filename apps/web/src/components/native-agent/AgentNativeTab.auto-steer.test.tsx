@@ -19,17 +19,18 @@ import * as realAgentHandoff from "@/hooks/useAgentHandoff";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { createSessionKey } from "@/lib/utils";
 import {
   mockToastInfo,
   mockToastSuccess,
   resetSonnerMocks,
 } from "../../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realHandoffSnapshot = { ...realAgentHandoff };
 const emptyMessages: NativeMessage[] = [];
@@ -92,7 +93,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
   } as NativeAgentSessionProjection<NativeMessage>;
 }
 
-const configSnapshot = useConfigStore.getState().config;
+const configSnapshot = appCommandStore(configStore).getState().config;
 
 const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) => {
   if (refreshError && steerNativeAgentQueuedPromptMock.mock.calls.length)
@@ -187,7 +188,7 @@ function draftText(tabId: string) {
 }
 
 function setAutoSteer(autoSteer: boolean) {
-  useConfigStore.getState().updateGlobalConfig({ autoSteer });
+  appCommandStore(configStore).getState().updateGlobalConfig({ autoSteer });
 }
 
 async function sendWhileRunning(tabId: string, text: string) {
@@ -219,7 +220,7 @@ function enqueuedText(): string {
 }
 
 beforeEach(() => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -240,13 +241,13 @@ afterEach(() => {
   steerOutcome = { outcome: "applied" };
   providerSteers = true;
   resetSonnerMocks();
-  useConfigStore.getState().setConfig(configSnapshot);
+  appCommandStore(configStore).getState().setConfig(configSnapshot);
   steerNativeAgentQueuedPromptMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),

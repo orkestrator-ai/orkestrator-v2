@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { invoke } from "@/lib/native/backend";
 import { mockReadImage } from "../../mocks/clipboard";
@@ -12,6 +12,7 @@ import {
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 // Attachment cases allocate and encode tens of megabytes. Under the aggregate
 // suite that work can legitimately outlive Bun's generic five-second budget.
@@ -23,7 +24,7 @@ const {
   pngFilenameForDroppedImage,
   resolveAgentDefaults,
 } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
-const defaultConfig = structuredClone(useConfigStore.getInitialState().config);
+const defaultConfig = structuredClone(appCommandStore(configStore).getInitialState().config);
 const defaultClaudeModels = useAgentModelCatalogStore.getInitialState().claudeModels;
 const defaultCodexModels = useAgentModelCatalogStore.getInitialState().codexModels;
 const invokeMock = invoke as ReturnType<typeof mock>;
@@ -135,7 +136,7 @@ async function selectReasoning(name: string) {
 describe("resolveAgentDefaults", () => {
   beforeEach(() => {
     cleanup();
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: structuredClone(defaultConfig),
       isLoading: false,
       error: null,
@@ -765,7 +766,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("submits the configured Codex mode alongside the prompt", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -876,7 +877,7 @@ describe("resolveAgentDefaults", () => {
         newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
@@ -930,7 +931,7 @@ describe("resolveAgentDefaults", () => {
         mode: "native",
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(
@@ -977,7 +978,7 @@ describe("resolveAgentDefaults", () => {
       prBaseBranch: "main",
       lastEnvironmentAgentSelection: { platform: "codex", mode: "native" },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(
@@ -1017,7 +1018,7 @@ describe("resolveAgentDefaults", () => {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(
@@ -1060,7 +1061,7 @@ describe("resolveAgentDefaults", () => {
         newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
@@ -1090,7 +1091,7 @@ describe("resolveAgentDefaults", () => {
       },
     };
     config.global.enabledAgentPlatforms = ["cursor"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     useAgentModelCatalogStore.getState().setAcpModels([
       {
         platform: "cursor",
@@ -1143,7 +1144,7 @@ describe("resolveAgentDefaults", () => {
       },
     };
     config.global.enabledAgentPlatforms = ["pi"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "ensure_host_pi_model_catalog") {
         return Promise.resolve([
@@ -1188,7 +1189,7 @@ describe("resolveAgentDefaults", () => {
   test("does not seed the Pi catalogue when Pi is not an enabled platform", async () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["claude", "codex"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") return Promise.resolve(null);
       return Promise.resolve(undefined);
@@ -1209,7 +1210,7 @@ describe("resolveAgentDefaults", () => {
   test("retries the Pi seed the next time the dialog is opened", async () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["pi"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     // A failed probe leaves the picker on its fallback rather than breaking the
     // dialog, and the attempt is not held against the next opening.
     const logs = captureLogs();
@@ -1303,7 +1304,7 @@ describe("resolveAgentDefaults", () => {
         codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "medium" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
@@ -1362,7 +1363,7 @@ describe("resolveAgentDefaults", () => {
         codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-a" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
@@ -1398,7 +1399,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
@@ -1474,7 +1475,7 @@ describe("resolveAgentDefaults", () => {
       prBaseBranch: "main",
       agentSettings: { platforms: { claude: { mode: "native" } } },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(
@@ -1526,7 +1527,7 @@ describe("resolveAgentDefaults", () => {
       prBaseBranch: "main",
       agentSettings: { defaultAgent: "codex", platforms: { codex: { model: "codex-preferred" } } },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(
@@ -1586,7 +1587,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { codex: { model: "codex-medium-only", reasoningEffort: "medium" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     const { unmount } = render(
@@ -1606,7 +1607,7 @@ describe("resolveAgentDefaults", () => {
       ...config.repositories["project-codex"]!.agentSettings,
       platforms: { codex: { model: "codex-medium-only", reasoningEffort: "high" } },
     };
-    useConfigStore.setState({ config: structuredClone(config) });
+    appCommandStore(configStore).setState({ config: structuredClone(config) });
     render(
       <CreateEnvironmentDialog
         open
@@ -1653,7 +1654,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/model-b", reasoningEffort: "deep" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(
@@ -1705,7 +1706,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/model-a", reasoningEffort: "fast" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_opencode_model_catalog_cache") {
         expect(args).toEqual({ projectId: "durable-project" });
@@ -1788,7 +1789,7 @@ describe("resolveAgentDefaults", () => {
       { platform: "opencode", modelId: "provider/model-b" },
       { platform: "opencode", modelId: "provider/model-a" },
     ];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -1879,7 +1880,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/source", reasoningEffort: "deep" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
     render(
@@ -1924,7 +1925,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
     render(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
@@ -1946,7 +1947,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const projectA = deferred<Record<string, unknown>>();
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -2008,7 +2009,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     let cacheRead = 0;
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -2081,7 +2082,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") return cacheResult();
       if (command === "get_opencode_model_preferences") {
@@ -2125,7 +2126,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "configured/missing-model", reasoningEffort: "turbo" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2201,7 +2202,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/configured-model", reasoningEffort: "turbo" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2250,7 +2251,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2303,7 +2304,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2356,7 +2357,7 @@ describe("resolveAgentDefaults", () => {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     let resolveCache: (value: unknown) => void = () => {};
     const cacheRead = new Promise((resolve) => {
       resolveCache = resolve;
@@ -2442,7 +2443,7 @@ describe("resolveAgentDefaults", () => {
         codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "high" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
     render(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
@@ -2521,7 +2522,7 @@ describe("resolveAgentDefaults", () => {
           },
         },
       };
-      useConfigStore.setState({ config });
+      appCommandStore(configStore).setState({ config });
       const onCreate = mock(async () => {});
       render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
@@ -2562,7 +2563,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("defaults to the project's last created environment type", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -2619,7 +2620,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("resets environment type to the saved project default when reopened", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -3631,7 +3632,7 @@ describe("resolveAgentDefaults", () => {
 describe("CreateEnvironmentDialog feature builds", () => {
   beforeEach(() => {
     cleanup();
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: structuredClone(defaultConfig),
       isLoading: false,
       error: null,
@@ -4453,7 +4454,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
         resolve: { platform: "claude", model: "haiku" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
@@ -4487,7 +4488,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   test("uses the visible Default Agent, model and reasoning for a closed feature build", async () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["claude", "codex"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog
@@ -4749,7 +4750,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
         resolve: { platform: "claude", model: "haiku" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     render(
       <CreateEnvironmentDialog

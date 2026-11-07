@@ -7,10 +7,11 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { ChatFindActiveContext } from "./chat-find-context";
 import { MailTile, mailTileTone } from "./MailTile";
+import { appCommandStore } from "@/test/app-command-store";
 
 const LONG_REPORT = Array.from(
   { length: 12 },
@@ -42,13 +43,13 @@ function tile(container: HTMLElement): HTMLElement {
 }
 
 describe("the Open action on a notice about a worker", () => {
-  const initialEnvironments = useEnvironmentStore.getState();
+  const initialEnvironments = appCommandStore(environmentStore).getState();
   const initialPortal = portalStore.store.getState();
 
   afterEach(() => {
     cleanup();
     useMessagePartExpansionStore.getState().reset();
-    useEnvironmentStore.setState(initialEnvironments, true);
+    appCommandStore(environmentStore).setState(initialEnvironments, true);
     portalStore.store.setState(initialPortal, true);
   });
 
@@ -71,7 +72,7 @@ describe("the Open action on a notice about a worker", () => {
   const openButton = () => screen.queryByRole("button", { name: /Open worker/ });
 
   test("opens that worker's tab, beside the conversation button", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment],
     });
     usePaneLayoutStore.getState().hydration.set("worker-env", "done");
@@ -91,7 +92,7 @@ describe("the Open action on a notice about a worker", () => {
   });
 
   test("opening does not expand the tile", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
     });
     const { container } = render(<MailTile mail={noticeMail(workerNotice())} expansionKey="k" />);
@@ -100,7 +101,7 @@ describe("the Open action on a notice about a worker", () => {
   });
 
   test("an environment notice opens the environment, with no tab to aim for", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
     });
     render(
@@ -152,7 +153,7 @@ describe("the Open action on a notice about a worker", () => {
     noNode.unmount();
 
     // A notice about something else, even in a known environment.
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", projectId: "project-1" } as Environment],
     });
     const other = render(
@@ -167,7 +168,7 @@ describe("the Open action on a notice about a worker", () => {
     bare.unmount();
 
     // Mail that is not a notice never has one, whatever it carries.
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
     });
     render(<MailTile mail={mail({ notice: workerNotice() })} expansionKey="e" />);
@@ -177,13 +178,13 @@ describe("the Open action on a notice about a worker", () => {
 
 describe("MailTile", () => {
   const initialMail = useAgentMailStore.getState();
-  const initialEnvironments = useEnvironmentStore.getState();
+  const initialEnvironments = appCommandStore(environmentStore).getState();
 
   afterEach(() => {
     cleanup();
     useMessagePartExpansionStore.getState().reset();
     useAgentMailStore.setState(initialMail, true);
-    useEnvironmentStore.setState(initialEnvironments, true);
+    appCommandStore(environmentStore).setState(initialEnvironments, true);
   });
 
   test("shows attached images by name and size, collapsed and open, without a path", () => {
@@ -406,7 +407,7 @@ describe("MailTile", () => {
   });
 
   test("names a recipient tab with its environment, giving way on the environment first", () => {
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
     const { container } = render(
       <MailTile
         mail={mail({
@@ -421,7 +422,7 @@ describe("MailTile", () => {
     const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
     expect(sender.textContent).toBe("To env-1 · Claude 2");
     act(() =>
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             id: "env-1",
@@ -447,7 +448,7 @@ describe("MailTile", () => {
   test.each(["Claude 2", undefined])(
     "updates a received sender's environment name with tab %s",
     (tabName) => {
-      useEnvironmentStore.setState({ environments: [] });
+      appCommandStore(environmentStore).setState({ environments: [] });
       useAgentMailStore.setState({ mailboxes: new Map() });
       const environmentId = "acf90d0f-8be8-45ba-b87b-745b54a007e0";
       const { container } = render(
@@ -462,7 +463,7 @@ describe("MailTile", () => {
       const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
       expect(sender.textContent).toBe(`acf90d0f · ${tabName ?? "startup-agent"}`);
       act(() =>
-        useEnvironmentStore.setState({
+        appCommandStore(environmentStore).setState({
           environments: [{ id: environmentId, name: "worker", order: 0 } as Environment],
         }),
       );
@@ -473,7 +474,7 @@ describe("MailTile", () => {
   );
 
   test("renders a received environment-only address without a tab suffix", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", name: "worker", order: 0 } as Environment],
     });
     const { container } = render(

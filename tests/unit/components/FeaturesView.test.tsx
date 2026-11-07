@@ -14,15 +14,16 @@ import {
 } from "@/lib/feature-planner";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useFeaturePlanStore } from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import type { FeaturePlan, FeaturePlanMessage, FeatureStoryCard } from "@/lib/backend";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastWarning } from "../../mocks/sonner";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realNativeComposeDockSnapshot = { ...realNativeComposeDock };
@@ -31,7 +32,7 @@ const realHooksSnapshot = { ...realHooks };
 const realUseBuildPipelineSnapshot = { ...realUseBuildPipeline };
 const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realBackendSnapshot = { ...realBackend };
-const defaultConfigSnapshot = structuredClone(useConfigStore.getState().config);
+const defaultConfigSnapshot = structuredClone(appCommandStore(configStore).getState().config);
 
 const startBuildMock = mock(async () => undefined);
 // Most Build tests below drive the renderer sequence an older backend needs.
@@ -334,7 +335,7 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
 }
 
 function seedExistingCodexEnvironment(environment: Environment = makeEnvironment()) {
-  useEnvironmentStore.setState({ environments: [environment] });
+  appCommandStore(environmentStore).setState({ environments: [environment] });
 }
 
 function chatFeature(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
@@ -450,7 +451,7 @@ function appendStoryMessageInStore(
 
 function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
   const features = Array.isArray(featureOrFeatures) ? featureOrFeatures : [featureOrFeatures];
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -680,12 +681,12 @@ beforeEach(() => {
     virtuosoRef: { current: null },
     scrollProps: {},
   }));
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config: structuredClone(defaultConfigSnapshot),
     isLoading: false,
     error: null,
   });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [],
     isLoading: false,
     error: null,
@@ -2112,7 +2113,7 @@ describe("FeaturesView build action", () => {
 
   test("uses the local environment preference for local projects", async () => {
     seedStores(featureWithStories({ codexEnvironmentId: undefined }));
-    useProjectStore.setState((state) => ({
+    appCommandStore(projectStore).setState((state) => ({
       projects: state.projects.map((project) => ({ ...project, localPath: "/repo" })),
     }));
     seedPipeline();
@@ -2135,10 +2136,10 @@ describe("FeaturesView build action", () => {
 
   test("uses the configured environment type before the project-path fallback", async () => {
     seedStores(featureWithStories({ codexEnvironmentId: undefined }));
-    useProjectStore.setState((state) => ({
+    appCommandStore(projectStore).setState((state) => ({
       projects: state.projects.map((project) => ({ ...project, localPath: "/repo" })),
     }));
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         repositories: {

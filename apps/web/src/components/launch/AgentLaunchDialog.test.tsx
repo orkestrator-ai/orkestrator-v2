@@ -21,15 +21,16 @@ mock.module("@/components/ui/dialog", () => ({
 
 import { AgentLaunchDialog, type AgentLaunchSelection } from "./AgentLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(cleanup);
 afterAll(() => {
   mock.module("@/components/ui/dialog", () => realDialogSnapshot);
 });
 beforeEach(() => {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: {
       ...config,
       global: {

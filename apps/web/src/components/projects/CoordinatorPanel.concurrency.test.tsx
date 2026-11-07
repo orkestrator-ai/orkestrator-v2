@@ -28,9 +28,9 @@ import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 
 const observationSnapshot = { ...realObservation };
 const observationListeners = new Set<(hint: NativeObservationInvalidation) => void>();
@@ -242,6 +242,7 @@ mock.module("@/components/native-agent", () => ({
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Two tab groups, each showing one of `first` and `second`. */
 function showInTwoGroups(first: CoordinatorConversation, second: CoordinatorConversation) {
@@ -277,8 +278,8 @@ beforeEach(() => {
   prepareSwitch.mockClear();
   getCheckoutTurn.mockReset();
   getCheckoutTurn.mockImplementation(async () => null);
-  useEnvironmentStore.setState({ environments: [] });
-  useProjectStore.setState({
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -612,7 +613,7 @@ describe("branch switch and Sync while any turn runs", () => {
   test.each(["observation", "session"] as const)(
     "%s hints filter by Home and workspace runtime IDs",
     async (source) => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           { id: "home-1", projectId: "project-1", projectHome: true },
           { id: "other-home", projectId: "other-project", projectHome: true },
@@ -709,7 +710,7 @@ describe("branch switch and Sync while any turn runs", () => {
     ["has not answered yet", () => new Promise<null>(() => undefined)],
   ])("a backend that %s leaves every projection to go on", async (_name, answer) => {
     getCheckoutTurn.mockImplementation(answer);
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "home-1", projectId: "project-1", projectHome: true } as never],
     });
     useNativeAgentProjectionStore

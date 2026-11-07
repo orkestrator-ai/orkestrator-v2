@@ -4,7 +4,7 @@ import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/lib/backend";
@@ -13,6 +13,7 @@ import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const startBuildPipelineMock = mock(async (_input: unknown) =>
@@ -536,8 +537,8 @@ describe("useBuildPipeline", () => {
 
   test("older backend: applies the configured Multi Review fan-out and verify model by default", async () => {
     olderBackend();
-    const baseConfig = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const baseConfig = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {
@@ -582,8 +583,8 @@ describe("useBuildPipeline", () => {
 
   test("older backend: falls back to the repository's configured agent when neither is given", async () => {
     olderBackend();
-    const baseConfig = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const baseConfig = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         repositories: {
@@ -607,15 +608,15 @@ describe("useBuildPipeline", () => {
     } finally {
       // The hook is still mounted and subscribed, so the restore is a render.
       act(() => {
-        useConfigStore.setState({ config: baseConfig });
+        appCommandStore(configStore).setState({ config: baseConfig });
       });
     }
   });
 
   test("older backend: a single configured reviewer omits fan-out and review preparation", async () => {
     olderBackend();
-    const baseConfig = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const baseConfig = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {
@@ -649,8 +650,8 @@ describe("useBuildPipeline", () => {
 
   test("older backend: an explicit review step replaces only the first configured reviewer", async () => {
     olderBackend();
-    const baseConfig = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const baseConfig = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {
@@ -683,8 +684,8 @@ describe("useBuildPipeline", () => {
 
   test("older backend: a GitHub issue build without options sends the configured Multi Review defaults", async () => {
     olderBackend();
-    const baseConfig = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const baseConfig = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {

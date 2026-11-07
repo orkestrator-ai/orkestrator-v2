@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { createSessionKey } from "@/lib/utils";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -13,6 +13,7 @@ import {
   type NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { AgentInfoButton } from "./AgentInfoButton";
+import { appCommandStore } from "@/test/app-command-store";
 
 const COORDINATOR_ENVIRONMENT_ID = coordinatorRuntimeId("workspace-1", "conversation-1");
 const TAB_ID = "coordinator-tab-1";
@@ -97,7 +98,7 @@ function open() {
   fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
 }
 
-const originalGlobalConfig = useConfigStore.getState().config.global;
+const originalGlobalConfig = appCommandStore(configStore).getState().config.global;
 beforeEach(() => {
   useNativeAgentProjectionStore.getState().reset();
   nativeInvokeMock.mockClear();
@@ -141,7 +142,7 @@ afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
   useNativeAgentProjectionStore.getState().reset();
-  useConfigStore.setState((state) => ({
+  appCommandStore(configStore).setState((state) => ({
     config: { ...state.config, global: originalGlobalConfig },
   }));
 });

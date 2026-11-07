@@ -4,10 +4,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseSync, visitorKeys, type Node } from "oxc-parser";
 import { cleanup, render, screen } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./dialog";
 import { MODAL_SIZE_CLASS_NAME, MODAL_WIDTH_CLASS_NAME, type ModalSize } from "./modal-theme";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(cleanup);
 
@@ -124,8 +125,8 @@ describe("Dialog primitives", () => {
   });
 
   test("keeps modal contrast independent of a light terminal background", () => {
-    const originalConfig = useConfigStore.getState().config;
-    useConfigStore.setState((state) => ({
+    const originalConfig = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -151,7 +152,7 @@ describe("Dialog primitives", () => {
       expect(dialog.className).toContain("bg-background");
       expect(dialog.style.getPropertyValue("--color-background")).toBe("");
     } finally {
-      useConfigStore.setState({ config: originalConfig });
+      appCommandStore(configStore).setState({ config: originalConfig });
     }
   });
 

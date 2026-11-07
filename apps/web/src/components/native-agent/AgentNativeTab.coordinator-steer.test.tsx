@@ -24,9 +24,10 @@ import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { createSessionKey } from "@/lib/utils";
 import { mockToastSuccess, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENV_ID = "coordinator:workspace-1:conversation-1";
 const realHandoffSnapshot = { ...realAgentHandoff };
@@ -106,7 +107,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
   } as NativeAgentSessionProjection<NativeMessage>;
 }
 
-const configSnapshot = useConfigStore.getState().config;
+const configSnapshot = appCommandStore(configStore).getState().config;
 
 const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) => {
   if (refreshError && steerNativeAgentQueuedPromptMock.mock.calls.length)
@@ -201,7 +202,7 @@ function draftText() {
 }
 
 function setAutoSteer(autoSteer: boolean) {
-  useConfigStore.getState().updateGlobalConfig({ autoSteer });
+  appCommandStore(configStore).getState().updateGlobalConfig({ autoSteer });
 }
 
 /** Mount the tab the way `CoordinatorPanel` does, then send while it works. */
@@ -254,7 +255,7 @@ afterEach(() => {
   running = true;
   queuedItems = [];
   resetSonnerMocks();
-  useConfigStore.getState().setConfig(configSnapshot);
+  appCommandStore(configStore).getState().setConfig(configSnapshot);
   steerNativeAgentQueuedPromptMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();

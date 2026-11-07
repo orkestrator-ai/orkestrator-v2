@@ -10,7 +10,8 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import * as realBackend from "@/lib/backend";
 import * as realNativeEvents from "@/lib/native/events";
 import * as realNotificationSounds from "@/lib/notification-sounds";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const handlers = new Map<string, (event: { payload: unknown }) => void>();
 const callOrder: string[] = [];
@@ -57,7 +58,7 @@ beforeEach(() => {
   prMonitorWatch.mockClear();
   prMonitorRefresh.mockClear();
   usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: "env-1", branch: "feature/sounds" }] as never,
   });
 });

@@ -3,11 +3,12 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { useState } from "react";
 import { AgentIcon, AgentRadioGroup } from "./AgentRadioGroup";
 import type { LaunchAgent } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
-  useConfigStore.setState((state) => ({
+  appCommandStore(configStore).setState((state) => ({
     config: {
       ...state.config,
       global: {
@@ -72,7 +73,7 @@ describe("AgentRadioGroup", () => {
   });
 
   test("exposes all five agents when every platform is enabled", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {

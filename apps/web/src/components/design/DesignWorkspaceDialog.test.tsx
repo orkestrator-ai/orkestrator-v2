@@ -10,8 +10,8 @@ import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftP
 import { awaitComposeDraftWrites, composeDraftKey } from "@/lib/compose-draft-persistence";
 import { nativeComposePersistenceStore } from "@/stores/nativeComposeStore";
 import { createSessionKey } from "@/lib/utils";
-import { useConfigStore } from "@/stores";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores";
+import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
@@ -25,6 +25,7 @@ import {
   pasteImage,
   settlePaste,
 } from "./design-paste-test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 // `@/lib/native/backend` is mocked once in tests/setup.ts; vary its behavior here.
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
@@ -83,7 +84,7 @@ function commandNames(): string[] {
   );
 }
 
-const originalConfig = useConfigStore.getState().config;
+const originalConfig = appCommandStore(configStore).getState().config;
 
 beforeEach(() => {
   resetCapabilities();
@@ -118,9 +119,9 @@ afterEach(() => {
   cleanup();
   resetCapabilities();
   // After unmount, so the reset does not re-render a mounted dialog outside act().
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   invokeMock.mockImplementation(() => Promise.resolve());
-  useConfigStore.setState({ config: originalConfig });
+  appCommandStore(configStore).setState({ config: originalConfig });
 });
 
 function mount(createTab: (type: CreatableTabType, options?: CreateTabOptions) => boolean) {
@@ -154,7 +155,7 @@ const brief = () => screen.getByRole("textbox", { name: "Design brief" }) as HTM
 describe("DesignWorkspaceDialog", () => {
   function supportPaste(write?: Promise<string>) {
     const restore = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -582,7 +583,7 @@ describe("DesignWorkspaceDialog", () => {
 
   test("a pasted image is attached to the agent's initial prompt", async () => {
     const restorePaste = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -799,7 +800,7 @@ describe("DesignWorkspaceDialog", () => {
 
   test("a pasted image can be removed before launch", async () => {
     const restorePaste = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -830,7 +831,7 @@ describe("DesignWorkspaceDialog", () => {
   });
 
   test("a blank canvas needs no agent and closes when opened", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...originalConfig,
         global: { ...originalConfig.global, enabledAgentPlatforms: [] },
@@ -869,13 +870,15 @@ describe("DesignWorkspaceDialog", () => {
     test(`capability fallback ${outcome} creates once with the intended session support`, async () => {
       const pending = deferred<unknown>();
       installLaunchCommands(() => pending.promise);
-      useConfigStore.getState().updateGlobalConfig({
-        agentSettings: {
-          platforms: {
-            claude: { model: "claude-sonnet-5", reasoningEffort: "high", fastMode: true },
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          agentSettings: {
+            platforms: {
+              claude: { model: "claude-sonnet-5", reasoningEffort: "high", fastMode: true },
+            },
           },
-        },
-      });
+        });
       const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
         usePaneLayoutStore
           .getState()

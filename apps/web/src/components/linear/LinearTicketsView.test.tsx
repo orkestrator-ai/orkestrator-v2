@@ -6,13 +6,14 @@ import {
   mockToastSuccess as toastSuccessMock,
 } from "../../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type {
   LinearConnectionStatus,
   LinearIssueDetail,
   LinearIssueListItem,
 } from "@/types/linear";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -207,7 +208,7 @@ describe("LinearTicketsView", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
   });
 
   function renderLinearTicketsView() {
@@ -700,7 +701,7 @@ describe("LinearTicketsView", () => {
   });
 
   test("opens the shared build launcher and starts a configured Linear-backed build", async () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",

@@ -168,11 +168,12 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 import { CODEX_MODELS } from "@/lib/codex-models";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 /** The picker asks the node of the scope the dialog renders in: here the command scope (3017). */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -213,7 +214,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 }
 
 function resetStores(config = makeConfig()) {
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config,
     isLoading: false,
     error: null,
@@ -1145,7 +1146,8 @@ describe("RepositorySettings", () => {
       expect(getSavedConfig().lastEnvironmentType).toBeUndefined();
       await waitFor(() => {
         expect(
-          useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType,
+          appCommandStore(configStore).getState().config.repositories["project-1"]
+            ?.lastEnvironmentType,
         ).toBe("local");
       });
     });

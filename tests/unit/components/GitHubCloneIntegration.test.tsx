@@ -6,7 +6,7 @@ import path from "node:path";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import { useProjects } from "@/hooks/useProjects";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import * as native from "@/lib/native/backend";
 import {
   createCommandRegistry,
@@ -16,6 +16,7 @@ import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/
 import { runCommand } from "../../../apps/backend/src/core/shell";
 import { StorageService } from "../../../apps/backend/src/core/storage";
 import { BackendRuntime } from "../../../apps/backend/src/core/backend-runtime";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 jest.setTimeout(30_000);
 afterEach(cleanup);
@@ -166,7 +167,7 @@ describe("GitHub picker to project registration", () => {
         return (await handler(args ?? {}, context)) as never;
       });
       const changes: boolean[] = [];
-      useProjectStore.setState({ projects: [], isLoading: false, error: null });
+      appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
       try {
         render(<CloneDialog onOpenChange={(open) => changes.push(open)} />);
         fireEvent.click(screen.getByRole("button", { name: "From GitHub" }));
@@ -189,14 +190,14 @@ describe("GitHub picker to project registration", () => {
         if (destination === "matching-retry" || willClone) {
           await waitFor(() => expect(changes).toEqual([false]), REAL_GIT_WAIT);
           expect(await storage.loadProjects()).toHaveLength(1);
-          expect(useProjectStore.getState().projects[0]?.localPath).toBe(localPath);
+          expect(appCommandStore(projectStore).getState().projects[0]?.localPath).toBe(localPath);
         } else {
           expect(
             (await screen.findByRole("alert", undefined, REAL_GIT_WAIT)).textContent,
           ).toContain("Clone destination is not empty");
           expect(changes).toEqual([]);
           expect(await storage.loadProjects()).toEqual([]);
-          expect(useProjectStore.getState().projects).toEqual([]);
+          expect(appCommandStore(projectStore).getState().projects).toEqual([]);
         }
         expect(transport).toHaveBeenCalledWith("add_project", {
           gitUrl: "https://github.com/acme/api.git",
@@ -215,7 +216,7 @@ describe("GitHub picker to project registration", () => {
       } finally {
         cleanup();
         transport.mockRestore();
-        useProjectStore.setState({ projects: [], isLoading: false, error: null });
+        appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
         await fs.rm(root, { recursive: true, force: true });
       }
     });
@@ -254,7 +255,7 @@ for (const outcome of ["success", "error"] as const) {
     // before every test, so they count only this test's toasts.
     const success = mockToastSuccess;
     const error = mockToastError;
-    useProjectStore.setState({ projects: [], isLoading: false, error: null });
+    appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
     try {
       const view = render(<CloneDialog onOpenChange={() => undefined} />);
       fireEvent.click(screen.getByRole("button", { name: "From GitHub" }));
@@ -281,7 +282,7 @@ for (const outcome of ["success", "error"] as const) {
     } finally {
       cleanup();
       transport.mockRestore();
-      useProjectStore.setState({ projects: [], isLoading: false, error: null });
+      appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
     }
   });
 }

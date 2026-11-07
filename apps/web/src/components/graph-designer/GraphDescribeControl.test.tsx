@@ -4,7 +4,7 @@ import type { GraphDescribeJobView } from "@orkestrator/protocol/graphs/describe
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { dispatchResourceChange } from "@/lib/resource-sync";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useGraphDescribeStore } from "@/stores/graphDescribeStore";
 import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -12,6 +12,7 @@ import type { Environment } from "@/types";
 import { GraphDesignerTab } from "./GraphDesignerTab";
 import { builtInDetail, listResult } from "./graph-designer.test-fixtures";
 import { installReactFlowDomStubs } from "./react-flow.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -80,7 +81,7 @@ function installBackend() {
 function seedStores() {
   useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
   useGraphDescribeStore.setState({ entries: new Map() });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
   usePaneLayoutStore.setState({

@@ -24,9 +24,9 @@ import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
   reconcileCoordinatorLayout,
@@ -160,6 +160,7 @@ mock.module("@/components/native-agent", () => ({
 }));
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
+import { appCommandStore } from "@/test/app-command-store";
 
 const worker = { id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment;
 const unrelated = {
@@ -184,7 +185,7 @@ async function renderPanel() {
 }
 
 describe("CoordinatorPanel render cost", () => {
-  const previousEnvironments = useEnvironmentStore.getState().environments;
+  const previousEnvironments = appCommandStore(environmentStore).getState().environments;
   const previousPipelines = useBuildPipelineStore.getState().pipelines;
   const previousReviews = useMultiReviewStore.getState().workflows;
 
@@ -208,8 +209,8 @@ describe("CoordinatorPanel render cost", () => {
           single.activePaneId,
         ),
       );
-    useEnvironmentStore.setState({ environments: [worker, unrelated] });
-    useProjectStore.setState({
+    appCommandStore(environmentStore).setState({ environments: [worker, unrelated] });
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -225,7 +226,7 @@ describe("CoordinatorPanel render cost", () => {
   afterEach(() => {
     cleanup();
     resetReadCoordinatorForTests();
-    useEnvironmentStore.setState({ environments: previousEnvironments });
+    appCommandStore(environmentStore).setState({ environments: previousEnvironments });
     useBuildPipelineStore.setState({ pipelines: previousPipelines });
     useMultiReviewStore.setState({ workflows: previousReviews });
   });
@@ -247,7 +248,7 @@ describe("CoordinatorPanel render cost", () => {
 
     for (let index = 0; index < 5; index += 1) {
       act(() =>
-        useEnvironmentStore.setState((state) => ({
+        appCommandStore(environmentStore).setState((state) => ({
           environments: state.environments.map((item) =>
             item.id === unrelated.id
               ? ({ ...item, status: index % 2 ? "running" : "stopped" } as Environment)
@@ -279,7 +280,7 @@ describe("CoordinatorPanel render cost", () => {
     const settled = await renderPanel();
     // A refreshed project list: the panel's own project, as a new object.
     act(() =>
-      useProjectStore.setState((state) => ({
+      appCommandStore(projectStore).setState((state) => ({
         projects: state.projects.map((item) => ({ ...item })),
       })),
     );
@@ -302,7 +303,7 @@ describe("CoordinatorPanel render cost", () => {
     const settled = counts();
 
     act(() =>
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         environments: state.environments.map((item) =>
           item.id === worker.id ? { ...item, name: "parser-fix" } : item,
         ),

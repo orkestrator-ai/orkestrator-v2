@@ -4,9 +4,10 @@ import {
   includeMissingOpenCodeModels,
   resolveDefaultReviewTabType,
 } from "./review-launch-options";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { firstModelFor } from "@/lib/agent-launch";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalClaudeModels = useAgentModelCatalogStore.getState().claudeModels;
 const originalCodexModels = useAgentModelCatalogStore.getState().codexModels;
@@ -299,7 +300,7 @@ describe("buildReviewModelCatalog", () => {
 });
 
 describe("resolveDefaultReviewTabType", () => {
-  const global = useConfigStore.getState().config.global;
+  const global = appCommandStore(configStore).getState().config.global;
 
   test("forces every Claude review into the SDK-native mode", () => {
     expect(

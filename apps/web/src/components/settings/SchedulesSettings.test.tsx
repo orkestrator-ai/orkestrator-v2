@@ -19,13 +19,14 @@ import {
 import * as realBackend from "@/lib/backend";
 import { dispatchResourceChange, requestViewSafetyChecks } from "@/lib/resource-sync";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useProjectStore } from "@/stores";
+import { projectStore } from "@/stores";
 import type { Project } from "@/types";
 import {
   GRAPH_REF,
   graphScheduleOptions,
   graphTemplateSummary,
 } from "./graph-schedule.test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 function job(overrides: Partial<ScheduledJob> = {}): ScheduledJob {
   return {
@@ -511,7 +512,7 @@ describe("graph schedules", () => {
 
   function installGraphBackend() {
     optionQueries.length = 0;
-    useProjectStore.setState({ projects: [{ id: "p1", name: "Shop" } as Project] });
+    appCommandStore(projectStore).setState({ projects: [{ id: "p1", name: "Shop" } as Project] });
     invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
       if (command === "graph_templates_list") {
         return {

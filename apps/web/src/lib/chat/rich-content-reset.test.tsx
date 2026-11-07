@@ -21,7 +21,7 @@ import "@/lib/chat/rich-markdown/media-resolver";
 import { richBlockViewKey, richCacheKey, type RichTranscriptScope } from "@/lib/chat/rich-identity";
 import { richRenderScheduler } from "@/lib/chat/rich-render-cache";
 import { useRichContentViewStore } from "@/stores/richContentViewStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { createBrowserGatewayApi, installBrowserGatewayApi } from "@/lib/native/web-gateway";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
@@ -37,6 +37,7 @@ import {
   richBackendIdentityOf,
   richContentResetCounters,
 } from "./rich-content-reset";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -184,7 +185,7 @@ describe("protected rich content clearing", () => {
     await waitFor(() => expect(artifactRequestCacheStats().entries).toBe(2));
     await waitFor(() => expect(artifactPublicationCacheSize()).toBe(2));
 
-    act(() => useEnvironmentStore.getState().removeEnvironment("env-deleted"));
+    act(() => appCommandStore(environmentStore).getState().removeEnvironment("env-deleted"));
 
     expect(richRenderScheduler.peek(renderKey(deleted))).toBeNull();
     expect(richRenderScheduler.peek(renderKey(kept))?.ok).toBe(true);

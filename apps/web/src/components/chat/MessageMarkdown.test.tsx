@@ -6,7 +6,7 @@ import type { PluggableList } from "unified";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, useUIStore } from "@/stores";
 import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
 import type { Environment, Project } from "@/types";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
@@ -19,6 +19,7 @@ import {
   markdownRenderSource,
 } from "./MessageMarkdown";
 import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -387,7 +388,7 @@ describe("MessageMarkdown pull request links", () => {
   afterEach(() => {
     cleanup();
     useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
     setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
   });
 
@@ -428,7 +429,7 @@ describe("MessageMarkdown pull request links", () => {
 
   test("opens a pull request link in the selected environment's files panel", () => {
     invokeMock.mockClear();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", projectId: "project-1" } as Environment],
     });
     useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
@@ -449,7 +450,7 @@ describe("MessageMarkdown pull request links", () => {
     "a link on the project's %s page opens in the PR pane without leaving the page",
     (projectBoardTab) => {
       invokeMock.mockClear();
-      useProjectStore.setState({
+      appCommandStore(projectStore).setState({
         projects: [{ id: "project-1", name: "Project", localPath: "/repo" } as Project],
       });
       useUIStore.setState({
@@ -472,7 +473,7 @@ describe("MessageMarkdown pull request links", () => {
       expect(useUIStore.getState().projectBoardTab).toBe(projectBoardTab);
       expect(useProjectPullRequestsStore.getState().projects).toEqual({});
       expect(invokeMock).not.toHaveBeenCalled();
-      useProjectStore.setState({ projects: [] });
+      appCommandStore(projectStore).setState({ projects: [] });
     },
   );
 

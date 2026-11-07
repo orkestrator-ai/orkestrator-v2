@@ -4,7 +4,7 @@ import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphTemplateDetail } from "@orkestrator/protocol/graphs/library";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { graphDesignerTab, useGraphDesignerStore } from "@/stores/graphDesignerStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
@@ -17,6 +17,7 @@ import {
   userDetail,
 } from "./graph-designer.test-fixtures";
 import { installReactFlowDomStubs } from "./react-flow.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * The editable designer end to end in the tab (item 212): new graph, palette,
@@ -98,7 +99,7 @@ function installBackend() {
 
 function seedStores(data: GraphDesignerTabData) {
   useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
   usePaneLayoutStore.setState({

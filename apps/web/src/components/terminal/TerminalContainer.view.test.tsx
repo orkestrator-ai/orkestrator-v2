@@ -10,11 +10,11 @@ import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { MAX_TABS, TerminalProvider, useTerminalContext } from "@/contexts";
 
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
 
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
@@ -59,6 +59,7 @@ import * as realNativeEvents from "@/lib/native/events";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import { appCommandStore } from "@/test/app-command-store";
 
 const LEGACY_SELECTION_STORAGE_KEY = "orkestrator.pane-selection.v1";
 
@@ -188,7 +189,9 @@ const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
 
 const ensureEnvironmentSetupMock = mock(
   async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId)!;
     return {
       setupStarted: false,
       environment: {
@@ -200,7 +203,7 @@ const ensureEnvironmentSetupMock = mock(
 );
 
 const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   setupScriptsComplete: true,
 }));
 
@@ -227,7 +230,7 @@ const getTerminalOutputSnapshotMock = mock(async (_sessionId: string) => ({
 
 const setEnvironmentPendingAgentLaunchMock = mock(
   async (environmentId: string, pending: boolean) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     pendingAgentLaunch: pending,
     ...(pending
       ? {}
@@ -239,13 +242,13 @@ const setEnvironmentPendingAgentLaunchMock = mock(
 );
 
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
 
 const setEnvironmentInitialPromptMock = mock(
   async (environmentId: string, initialPrompt: string) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     initialPrompt,
   }),
 );
@@ -290,7 +293,9 @@ const writeInitialPromptAttachmentsMock = mock(
     environmentId: string,
     attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
   ) => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const usedNames = new Set<string>();
     return Promise.all(
@@ -345,7 +350,7 @@ const publishSetupTab = (
   } as PersistedPaneLayout);
 
 const seedContainerSetupCommands = (environmentId = "env-hidden") => {
-  useEnvironmentStore.getState().updateEnvironment(environmentId, {
+  appCommandStore(environmentStore).getState().updateEnvironment(environmentId, {
     setupPhase: "running",
   });
 };
@@ -492,7 +497,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-visible",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-visible",
@@ -547,7 +552,9 @@ describe("TerminalContainer", () => {
     getSetupCommandsMock.mockResolvedValue(null);
     ensureEnvironmentSetupMock.mockReset();
     ensureEnvironmentSetupMock.mockImplementation(async (environmentId: string) => {
-      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+      const environment = appCommandStore(environmentStore)
+        .getState()
+        .getEnvironmentById(environmentId)!;
       return {
         setupStarted: false,
         environment: {
@@ -558,7 +565,7 @@ describe("TerminalContainer", () => {
     });
     runEnvironmentSetupMock.mockReset();
     runEnvironmentSetupMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       setupScriptsComplete: true,
     }));
     getEnvironmentSetupSessionMock.mockReset();
@@ -579,7 +586,7 @@ describe("TerminalContainer", () => {
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         pendingAgentLaunch: pending,
         ...(pending
           ? {}
@@ -591,13 +598,13 @@ describe("TerminalContainer", () => {
     );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
     setEnvironmentInitialPromptMock.mockReset();
     setEnvironmentInitialPromptMock.mockImplementation(
       async (environmentId: string, initialPrompt: string) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         initialPrompt,
       }),
     );
@@ -624,7 +631,7 @@ describe("TerminalContainer", () => {
       async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`,
     );
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -644,7 +651,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
   });
@@ -671,7 +678,7 @@ describe("TerminalContainer", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 1,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -750,7 +757,7 @@ describe("TerminalContainer", () => {
       hydration: new Map([["env-hidden", "done"]]),
       activeEnvironmentId: null,
     } as never);
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -767,7 +774,7 @@ describe("TerminalContainer", () => {
           : environment,
       ),
     }));
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
   }
 
   const renderHiddenTerminal = () =>
@@ -805,7 +812,7 @@ describe("TerminalContainer", () => {
   // environment whose backend-published agent tab already exists while the
   // setup terminal is still the surface the renderer keeps selected.
   function seedStartupFocusHandoffConfig(): void {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -834,7 +841,7 @@ describe("TerminalContainer", () => {
     environmentId: string,
     options: { setupReady: boolean },
   ): void {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === environmentId
@@ -891,7 +898,8 @@ describe("TerminalContainer", () => {
       expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
       expect(acknowledgeStartupAgentSessionMock).not.toHaveBeenCalled();
       expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+          ?.pendingAgentLaunch,
       ).toBe(true);
     },
   );
@@ -954,7 +962,7 @@ describe("TerminalContainer", () => {
       } else {
         getPaneLayoutMock.mockResolvedValue(firstResult);
       }
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         ...state,
         environments: state.environments.map((environment) =>
           environment.id === "env-hidden"
@@ -1309,7 +1317,7 @@ describe("TerminalContainer", () => {
       );
       expect(teardownTabMock).not.toHaveBeenCalled();
 
-      useEnvironmentStore
+      appCommandStore(environmentStore)
         .getState()
         .updateEnvironment("env-hidden", { containerId: nextContainerId });
       getPaneLayoutMock.mockResolvedValue({
@@ -1495,7 +1503,7 @@ describe("TerminalContainer", () => {
   });
 
   test("hydrates a failed local setup and renders retry and skip recovery actions", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
       environmentType: "local",
       containerId: null,
       worktreePath: "/tmp/failed-local-worktree",
@@ -1525,7 +1533,7 @@ describe("TerminalContainer", () => {
   });
 
   test("keeps setup recovery visible for a live container reported as errored", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
       status: "error",
       setupScriptsComplete: false,
       setupPhase: "failed",
@@ -2059,7 +2067,7 @@ describe("TerminalContainer", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 1,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -2170,7 +2178,7 @@ describe("TerminalContainer", () => {
     });
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -2444,7 +2452,7 @@ describe("TerminalContainer", () => {
     });
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -2530,7 +2538,7 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         pendingAgentLaunch: false,
       });
       await Promise.resolve();
@@ -2975,7 +2983,7 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
     await waitFor(() => expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden"));
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.filter((environment) => environment.id !== "env-hidden"),
     }));
@@ -2987,7 +2995,7 @@ describe("TerminalContainer", () => {
   });
 
   test("does not create a Codex terminal tab when the backend owns startup", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3005,7 +3013,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3033,7 +3041,7 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves container initial prompt attachments for the backend", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3051,7 +3059,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3089,7 +3097,7 @@ describe("TerminalContainer", () => {
   });
 
   test("does not persist a prompt that attachment saving left unchanged", async () => {
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3119,7 +3127,7 @@ describe("TerminalContainer", () => {
   });
 
   test("does not enter renderer attachment persistence when the backend owns startup", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3137,7 +3145,7 @@ describe("TerminalContainer", () => {
       },
     }));
     setEnvironmentInitialPromptMock.mockRejectedValueOnce(new Error("offline"));
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3180,7 +3188,7 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves local initial prompt attachments for the backend", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3194,7 +3202,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3212,7 +3220,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3245,7 +3253,7 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves initial prompt images to the backend when it owns the native launch", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3271,7 +3279,7 @@ describe("TerminalContainer", () => {
         base64Data: "UkFDRQ==",
       },
     ];
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3301,8 +3309,8 @@ describe("TerminalContainer", () => {
     // Optimistic projection may drop the renderer copy; the backend still owns
     // the attachments. The rewrite path would empty them and also persist paths.
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments ??
-        attachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-hidden")
+        ?.initialPromptAttachments ?? attachments,
     ).toEqual(attachments);
     expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).not.toContainEqual(
       expect.objectContaining({
@@ -3312,7 +3320,7 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves an attachment-only native launch to the backend", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3338,7 +3346,7 @@ describe("TerminalContainer", () => {
         base64Data: "SU1BR0U=",
       },
     ];
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3364,8 +3372,8 @@ describe("TerminalContainer", () => {
     // Optimistic projection may drop the renderer copy; the backend still owns
     // the attachments. The rewrite path would empty them and also persist paths.
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments ??
-        attachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-hidden")
+        ?.initialPromptAttachments ?? attachments,
     ).toEqual(attachments);
   });
 
@@ -3373,7 +3381,7 @@ describe("TerminalContainer", () => {
     // The backend resolves the Claude style through the repository tier as
     // well. The renderer has to reach the same verdict from the same tier, or
     // it rewrites a prompt the backend is about to dispatch with real images.
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3398,7 +3406,7 @@ describe("TerminalContainer", () => {
         },
       },
     }));
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3420,7 +3428,7 @@ describe("TerminalContainer", () => {
           : env,
       ),
     }));
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3452,7 +3460,7 @@ describe("TerminalContainer", () => {
   });
 
   test("creates a regular terminal for a ready local environment when no agent is requested", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -3568,7 +3576,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
     renderInAppCommandScope(
       <TerminalProvider>
@@ -3589,7 +3597,7 @@ describe("TerminalContainer", () => {
     });
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -3638,7 +3646,7 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
       startedAt: "2026-09-14T00:00:00.000Z",
     });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
     renderInAppCommandScope(
       <TerminalProvider>
@@ -3653,7 +3661,7 @@ describe("TerminalContainer", () => {
     });
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
         pendingAgentLaunch: false,
@@ -3696,7 +3704,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
     renderInAppCommandScope(
       <TerminalProvider>
@@ -3705,7 +3713,7 @@ describe("TerminalContainer", () => {
     );
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -3748,7 +3756,7 @@ describe("TerminalContainer", () => {
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
     armWindowStartupAgentActivation("env-hidden");
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
     renderInAppCommandScope(
       <TerminalProvider>
@@ -3757,7 +3765,7 @@ describe("TerminalContainer", () => {
     );
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
         pendingAgentLaunch: false,
@@ -3798,7 +3806,7 @@ describe("TerminalContainer", () => {
       hydration: new Map([["env-hidden", "done"]]),
       activeEnvironmentId: "env-hidden",
     } as never);
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -3824,7 +3832,7 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
       startedAt: "2026-09-14T00:00:00.000Z",
     });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
     const firstMount = renderInAppCommandScope(
       <TerminalProvider>
@@ -3839,7 +3847,8 @@ describe("TerminalContainer", () => {
     });
     expect(hasWindowStartupAgentActivation("env-hidden")).toBe(false);
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBeFalsy();
 
     await act(async () => {
@@ -3854,7 +3863,8 @@ describe("TerminalContainer", () => {
     );
     expect(hasWindowStartupAgentActivation("env-hidden")).toBe(false);
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBeFalsy();
 
     renderInAppCommandScope(
@@ -3897,7 +3907,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: true });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
     renderInAppCommandScope(
       <TerminalProvider>
@@ -3913,7 +3923,7 @@ describe("TerminalContainer", () => {
 
     await act(async () => {
       usePaneLayoutStore.getState().setActiveTab("default", "default", "env-hidden");
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "running",
         setupScriptsComplete: false,
         pendingAgentLaunch: true,
@@ -3925,7 +3935,7 @@ describe("TerminalContainer", () => {
     );
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -3982,7 +3992,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: true });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: [
         ...state.environments,
@@ -3998,7 +4008,7 @@ describe("TerminalContainer", () => {
         },
       ],
     }));
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
     const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
@@ -4127,67 +4137,77 @@ describe("TerminalContainer", () => {
     expect(mockToastError).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         branch: "unrelated-render",
       });
     });
     expect(mockToastError).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "error",
-          error: "Session handshake timed out",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "error",
+            error: "Session handshake timed out",
+          },
+        });
     });
     await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(2));
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "starting",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "starting",
+          },
+        });
     });
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "error",
-          error: "Session handshake timed out",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "error",
+            error: "Session handshake timed out",
+          },
+        });
     });
     await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(3));
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "starting",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "starting",
+          },
+        });
     });
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "error",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "error",
+          },
+        });
     });
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledTimes(4);
@@ -4228,7 +4248,8 @@ describe("TerminalContainer", () => {
     expect(savePaneLayoutMock).not.toHaveBeenCalled();
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBe(true);
   });
 
@@ -4239,13 +4260,16 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
     await waitForDurableAgentTab();
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", { branch: "rerender" });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", { branch: "rerender" });
       await Promise.resolve();
     });
 
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBe(true);
   });
 
@@ -4257,7 +4281,9 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
     await waitForDurableAgentTab();
 
-    const environment = useEnvironmentStore.getState().getEnvironmentById("env-hidden");
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById("env-hidden");
     expect(environment?.pendingAgentLaunch).toBe(true);
     expect(environment?.setupPhase).toBe("ready");
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
@@ -4286,7 +4312,9 @@ describe("TerminalContainer", () => {
     });
     // A rerender must not find a second chance to re-project it either.
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", { branch: "rerender" });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", { branch: "rerender" });
       await Promise.resolve();
     });
 
@@ -4377,7 +4405,7 @@ describe("TerminalContainer", () => {
       updatedAt: "2026-07-29T12:00:00.000Z",
       revision: 3,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -4436,7 +4464,7 @@ describe("TerminalContainer", () => {
     setupDurableLaunchEnvironment({
       agentSettings: { platforms: { opencode: { mode: "native" } } },
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -4658,7 +4686,7 @@ describe("TerminalContainer", () => {
       startedAt: "2024-01-01T00:00:00.000Z",
       terminalRunning: true,
     });
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
 
@@ -4687,12 +4715,15 @@ describe("TerminalContainer", () => {
     });
 
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")?.setupPhase ===
+        "running",
     ).toBe(true);
   });
 
   test("waits for the backend to publish the setup tab rather than adding one", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
 
     renderInAppCommandScope(
       <TerminalProvider>
@@ -4714,7 +4745,9 @@ describe("TerminalContainer", () => {
   });
 
   test("attaches a setup tab to a backend-owned setup session", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
     publishSetupTab();
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
@@ -4723,11 +4756,11 @@ describe("TerminalContainer", () => {
       startedAt: "2024-01-01T00:00:00.000Z",
       terminalRunning: true,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
 
@@ -4774,7 +4807,7 @@ describe("TerminalContainer", () => {
       .mockRejectedValueOnce(new Error("bind unavailable"))
       .mockImplementationOnce(() => new Promise(() => {}));
     seedUnboundSetupTab();
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
     }));
 
@@ -5303,8 +5336,12 @@ describe("TerminalContainer", () => {
       .mockImplementationOnce(() => new Promise<EnvironmentSetupSession>(() => {}));
     // Setup is running for both environments, so pane-layout hydration leaves
     // the seeded setup tabs alone and the second bind stays genuinely unbound.
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
-    useEnvironmentStore.getState().updateEnvironment("env-visible", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-visible", { setupPhase: "running" });
     seedUnboundSetupTab();
     seedUnboundSetupTabFor("env-visible", "container-visible");
 
@@ -5358,7 +5395,9 @@ describe("TerminalContainer", () => {
   test("grants a fresh setup-session retry budget when a reconnect follows an exhausted one", async () => {
     // Setup is still running, so stale-tab cleanup leaves the unbound setup tab
     // in place after the first budget is exhausted and a reconnect can reach it.
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
     let reconnect: (() => void) | undefined;
     listenMock.mockImplementation(async (event: string, handler: () => void) => {
       if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) reconnect = handler;
@@ -5440,7 +5479,7 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
     });
 
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -5480,12 +5519,13 @@ describe("TerminalContainer", () => {
         .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
     ).toBe("env-hidden:setup");
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")?.setupPhase ===
+        "running",
     ).toBe(true);
   });
 
   test("auto-resolves a ready local environment whose setup completed in a prior session", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -5508,7 +5548,8 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase !== "pending",
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+          ?.setupPhase !== "pending",
       ).toBe(true);
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
         { type: "plain" },
@@ -5540,7 +5581,7 @@ describe("TerminalContainer", () => {
       });
       return { ...state, environments };
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -5578,7 +5619,7 @@ describe("TerminalContainer", () => {
   test("does not persist completion when backend setup re-run fails", async () => {
     ensureEnvironmentSetupMock.mockRejectedValue(new Error("unavailable"));
 
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -5913,7 +5954,7 @@ describe("TerminalContainer", () => {
   });
 
   test("normalizes an absolute local worktree path before creating a file tab", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-visible", {
       containerId: null,
       environmentType: "local",
       worktreePath: "/tmp/env-visible-worktree",
@@ -5952,7 +5993,7 @@ describe("TerminalContainer", () => {
   });
 
   test("opens a file requested from the project board once its environment is active", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-visible", {
       containerId: null,
       environmentType: "local",
       worktreePath: "/tmp/env-visible-worktree",
@@ -5993,7 +6034,7 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves a file requested for another environment pending", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-visible", {
       containerId: null,
       environmentType: "local",
       worktreePath: "/tmp/env-visible-worktree",

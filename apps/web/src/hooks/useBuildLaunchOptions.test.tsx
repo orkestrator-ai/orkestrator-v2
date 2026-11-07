@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const getCachedOpenCodeModelCatalogMock = mock(
@@ -22,7 +23,7 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-const baseConfig = useConfigStore.getState().config;
+const baseConfig = appCommandStore(configStore).getState().config;
 
 function flushPromises() {
   return act(async () => {});
@@ -35,7 +36,7 @@ describe("useBuildLaunchOptions", () => {
     getOpencodeModelPreferencesMock.mockReset();
     getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
     getOpencodeModelPreferencesMock.mockImplementation(async () => undefined);
-    useConfigStore.setState({ config: baseConfig });
+    appCommandStore(configStore).setState({ config: baseConfig });
     useAgentModelCatalogStore.setState({
       cursorModels: [],
       grokModels: [],
@@ -141,7 +142,7 @@ describe("useBuildLaunchOptions", () => {
   });
 
   test("synthesises configured pipeline OpenCode models before a cached catalogue exists", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {
@@ -175,7 +176,7 @@ describe("useBuildLaunchOptions", () => {
   });
 
   test("includes favourited OpenCode models before a cached catalogue exists", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {
@@ -197,7 +198,7 @@ describe("useBuildLaunchOptions", () => {
   });
 
   test("does not synthesize a favourite from an excluded OpenCode provider", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {

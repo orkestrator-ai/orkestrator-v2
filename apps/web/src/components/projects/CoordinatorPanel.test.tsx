@@ -14,11 +14,11 @@ import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useConfigStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import {
@@ -58,7 +58,7 @@ const commandNodeId = () => getWindowScope().commandScope().nodeId;
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
 let useRealAgentTab = false;
-const initialConfig = useConfigStore.getState().config;
+const initialConfig = appCommandStore(configStore).getState().config;
 const pause = mock(async (): Promise<CoordinatorSnapshot> => {
   throw new Error("pause failed");
 });
@@ -371,6 +371,7 @@ import { COORDINATOR_FOCUS_PROBE_MIN_INTERVAL_MS } from "./useCoordinatorPanelDa
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { ProjectWorkspace } from "./ProjectWorkspace";
 import { useUIStore } from "@/stores";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("CoordinatorPanel", () => {
   beforeEach(() => {
@@ -383,7 +384,7 @@ describe("CoordinatorPanel", () => {
       outcome: "accepted" as const,
       requestId: input.requestId,
     }));
-    useConfigStore.setState({ config: initialConfig });
+    appCommandStore(configStore).setState({ config: initialConfig });
     useNativeComposeStore
       .getState()
       .clearDraft(createSessionKey("coordinator:coordinator-1:conversation-1", "coordinator-tab"));
@@ -409,7 +410,7 @@ describe("CoordinatorPanel", () => {
     ensuredSnapshot = snapshot;
     ensuredGit = gitStatus;
     ensureFailure = null;
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -663,10 +664,12 @@ describe("CoordinatorPanel", () => {
 
   test("the real tab dispatches the opening prompt once after a delayed authoritative read", async () => {
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     const assignedSnapshot = prepareUnassignedLaunch();
     let resolveRead!: (projection: NativeAgentSessionProjection) => void;
     const pendingRead = new Promise<NativeAgentSessionProjection>((resolve) => {
@@ -934,10 +937,12 @@ describe("CoordinatorPanel", () => {
 
     test("an automatic sync failure reports the error and still sends", async () => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({
-        enabledAgentPlatforms: ["claude"],
-        agentSettings: { defaultAgent: "claude" },
-      });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          enabledAgentPlatforms: ["claude"],
+          agentSettings: { defaultAgent: "claude" },
+        });
       prepareUnassignedLaunch();
       checkUpstream.mockImplementation(async () => ({
         offer: true,
@@ -1034,10 +1039,12 @@ describe("CoordinatorPanel", () => {
 
   test("a rejected fast-forward reports the error and still starts the conversation", async () => {
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     prepareUnassignedLaunch();
     ensuredGit = behindGit({ behind: 2 });
     syncGit.mockRejectedValueOnce(new Error("Fast-forward refused"));
@@ -1064,10 +1071,12 @@ describe("CoordinatorPanel", () => {
       dispatchIntent.mock.calls.map((call) => (call[0] as { prompt?: string }).prompt);
     const renderAssigned = async (platform: "claude" | "codex" = "claude") => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({
-        enabledAgentPlatforms: [platform],
-        agentSettings: { defaultAgent: platform },
-      });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          enabledAgentPlatforms: [platform],
+          agentSettings: { defaultAgent: platform },
+        });
       ensuredSnapshot = {
         ...snapshot,
         workspace: {
@@ -1345,7 +1354,7 @@ describe("CoordinatorPanel", () => {
         ensuredGit = behindGit();
         await renderAssigned();
         const fetches = await fetchesAfterOpen();
-        const previousEnvironments = useEnvironmentStore.getState().environments;
+        const previousEnvironments = appCommandStore(environmentStore).getState().environments;
         try {
           act(() => {
             if (kind === "recovering") {
@@ -1353,7 +1362,7 @@ describe("CoordinatorPanel", () => {
                 .getState()
                 .setProjection(launchSessionKey, launchProjection("recovering", [], 50));
             } else {
-              useEnvironmentStore.setState({
+              appCommandStore(environmentStore).setState({
                 environments: [
                   ...previousEnvironments,
                   {
@@ -1381,7 +1390,7 @@ describe("CoordinatorPanel", () => {
           expect(syncGit).not.toHaveBeenCalled();
           expect(mergeDialog() === null).toBe(true);
         } finally {
-          useEnvironmentStore.setState({ environments: previousEnvironments });
+          appCommandStore(environmentStore).setState({ environments: previousEnvironments });
         }
       },
     );
@@ -1628,14 +1637,14 @@ describe("CoordinatorPanel", () => {
   });
 
   test("renders missing-checkout, unavailable, paused, startup-error, and dirty states", async () => {
-    useProjectStore.setState((state) => ({
+    appCommandStore(projectStore).setState((state) => ({
       projects: state.projects.map((project) => ({ ...project, localPath: null })),
     }));
     const first = render(<CoordinatorPanel projectId="project-1" />);
     expect(screen.getByText("Connect a local checkout")).toBeTruthy();
     first.unmount();
 
-    useProjectStore.setState((state) => ({
+    appCommandStore(projectStore).setState((state) => ({
       projects: state.projects.map((project) => ({ ...project, localPath: "/checkout" })),
     }));
     ensuredSnapshot = {
@@ -1698,7 +1707,7 @@ describe("CoordinatorPanel", () => {
   test("unmounts the previous project's chat before loading the next project", async () => {
     const rendered = render(<ProjectWorkspace projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    useProjectStore.setState((state) => ({
+    appCommandStore(projectStore).setState((state) => ({
       projects: [
         ...state.projects,
         {
@@ -1964,17 +1973,17 @@ describe("CoordinatorPanel", () => {
       },
     };
     const worker = { id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment;
-    const previousEnvironments = useEnvironmentStore.getState().environments;
+    const previousEnvironments = appCommandStore(environmentStore).getState().environments;
 
     beforeEach(() => {
       workerPromptsForTest = [];
       listHumanPrompts.mockClear();
-      useEnvironmentStore.setState({ environments: [worker] });
+      appCommandStore(environmentStore).setState({ environments: [worker] });
       ensuredSnapshot = { ...snapshot, workflows: [running] };
     });
     afterEach(() => {
       workerPromptsForTest = [];
-      useEnvironmentStore.setState({ environments: previousEnvironments });
+      appCommandStore(environmentStore).setState({ environments: previousEnvironments });
     });
 
     test.each([

@@ -6,7 +6,7 @@ import { mockReadImage } from "../../../../../tests/mocks/clipboard";
 import { toast } from "sonner";
 // Registered once in tests/setup.ts; this file only varies its behavior.
 import { invoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import type { Environment } from "@/types";
 import {
@@ -23,6 +23,7 @@ import {
   useDesignPromptImagePaste,
   type DesignPromptImage,
 } from "./design-prompt-images";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<
   (command: string, args?: Record<string, unknown>) => Promise<unknown>
@@ -33,7 +34,7 @@ function image(id: string): DesignPromptImage {
 }
 
 function seedEnvironment(overrides: Partial<Environment> = {}) {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -106,7 +107,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   restorePaste();
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
 });

@@ -17,7 +17,7 @@ import {
 } from "@/contexts/TerminalContext";
 import { createSessionKey } from "@/lib/utils";
 import { emptyProjection, type DesignProjection } from "@/stores/designStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
@@ -32,6 +32,7 @@ import {
   pasteImage,
   settlePaste,
 } from "./design-paste-test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<
   (command: string, args?: Record<string, unknown>) => Promise<unknown>
@@ -182,7 +183,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   // After unmount, so the reset does not re-render a mounted dialog outside act().
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
 });
@@ -190,7 +191,7 @@ afterEach(() => {
 describe("DesignAgentDialog", () => {
   function supportPaste(write?: Promise<string>) {
     const restore = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -657,7 +658,7 @@ describe("DesignAgentDialog", () => {
 
   test("attaches a pasted image to the chosen conversation's draft", async () => {
     const restorePaste = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",

@@ -21,7 +21,7 @@ import {
 } from "@/contexts";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useUIStore } from "@/stores/uiStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -55,6 +55,7 @@ import {
 } from "./multi-review-steps";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * A node of the flow graph. Nodes are tabs controlling the inspector, named
@@ -438,8 +439,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         tabId: "agent-job-pr",
       },
     };
-    const environments = useEnvironmentStore.getState().environments;
-    useEnvironmentStore.setState({
+    const environments = appCommandStore(environmentStore).getState().environments;
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -498,7 +499,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         (screen.getByRole("button", { name: "Open PR session" }) as HTMLButtonElement).disabled,
       ).toBe(true);
     } finally {
-      useEnvironmentStore.setState({ environments });
+      appCommandStore(environmentStore).setState({ environments });
       useUIStore.setState({ selectedEnvironmentId: null });
       setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     }
@@ -4673,8 +4674,8 @@ describe("PR background state and review clock", () => {
   });
 
   test("accepts a manual PR for a clean review with automatic PR off and no Address Findings or launch", () => {
-    const saved = useEnvironmentStore.getState().environments;
-    useEnvironmentStore.setState({
+    const saved = appCommandStore(environmentStore).getState().environments;
+    appCommandStore(environmentStore).setState({
       environments: [
         { id: "env-1", prUrl: "https://github.com/o/r/pull/42", prState: "open" } as Environment,
       ],
@@ -4705,13 +4706,13 @@ describe("PR background state and review clock", () => {
       expect(inspector().queryByText(/Use the PR button/) === null).toBe(true);
     } finally {
       cleanup();
-      useEnvironmentStore.setState({ environments: saved });
+      appCommandStore(environmentStore).setState({ environments: saved });
     }
   });
 
   test("keeps review duration stable during PR-only work, completion and remount despite a stale projection", async () => {
     const restorePane = installPrTab();
-    const savedEnvironments = useEnvironmentStore.getState().environments;
+    const savedEnvironments = appCommandStore(environmentStore).getState().environments;
     const savedProjections = useNativeAgentProjectionStore.getState().projections;
     const originalNow = Date.now;
     let now = Date.parse("2026-08-14T00:02:00.000Z");
@@ -4741,7 +4742,7 @@ describe("PR background state and review clock", () => {
             ],
           ]),
         });
-        useEnvironmentStore.setState({
+        appCommandStore(environmentStore).setState({
           environments: [
             {
               id: "env-1",
@@ -4762,7 +4763,7 @@ describe("PR background state and review clock", () => {
       view.unmount();
       Date.now = originalNow;
       restorePane();
-      useEnvironmentStore.setState({ environments: savedEnvironments });
+      appCommandStore(environmentStore).setState({ environments: savedEnvironments });
       useNativeAgentProjectionStore.setState({ projections: savedProjections });
     }
   });

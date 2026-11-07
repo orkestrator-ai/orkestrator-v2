@@ -5,9 +5,10 @@ import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realDndKitCore from "@dnd-kit/core";
 import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realDndKitCoreSnapshot = { ...realDndKitCore };
 const realBackendSnapshot = { ...realBackend };
@@ -74,7 +75,7 @@ function environment(overrides: Partial<Environment> = {}): Environment {
 beforeEach(() => {
   cleanup();
   containerRenders = 0;
-  useEnvironmentStore.setState({ environments: [environment()] });
+  appCommandStore(environmentStore).setState({ environments: [environment()] });
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -117,7 +118,7 @@ async function renderContainer(): Promise<void> {
 
 /** Writes to env-1 that change only fields the container does not read. */
 async function writeUnrelatedFields(): Promise<void> {
-  const store = useEnvironmentStore.getState();
+  const store = appCommandStore(environmentStore).getState();
   await act(async () => {
     store.updateEnvironment("env-1", { lastActivityAt: "2024-01-02T00:00:00.000Z" });
     store.updateEnvironmentStatus("env-1", "stopping");
@@ -173,12 +174,12 @@ test("an unrelated environment field does not re-render the container", async ()
 });
 
 test("another environment in the project does not re-render the container", async () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment(), environment({ id: "env-2", order: 1 })],
   });
   await renderContainer();
   await act(async () => {
-    useEnvironmentStore
+    appCommandStore(environmentStore)
       .getState()
       .mergeEnvironmentsForProject("project-1", [
         environment(),
@@ -191,15 +192,17 @@ test("another environment in the project does not re-render the container", asyn
 test("a field the container reads still re-renders it", async () => {
   await renderContainer();
   await act(async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-1", {
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-1", {
+        agentSettings: { defaultAgent: "claude" },
+      });
   });
   expect(containerRenders).toBeGreaterThan(0);
 });
 
 test("the launch handoff moves focus once, whatever unrelated writes surround it", async () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       environment({
         setupPhase: "running",
@@ -220,7 +223,9 @@ test("the launch handoff moves focus once, whatever unrelated writes surround it
   expect(selectedTabId()).toBe("setup");
 
   await act(async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-1", { setupPhase: "ready" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-1", { setupPhase: "ready" });
   });
   expect(selectedTabId()).toBe("startup-agent");
 
@@ -234,7 +239,7 @@ test("the launch handoff moves focus once, whatever unrelated writes surround it
 });
 
 test("the setup check still sees a user proceeding past a failed setup", async () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment({ setupPhase: "failed", pendingAgentLaunch: true })],
   });
   seedStartupAgentPane();
@@ -242,7 +247,9 @@ test("the setup check still sees a user proceeding past a failed setup", async (
   expect(selectedTabId()).toBe("setup");
 
   await act(async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-1", { setupOverride: true });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-1", { setupOverride: true });
   });
   expect(selectedTabId()).toBe("startup-agent");
 });
@@ -257,15 +264,17 @@ test("a provider session binds when published and unrelated writes do not bind i
     expect(updateTabNativeSessionId).not.toHaveBeenCalled();
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-1", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "running",
-          providerSessionId: "provider-session",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-1", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "running",
+            providerSessionId: "provider-session",
+          },
+        });
     });
     const startupTab = usePaneLayoutStore
       .getState()

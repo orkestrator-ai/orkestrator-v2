@@ -21,11 +21,11 @@ import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { mockToastWarning } from "../../mocks/sonner";
 import {
-  useClaudeOptionsStore,
-  useConfigStore,
+  claudeOptionsStore,
+  configStore,
+  environmentStore,
+  projectStore,
   useUIStore,
-  useEnvironmentStore,
-  useProjectStore,
 } from "@/stores";
 import type { Environment, Project } from "@/types";
 import { useAppDialogStore } from "@/stores/appDialogStore";
@@ -44,6 +44,7 @@ import * as realUseProjects from "@/hooks/useProjects";
 import * as realUseEnvironments from "@/hooks/useEnvironments";
 import * as realUseEnvironmentDiffStats from "@/hooks/useEnvironmentDiffStats";
 import * as realBackend from "@/lib/backend";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realDndCoreSnapshot = { ...realDndCore };
 const realUseProjectsSnapshot = { ...realUseProjects };
@@ -238,7 +239,7 @@ describe("HierarchicalSidebar", () => {
       list: connectionList([remoteConnection("a", "Machine A", "teal")]),
       datasets: { a: { projects: [], environments: {} } },
     });
-    useProjectStore.getState().setProjects([project]);
+    appCommandStore(projectStore).getState().setProjects([project]);
     useMachineViewStore.getState().setGrouping("project");
     let view: ReturnType<typeof render> | undefined;
     try {
@@ -310,8 +311,8 @@ describe("HierarchicalSidebar", () => {
         projectId: sameRepository.id,
       },
     ];
-    useProjectStore.getState().setProjects(projectsValue);
-    useEnvironmentStore.getState().setEnvironments(environmentsValue);
+    appCommandStore(projectStore).getState().setProjects(projectsValue);
+    appCommandStore(environmentStore).getState().setEnvironments(environmentsValue);
     useMachineViewStore.getState().setGrouping("repository");
     let view: ReturnType<typeof render> | undefined;
     try {
@@ -378,7 +379,7 @@ describe("HierarchicalSidebar", () => {
         list: connectionList([remoteConnection("a", "Machine A", "teal")]),
         datasets: { a: { projects: [], environments: {} } },
       });
-      useProjectStore.getState().setProjects([project]);
+      appCommandStore(projectStore).getState().setProjects([project]);
       useMachineViewStore.getState().setGrouping(mode);
       let view: ReturnType<typeof render> | undefined;
       try {
@@ -468,8 +469,15 @@ describe("HierarchicalSidebar", () => {
     arrangeProjectsMock.mockClear();
     arrangeProjectsMock.mockImplementation(async () => {});
     ensureProjectHomeMock.mockClear();
-    useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-    useProjectStore.setState({ projects: [], deletingProjects: new Set(), hasLoaded: true });
+    appCommandStore(environmentStore).setState({
+      environments: [],
+      deletingEnvironments: new Set(),
+    });
+    appCommandStore(projectStore).setState({
+      projects: [],
+      deletingProjects: new Set(),
+      hasLoaded: true,
+    });
     projectsValue = [project];
     environmentsValue = [];
     projectsLoadingValue = false;
@@ -485,7 +493,7 @@ describe("HierarchicalSidebar", () => {
     HTMLCanvasElement.prototype.toDataURL = (() =>
       "data:image/png;base64,QUJD") as typeof HTMLCanvasElement.prototype.toDataURL;
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
     useUIStore.setState({
@@ -505,7 +513,7 @@ describe("HierarchicalSidebar", () => {
       activitySortOrder: "priority",
       zoomLevel: 100,
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -1609,7 +1617,7 @@ describe("HierarchicalSidebar", () => {
         background: true,
         silent: true,
       });
-      expect(useClaudeOptionsStore.getState().getOptions("env-created")).toEqual(
+      expect(appCommandStore(claudeOptionsStore).getState().getOptions("env-created")).toEqual(
         expect.objectContaining({
           launchAgent: true,
           agentType: "claude",
@@ -1826,7 +1834,7 @@ describe("HierarchicalSidebar", () => {
     const forgetRequest = () => useRemoteWorkspaceStore.setState(initialRemote, true);
 
     test("opens the create dialog its window asked for once config has loaded", async () => {
-      useConfigStore.setState({ hasLoaded: false });
+      appCommandStore(configStore).setState({ hasLoaded: false });
       askForCreate("project-1");
       try {
         render(<NodeWorkspaceHost />);
@@ -1834,7 +1842,7 @@ describe("HierarchicalSidebar", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
 
-        act(() => useConfigStore.setState({ hasLoaded: true }));
+        act(() => appCommandStore(configStore).setState({ hasLoaded: true }));
         await screen.findByText(/^Create Ork \(Environment\)/);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
@@ -1848,8 +1856,8 @@ describe("HierarchicalSidebar", () => {
         const localProject = { ...project, localPath: "/tmp/project-one" };
         const ports = [{ hostPort: 4300, containerPort: 3000, protocol: "tcp" as const }];
         projectsValue = [localProject];
-        useProjectStore.setState({ projects: [localProject] });
-        useConfigStore.setState({ hasLoaded: false });
+        appCommandStore(projectStore).setState({ projects: [localProject] });
+        appCommandStore(configStore).setState({ hasLoaded: false });
         askForCreate(project.id);
         const sidebar = (ready: boolean) => (
           <DockerAvailabilityProvider available={ready && available} ready={ready}>
@@ -1859,24 +1867,26 @@ describe("HierarchicalSidebar", () => {
         try {
           const view = render(sidebar(false));
           act(() => {
-            const config = useConfigStore.getState().config;
-            useConfigStore.getState().setConfig({
-              ...config,
-              repositories: {
-                [project.id]: {
-                  defaultBranch: "main",
-                  prBaseBranch: "main",
-                  lastEnvironmentType: "containerized",
-                  defaultPortMappings: ports,
-                  agentSettings: {
-                    defaultAgent: "codex",
-                    platforms: {
-                      codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
+            const config = appCommandStore(configStore).getState().config;
+            appCommandStore(configStore)
+              .getState()
+              .setConfig({
+                ...config,
+                repositories: {
+                  [project.id]: {
+                    defaultBranch: "main",
+                    prBaseBranch: "main",
+                    lastEnvironmentType: "containerized",
+                    defaultPortMappings: ports,
+                    agentSettings: {
+                      defaultAgent: "codex",
+                      platforms: {
+                        codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
+                      },
                     },
                   },
                 },
-              },
-            });
+              });
           });
           // Config and projects arrived first; the initial probe is still pending.
           expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
@@ -1927,14 +1937,14 @@ describe("HierarchicalSidebar", () => {
     test("waits for both initial project hydration and an in-flight project load", async () => {
       projectsValue = [];
       projectsLoadingValue = false;
-      useProjectStore.setState({ hasLoaded: false });
+      appCommandStore(projectStore).setState({ hasLoaded: false });
       askForCreate(project.id);
       try {
         const view = render(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         projectsValue = [project];
         projectsLoadingValue = true;
-        act(() => useProjectStore.setState({ hasLoaded: true, projects: [project] }));
+        act(() => appCommandStore(projectStore).setState({ hasLoaded: true, projects: [project] }));
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         projectsLoadingValue = false;
         view.rerender(<NodeWorkspaceHost />);
@@ -1953,7 +1963,7 @@ describe("HierarchicalSidebar", () => {
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         // A later project refresh must not revive an already discarded request.
         projectsValue = [project];
-        act(() => useProjectStore.setState({ projects: [project] }));
+        act(() => appCommandStore(projectStore).setState({ projects: [project] }));
         view.rerender(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
@@ -1963,20 +1973,20 @@ describe("HierarchicalSidebar", () => {
     });
 
     test("keeps a create request pending when config fails until a retry loads it", async () => {
-      useConfigStore.setState({ hasLoaded: false, isLoading: true });
+      appCommandStore(configStore).setState({ hasLoaded: false, isLoading: true });
       askForCreate(project.id);
       try {
         const view = render(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         act(() => {
-          useConfigStore.getState().setError("Config could not be loaded");
-          useConfigStore.getState().setLoading(false);
+          appCommandStore(configStore).getState().setError("Config could not be loaded");
+          appCommandStore(configStore).getState().setLoading(false);
         });
         view.rerender(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
         act(() => {
-          const state = useConfigStore.getState();
+          const state = appCommandStore(configStore).getState();
           state.setError(null);
           state.setConfig(structuredClone(state.config));
         });
@@ -2410,7 +2420,7 @@ describe("HierarchicalSidebar", () => {
         lifecycleOperation: "deleting",
       },
     ];
-    useEnvironmentStore.getState().setEnvironments(environmentsValue);
+    appCommandStore(environmentStore).getState().setEnvironments(environmentsValue);
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByRole("button", { name: /^In Flight/ }), { metaKey: true });
@@ -2837,7 +2847,7 @@ describe("HierarchicalSidebar", () => {
 
   test("project teardown includes a home from the latest store when the sidebar snapshot is stale", async () => {
     const home = { ...createdEnvironment, id: "new-home", projectHome: true };
-    useEnvironmentStore.setState({ environments: [home] });
+    appCommandStore(environmentStore).setState({ environments: [home] });
     await deleteProjectAndEnvironments(
       project.id,
       [createdEnvironment],
@@ -2863,7 +2873,7 @@ describe("HierarchicalSidebar", () => {
           resolve = done;
         }),
     );
-    useProjectStore.setState({ projects: [{ ...project, localPath: "/checkout" }] });
+    appCommandStore(projectStore).setState({ projects: [{ ...project, localPath: "/checkout" }] });
     useUIStore.setState({
       selectedProjectId: project.id,
       selectedEnvironmentId: createdEnvironment.id,
@@ -2896,9 +2906,9 @@ describe("HierarchicalSidebar", () => {
       createdEnvironment.id,
       "home",
     ]);
-    expect(useEnvironmentStore.getState().environments).toEqual([]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([]);
     expect(removeProjectMock).toHaveBeenCalledTimes(1);
-    expect(useProjectStore.getState().deletingProjects.size).toBe(0);
+    expect(appCommandStore(projectStore).getState().deletingProjects.size).toBe(0);
   });
 
   test("hidden homes keep project attention and activity routes without inflating environment rows or search", async () => {

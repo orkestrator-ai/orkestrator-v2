@@ -7,12 +7,13 @@ import type {
 } from "@orkestrator/protocol/graphs/launch";
 import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { GraphLaunchDialog } from "./GraphLaunchDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -178,7 +179,7 @@ function installBackend() {
 }
 
 function seedStores() {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       { id: ENVIRONMENT, projectId: PROJECT, name: "feature-login" } as Environment,
       { id: "env-other", projectId: "project-2", name: "elsewhere" } as Environment,

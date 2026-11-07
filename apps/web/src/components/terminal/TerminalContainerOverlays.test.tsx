@@ -7,11 +7,11 @@ import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { TerminalProvider } from "@/contexts";
 
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
 
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
@@ -36,6 +36,7 @@ import * as realDndKitCore from "@dnd-kit/core";
 import * as realNativeEvents from "@/lib/native/events";
 
 import { listen } from "@/lib/native/events";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -86,7 +87,9 @@ const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
 
 const ensureEnvironmentSetupMock = mock(
   async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId)!;
     return {
       setupStarted: false,
       environment: {
@@ -98,7 +101,7 @@ const ensureEnvironmentSetupMock = mock(
 );
 
 const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   setupScriptsComplete: true,
 }));
 
@@ -113,7 +116,7 @@ const awaitEnvironmentSetupSessionMock = mock(
 
 const setEnvironmentPendingAgentLaunchMock = mock(
   async (environmentId: string, pending: boolean) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     pendingAgentLaunch: pending,
     ...(pending
       ? {}
@@ -125,13 +128,13 @@ const setEnvironmentPendingAgentLaunchMock = mock(
 );
 
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
 
 const setEnvironmentInitialPromptMock = mock(
   async (environmentId: string, initialPrompt: string) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     initialPrompt,
   }),
 );
@@ -169,7 +172,9 @@ const writeInitialPromptAttachmentsMock = mock(
     environmentId: string,
     attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
   ) => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const usedNames = new Set<string>();
     return Promise.all(
@@ -317,7 +322,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-visible",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-visible",
@@ -372,7 +377,9 @@ describe("TerminalContainer", () => {
     getSetupCommandsMock.mockResolvedValue(null);
     ensureEnvironmentSetupMock.mockReset();
     ensureEnvironmentSetupMock.mockImplementation(async (environmentId: string) => {
-      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+      const environment = appCommandStore(environmentStore)
+        .getState()
+        .getEnvironmentById(environmentId)!;
       return {
         setupStarted: false,
         environment: {
@@ -383,7 +390,7 @@ describe("TerminalContainer", () => {
     });
     runEnvironmentSetupMock.mockReset();
     runEnvironmentSetupMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       setupScriptsComplete: true,
     }));
     getEnvironmentSetupSessionMock.mockReset();
@@ -392,7 +399,7 @@ describe("TerminalContainer", () => {
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         pendingAgentLaunch: pending,
         ...(pending
           ? {}
@@ -404,13 +411,13 @@ describe("TerminalContainer", () => {
     );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
     setEnvironmentInitialPromptMock.mockReset();
     setEnvironmentInitialPromptMock.mockImplementation(
       async (environmentId: string, initialPrompt: string) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         initialPrompt,
       }),
     );
@@ -430,7 +437,7 @@ describe("TerminalContainer", () => {
       async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`,
     );
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -445,13 +452,13 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
   });
 
   test("shows the stopped overlay and clears panes for a stopped failed setup", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
       status: "stopped",
       setupScriptsComplete: false,
       setupPhase: "failed",
@@ -552,7 +559,7 @@ describe("TerminalContainer", () => {
   });
 
   test("renders local creation and stopped overlays with environment wording", () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"

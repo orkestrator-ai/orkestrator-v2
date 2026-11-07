@@ -20,7 +20,7 @@ import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolde
 import { Collapsible } from "@/components/ui/collapsible";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { TerminalProvider } from "@/contexts/TerminalContext";
-import { useProjectStore, useEnvironmentStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, useUIStore } from "@/stores";
 import {
   useCoordinatorActivity,
   useCoordinatorActivityStore,
@@ -29,6 +29,7 @@ import { useMachineViewStore } from "@/stores/machineViewStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { type ActivitySortOrder, useUIChromeStore } from "@/stores/uiChromeStore";
 import type { Project, Environment } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ALIGNMENT_ICON =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -338,8 +339,8 @@ function install() {
       }
     },
   };
-  useProjectStore.getState().setProjects(projects);
-  useEnvironmentStore.setState({ environments });
+  appCommandStore(projectStore).getState().setProjects(projects);
+  appCommandStore(environmentStore).setState({ environments });
   if (mergeReady) {
     // The fixture has no PR monitor service, so seed its confirmed mirror.
     usePrMonitorStore.getState().applySnapshot(

@@ -10,7 +10,7 @@ import { McpServersSettingsLink } from "@/components/settings/mcp-servers/McpSer
 import { onMcpSettingsIntent, type McpSettingsIntent } from "@/lib/mcp-settings-navigation";
 import { listen as nativeListen } from "@/lib/native/events";
 import { onResourceChanged } from "@/lib/resource-sync";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
@@ -18,6 +18,7 @@ import { joinLiveMcpServer } from "../settings/mcp-servers/mcp-live-join";
 import { definition, snapshot } from "../settings/mcp-servers/mcp-test-fixtures";
 import { McpLiveJoinNotice } from "../settings/mcp-servers/McpLiveJoinNotice";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
+import { appCommandStore } from "@/test/app-command-store";
 
 const listenMock = nativeListen as unknown as ReturnType<typeof mock>;
 
@@ -183,11 +184,11 @@ describe("AgentInfoMcpSection shows what to do outside Orkestrator", () => {
 
 describe("AgentInfoMcpSection says where servers connect from", () => {
   function withEnvironment(environmentType: "local" | "container") {
-    const previous = useEnvironmentStore.getState().environments;
-    useEnvironmentStore.setState({
+    const previous = appCommandStore(environmentStore).getState().environments;
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", name: "env-a", environmentType } as Environment],
     });
-    cleanups.push(() => useEnvironmentStore.setState({ environments: previous }));
+    cleanups.push(() => appCommandStore(environmentStore).setState({ environments: previous }));
   }
 
   test("a failing server in a container names the container", () => {

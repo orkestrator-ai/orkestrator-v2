@@ -12,10 +12,11 @@ import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
-import { useConfigStore, useEnvironmentStore } from "@/stores";
+import { configStore, environmentStore } from "@/stores";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useAccountMachineStore } from "./account-machine";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
@@ -170,15 +171,15 @@ function dockerStats(counts: { containersRunning: number; containersTotal: numbe
 }
 const initialPortal = portalStore.getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
-const initialConfig = useConfigStore.getState();
+const initialConfig = appCommandStore(configStore).getState();
 const initialSettings = useGlobalSettingsStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 afterEach(() => {
   portalStore.store.setState(initialPortal);
   useRemoteWorkspaceStore.setState(initialRemote);
-  useConfigStore.setState(initialConfig);
+  appCommandStore(configStore).setState(initialConfig);
   useGlobalSettingsStore.setState(initialSettings);
-  useEnvironmentStore.setState(initialEnvironments);
+  appCommandStore(environmentStore).setState(initialEnvironments);
   useAccountMachineStore.getState().choose(undefined);
   invokeMock.mockReset();
 });
@@ -200,7 +201,7 @@ test("the Docker tab renders while global config is still loading", async () => 
   });
   render(<SettingsPage open defaultSection="docker" onOpenChange={() => undefined} />);
   expect(await screen.findByText("System Resources")).toBeTruthy();
-  expect(useConfigStore.getState().isLoading).toBe(true);
+  expect(appCommandStore(configStore).getState().isLoading).toBe(true);
   expect(screen.queryByText("Loading Docker stats...") === null).toBe(true);
 });
 
@@ -320,7 +321,9 @@ test("a remote workspace opens Docker in parent Settings and every action target
   await waitFor(() =>
     expect(routed.some((call) => call.command === "reattach_container")).toBe(true),
   );
-  expect(useEnvironmentStore.getState().environments).toEqual(initialEnvironments.environments);
+  expect(appCommandStore(environmentStore).getState().environments).toEqual(
+    initialEnvironments.environments,
+  );
   await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
 
   fireEvent.click(screen.getByRole("button", { name: "Review cleanup…" }));

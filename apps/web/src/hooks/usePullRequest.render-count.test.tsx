@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { usePullRequest } from "./usePullRequest";
+import { appCommandStore } from "@/test/app-command-store";
 
 // WEB-7: the hook used to call `useEnvironmentStore()` with no selector, so
 // every write to the store re-rendered the action bar that consumes it.
@@ -20,10 +21,10 @@ function environment(id: string, overrides: Partial<Environment> = {}): Environm
   } as Environment;
 }
 
-const INITIAL = useEnvironmentStore.getState();
+const INITIAL = appCommandStore(environmentStore).getState();
 
 beforeEach(() => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       environment("environment-1", {
         prUrl: "https://github.com/acme/app/pull/1",
@@ -37,7 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useEnvironmentStore.setState(INITIAL, true);
+  appCommandStore(environmentStore).setState(INITIAL, true);
 });
 
 describe("usePullRequest subscriptions", () => {
@@ -53,7 +54,7 @@ describe("usePullRequest subscriptions", () => {
 
     const before = renders;
     act(() => {
-      const store = useEnvironmentStore.getState();
+      const store = appCommandStore(environmentStore).getState();
       store.updateEnvironmentStatus("environment-2", "stopped");
       store.setEnvironmentPR("environment-2", "https://github.com/acme/app/pull/2", "open");
       store.setDeleting("environment-2", true);
@@ -62,7 +63,7 @@ describe("usePullRequest subscriptions", () => {
 
     // A change to this environment's PR fields still reaches the consumer.
     act(() => {
-      useEnvironmentStore
+      appCommandStore(environmentStore)
         .getState()
         .setEnvironmentPR("environment-1", "https://github.com/acme/app/pull/1", "merged", true);
     });

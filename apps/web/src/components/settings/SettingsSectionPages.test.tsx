@@ -3,9 +3,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import * as backend from "@/lib/backend";
 import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { RepositorySettings } from "./RepositorySettings";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL } from "@orkestrator/protocol/coordinator";
 import type { Environment, Project } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const project: Project = {
   id: "layout-project",
@@ -83,7 +84,7 @@ test("repository section navigation uses menu titles and widens Defaults only", 
 
 for (const stored of [undefined, true]) {
   test(`repository coordinator form loads ${stored ?? "default off"} and saves the edited switch`, async () => {
-    const original = useConfigStore.getState().config;
+    const original = appCommandStore(configStore).getState().config;
     const config = {
       ...original,
       repositories: {
@@ -95,7 +96,7 @@ for (const stored of [undefined, true]) {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const save = spyOn(backend, "patchRepositorySettings").mockResolvedValue(config);
     const close = mock(() => {});
     try {
@@ -114,7 +115,7 @@ for (const stored of [undefined, true]) {
       expect(save.mock.calls[0]![2]).toEqual(stored ? ["coordinatorOtherEnvironments"] : []);
       await waitFor(() => expect(close).toHaveBeenCalledWith(false));
     } finally {
-      useConfigStore.setState({ config: original });
+      appCommandStore(configStore).setState({ config: original });
     }
   });
 }

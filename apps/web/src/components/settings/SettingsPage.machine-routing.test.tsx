@@ -3,14 +3,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useAccountMachineStore } from "./account-machine";
 import { SettingsPage } from "./SettingsPage";
 import type { AppConfig } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const workspace = invoke as unknown as ReturnType<typeof mock>;
-const initialConfig = useConfigStore.getState();
+const initialConfig = appCommandStore(configStore).getState();
 const initialPortal = portalStore.getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 let configs: Record<string, AppConfig>;
@@ -106,7 +107,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   portalStore.store.setState(initialPortal);
-  useConfigStore.setState(initialConfig);
+  appCommandStore(configStore).setState(initialConfig);
   useRemoteWorkspaceStore.setState(initialRemote);
   useAccountMachineStore.getState().choose(undefined);
   workspace.mockReset();

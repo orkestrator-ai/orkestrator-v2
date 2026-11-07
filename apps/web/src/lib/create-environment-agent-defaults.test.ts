@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { resolveCreateEnvironmentAgentDefaults } from "./create-environment-agent-defaults";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "sonnet", name: "Sonnet", reasoningEfforts: ["low", "high"] }],
@@ -242,7 +243,8 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
   test("honours the shipped global Claude preference exactly as the other launchers do", () => {
     useAgentModelCatalogStore.setState({ claudeModels: [] });
     const shippedClaudeModel =
-      useConfigStore.getInitialState().config.global.agentSettings?.platforms?.claude?.model;
+      appCommandStore(configStore).getInitialState().config.global.agentSettings?.platforms?.claude
+        ?.model;
     expect(shippedClaudeModel).toBe("claude-sonnet-5-5");
 
     const shippedCatalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());

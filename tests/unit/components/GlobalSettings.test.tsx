@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { configStore } from "@/stores/configStore";
+import { projectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
@@ -23,6 +23,7 @@ import type {
   GlobalConfig,
   WebClientStatus,
 } from "@/types";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 // What a save with nothing to clear sends beside its patch; toHaveBeenCalledWith
 // ignores the undefined `machine`, and any cleared key or machine would fail it.
@@ -31,7 +32,7 @@ const SAVE_OPTIONS = { unset: [], machine: undefined };
 // As the backend does, merge the changed keys onto the current settings.
 const mockPatchGlobalConfig = mock(
   async (patch: Record<string, unknown>, options?: { unset?: string[] }) => {
-    const global = { ...useConfigStore.getState().config.global, ...patch } as Record<
+    const global = { ...appCommandStore(configStore).getState().config.global, ...patch } as Record<
       string,
       unknown
     >;
@@ -43,7 +44,7 @@ const mockPatchGlobalConfig = mock(
 const mockSetGitHubToken = mock(async (token: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     githubTokenConfigured: token !== null,
   },
   repositories: {},
@@ -51,7 +52,7 @@ const mockSetGitHubToken = mock(async (token: string | null) => ({
 const mockSetCursorApiKey = mock(async (apiKey: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     cursorApiKeyConfigured: apiKey !== null,
   },
   repositories: {},
@@ -59,7 +60,7 @@ const mockSetCursorApiKey = mock(async (apiKey: string | null) => ({
 const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     anthropicApiKeyConfigured: apiKey !== null,
   },
   repositories: {},
@@ -67,7 +68,7 @@ const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
 const mockSetOpenCodeZenApiKey = mock(async (apiKey: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     openCodeZenApiKeyConfigured: apiKey !== null,
   },
   repositories: {},
@@ -248,7 +249,7 @@ async function flushAutoSave() {
 
 describe("GlobalSettings", () => {
   const setSavedCodexMaxConcurrentThreads = (value: number) => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -361,10 +362,10 @@ describe("GlobalSettings", () => {
       source: "file" as const,
     }));
     window.orkestratorGateway = { enabled: true };
-    useProjectStore.setState({ projects: [], isLoading: false, error: null });
+    appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
     useUIStore.setState({ selectedProjectId: null });
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -403,7 +404,7 @@ describe("GlobalSettings", () => {
   });
 
   test("Cursor sign-in controls remain available when Cursor is disabled", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
@@ -642,7 +643,9 @@ describe("GlobalSettings", () => {
 
       expect(input.value).toBe("7");
       await flushAutoSave();
-      expect(useConfigStore.getState().config.global.codexMaxConcurrentThreads).toBe(7);
+      expect(appCommandStore(configStore).getState().config.global.codexMaxConcurrentThreads).toBe(
+        7,
+      );
       expect(mockPatchGlobalConfig).not.toHaveBeenCalled();
     });
   }
@@ -858,7 +861,7 @@ describe("GlobalSettings", () => {
   });
 
   test("renders the authoritative disabled status as Off", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, webClientEnabled: false },
@@ -1039,7 +1042,7 @@ describe("GlobalSettings", () => {
     await screen.findByLabelText("Gateway token");
 
     act(() => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         config: {
           ...state.config,
           global: { ...state.config.global, webClientEnabled: false },
@@ -1190,7 +1193,7 @@ describe("GlobalSettings", () => {
         .map((button) => button.closest("li")?.querySelector("span")?.textContent ?? "");
 
     test("names and refreshes the fallback repository when none is selected", async () => {
-      useProjectStore.setState({
+      appCommandStore(projectStore).setState({
         projects: [
           {
             id: "project-2",
@@ -1323,7 +1326,7 @@ describe("GlobalSettings", () => {
     });
 
     test("refuses to add past the stored provider cap", () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         config: {
           ...state.config,
           global: {
@@ -1431,7 +1434,7 @@ describe("GlobalSettings", () => {
   });
 
   test("falls back to the built-in instruction for malformed persisted values", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, reviewInstruction: 123 as never },
@@ -1601,7 +1604,7 @@ describe("GlobalSettings", () => {
   });
 
   test("shows all platforms and persists visibility choices", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -1634,7 +1637,7 @@ describe("GlobalSettings", () => {
 
   test("rehydrates coordinator research controls and saves mode and server edits", async () => {
     const servers = [{ name: "docs", url: "https://docs.example/mcp" }];
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -1684,10 +1687,9 @@ describe("GlobalSettings", () => {
         SAVE_OPTIONS,
       ),
     );
-    expect(useConfigStore.getState().config.global.coordinatorResearchMcpServers).toEqual([
-      ...servers,
-      { name: "guides", url: "https://guides.example/mcp" },
-    ]);
+    expect(
+      appCommandStore(configStore).getState().config.global.coordinatorResearchMcpServers,
+    ).toEqual([...servers, { name: "guides", url: "https://guides.example/mcp" }]);
   });
 
   test("persists a coordinator safety level change on its own", async () => {
@@ -1714,7 +1716,7 @@ describe("GlobalSettings", () => {
   });
 
   test("rehydrates coordinator safety changes without losing an edit to favourites", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, coordinatorProviderTiers: "enforced" },
@@ -1731,7 +1733,7 @@ describe("GlobalSettings", () => {
     }) as HTMLInputElement;
 
     act(() => {
-      useConfigStore.getState().updateGlobalConfig({
+      appCommandStore(configStore).getState().updateGlobalConfig({
         coordinatorProviderTiers: "provider-configured",
       });
     });
@@ -1739,9 +1741,11 @@ describe("GlobalSettings", () => {
 
     fireEvent.click(advisory);
     act(() => {
-      useConfigStore.getState().updateGlobalConfig({
-        favoriteModels: [{ platform: "codex", modelId: "gpt-5.4" }],
-      });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          favoriteModels: [{ platform: "codex", modelId: "gpt-5.4" }],
+        });
     });
 
     // A store write that does not touch a field this form owns must not discard
@@ -1757,7 +1761,7 @@ describe("GlobalSettings", () => {
   });
 
   test("draws each platform toggle in its shared accent colour, enabled or not", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -1780,7 +1784,7 @@ describe("GlobalSettings", () => {
   });
 
   test("signals a disabled platform on the tile rather than on the mark inside it", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -1805,7 +1809,7 @@ describe("GlobalSettings", () => {
     const { invoke } = await import("../../../apps/web/src/lib/native/backend");
     const invokeMock = invoke as unknown as ReturnType<typeof mock>;
     invokeMock.mockClear();
-    let saved = useConfigStore.getState().config;
+    let saved = appCommandStore(configStore).getState().config;
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === "get_config") return saved;
       if (command === "set_container_resource_limits") {
@@ -1842,11 +1846,13 @@ describe("GlobalSettings", () => {
       }),
     );
     await waitFor(() =>
-      expect(useConfigStore.getState().config.global.containerResourceLimits).toEqual({
-        cpus: 2,
-        memoryMiB: 4096,
-        pids: null,
-      }),
+      expect(appCommandStore(configStore).getState().config.global.containerResourceLimits).toEqual(
+        {
+          cpus: 2,
+          memoryMiB: 4096,
+          pids: null,
+        },
+      ),
     );
     fireEvent.click(screen.getByRole("button", { name: "No limits" }));
     fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
@@ -1856,11 +1862,13 @@ describe("GlobalSettings", () => {
       }),
     );
     await waitFor(() =>
-      expect(useConfigStore.getState().config.global.containerResourceLimits).toEqual({
-        cpus: null,
-        memoryMiB: null,
-        pids: null,
-      }),
+      expect(appCommandStore(configStore).getState().config.global.containerResourceLimits).toEqual(
+        {
+          cpus: null,
+          memoryMiB: null,
+          pids: null,
+        },
+      ),
     );
     fireEvent.click(screen.getByRole("button", { name: "Built-in default" }));
     fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
@@ -1868,13 +1876,15 @@ describe("GlobalSettings", () => {
       expect(invokeMock).toHaveBeenCalledWith("set_container_resource_limits", { limits: null }),
     );
     await waitFor(() =>
-      expect(useConfigStore.getState().config.global.containerResourceLimits).toBeUndefined(),
+      expect(
+        appCommandStore(configStore).getState().config.global.containerResourceLimits,
+      ).toBeUndefined(),
     );
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
   test("preserves the selected terminal font family while saving a size change", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -1950,7 +1960,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a configured Cursor API key as write-only and clears it explicitly", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -1974,7 +1984,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a configured Anthropic API key as write-only and clears it explicitly", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2000,7 +2010,7 @@ describe("GlobalSettings", () => {
   });
 
   test("warns that a Cursor key inherited from the host environment cannot be cleared here", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2024,7 +2034,7 @@ describe("GlobalSettings", () => {
   });
 
   test("shows no host-environment warning when the stored key is the one in use", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2043,7 +2053,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a configured GitHub token as write-only and replaces it explicitly", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2071,7 +2081,7 @@ describe("GlobalSettings", () => {
   });
 
   test("clears a configured GitHub token through the write-only command", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2129,8 +2139,12 @@ describe("GlobalSettings", () => {
       });
       await flushAutoSave();
 
-      expect(useConfigStore.getState().config.global.envFilePatterns).toEqual([".env.local"]);
-      expect(useConfigStore.getState().config.global.useHostGitHubCredentials).toBe(false);
+      expect(appCommandStore(configStore).getState().config.global.envFilePatterns).toEqual([
+        ".env.local",
+      ]);
+      expect(appCommandStore(configStore).getState().config.global.useHostGitHubCredentials).toBe(
+        false,
+      );
 
       rerender(<GlobalSettings activeSection="version-control" />);
       const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
@@ -2198,7 +2212,7 @@ describe("GlobalSettings", () => {
   });
 
   test("switches from a configured PAT to host credentials without replacing the PAT", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2475,7 +2489,7 @@ describe("GlobalSettings", () => {
   });
 
   test("uses the default terminal scrollback when legacy config omits it", () => {
-    useConfigStore.setState((state) => {
+    appCommandStore(configStore).setState((state) => {
       // A legacy stored config predates the field, so it is genuinely absent.
       const legacyGlobal: Partial<GlobalConfig> = {
         ...state.config.global,
@@ -2567,7 +2581,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a missing legacy Claude mode as native and saves explicit terminal", async () => {
-    useConfigStore.setState((state) => {
+    appCommandStore(configStore).setState((state) => {
       // A config that never set a Claude mode: the pane must show the shipped
       // native default rather than an empty selection.
       const global = { ...state.config.global };
@@ -2660,7 +2674,7 @@ describe("GlobalSettings", () => {
   });
 
   test("preserves the tmux Claude model preference when saving unrelated settings", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2693,7 +2707,7 @@ describe("GlobalSettings", () => {
 
   test("preserves max and ultra Codex preferences when saving unrelated settings", async () => {
     for (const effort of ["max", "ultra"] as const) {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -2836,7 +2850,9 @@ describe("GlobalSettings", () => {
     expect(mockToastError).toHaveBeenCalledWith("Settings saved, but containers were not updated", {
       description: "container unavailable",
     });
-    expect(useConfigStore.getState().config.global.containerGitHubCredential).toBe("pat");
+    expect(appCommandStore(configStore).getState().config.global.containerGitHubCredential).toBe(
+      "pat",
+    );
   });
 
   test("reports partial GitHub credential propagation failures with affected containers", async () => {
@@ -3004,10 +3020,15 @@ describe("GlobalSettings", () => {
   });
 
   test("saves false when graphs are switched off and restores it when settings reopen", async () => {
-    useConfigStore.getState().setConfig({
-      ...useConfigStore.getState().config,
-      global: { ...useConfigStore.getState().config.global, experimentalGraphs: true },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .setConfig({
+        ...appCommandStore(configStore).getState().config,
+        global: {
+          ...appCommandStore(configStore).getState().config.global,
+          experimentalGraphs: true,
+        },
+      });
     const { unmount } = render(<GlobalSettings activeSection="experimental" />);
     const toggle = screen.getByRole("switch", { name: "Enable graphs" });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -3019,7 +3040,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({ experimentalGraphs: false }),
         SAVE_OPTIONS,
       );
-      expect(useConfigStore.getState().config.global.experimentalGraphs).toBe(false);
+      expect(appCommandStore(configStore).getState().config.global.experimentalGraphs).toBe(false);
     });
     unmount();
 
@@ -3080,7 +3101,7 @@ describe("GlobalSettings", () => {
   });
 
   test("does not re-save a value that normalizes to the stored config", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, envFilePatterns: [".env"] },
@@ -3128,7 +3149,10 @@ describe("GlobalSettings", () => {
     await act(async () => {
       firstSave.resolve({
         version: "1.0",
-        global: { ...useConfigStore.getState().config.global, envFilePatterns: [".env"] },
+        global: {
+          ...appCommandStore(configStore).getState().config.global,
+          envFilePatterns: [".env"],
+        },
         repositories: {},
       });
       await firstSave.promise;
@@ -3221,7 +3245,7 @@ describe("GlobalSettings", () => {
       );
 
       act(() => {
-        useConfigStore.setState((state) => ({
+        appCommandStore(configStore).setState((state) => ({
           config: {
             ...state.config,
             global: { ...state.config.global, allowedDomains: ["example.com"] },

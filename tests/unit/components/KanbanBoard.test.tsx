@@ -1,26 +1,27 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import { useUIStore } from "@/stores/uiStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase, BuildPipeline } from "@/stores/buildPipelineStore";
 import type { Environment } from "@/types";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const loadTasksMock = mock(async () => undefined);
 const loadGitHubIssuesMock = mock(async () => undefined);
-const initialConfig = useConfigStore.getState().config;
+const initialConfig = appCommandStore(configStore).getState().config;
 
 beforeEach(() => {
   cleanup();
   loadTasksMock.mockClear();
   loadGitHubIssuesMock.mockClear();
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -39,8 +40,8 @@ beforeEach(() => {
     loadTasks: loadTasksMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadTasks"],
   });
   useUIStore.setState({ projectBoardTab: "kanban" });
-  useEnvironmentStore.setState({ environments: [] });
-  useConfigStore.setState({ config: initialConfig });
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(configStore).setState({ config: initialConfig });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
   useGitHubIssuesStore.setState({
     snapshots: new Map([
@@ -197,7 +198,7 @@ describe("KanbanBoard ticket sources", () => {
 describe("KanbanBoard environment labels", () => {
   test("labels a card with the name of the environment its task links to", () => {
     useKanbanStore.setState({ tasks: [makeTask({ environmentId: "env-1" })] });
-    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+    appCommandStore(environmentStore).setState({ environments: [makeEnvironment()] });
 
     render(<KanbanBoard projectId="project-1" />);
 
@@ -208,7 +209,7 @@ describe("KanbanBoard environment labels", () => {
     // A build creates its environment before the task row records the link, so
     // the pipeline is the only place the id lives during that window.
     useKanbanStore.setState({ tasks: [makeTask()] });
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [makeEnvironment({ id: "env-2", name: "fix-provider-icons" })],
     });
     useBuildPipelineStore.setState({
@@ -223,7 +224,7 @@ describe("KanbanBoard environment labels", () => {
 
   test("prefers the task's environment when its pipeline points somewhere else", () => {
     useKanbanStore.setState({ tasks: [makeTask({ environmentId: "env-1" })] });
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         makeEnvironment(),
         makeEnvironment({ id: "env-2", name: "pipeline-environment" }),
@@ -242,7 +243,7 @@ describe("KanbanBoard environment labels", () => {
 
   test("ignores pipeline environment links from another project", () => {
     useKanbanStore.setState({ tasks: [makeTask()] });
-    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+    appCommandStore(environmentStore).setState({ environments: [makeEnvironment()] });
     useBuildPipelineStore.setState({
       pipelines: new Map([
         ["pipeline-1", makePipeline({ projectId: "project-2", environmentId: "env-1" })],
@@ -257,7 +258,7 @@ describe("KanbanBoard environment labels", () => {
 
   test("shows no environment label when the linked environment is gone", () => {
     useKanbanStore.setState({ tasks: [makeTask({ environmentId: "env-deleted" })] });
-    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+    appCommandStore(environmentStore).setState({ environments: [makeEnvironment()] });
 
     render(<KanbanBoard projectId="project-1" />);
 
@@ -285,7 +286,7 @@ describe("KanbanBoard experimental graphs", () => {
 
   test("a card offers Run graph… once graphs are on", () => {
     useKanbanStore.setState({ tasks: [makeTask()] });
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: { ...initialConfig, global: { ...initialConfig.global, experimentalGraphs: true } },
     });
 

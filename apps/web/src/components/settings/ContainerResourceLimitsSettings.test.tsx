@@ -6,11 +6,12 @@ import {
   type DockerCapacity,
 } from "@orkestrator/protocol/container-resources";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore, useConfigStore } from "@/stores/configStore";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invoke = nativeInvoke as unknown as ReturnType<typeof mock>;
-const initialConfig = useConfigStore.getState().config;
+const initialConfig = appCommandStore(configStore).getState().config;
 const capacity: DockerCapacity = {
   scope: "docker-daemon",
   cpus: 8,
@@ -35,7 +36,7 @@ function install(next = capacity, unenforceable: Array<"cpus" | "memoryMiB" | "p
   mockToastSuccess.mockClear();
   let stored = { ...initialConfig, global: { ...initialConfig.global } };
   delete stored.global.containerResourceLimits;
-  useConfigStore.getState().setConfig(stored);
+  appCommandStore(configStore).getState().setConfig(stored);
   invoke.mockClear();
   invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
     if (command === "get_docker_capacity") return next;
@@ -60,7 +61,7 @@ function Settings() {
 
 afterEach(() => {
   cleanup();
-  useConfigStore.getState().setConfig(initialConfig);
+  appCommandStore(configStore).getState().setConfig(initialConfig);
   invoke.mockImplementation(() => Promise.resolve());
 });
 
@@ -74,7 +75,7 @@ test("saved Custom, No limits and Built-in default survive remounts from the sam
       fireEvent.change(screen.getByLabelText("Memory (GB)"), { target: { value: "4" } });
     fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
     await waitFor(() => {
-      const limits = useConfigStore.getState().config.global.containerResourceLimits;
+      const limits = appCommandStore(configStore).getState().config.global.containerResourceLimits;
       if (mode === "Custom") expect(limits).toEqual({ cpus: null, memoryMiB: 4096, pids: null });
       else if (mode === "No limits")
         expect(limits).toEqual({ cpus: null, memoryMiB: null, pids: null });
@@ -141,7 +142,7 @@ test("a custom budget this Docker cannot enforce is flagged before and when it i
   // Saving is still allowed: the backend stores it and reports the same.
   fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
   await waitFor(() =>
-    expect(useConfigStore.getState().config.global.containerResourceLimits).toEqual({
+    expect(appCommandStore(configStore).getState().config.global.containerResourceLimits).toEqual({
       cpus: 2,
       memoryMiB: 4096,
       pids: null,
@@ -174,6 +175,8 @@ for (const [axes, wording] of [
       ),
     );
     expect(mockToastSuccess).not.toHaveBeenCalled();
-    expect(useConfigStore.getState().config.global.containerResourceLimits?.memoryMiB).toBe(4096);
+    expect(
+      appCommandStore(configStore).getState().config.global.containerResourceLimits?.memoryMiB,
+    ).toBe(4096);
   });
 }

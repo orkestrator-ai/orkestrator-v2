@@ -81,7 +81,8 @@ import {
   type ReviewTabType,
 } from "./ReviewLaunchDialog";
 import { mergeReorderedFavoriteModels } from "@/hooks/useAgentModelFavorites";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * The picker renders its three choice columns side by side on desktop and as
@@ -112,8 +113,8 @@ const originalMatchMedia = window.matchMedia;
 afterEach(cleanup);
 beforeEach(() => {
   setViewport(false);
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: {
       ...config,
       global: {
@@ -281,8 +282,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("hides disabled providers and falls back from a disabled default", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: {
@@ -314,8 +315,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("keeps only Claude when configuration enables no platform at all", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: { ...config.global, enabledAgentPlatforms: [] },
@@ -342,8 +343,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("keeps favourites from disabled providers out of the picker", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: {
@@ -739,8 +740,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("orders stored favourite models first", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: {

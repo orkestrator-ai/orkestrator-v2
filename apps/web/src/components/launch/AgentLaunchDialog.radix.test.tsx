@@ -3,7 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { useRef, useState } from "react";
 import { AgentLaunchDialog, type AgentLaunchSelection } from "./AgentLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "claude-a", name: "Claude A", reasoningEfforts: ["high"] }],
@@ -14,8 +15,8 @@ const catalog: AgentModelCatalog = {
 const originalMatchMedia = window.matchMedia;
 
 beforeEach(() => {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: {
       ...config,
       global: {

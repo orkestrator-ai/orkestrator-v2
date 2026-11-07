@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import * as backend from "@/lib/backend";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { type EnvironmentPaneState, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { PaneLeaf, PersistedPaneLayout, TabInfo } from "@/types/paneLayout";
@@ -19,6 +19,7 @@ import {
 } from "./pane-layout-persistence";
 import { reconcilePersistedLayout } from "./pane-layout-restore";
 import { mockToastError } from "../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const waitForTimers = () => new Promise((resolve) => setTimeout(resolve, 20));
 type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
@@ -29,7 +30,7 @@ type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
  * environment this client no longer has.
  */
 function seedEnvironment(containerId: string | null, environmentId = "env-1"): void {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: environmentId,
@@ -46,7 +47,7 @@ function seedEnvironment(containerId: string | null, environmentId = "env-1"): v
 }
 
 function resetStore() {
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   seedEnvironment("container-1");
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -2373,10 +2374,10 @@ describe("pane layout persistence", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
-            ...(useEnvironmentStore.getState().environments[0] as Environment),
+            ...(appCommandStore(environmentStore).getState().environments[0] as Environment),
             setupPhase: "ready",
             setupScriptsComplete: true,
           },

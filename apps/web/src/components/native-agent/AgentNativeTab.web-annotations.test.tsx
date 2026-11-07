@@ -25,11 +25,12 @@ import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore, type NativeComposeDraft } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
@@ -210,7 +211,7 @@ async function renderTab(tabId: string, platform: AgentPlatform = "codex") {
 
 beforeEach(() => {
   projectionOptions = {};
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -230,7 +231,7 @@ afterEach(() => {
   enqueuePromptQueueMessageMock.mockClear();
   removePromptQueueMessageMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),

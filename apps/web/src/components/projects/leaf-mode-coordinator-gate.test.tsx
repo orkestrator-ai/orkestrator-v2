@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useProjectStore, useUIStore } from "@/stores";
+import { useUIStore } from "@/stores";
 import { uiStore } from "@/stores/uiStore";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { Project } from "@/types";
@@ -13,6 +13,7 @@ import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import * as openWorkspace from "@/lib/federation/open-workspace";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
+import { appCommandStore } from "@/test/app-command-store";
 
 const nativeInvoke = invoke as ReturnType<typeof mock>;
 const originalHref = window.location.href;
@@ -25,7 +26,12 @@ afterEach(() => {
   nativeInvoke.mockReset();
   nativeInvoke.mockResolvedValue(undefined);
   portalStore.store.setState({ status: null, loaded: false, selfId: null });
-  useProjectStore.setState({ projects: [], hasLoaded: false, error: null, isLoading: false });
+  appCommandStore(projectStore).setState({
+    projects: [],
+    hasLoaded: false,
+    error: null,
+    isLoading: false,
+  });
   useUIStore.setState({ openedLeafCoordinators: [] });
 });
 

@@ -18,7 +18,7 @@ import {
 } from "@orkestrator/protocol/preview-services";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   ensurePreviewServiceSync,
@@ -31,6 +31,7 @@ import type { BrowserTabData } from "@/types/paneLayout";
 import { BrowserTab } from "./BrowserTab";
 import { createPersistedPaneLayoutInput } from "@/lib/pane-layout-persistence";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 const originalOrkestrator = window.orkestrator;
@@ -278,7 +279,7 @@ describe("service browser tabs", () => {
   beforeEach(() => {
     resetPreviewServiceSyncForTests();
     resetWebAnnotationSyncForTests();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: FIXTURE_ENVIRONMENT_ID,
@@ -1143,7 +1144,7 @@ describe("service browser tabs", () => {
   );
 
   test("an unregistered host terminal port offers a temporary backend host port and opens the original URL", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) => ({
         ...environment,
         environmentType: "local",
@@ -1182,7 +1183,7 @@ describe("service browser tabs", () => {
   });
 
   test("a dev server on the next free port is offered as a move of its service, never moved on its own", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) => ({
         ...environment,
         environmentType: "local",

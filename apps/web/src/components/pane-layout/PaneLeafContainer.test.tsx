@@ -11,8 +11,8 @@ import type {
   AgentMailSummaryEntry,
 } from "@orkestrator/protocol/agent-mail";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -26,6 +26,7 @@ import * as realMultiReviewTab from "@/components/review/MultiReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
 import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
 import * as realHooks from "@/hooks";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realNativeAgentSnapshot = { ...realNativeAgent };
@@ -477,7 +478,7 @@ describe("PaneLeafContainer", () => {
       activeEnvironmentId: "env-visible",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-hidden",
@@ -500,7 +501,7 @@ describe("PaneLeafContainer", () => {
       deletingEnvironments: new Set(),
     });
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,

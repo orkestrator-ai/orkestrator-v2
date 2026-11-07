@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { shippedReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { storedCoreFields } from "./GlobalSettings";
 import { globalConfigPatchFromCoreFields } from "./global-settings-patch";
 import { repositorySettingsPatch } from "./repository-settings-patch";
+import { appCommandStore } from "@/test/app-command-store";
 
-const baseline = storedCoreFields(useConfigStore.getState().config.global);
+const baseline = storedCoreFields(appCommandStore(configStore).getState().config.global);
 
 describe("globalConfigPatchFromCoreFields", () => {
   test("an unchanged form produces an empty patch", () => {
@@ -15,7 +16,7 @@ describe("globalConfigPatchFromCoreFields", () => {
 
   test("defaults unset raw stored keys even when the normalized baseline equals the form", () => {
     const stored = {
-      ...useConfigStore.getState().config.global,
+      ...appCommandStore(configStore).getState().config.global,
       claudeBackgroundCommandLimitHours: 24,
     };
     const changes = globalConfigPatchFromCoreFields(baseline, baseline, stored);
@@ -25,7 +26,7 @@ describe("globalConfigPatchFromCoreFields", () => {
 
   test("a retired key left in the stored config is neither sent nor unset", () => {
     const stored = {
-      ...useConfigStore.getState().config.global,
+      ...appCommandStore(configStore).getState().config.global,
       experimentalCodexRawEventLogging: true,
     };
     expect(storedCoreFields(stored)).not.toHaveProperty("experimentalCodexRawEventLogging");

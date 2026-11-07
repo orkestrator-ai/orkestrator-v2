@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import {
   createTerminalLinkActivator,
   getTerminalLinkTarget,
@@ -8,6 +8,7 @@ import {
   requestTerminalBrowserTab,
   type TerminalBrowserTabRequest,
 } from "./terminal-links";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("getTerminalLinkTarget", () => {
   test("keeps unmodified clicks inside the terminal", () => {
@@ -75,9 +76,9 @@ describe("createTerminalLinkActivator", () => {
   const click = (modifiers: MouseEventInit) => new MouseEvent("click", { button: 0, ...modifiers });
 
   test("reads the default target on each click, so a live terminal follows the setting", () => {
-    const original = useConfigStore.getState().config;
+    const original = appCommandStore(configStore).getState().config;
     const setDefaultTarget = (terminalLinkDefaultTarget: "external" | "browser-tab" | undefined) =>
-      useConfigStore.setState({
+      appCommandStore(configStore).setState({
         config: { ...original, global: { ...original.global, terminalLinkDefaultTarget } },
       });
     const openExternal = mock((_url: string) => Promise.resolve());
@@ -110,14 +111,14 @@ describe("createTerminalLinkActivator", () => {
       expect(listener).toHaveBeenCalledTimes(1);
     } finally {
       stopListening();
-      useConfigStore.setState({ config: original });
+      appCommandStore(configStore).setState({ config: original });
     }
   });
 
   test.each(["https://example.com/", "mailto:hello@example.com", "ftp://localhost/file"])(
     "opens non-previewable %s externally for either preview gesture",
     (url) => {
-      const original = useConfigStore.getState().config;
+      const original = appCommandStore(configStore).getState().config;
       const openExternal = mock((_url: string) => Promise.resolve());
       const listener = mock((_request: TerminalBrowserTabRequest) => undefined);
       const stopListening = listenForTerminalBrowserTabRequests(listener);
@@ -128,7 +129,7 @@ describe("createTerminalLinkActivator", () => {
       });
       try {
         for (const terminalLinkDefaultTarget of ["external", "browser-tab"] as const) {
-          useConfigStore.setState({
+          appCommandStore(configStore).setState({
             config: { ...original, global: { ...original.global, terminalLinkDefaultTarget } },
           });
           for (const shiftKey of [false, true]) {
@@ -142,7 +143,7 @@ describe("createTerminalLinkActivator", () => {
         expect(listener).not.toHaveBeenCalled();
       } finally {
         stopListening();
-        useConfigStore.setState({ config: original });
+        appCommandStore(configStore).setState({ config: original });
       }
     },
   );
@@ -150,8 +151,8 @@ describe("createTerminalLinkActivator", () => {
   test.each(["external", "browser-tab"] as const)(
     "opens a pull request link in the PR pane with the default gesture (default %s)",
     (terminalLinkDefaultTarget) => {
-      const original = useConfigStore.getState().config;
-      useConfigStore.setState({
+      const original = appCommandStore(configStore).getState().config;
+      appCommandStore(configStore).setState({
         config: { ...original, global: { ...original.global, terminalLinkDefaultTarget } },
       });
       const openExternal = mock((_url: string) => Promise.resolve());
@@ -181,7 +182,7 @@ describe("createTerminalLinkActivator", () => {
         expect(openPullRequest).toHaveBeenCalledTimes(2);
         expect(openExternal).toHaveBeenCalledWith(url);
       } finally {
-        useConfigStore.setState({ config: original });
+        appCommandStore(configStore).setState({ config: original });
       }
     },
   );

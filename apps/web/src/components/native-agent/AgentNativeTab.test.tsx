@@ -31,8 +31,8 @@ import * as scrollState from "@/hooks/useVirtuosoScrollState";
 import * as realBackend from "@/lib/backend";
 import * as modelPicker from "@/components/chat/AgentModelPicker";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore, useConfigStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -81,6 +81,7 @@ import {
   mockToastWarning,
 } from "../../../../../tests/mocks/sonner";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
+import { appCommandStore } from "@/test/app-command-store";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -483,10 +484,10 @@ const { useNativeAgentSession } = await import("@/hooks/useNativeAgentSession");
 let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
 
 beforeEach(() => {
-  configSnapshot = useConfigStore.getState().config;
+  configSnapshot = appCommandStore(configStore).getState().config;
   useNativeNoticeDismissalStore.getState().clear();
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -573,7 +574,7 @@ afterEach(() => {
   }
   renderVirtualizedMessages = false;
   latestTranscriptAnnotationProps = undefined;
-  useConfigStore.getState().setConfig(configSnapshot);
+  appCommandStore(configStore).getState().setConfig(configSnapshot);
   flushPaneLayoutNowMock.mockClear();
   getNativeAgentModelCatalogMock.mockReset();
   getNativeAgentModelCatalogMock.mockImplementation(async () => []);
@@ -651,11 +652,13 @@ afterEach(() => {
   latestRenderedMessageActions = new Map();
   nativeMessageRenderCounts = new Map();
   latestPasteOptions = null;
-  useEnvironmentStore.setState({ environments: [] });
-  useConfigStore.getState().updateGlobalConfig({
-    enabledAgentPlatforms: ["claude", "codex", "opencode"],
-    agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
-  });
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(configStore)
+    .getState()
+    .updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
+    });
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -1323,7 +1326,9 @@ describe("AgentNativeTab", () => {
       getAgentAccountLoginMock.mockClear();
       startAgentAccountLoginMock.mockClear();
       renderVirtualizedMessages = true;
-      useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ useHostClaudeCredentials: false });
       const createTab = mock(() => true);
       const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
@@ -1440,7 +1445,7 @@ describe("AgentNativeTab", () => {
     renderVirtualizedMessages = true;
     accountLoginProgress = { state: "idle" };
     startAgentAccountLoginMock.mockClear();
-    useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: true });
+    appCommandStore(configStore).getState().updateGlobalConfig({ useHostClaudeCredentials: true });
     const createTab = mock(() => true);
     claudeAuthFailureProjection(
       "native-terminal:error:auth-shared-docker",
@@ -1610,7 +1615,7 @@ describe("AgentNativeTab", () => {
 
   test("does not duplicate createTab's own failure notification", async () => {
     renderVirtualizedMessages = true;
-    useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
+    appCommandStore(configStore).getState().updateGlobalConfig({ useHostClaudeCredentials: false });
     mockToastError.mockClear();
     const createTab = mock(() => {
       mockToastError("Maximum tab limit reached");
@@ -2175,9 +2180,9 @@ describe("AgentNativeTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
     await screen.findByText("SAME-CODE");
     view.unmount();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
-        ...useEnvironmentStore.getState().environments,
+        ...appCommandStore(environmentStore).getState().environments,
         {
           id: "other-environment",
           projectId: "project-1",
@@ -2366,9 +2371,9 @@ describe("AgentNativeTab", () => {
           </TerminalTabHarness>
         </TerminalProvider>,
       );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
-        ...useEnvironmentStore.getState().environments,
+        ...appCommandStore(environmentStore).getState().environments,
         {
           id: "env-other",
           projectId: "project-1",
@@ -2765,7 +2770,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("an ordinary unassigned local tab keeps its worktree paste destination", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -2790,7 +2795,7 @@ describe("AgentNativeTab", () => {
   for (const assigned of [false, true]) {
     test(`a ${assigned ? "assigned" : "unassigned"} bug-report composer stages pasted images by report ID`, async () => {
       seedUnassignedDefaultCatalog();
-      useEnvironmentStore.setState({ environments: [] });
+      appCommandStore(environmentStore).setState({ environments: [] });
       renderInAppCommandScope(
         <AgentNativeTab
           tabId={`bug-report-paste-${assigned}`}
@@ -2821,11 +2826,13 @@ describe("AgentNativeTab", () => {
 
   test("a coordinator tab assigns through the backend instead of locking a pane", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: { defaultAgent: "claude" },
-    });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: { defaultAgent: "claude" },
+      });
+    appCommandStore(environmentStore).setState({ environments: [] });
     const onAssignPlatform = mock<
       (platform: AgentPlatform, prompt: string, options: unknown) => Promise<void>
     >(async () => undefined);
@@ -2880,10 +2887,12 @@ describe("AgentNativeTab", () => {
         },
       } as NativeAgentSessionProjection<NativeMessage>;
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      favoriteModels,
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        favoriteModels,
+      });
     let pickerProps: Parameters<typeof modelPicker.AgentModelPicker>[0] | undefined;
     const OriginalPicker = modelPicker.AgentModelPicker;
     const picker = spyOn(modelPicker, "AgentModelPicker").mockImplementation((props) => {
@@ -2891,8 +2900,8 @@ describe("AgentNativeTab", () => {
       return <OriginalPicker {...props} />;
     });
     const persist = spyOn(realBackend, "patchGlobalConfig").mockImplementation(async (patch) => ({
-      ...useConfigStore.getState().config,
-      global: { ...useConfigStore.getState().config.global, ...patch },
+      ...appCommandStore(configStore).getState().config,
+      global: { ...appCommandStore(configStore).getState().config.global, ...patch },
     }));
     try {
       renderInAppCommandScope(
@@ -2925,7 +2934,9 @@ describe("AgentNativeTab", () => {
         favoriteModels[1]!,
       ];
       await waitFor(() =>
-        expect(useConfigStore.getState().config.global.favoriteModels).toEqual(reordered),
+        expect(appCommandStore(configStore).getState().config.global.favoriteModels).toEqual(
+          reordered,
+        ),
       );
       expect(persist).toHaveBeenCalledWith({ favoriteModels: reordered });
     } finally {
@@ -2942,12 +2953,14 @@ describe("AgentNativeTab", () => {
       { platform: "codex", modelId: "gpt-5.4" },
       { platform: "claude", modelId: "claude-sonnet-5" },
     ];
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      favoriteModels,
-      agentSettings: { defaultAgent: "claude" },
-    } as never);
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        favoriteModels,
+        agentSettings: { defaultAgent: "claude" },
+      } as never);
+    appCommandStore(environmentStore).setState({ environments: [] });
 
     renderInAppCommandScope(
       <AgentNativeTab
@@ -2971,7 +2984,9 @@ describe("AgentNativeTab", () => {
         .filter((row) => !row.includes("credit rate"));
     await waitFor(() => expect(modelRows()).toEqual(["GPT-5.4Codex", "Claude SonnetClaude"]));
     // The hidden favourite is still a favourite.
-    expect(useConfigStore.getState().config.global.favoriteModels).toEqual(favoriteModels);
+    expect(appCommandStore(configStore).getState().config.global.favoriteModels).toEqual(
+      favoriteModels,
+    );
   });
 
   test("an unassigned coordinator composer searches the checkout and stages pastes outside it", async () => {
@@ -2979,11 +2994,13 @@ describe("AgentNativeTab", () => {
     // composer used to have no workspace to search and nowhere to put a pasted
     // image — and the one path it must never take is writing into the checkout.
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: { defaultAgent: "claude" },
-    });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: { defaultAgent: "claude" },
+      });
+    appCommandStore(environmentStore).setState({ environments: [] });
 
     renderInAppCommandScope(
       <AgentNativeTab
@@ -3013,11 +3030,13 @@ describe("AgentNativeTab", () => {
 
   test("a failed coordinator assignment is reported and leaves the composer usable", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: { defaultAgent: "claude" },
-    });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: { defaultAgent: "claude" },
+      });
+    appCommandStore(environmentStore).setState({ environments: [] });
     const onAssignPlatform = mock(async () => {
       throw new Error("Coordinator provider is unavailable");
     });
@@ -3042,11 +3061,13 @@ describe("AgentNativeTab", () => {
   });
 
   test("an unassigned coordinator tab with no qualified platform explains itself", () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: { defaultAgent: "claude" },
-    });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: { defaultAgent: "claude" },
+      });
+    appCommandStore(environmentStore).setState({ environments: [] });
 
     renderInAppCommandScope(
       <AgentNativeTab
@@ -3070,11 +3091,13 @@ describe("AgentNativeTab", () => {
 
   test("a coordinator platform caveat is shown inside the picker", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex"],
-      agentSettings: { defaultAgent: "claude" },
-    });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex"],
+        agentSettings: { defaultAgent: "claude" },
+      });
+    appCommandStore(environmentStore).setState({ environments: [] });
 
     renderInAppCommandScope(
       <AgentNativeTab
@@ -3100,17 +3123,19 @@ describe("AgentNativeTab", () => {
 
   test("unassigned composer adopts the environment default agent and model", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: {
-          claude: { model: "claude-sonnet-5" },
-          codex: { model: "o3", reasoningEffort: "medium" },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { model: "claude-sonnet-5" },
+            codex: { model: "o3", reasoningEffort: "medium" },
+          },
         },
-      },
-    });
-    useEnvironmentStore.setState({
+      });
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3143,14 +3168,16 @@ describe("AgentNativeTab", () => {
 
   test("unassigned composer preselects the create-dialog model without locking the tab", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: { claude: { model: "claude-sonnet-5" } },
-      },
-    });
-    useEnvironmentStore.setState({
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "claude-sonnet-5" } },
+        },
+      });
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3187,17 +3214,19 @@ describe("AgentNativeTab", () => {
 
   test("unassigned composer preselects an explicit create-dialog provider over the environment default", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: {
-          claude: { model: "claude-sonnet-5" },
-          codex: { model: "o3" },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { model: "claude-sonnet-5" },
+            codex: { model: "o3" },
+          },
         },
-      },
-    });
-    useEnvironmentStore.setState({
+      });
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3229,18 +3258,20 @@ describe("AgentNativeTab", () => {
 
   test("keeps a user provider switch after create-dialog preselect and dispatches through it", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      favoriteModels: [{ platform: "claude", modelId: "claude-sonnet-5" }],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: {
-          claude: { model: "claude-sonnet-5", fastMode: false },
-          codex: { model: "o3", reasoningEffort: "medium", fastMode: true },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        favoriteModels: [{ platform: "claude", modelId: "claude-sonnet-5" }],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { model: "claude-sonnet-5", fastMode: false },
+            codex: { model: "o3", reasoningEffort: "medium", fastMode: true },
+          },
         },
-      },
-    } as never);
-    useEnvironmentStore.setState({
+      } as never);
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3322,18 +3353,20 @@ describe("AgentNativeTab", () => {
 
   test("does not re-seed create-dialog values after a deliberate platform switch", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      favoriteModels: [{ platform: "claude", modelId: "claude-sonnet-5" }],
-      agentSettings: {
-        defaultAgent: "codex",
-        platforms: {
-          claude: { model: "claude-sonnet-5", fastMode: false },
-          codex: { model: "gpt-5.4", reasoningEffort: "high", fastMode: true },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        favoriteModels: [{ platform: "claude", modelId: "claude-sonnet-5" }],
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: {
+            claude: { model: "claude-sonnet-5", fastMode: false },
+            codex: { model: "gpt-5.4", reasoningEffort: "high", fastMode: true },
+          },
         },
-      },
-    } as never);
-    useEnvironmentStore.setState({
+      } as never);
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3400,13 +3433,15 @@ describe("AgentNativeTab", () => {
 
   test("does not overwrite a user pick when create-dialog fields arrive later", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: { claude: { model: "claude-sonnet-5" } },
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "claude-sonnet-5" } },
+        },
+      });
     const tabId = "tab-user-pick-before-republish";
     const sessionKey = createSessionKey("env-1", tabId);
     useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -3443,24 +3478,28 @@ describe("AgentNativeTab", () => {
 
   test("unassigned composer adopts the repository default when the environment inherits", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: {
-          claude: { model: "claude-sonnet-5" },
-          codex: { model: "o3" },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { model: "claude-sonnet-5" },
+            codex: { model: "o3" },
+          },
         },
-      },
-    });
-    useConfigStore.getState().setRepositoryConfig("project-1", {
-      defaultBranch: "main",
-      prBaseBranch: "main",
-      agentSettings: {
-        defaultAgent: "codex",
-        platforms: { codex: { model: "gpt-5.4" } },
-      },
-    });
+      });
+    appCommandStore(configStore)
+      .getState()
+      .setRepositoryConfig("project-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: { codex: { model: "gpt-5.4" } },
+        },
+      });
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-unassigned-repo" data={{ environmentId: "env-1" }} isActive />,
@@ -3472,13 +3511,15 @@ describe("AgentNativeTab", () => {
 
   test("unassigned composer uses the application default when every tier inherits", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: { claude: { model: "claude-sonnet-5" } },
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "claude-sonnet-5" } },
+        },
+      });
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-unassigned-app" data={{ environmentId: "env-1" }} isActive />,
@@ -3508,7 +3549,7 @@ describe("AgentNativeTab", () => {
           },
         ] as never,
     );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3519,10 +3560,12 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["opencode", "codex"],
-      favoriteModels: [],
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["opencode", "codex"],
+        favoriteModels: [],
+      } as never);
     const tabId = "tab-opencode-initial-profile";
     seedUnassignedPane(tabId);
     const sessionKey = createSessionKey("env-1", tabId);
@@ -3620,7 +3663,7 @@ describe("AgentNativeTab", () => {
           },
         ] as never,
     );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3631,10 +3674,12 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["codex"],
-      favoriteModels: [],
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["codex"],
+        favoriteModels: [],
+      } as never);
     const tabId = "tab-codex-initial-approvals";
     seedUnassignedPane(tabId);
     useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
@@ -3673,7 +3718,7 @@ describe("AgentNativeTab", () => {
           },
         ] as never,
     );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3685,10 +3730,12 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["codex"],
-      favoriteModels: [],
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["codex"],
+        favoriteModels: [],
+      } as never);
     const tabId = "tab-codex-container-approvals";
     seedUnassignedPane(tabId);
     useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
@@ -3716,7 +3763,7 @@ describe("AgentNativeTab", () => {
           },
         ] as never,
     );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3727,10 +3774,12 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["codex"],
-      favoriteModels: [],
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["codex"],
+        favoriteModels: [],
+      } as never);
     const tabId = "tab-unassigned-annotations";
     const sessionKey = createSessionKey("env-1", tabId);
     seedUnassignedPane(tabId);
@@ -3792,7 +3841,7 @@ describe("AgentNativeTab", () => {
           },
         ] as never,
     );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3803,10 +3852,12 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["opencode"],
-      favoriteModels: [],
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["opencode"],
+        favoriteModels: [],
+      } as never);
     const tabId = "tab-opencode-profile-cycle";
     seedUnassignedPane(tabId);
     const sessionKey = createSessionKey("env-1", tabId);
@@ -3878,7 +3929,7 @@ describe("AgentNativeTab", () => {
           },
         ] as never,
     );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3888,16 +3939,18 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex"],
-      favoriteModels: [{ platform: "codex", modelId: "codex-m" }],
-      agentSettings: {
-        platforms: {
-          claude: { fastMode: false },
-          codex: { fastMode: true },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex"],
+        favoriteModels: [{ platform: "codex", modelId: "codex-m" }],
+        agentSettings: {
+          platforms: {
+            claude: { fastMode: false },
+            codex: { fastMode: true },
+          },
         },
-      },
-    } as never);
+      } as never);
     const sessionKey = createSessionKey("env-1", "tab-effort-platform-switch");
     useNativeComposeStore.getState().updateDraft(sessionKey, {
       platform: "claude",
@@ -3954,7 +4007,7 @@ describe("AgentNativeTab", () => {
           },
         ] as never,
     );
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3964,10 +4017,12 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      favoriteModels: [],
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        favoriteModels: [],
+      } as never);
     const sessionKey = createSessionKey("env-1", "tab-same-platform-switch");
     useNativeComposeStore.getState().updateDraft(sessionKey, {
       platform: "claude",
@@ -3996,9 +4051,11 @@ describe("AgentNativeTab", () => {
   });
 
   test("asks for a platform before opening that provider's normal resume flow", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: [...AGENT_PLATFORMS],
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: [...AGENT_PLATFORMS],
+      });
     usePaneLayoutStore.setState({
       environments: new Map([
         [
@@ -4050,9 +4107,11 @@ describe("AgentNativeTab", () => {
   });
 
   function seedUnassignedResumeTab(tabId: string) {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: [...AGENT_PLATFORMS],
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: [...AGENT_PLATFORMS],
+      });
     usePaneLayoutStore.setState({
       environments: new Map([
         [
@@ -4213,7 +4272,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("renders the backend-normalized OpenCode catalogue in a new tab", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -4263,10 +4322,12 @@ describe("AgentNativeTab", () => {
   });
 
   test("renders the cached Cursor catalogue without starting its SDK bridge", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["cursor"],
-    });
-    useEnvironmentStore.setState({
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["cursor"],
+      });
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -4310,10 +4371,12 @@ describe("AgentNativeTab", () => {
   });
 
   test("requests a first-use Pi catalogue when the selected platform has no cached list", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["pi"],
-    });
-    useEnvironmentStore.setState({
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["pi"],
+      });
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -4351,7 +4414,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("deduplicates the first-use request across StrictMode effect replay", async () => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
     useNativeComposeStore
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-pi-strict"), { platform: "pi" });
@@ -4368,7 +4433,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("retries a transient first-use failure once and publishes the recovered catalogue", async () => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
     useNativeComposeStore
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-pi-retry"), { platform: "pi" });
@@ -4417,7 +4484,7 @@ describe("AgentNativeTab", () => {
   // platform switch must filter what is loaded rather than clearing the list or
   // refetching a platform the current snapshot already contains.
   test("does not refetch the catalogue when the composer platform changes", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -4472,10 +4539,12 @@ describe("AgentNativeTab", () => {
   // so it legitimately arrives without the platform the picker already had.
   // Replacing rather than merging would empty the picker the user came from.
   test("keeps an already-loaded platform when a first-use response omits it", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["cursor", "pi"],
-    });
-    useEnvironmentStore.setState({
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["cursor", "pi"],
+      });
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -4532,8 +4601,10 @@ describe("AgentNativeTab", () => {
   // The memo is keyed per environment and platform, so a platform whose bridge
   // genuinely has no models must not re-trigger a bridge start on every render.
   test("does not repeat a first-use request that came back without the platform", async () => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
-    useEnvironmentStore.setState({
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -4560,7 +4631,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not restart an empty bridge-backed catalogue on window focus", async () => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["grok"] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["grok"] });
     useNativeComposeStore
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-grok-focus"), { platform: "grok" });
@@ -4582,7 +4655,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not invalidate a catalogue request while it is still in flight", async () => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["opencode"] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["opencode"] });
     useNativeComposeStore
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-opencode-in-flight"), {
@@ -4613,7 +4688,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("retries after a catalogue refresh, hydrates the cache, and stops once models arrive", async () => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["opencode"] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["opencode"] });
     useNativeComposeStore
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-opencode-refresh"), {
@@ -4653,7 +4730,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("drops attachments the newly selected platform cannot receive", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -5107,11 +5184,13 @@ describe("AgentNativeTab", () => {
 
   test("carries a coordinator-staged image through assignment as a structured attachment", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: { defaultAgent: "claude" },
-    });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "opencode"],
+        agentSettings: { defaultAgent: "claude" },
+      });
+    appCommandStore(environmentStore).setState({ environments: [] });
     const tabId = "coordinator-tab-first-attachment";
     const environmentId = "coordinator:workspace-1:conversation-7";
     const sessionKey = createSessionKey(environmentId, tabId);
@@ -5226,7 +5305,7 @@ describe("AgentNativeTab", () => {
       await dispatchGate;
       return { outcome: "accepted", requestId: input.requestId };
     });
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -6791,9 +6870,11 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not overwrite a resumed session with configured defaults", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      agentSettings: { platforms: { claude: { model: "configured-default" } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentSettings: { platforms: { claude: { model: "configured-default" } } },
+      });
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-resume-preserve-controls" data={identity("claude")} isActive />,
@@ -6806,16 +6887,20 @@ describe("AgentNativeTab", () => {
     expect(adopted).not.toHaveProperty("sessionMode");
     expect(adopted).not.toHaveProperty("fastMode");
 
-    useConfigStore.getState().updateGlobalConfig({
-      agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
+      });
   });
 
   test("applies a configured Cursor fast-mode default to a new session", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["cursor"],
-      agentSettings: { platforms: { cursor: { fastMode: true } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["cursor"],
+        agentSettings: { platforms: { cursor: { fastMode: true } } },
+      });
 
     renderInAppCommandScope(
       <AgentNativeTab
@@ -6839,15 +6924,21 @@ describe("AgentNativeTab", () => {
 
   test("applies configured Claude SDK parameters after locking an unassigned tab", async () => {
     seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex"],
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: {
-          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true, claudeChrome: true },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: {
+              claudeThinkingMode: "budget-16384",
+              claudeContext1m: true,
+              claudeChrome: true,
+            },
+          },
         },
-      },
-    });
+      });
     const tabId = "tab-claude-first-send-params";
     seedUnassignedPane(tabId);
     useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
@@ -6866,10 +6957,12 @@ describe("AgentNativeTab", () => {
   });
 
   test("forwards an explicit disconnected OpenCode model without a fallback toast", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["opencode"],
-      agentSettings: { platforms: { opencode: { model: "opencode-go/gpt-5.6-luna" } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["opencode"],
+        agentSettings: { platforms: { opencode: { model: "opencode-go/gpt-5.6-luna" } } },
+      });
     renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-opencode-explicit"
@@ -6887,10 +6980,12 @@ describe("AgentNativeTab", () => {
   });
 
   test("tells the user when a new OpenCode session starts on a substituted model", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["opencode"],
-      agentSettings: { platforms: { opencode: { model: "opencode/claude-sonnet-5" } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["opencode"],
+        agentSettings: { platforms: { opencode: { model: "opencode/claude-sonnet-5" } } },
+      });
     const message = "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.";
     ensureNativeAgentSessionMock.mockImplementation(async (input) => ({
       ...(await defaultEnsureNativeAgentSession(input)),
@@ -6941,13 +7036,19 @@ describe("AgentNativeTab", () => {
   });
 
   test("applies configured Claude SDK parameters to a new session", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      agentSettings: {
-        platforms: {
-          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true, claudeChrome: true },
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentSettings: {
+          platforms: {
+            claude: {
+              claudeThinkingMode: "budget-16384",
+              claudeContext1m: true,
+              claudeChrome: true,
+            },
+          },
         },
-      },
-    });
+      });
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-claude-sdk-defaults" data={freshTab("claude")} isActive />,
@@ -6961,9 +7062,11 @@ describe("AgentNativeTab", () => {
   });
 
   test("rehydrates a Chrome-enabled Claude session created while its environment is inactive", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      agentSettings: { platforms: { claude: { claudeChrome: true } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentSettings: { platforms: { claude: { claudeChrome: true } } },
+      });
     let settleEnsure: (() => void) | undefined;
     ensureNativeAgentSessionMock.mockImplementation(
       (input) =>
@@ -7180,12 +7283,14 @@ describe("AgentNativeTab", () => {
       grokModels: [],
       piModels: [],
     });
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["cursor"],
-      agentSettings: {
-        platforms: { cursor: { model: "normal-only", fastMode: true } },
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["cursor"],
+        agentSettings: {
+          platforms: { cursor: { model: "normal-only", fastMode: true } },
+        },
+      });
 
     renderInAppCommandScope(
       <AgentNativeTab
@@ -7437,7 +7542,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("waits for environment setup before starting the shared provider", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -7454,7 +7559,7 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
 
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) => ({
         ...environment,
         setupPhase: "ready" as const,
@@ -7465,7 +7570,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not apply worker setup gating to a coordinator runtime", async () => {
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
     renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab"
@@ -7493,14 +7598,16 @@ describe("AgentNativeTab", () => {
   });
 
   test("applies repository model defaults to a coordinator runtime", async () => {
-    useEnvironmentStore.setState({ environments: [] });
-    useConfigStore.getState().setRepositoryConfig("coordinator-project", {
-      defaultBranch: "main",
-      prBaseBranch: "main",
-      agentSettings: {
-        platforms: { codex: { model: "gpt-repository", reasoningEffort: "high" } },
-      },
-    });
+    appCommandStore(environmentStore).setState({ environments: [] });
+    appCommandStore(configStore)
+      .getState()
+      .setRepositoryConfig("coordinator-project", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        agentSettings: {
+          platforms: { codex: { model: "gpt-repository", reasoningEffort: "high" } },
+        },
+      });
 
     renderInAppCommandScope(
       <AgentNativeTab
@@ -8399,7 +8506,7 @@ describe("AgentNativeTab", () => {
 
   test("shows a backend-owned startup prompt before the backend dispatches it", async () => {
     renderVirtualizedMessages = true;
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -8447,7 +8554,7 @@ describe("AgentNativeTab", () => {
     // Dispatch returned: the launch flags clear before the echo is read. The
     // prompt stays on screen through that gap rather than flickering out.
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-1", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-1", {
         pendingAgentLaunch: false,
         startupAgentSession: undefined,
       });
@@ -8543,7 +8650,7 @@ describe("AgentNativeTab", () => {
   );
 
   test("shows a backend-owned startup prompt while setup is still running", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",

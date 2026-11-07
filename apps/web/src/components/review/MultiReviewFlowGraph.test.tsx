@@ -20,7 +20,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 
 /** Outside a provider, flow views are remembered under the app's command node. */
 const viewKeyOf = (key: string) => flowGraphViewKey(getWindowScope().commandScope().nodeId, key);
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -43,6 +43,7 @@ import {
   flowViewportHeight,
   resizedFlowViewportHeight,
 } from "@/components/flow-graph/flow-viewport";
+import { appCommandStore } from "@/test/app-command-store";
 
 const STARTED = "2026-08-14T00:00:00.000Z";
 
@@ -432,9 +433,9 @@ afterEach(cleanup);
 
 describe("flow graph by phase", () => {
   test.each(PHASES)("maps nodes and edges while $name", (phase) => {
-    const environments = useEnvironmentStore.getState().environments;
+    const environments = appCommandStore(environmentStore).getState().environments;
     if (phase.prUrl)
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ id: "env-1", prUrl: phase.prUrl, prState: "open" } as Environment],
       });
     try {
@@ -474,7 +475,7 @@ describe("flow graph by phase", () => {
       expect(selected[0]!.getAttribute("aria-label")).toStartWith(phase.selected);
     } finally {
       cleanup();
-      useEnvironmentStore.setState({ environments });
+      appCommandStore(environmentStore).setState({ environments });
     }
   });
 

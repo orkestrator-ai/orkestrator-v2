@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import {
   __testing,
   isNotificationSoundEnabled,
@@ -7,8 +7,9 @@ import {
   playNotificationSound,
   primeNotificationSounds,
 } from "./notification-sounds";
+import { appCommandStore } from "@/test/app-command-store";
 
-const originalConfig = structuredClone(useConfigStore.getState().config);
+const originalConfig = structuredClone(appCommandStore(configStore).getState().config);
 const audioContextDescriptor = Object.getOwnPropertyDescriptor(window, "AudioContext");
 const webkitAudioContextDescriptor = Object.getOwnPropertyDescriptor(window, "webkitAudioContext");
 
@@ -91,12 +92,12 @@ function restoreWindowProperty(
 
 beforeEach(() => {
   __testing.resetAudioContext();
-  useConfigStore.setState({ config: structuredClone(originalConfig) });
+  appCommandStore(configStore).setState({ config: structuredClone(originalConfig) });
 });
 
 afterEach(() => {
   __testing.resetAudioContext();
-  useConfigStore.setState({ config: structuredClone(originalConfig) });
+  appCommandStore(configStore).setState({ config: structuredClone(originalConfig) });
   restoreWindowProperty("AudioContext", audioContextDescriptor);
   restoreWindowProperty("webkitAudioContext", webkitAudioContextDescriptor);
 });
@@ -143,15 +144,17 @@ describe("notification sounds", () => {
 
   test("the question cue follows its own preference", async () => {
     const contexts = installAudioContext();
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: true,
-        prMerged: true,
-        coordinatorReport: true,
-        agentQuestion: false,
-        questionDesktopNotification: true,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: true,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: false,
+          questionDesktopNotification: true,
+        },
+      });
     expect(isNotificationSoundEnabled("agent-question")).toBe(false);
     expect(isNotificationSoundEnabled("agent-stopped")).toBe(true);
     expect(await playConfiguredNotificationSound("agent-question")).toBe(false);
@@ -178,38 +181,44 @@ describe("notification sounds", () => {
 
   test("suppresses configured cues when their preference is disabled", async () => {
     const contexts = installAudioContext();
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: false,
-        prMerged: true,
-        coordinatorReport: true,
-        agentQuestion: true,
-        questionDesktopNotification: false,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: false,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: true,
+          questionDesktopNotification: false,
+        },
+      });
 
     expect(isNotificationSoundEnabled("agent-stopped")).toBe(false);
     expect(isNotificationSoundEnabled("pr-merged")).toBe(true);
     expect(isNotificationSoundEnabled("coordinator-report")).toBe(true);
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: false,
-        prMerged: true,
-        coordinatorReport: false,
-        agentQuestion: true,
-        questionDesktopNotification: false,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: false,
+          prMerged: true,
+          coordinatorReport: false,
+          agentQuestion: true,
+          questionDesktopNotification: false,
+        },
+      });
     expect(isNotificationSoundEnabled("coordinator-report")).toBe(false);
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: false,
-        prMerged: true,
-        coordinatorReport: true,
-        agentQuestion: true,
-        questionDesktopNotification: false,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: false,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: true,
+          questionDesktopNotification: false,
+        },
+      });
     expect(await playConfiguredNotificationSound("agent-stopped")).toBe(false);
     expect(contexts).toHaveLength(0);
 

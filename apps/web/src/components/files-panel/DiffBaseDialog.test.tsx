@@ -2,11 +2,12 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { appCommandScope } from "@/lib/node-scope-slots";
-import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
+import { environmentStore, useFilesPanelStore } from "@/stores";
 import type { Environment } from "@/types";
 import { DiffBaseDialog, defaultDiffBaseRef, saveDiffBase } from "./DiffBaseDialog";
 import { DiffBaseNotice } from "./DiffBaseNotice";
 import { FilesPanelHeader } from "./FilesPanelHeader";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 const TIP = "a".repeat(40);
@@ -25,7 +26,7 @@ function environment(overrides: Partial<Environment> = {}): Environment {
 }
 
 beforeEach(() => {
-  useEnvironmentStore.setState({ environments: [environment()] });
+  appCommandStore(environmentStore).setState({ environments: [environment()] });
   useFilesPanelStore.setState({ activeTab: "changes", changes: [] });
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     if (command === "list_environment_diff_base_branches") return BRANCHES;
@@ -84,11 +85,13 @@ test("comparing against the tip of the target branch saves that commit", async (
     ref: "refs/remotes/origin/main",
     commit: TIP,
   });
-  expect(useEnvironmentStore.getState().environments[0]!.diffBaseOverride?.commit).toBe(TIP);
+  expect(
+    appCommandStore(environmentStore).getState().environments[0]!.diffBaseOverride?.commit,
+  ).toBe(TIP);
 });
 
 test("the notice names the chosen base and resets it", async () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       environment({
         diffBaseOverride: { ref: "refs/remotes/origin/main", commit: TIP, subject: "Merge #12" },
@@ -143,7 +146,9 @@ test("switching environments drops selections and ignores pending reads from the
   const aCommits = deferred<typeof COMMITS>();
   const bBranches = deferred<typeof BRANCHES>();
   const bCommits = deferred<typeof COMMITS>();
-  useEnvironmentStore.setState({ environments: [environment(), environment({ id: "env-2" })] });
+  appCommandStore(environmentStore).setState({
+    environments: [environment(), environment({ id: "env-2" })],
+  });
   invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
     if (command === "list_environment_diff_base_branches")
       return args?.environmentId === "env-1" ? Promise.resolve(BRANCHES) : bBranches.promise;
@@ -178,7 +183,7 @@ test("switching environments drops selections and ignores pending reads from the
 test.each([true, false])(
   "reopening retains the stored commit (inside fetched window: %s)",
   async (inside) => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         environment({
           diffBaseOverride: { ref: BRANCHES[1]!.ref, commit: OLDER, subject: "Older work" },
@@ -206,14 +211,14 @@ test.each([true, false])(
 );
 
 test("the picker can restore the automatic base", async () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment({ diffBaseOverride: { ref: BRANCHES[1]!.ref, commit: OLDER } })],
   });
   const onOpenChange = mock(() => undefined);
   render(<DiffBaseDialog environmentId="env-1" open onOpenChange={onOpenChange} />);
   fireEvent.click(screen.getByRole("button", { name: "Use automatic base" }));
   await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-  expect(useEnvironmentStore.getState().environments[0]!.diffBaseOverride).toBeNull();
+  expect(appCommandStore(environmentStore).getState().environments[0]!.diffBaseOverride).toBeNull();
 });
 
 test.each(["list_environment_diff_base_branches", "list_environment_diff_base_commits"])(
@@ -233,7 +238,9 @@ test("Reset and Change saves are serialized and superseded responses never repla
   const resetResponse = deferred<Environment>();
   const changeResponse = deferred<Environment>();
   const initial = { ref: BRANCHES[1]!.ref, commit: OLDER };
-  useEnvironmentStore.setState({ environments: [environment({ diffBaseOverride: initial })] });
+  appCommandStore(environmentStore).setState({
+    environments: [environment({ diffBaseOverride: initial })],
+  });
   const saves: unknown[] = [];
   invokeMock.mockImplementation((_command: string, args?: Record<string, unknown>) => {
     saves.push(args);
@@ -247,12 +254,16 @@ test("Reset and Change saves are serialized and superseded responses never repla
   expect(saves).toHaveLength(1);
   // Even if the newer answer is ready first, its request waits for Reset.
   changeResponse.resolve(environment({ diffBaseOverride: { ref: BRANCHES[1]!.ref, commit: TIP } }));
-  expect(useEnvironmentStore.getState().environments[0]!.diffBaseOverride).toEqual(initial);
+  expect(appCommandStore(environmentStore).getState().environments[0]!.diffBaseOverride).toEqual(
+    initial,
+  );
   resetResponse.resolve(environment({ diffBaseOverride: null }));
   expect(await reset).toBe(true);
   expect(await change).toBe(true);
   expect(saves).toHaveLength(2);
-  expect(useEnvironmentStore.getState().environments[0]!.diffBaseOverride?.commit).toBe(TIP);
+  expect(
+    appCommandStore(environmentStore).getState().environments[0]!.diffBaseOverride?.commit,
+  ).toBe(TIP);
 });
 
 test("a failed save releases the queue for the next choice", async () => {
@@ -261,7 +272,9 @@ test("a failed save releases the queue for the next choice", async () => {
   expect(
     await saveDiffBase("env-1", { ref: BRANCHES[1]!.ref, commit: TIP }, appCommandScope()),
   ).toBe(true);
-  expect(useEnvironmentStore.getState().environments[0]!.diffBaseOverride?.commit).toBe(TIP);
+  expect(
+    appCommandStore(environmentStore).getState().environments[0]!.diffBaseOverride?.commit,
+  ).toBe(TIP);
 });
 
 test("switching branches disables Compare and ignores a late answer for the previous ref", async () => {
@@ -305,7 +318,9 @@ test("switching branches disables Compare and ignores a late answer for the prev
 });
 
 test("an already selected commit cannot be submitted after switching the open picker to another environment", async () => {
-  useEnvironmentStore.setState({ environments: [environment(), environment({ id: "env-2" })] });
+  appCommandStore(environmentStore).setState({
+    environments: [environment(), environment({ id: "env-2" })],
+  });
   const onOpenChange = mock(() => undefined);
   const view = render(<DiffBaseDialog environmentId="env-1" open onOpenChange={onOpenChange} />);
   await ready();
@@ -331,7 +346,9 @@ test("an already selected commit cannot be submitted after switching the open pi
 });
 
 test("a save finishing after an environment switch does not close the new picker", async () => {
-  useEnvironmentStore.setState({ environments: [environment(), environment({ id: "env-2" })] });
+  appCommandStore(environmentStore).setState({
+    environments: [environment(), environment({ id: "env-2" })],
+  });
   const response = deferred<Environment>();
   const original = invokeMock.getMockImplementation()!;
   invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) =>
@@ -348,7 +365,8 @@ test("a save finishing after an environment switch does not close the new picker
   await ready();
   expect(onOpenChange).not.toHaveBeenCalled();
   expect(
-    useEnvironmentStore.getState().environments.find((item) => item.id === "env-2")
-      ?.diffBaseOverride,
+    appCommandStore(environmentStore)
+      .getState()
+      .environments.find((item) => item.id === "env-2")?.diffBaseOverride,
   ).toBeUndefined();
 });

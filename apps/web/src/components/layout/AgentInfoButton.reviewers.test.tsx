@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useConfigStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { TabInfo } from "@/types/paneLayout";
 import {
@@ -16,6 +16,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { AgentInfoButton } from "./AgentInfoButton";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-1";
 const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
@@ -66,11 +67,11 @@ function projectionUsage(snapshot: ReturnType<typeof usage>) {
 function open() {
   fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
 }
-const originalGlobalConfig = useConfigStore.getState().config.global;
+const originalGlobalConfig = appCommandStore(configStore).getState().config.global;
 beforeEach(() => {
   useMultiReviewStore.setState({ workflows: new Map() });
   useNativeAgentProjectionStore.getState().reset();
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   nativeInvokeMock.mockClear();
   nativeInvokeMock.mockImplementation(async () => undefined);
 });
@@ -79,8 +80,8 @@ afterEach(() => {
   resetReadCoordinatorForTests();
   useMultiReviewStore.setState({ workflows: new Map() });
   useNativeAgentProjectionStore.getState().reset();
-  useEnvironmentStore.setState({ environments: [] });
-  useConfigStore.setState((state) => ({
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(configStore).setState((state) => ({
     config: { ...state.config, global: originalGlobalConfig },
   }));
 });
@@ -317,12 +318,12 @@ describe("reviewer session boundaries", () => {
   for (const shared of [false, true]) {
     test(`Claude container reviewer ${shared ? "offers shared-host sign-in" : "suppresses host sign-in for isolated credentials"}`, async () => {
       useMultiReviewStore.getState().replaceWorkflow(multiReviewWorkflow());
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           { id: ENVIRONMENT_ID, containerId: "review-container", environmentType: "container" },
         ] as never,
       });
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         config: {
           ...state.config,
           global: { ...state.config.global, useHostClaudeCredentials: shared },

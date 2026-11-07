@@ -2,13 +2,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, tes
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import { GraphDesignerTab } from "./GraphDesignerTab";
 import { builtInDetail, fixtureSummary, listResult } from "./graph-designer.test-fixtures";
 import { installReactFlowDomStubs } from "./react-flow.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** The designer's item 405 entry points: Share, Import bundle and Review. */
 
@@ -62,7 +63,7 @@ beforeEach(() => {
   });
   window.orkestrator = { invoke: invokeMock, listen: () => () => undefined } as never;
   useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
   usePaneLayoutStore.setState({

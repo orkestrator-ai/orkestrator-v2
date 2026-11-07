@@ -3,10 +3,11 @@ import { useSyncExternalStore } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import * as realPersistentTerminal from "./PersistentTerminal";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createXtermTerminal } from "@/lib/terminal-xterm";
+import { appCommandStore } from "@/test/app-command-store";
 
 const persistentTerminalSnapshot = { ...realPersistentTerminal };
 const terminalPortalStoreSnapshot = { ...realTerminalPortalStore };
@@ -148,7 +149,7 @@ describe("TerminalPortalHost", () => {
       ],
     ]);
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -193,7 +194,7 @@ describe("TerminalPortalHost", () => {
       activeEnvironmentId: "env-1",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",

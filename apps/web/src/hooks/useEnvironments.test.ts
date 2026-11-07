@@ -3,7 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { useEnvironments } from "./useEnvironments";
 import * as backend from "@/lib/backend";
 import { appCommandScope } from "@/lib/node-scope-slots";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
   applyEnvironmentSetupComplete,
@@ -20,11 +20,12 @@ import {
   hasWindowBuildPipelineHandoffResolved,
   markWindowBuildPipelineHandoffResolved,
 } from "@/lib/pane-selection-storage";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
 });
 
 function environment(id: string, projectId: string): Environment {
@@ -95,7 +96,7 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
       const removed = environment("removed", "project-1");
       const surviving = environment("surviving", "project-1");
       const otherProject = environment("other-project", "project-2");
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [removed, surviving, otherProject],
       });
       for (const id of ["removed", "surviving", "other-project"]) {
@@ -122,7 +123,7 @@ describe("startup-agent handoff failure cleanup", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1", "project-1"),
@@ -136,7 +137,9 @@ describe("startup-agent handoff failure cleanup", () => {
       reconcileEnvironmentLifecycleErrors(appCommandScope());
 
       expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
-      expect(useEnvironmentStore.getState().environments[0]?.pendingAgentLaunch).toBe(false);
+      expect(appCommandStore(environmentStore).getState().environments[0]?.pendingAgentLaunch).toBe(
+        false,
+      );
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -150,7 +153,7 @@ describe("startup-agent handoff failure cleanup", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ ...environment("env-1", "project-1"), pendingAgentLaunch: true }],
       });
       armWindowStartupAgentActivation("env-1");
@@ -158,7 +161,9 @@ describe("startup-agent handoff failure cleanup", () => {
       applyEnvironmentSetupComplete({ environment_id: "env-1", success: false }, appCommandScope());
 
       expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
-      expect(useEnvironmentStore.getState().environments[0]?.pendingAgentLaunch).toBe(false);
+      expect(appCommandStore(environmentStore).getState().environments[0]?.pendingAgentLaunch).toBe(
+        false,
+      );
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -174,7 +179,7 @@ describe("pipeline handoff failure cleanup", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1", "project-1"),
@@ -203,7 +208,7 @@ describe("pipeline handoff failure cleanup", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ ...environment("env-1", "project-1"), pendingAgentLaunch: true }],
       });
       armWindowBuildPipelineActivation("env-1", "pipeline-1");
@@ -226,7 +231,7 @@ describe("pipeline handoff failure cleanup", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ ...environment("env-1", "project-1"), pendingAgentLaunch: true }],
       });
       armWindowBuildPipelineActivation("env-1", "pipeline-1");
@@ -250,13 +255,15 @@ describe("refreshEnvironmentSnapshot", () => {
 
   test("updates that environment and keeps the others' objects", async () => {
     const other = environment("env-2", "project-1");
-    useEnvironmentStore.setState({ environments: [environment("env-1", "project-1"), other] });
+    appCommandStore(environmentStore).setState({
+      environments: [environment("env-1", "project-1"), other],
+    });
     const list = spyOn(backend, "getEnvironmentSnapshots");
     const read = reads({ ...environment("env-1", "project-1"), status: "running" });
 
     expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(true);
 
-    const [first, second] = useEnvironmentStore.getState().environments;
+    const [first, second] = appCommandStore(environmentStore).getState().environments;
     expect(first!.status).toBe("running");
     expect(second).toBe(other);
     expect(read).toHaveBeenCalledTimes(1);
@@ -266,17 +273,23 @@ describe("refreshEnvironmentSnapshot", () => {
   });
 
   test("removes an environment the backend no longer has", async () => {
-    useEnvironmentStore.setState({ environments: [environment("env-1", "project-1")] });
+    appCommandStore(environmentStore).setState({
+      environments: [environment("env-1", "project-1")],
+    });
     const read = reads(null);
     expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(true);
-    expect(useEnvironmentStore.getState().environments).toEqual([]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([]);
     read.mockRestore();
   });
 
   test("adds one another client created", async () => {
     const read = reads(environment("env-new", "project-1"));
     expect(await refreshEnvironmentSnapshot("project-1", "env-new", appCommandScope())).toBe(true);
-    expect(useEnvironmentStore.getState().environments.map(({ id }) => id)).toEqual(["env-new"]);
+    expect(
+      appCommandStore(environmentStore)
+        .getState()
+        .environments.map(({ id }) => id),
+    ).toEqual(["env-new"]);
     read.mockRestore();
   });
 
@@ -322,17 +335,20 @@ describe("refreshEnvironmentSnapshot", () => {
           finishRead(created);
           expect(await snapshot).toBe(true);
         });
-        expect(useEnvironmentStore.getState().environments).toEqual(settled ? [other] : []);
+        expect(appCommandStore(environmentStore).getState().environments).toEqual(
+          settled ? [other] : [],
+        );
         if (!settled)
           await act(async () => {
             finishCreate(created);
             await creation;
           });
-        else useEnvironmentStore.getState().addEnvironment(created);
-        expect(useEnvironmentStore.getState().environments.map(({ id }) => id)).toEqual([
-          ...(settled ? [other.id] : []),
-          created.id,
-        ]);
+        else appCommandStore(environmentStore).getState().addEnvironment(created);
+        expect(
+          appCommandStore(environmentStore)
+            .getState()
+            .environments.map(({ id }) => id),
+        ).toEqual([...(settled ? [other.id] : []), created.id]);
       } finally {
         create.mockRestore();
         read.mockRestore();
@@ -342,10 +358,10 @@ describe("refreshEnvironmentSnapshot", () => {
 
   test("reports a backend that predates the read, changing nothing", async () => {
     const held = environment("env-1", "project-1");
-    useEnvironmentStore.setState({ environments: [held] });
+    appCommandStore(environmentStore).setState({ environments: [held] });
     const read = reads(new Error("Unknown backend command: get_environment_snapshot"));
     expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(false);
-    expect(useEnvironmentStore.getState().environments[0]).toBe(held);
+    expect(appCommandStore(environmentStore).getState().environments[0]).toBe(held);
     read.mockRestore();
   });
 

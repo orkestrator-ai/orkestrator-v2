@@ -3,7 +3,7 @@ import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import type { GlobalConfig } from "@/types";
 import { SHIPPED_REVIEW_LENS_PRESETS } from "@orkestrator/protocol/review-lens";
 import {
@@ -13,6 +13,7 @@ import {
   type MultiReviewLaunchDefaults,
   type MultiReviewLaunchSelection,
 } from "./MultiReviewLaunchDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high"] }],
@@ -39,8 +40,8 @@ const speedCatalog: AgentModelCatalog = {
 };
 
 function setFavorites(favoriteModels: AgentModelRef[]) {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, favoriteModels } },
   });
 }
@@ -831,8 +832,8 @@ describe("MultiReviewLaunchDialog launch value", () => {
 
 describe("MultiReviewLaunchDialog focus", () => {
   function setPresets(reviewLensPresets: GlobalConfig["reviewLensPresets"]) {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: { ...config, global: { ...config.global, reviewLensPresets } },
     });
   }

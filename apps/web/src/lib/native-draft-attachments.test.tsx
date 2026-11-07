@@ -32,10 +32,11 @@ import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent
 import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import { createSessionKey } from "@/lib/utils";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore, useConfigStore } from "@/stores/configStore";
 import { mockToastError as toastError } from "../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const saveComposeDraft = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
@@ -211,7 +212,7 @@ let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
 
 beforeEach(() => {
   cleanup();
-  configSnapshot = useConfigStore.getState().config;
+  configSnapshot = appCommandStore(configStore).getState().config;
   for (const fn of [saveComposeDraft, deleteComposeDraft, getComposeDraft]) fn.mockReset();
   getNativeAgentModelCatalog.mockReset();
   getNativeAgentModelCatalog.mockImplementation(async () => []);
@@ -226,7 +227,7 @@ afterEach(() => {
   cleanup();
   saveTimers?.restore();
   saveTimers = undefined;
-  useConfigStore.getState().setConfig(configSnapshot);
+  appCommandStore(configStore).getState().setConfig(configSnapshot);
 });
 
 afterAll(() => {
@@ -716,23 +717,27 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   test.each(["provider", "container", "none"] as const)(
     "a restricted-network launch in a full-network container describes the provider sandbox (%s override)",
     async (sandbox) => {
-      const previous = useEnvironmentStore.getState().environments;
-      useEnvironmentStore.getState().setEnvironments([
-        {
-          id: environmentId,
-          projectId: "project-1",
-          name: "Container",
-          environmentType: "containerized",
-          networkAccessMode: "full",
-          agentSettings: {
-            executionPolicy: { approvals: "ask", sandbox, networkAccess: "restricted" },
-          },
-        } as Environment,
-      ]);
-      useConfigStore.getState().updateGlobalConfig({
-        enabledAgentPlatforms: ["codex"],
-        agentSettings: { defaultAgent: "codex" },
-      } as never);
+      const previous = appCommandStore(environmentStore).getState().environments;
+      appCommandStore(environmentStore)
+        .getState()
+        .setEnvironments([
+          {
+            id: environmentId,
+            projectId: "project-1",
+            name: "Container",
+            environmentType: "containerized",
+            networkAccessMode: "full",
+            agentSettings: {
+              executionPolicy: { approvals: "ask", sandbox, networkAccess: "restricted" },
+            },
+          } as Environment,
+        ]);
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          enabledAgentPlatforms: ["codex"],
+          agentSettings: { defaultAgent: "codex" },
+        } as never);
       try {
         renderComposer(`tab-restricted-${sandbox}`);
         fireEvent.pointerDown(await screen.findByTestId("launch-approval-mode-picker"));
@@ -742,7 +747,7 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
         expect(Boolean(screen.queryByTitle(/like Untrusted/))).toBe(false);
       } finally {
         cleanup();
-        useEnvironmentStore.getState().setEnvironments(previous);
+        appCommandStore(environmentStore).getState().setEnvironments(previous);
       }
     },
   );
@@ -753,10 +758,12 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   ] as const) {
     test(`an undecided draft with ${label} metadata is reconciled once for the default provider after hydration`, async () => {
       // Codex is image-only, so the restored file cannot be dispatched to it.
-      useConfigStore.getState().updateGlobalConfig({
-        enabledAgentPlatforms: ["claude", "codex", "pi"],
-        agentSettings: { defaultAgent: "codex" },
-      } as never);
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          enabledAgentPlatforms: ["claude", "codex", "pi"],
+          agentSettings: { defaultAgent: "codex" },
+        } as never);
       const tabId = `tab-undecided-${label}`;
       const sessionKey = createSessionKey(environmentId, tabId);
       const key = composeDraftKey("agent-native", environmentId, sessionKey);
@@ -803,11 +810,13 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   }
 
   test("a platform change after restore reconciles exactly once and writes once", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "pi"],
-      favoriteModels: [{ platform: "codex", modelId: codexModel.id }],
-      agentSettings: { defaultAgent: "claude" },
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "pi"],
+        favoriteModels: [{ platform: "codex", modelId: codexModel.id }],
+        agentSettings: { defaultAgent: "claude" },
+      } as never);
     getNativeAgentModelCatalog.mockImplementation(async () => [codexModel, piModel]);
     const tabId = "tab-switch";
     const sessionKey = createSessionKey(environmentId, tabId);
@@ -860,10 +869,12 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   });
 
   test("an unavailable model catalogue neither destroys the image nor broadens dispatch", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "cursor"],
-      agentSettings: { defaultAgent: "claude" },
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "cursor"],
+        agentSettings: { defaultAgent: "claude" },
+      } as never);
     getNativeAgentModelCatalog.mockImplementation(async () => {
       throw new Error("bridge unavailable");
     });

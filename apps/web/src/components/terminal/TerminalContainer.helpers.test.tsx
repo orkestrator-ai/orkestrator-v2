@@ -15,11 +15,11 @@ import {
   type CreateTabOptions,
 } from "@/contexts";
 
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
 
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
@@ -53,6 +53,7 @@ import { mockToastError } from "../../../../../tests/mocks/sonner";
 import * as realNativeEvents from "@/lib/native/events";
 
 import { listen } from "@/lib/native/events";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -106,7 +107,9 @@ const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
 
 const ensureEnvironmentSetupMock = mock(
   async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId)!;
     return {
       setupStarted: false,
       environment: {
@@ -118,7 +121,7 @@ const ensureEnvironmentSetupMock = mock(
 );
 
 const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   setupScriptsComplete: true,
 }));
 
@@ -133,7 +136,7 @@ const awaitEnvironmentSetupSessionMock = mock(
 
 const setEnvironmentPendingAgentLaunchMock = mock(
   async (environmentId: string, pending: boolean) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     pendingAgentLaunch: pending,
     ...(pending
       ? {}
@@ -145,13 +148,13 @@ const setEnvironmentPendingAgentLaunchMock = mock(
 );
 
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
 
 const setEnvironmentInitialPromptMock = mock(
   async (environmentId: string, initialPrompt: string) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     initialPrompt,
   }),
 );
@@ -193,7 +196,9 @@ const writeInitialPromptAttachmentsMock = mock(
     environmentId: string,
     attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
   ) => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const usedNames = new Set<string>();
     return Promise.all(
@@ -345,7 +350,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-visible",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-visible",
@@ -401,7 +406,9 @@ describe("TerminalContainer", () => {
     getSetupCommandsMock.mockResolvedValue(null);
     ensureEnvironmentSetupMock.mockReset();
     ensureEnvironmentSetupMock.mockImplementation(async (environmentId: string) => {
-      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+      const environment = appCommandStore(environmentStore)
+        .getState()
+        .getEnvironmentById(environmentId)!;
       return {
         setupStarted: false,
         environment: {
@@ -412,7 +419,7 @@ describe("TerminalContainer", () => {
     });
     runEnvironmentSetupMock.mockReset();
     runEnvironmentSetupMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       setupScriptsComplete: true,
     }));
     getEnvironmentSetupSessionMock.mockReset();
@@ -423,7 +430,7 @@ describe("TerminalContainer", () => {
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         pendingAgentLaunch: pending,
         ...(pending
           ? {}
@@ -435,13 +442,13 @@ describe("TerminalContainer", () => {
     );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
     setEnvironmentInitialPromptMock.mockReset();
     setEnvironmentInitialPromptMock.mockImplementation(
       async (environmentId: string, initialPrompt: string) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         initialPrompt,
       }),
     );
@@ -461,7 +468,7 @@ describe("TerminalContainer", () => {
       async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`,
     );
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -481,7 +488,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
   });
@@ -805,7 +812,7 @@ describe("TerminalContainer", () => {
         ]),
         activeEnvironmentId: "env-visible",
       });
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         ...state,
         environments: state.environments.map((env) =>
           env.id === "env-visible"
@@ -1975,7 +1982,9 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      const visibleEnvironment = useEnvironmentStore.getState().getEnvironmentById("env-visible");
+      const visibleEnvironment = appCommandStore(environmentStore)
+        .getState()
+        .getEnvironmentById("env-visible");
       const expectedTerminalLinkTarget = visibleEnvironment
         ? formatPreviewIntentUri({
             environmentId: "env-visible",
@@ -2055,7 +2064,9 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      const visibleEnvironment = useEnvironmentStore.getState().getEnvironmentById("env-visible");
+      const visibleEnvironment = appCommandStore(environmentStore)
+        .getState()
+        .getEnvironmentById("env-visible");
       const expected = visibleEnvironment
         ? formatPreviewIntentUri({
             environmentId: "env-visible",
@@ -2863,7 +2874,7 @@ describe("TerminalContainer", () => {
       expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(stoppedBefore);
 
       unmount();
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         ...state,
         environments: state.environments.map((environment) =>
           environment.id === "env-visible"
@@ -2941,7 +2952,7 @@ describe("TerminalContainer", () => {
     });
 
     test("claude-native tabs receive displayTitle", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -2980,7 +2991,7 @@ describe("TerminalContainer", () => {
     });
 
     test("claude-tmux tabs are created when claudeMode is native and the native backend resolves to tmux", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3024,7 +3035,7 @@ describe("TerminalContainer", () => {
     });
 
     test("repository Claude agent style and backend override global terminal defaults", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3071,7 +3082,7 @@ describe("TerminalContainer", () => {
     });
 
     test("codex-native tabs receive displayTitle", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3111,7 +3122,7 @@ describe("TerminalContainer", () => {
     });
 
     test("opencode-native tabs receive displayTitle", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3153,7 +3164,7 @@ describe("TerminalContainer", () => {
     });
 
     test("agentLaunchMode tmux opens a Claude tmux tab even when Claude defaults to terminal", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3195,7 +3206,7 @@ describe("TerminalContainer", () => {
     });
 
     test("agentLaunchMode native opens a Codex native tab even when Codex defaults to terminal", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3469,7 +3480,7 @@ describe("TerminalContainer", () => {
     });
 
     test("agentLaunchMode cli opens an OpenCode CLI tab even when OpenCode defaults to native", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3514,7 +3525,7 @@ describe("TerminalContainer", () => {
     });
 
     test("agentLaunchMode cli opens a Claude CLI tab even when Claude defaults to tmux", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3556,7 +3567,7 @@ describe("TerminalContainer", () => {
     });
 
     test("agentLaunchMode native opens Claude SDK native even when the native backend defaults to tmux", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3599,7 +3610,7 @@ describe("TerminalContainer", () => {
     });
 
     test("agentLaunchMode cli opens a Codex CLI tab even when Codex defaults to native", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -3641,7 +3652,7 @@ describe("TerminalContainer", () => {
     });
 
     test("agentLaunchMode native opens an OpenCode native tab even when OpenCode defaults to terminal", async () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,

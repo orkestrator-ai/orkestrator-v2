@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
@@ -10,6 +10,7 @@ import {
   requestDesktopNotificationPermission,
   showQuestionDesktopNotification,
 } from "./question-desktop-notification";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface Shown {
   title: string;
@@ -58,18 +59,20 @@ beforeEach(() => {
   FakeNotification.permission = "granted";
   __testing.reset();
   Object.defineProperty(window, "Notification", { configurable: true, value: FakeNotification });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: "env-1", projectId: "project-1", name: "fix-login" } as Environment],
   });
-  useProjectStore.setState({ projects: [{ id: "project-1", name: "webapp" } as Project] });
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project-1", name: "webapp" } as Project],
+  });
   useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
 });
 
 afterEach(() => {
   if (descriptor) Object.defineProperty(window, "Notification", descriptor);
   else delete (window as unknown as { Notification?: unknown }).Notification;
-  useEnvironmentStore.setState({ environments: [] });
-  useProjectStore.setState({ projects: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(projectStore).setState({ projects: [] });
 });
 
 describe("question desktop notifications", () => {
@@ -124,7 +127,7 @@ describe("question desktop notifications", () => {
   });
 
   test("opens Project home from a coordinator tab", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",

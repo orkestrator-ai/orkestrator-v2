@@ -3,9 +3,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { invoke } from "@/lib/native/backend";
 import type { Mock } from "bun:test";
 import type { Environment } from "@/types";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import * as realSetupCommands from "@/lib/setup-commands";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<typeof invoke>;
 
@@ -56,7 +57,7 @@ describe("SetupPendingOverlay", () => {
     forceResolveSetupRuntime.mockResolvedValue(undefined);
     retrySetupRuntime.mockReset();
     retrySetupRuntime.mockResolvedValue(undefined);
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [createEnvironment({ setupPhase: "running" })],
       isLoading: false,
       error: null,
@@ -128,7 +129,7 @@ describe("SetupPendingOverlay", () => {
   });
 
   test("held setup keeps the queued prompt above the approval panel instead of retry actions", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [createEnvironment({ setupPhase: "failed", setupApprovalRequired: true })],
     });
     invokeMock.mockResolvedValueOnce({
@@ -289,7 +290,9 @@ describe("SetupPendingOverlay", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("running");
+    expect(
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-1")?.setupPhase,
+    ).toBe("running");
     expect(screen.getByRole("button", { name: /skip anyway/i })).toBeTruthy();
   });
 
@@ -298,7 +301,9 @@ describe("SetupPendingOverlay", () => {
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("running");
+    expect(
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-1")?.setupPhase,
+    ).toBe("running");
     expect(screen.getByRole("button", { name: /skip setup wait/i })).toBeTruthy();
   });
 

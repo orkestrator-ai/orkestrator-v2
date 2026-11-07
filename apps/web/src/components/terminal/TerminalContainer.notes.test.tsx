@@ -3,12 +3,13 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { keyInformation } from "@/components/build-pipeline/key-information-test-fixture";
 import type { Environment } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const backendSnapshot = { ...realBackend };
 mock.module("@/lib/backend", () => ({
@@ -27,7 +28,7 @@ const { TerminalContainer } = await import("./TerminalContainer");
 
 test("Notes activation creates and renders a real pane tab, and reopening reuses it", async () => {
   const pipeline = buildPipelineFixture({ phase: "complete", keyInformation });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",

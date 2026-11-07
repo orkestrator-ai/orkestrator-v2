@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("backend-owned activity projection", () => {
   beforeEach(() => {
@@ -11,7 +12,7 @@ describe("backend-owned activity projection", () => {
       containerStates: {},
       containerStateUpdatedAt: {},
     });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   test("bulk replacement exactly projects the environment snapshot", () => {
@@ -45,7 +46,7 @@ describe("backend-owned activity projection", () => {
   });
 
   test("rehydrates the latest backend snapshot after the observer remounts", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-a",
@@ -61,7 +62,7 @@ describe("backend-owned activity projection", () => {
     });
 
     first.unmount();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-b",
@@ -83,7 +84,7 @@ describe("backend-owned activity projection", () => {
   });
 
   test("projects environment-store updates while the observer stays mounted", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-a",
@@ -99,7 +100,7 @@ describe("backend-owned activity projection", () => {
     });
 
     act(() => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             id: "env-b",

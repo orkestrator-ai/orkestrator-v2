@@ -7,9 +7,10 @@ import {
 import { invoke } from "@/lib/native/backend";
 import type { AgentMailToolCall } from "@/lib/chat/agent-mail-tool-call";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { MailToolPart } from "./MailToolPart";
+import { appCommandStore } from "@/test/app-command-store";
 
 function senderText(): string | null | undefined {
   return document.querySelector("[data-mail-sender]")?.textContent;
@@ -88,7 +89,7 @@ function mailbox(revision = 1): AgentMailMailboxSnapshot {
 }
 
 beforeEach(() => {
-  useEnvironmentStore.setState(useEnvironmentStore.getInitialState());
+  appCommandStore(environmentStore).setState(appCommandStore(environmentStore).getInitialState());
   useAgentMailStore.setState(useAgentMailStore.getInitialState());
   useAgentMailStore.getState().clear();
   invokeMock.mockReset();
@@ -186,7 +187,7 @@ describe("mounted mail tool tiles", () => {
     // Neither name is known yet: the short environment id and the tab id stand in.
     expect(senderText()).toBe("To recipien · agent");
     act(() =>
-      useEnvironmentStore
+      appCommandStore(environmentStore)
         .getState()
         .setEnvironments([{ id: "recipient", name: "fix-login-bug", order: 0 } as Environment]),
     );

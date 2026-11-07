@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { WEB_ANNOTATION_CONFLICT } from "@orkestrator/protocol/web-annotations";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -14,6 +14,7 @@ import {
   invokeMock,
 } from "@/test/web-annotation-fakes";
 import { AnnotationHarness, flush, seedBrowserLayout } from "@/test/web-annotation-harness";
+import { appCommandStore } from "@/test/app-command-store";
 
 let backend: FakeWebAnnotationBackend;
 let bus: ReturnType<typeof installFakeOrkestrator>;
@@ -37,7 +38,7 @@ describe("request composer", () => {
     backend.seed({ id: "annotation-1", title: "Save button" });
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-1" });
     useNativeComposeStore.setState({ drafts: new Map() });
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",

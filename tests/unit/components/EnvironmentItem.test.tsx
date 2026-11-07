@@ -117,17 +117,18 @@ import {
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
-import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
-import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { configStore } from "../../../apps/web/src/stores/configStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
-import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import { projectStore } from "../../../apps/web/src/stores/projectStore";
 import { useAppDialogStore } from "../../../apps/web/src/stores/appDialogStore";
 import { useMergePrRequestStore } from "../../../apps/web/src/stores/mergePrRequestStore";
 import {
   environmentMarkerState,
   sidebarActivityFromMarkerState,
 } from "../../../e2e/agent-testing/idle-observation-live-support";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -229,7 +230,7 @@ beforeEach(() => {
     containerStateUpdatedAt: {},
   });
   useUIStore.setState({ selectedEnvironmentId: null });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     deletingEnvironments: new Set<string>(),
     deletingStartedAt: new Map(),
     environments: [],
@@ -240,10 +241,10 @@ beforeEach(() => {
     activeBuildEnvironmentIds: new Set<string>(),
   });
   useAgentMailStore.setState(useAgentMailStore.getInitialState());
-  const config = structuredClone(useConfigStore.getInitialState().config);
+  const config = structuredClone(appCommandStore(configStore).getInitialState().config);
   config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
-  useConfigStore.setState({ config });
-  useProjectStore.setState({ projects: [] });
+  appCommandStore(configStore).setState({ config });
+  appCommandStore(projectStore).setState({ projects: [] });
 });
 
 afterEach(() => {
@@ -1091,14 +1092,14 @@ describe("EnvironmentItem menu actions and selection", () => {
       lifecycleOperationStartedAt: "2026-01-02T00:00:00.000Z",
       deletionError: "failed",
     });
-    useEnvironmentStore.getState().setEnvironments([env]);
+    appCommandStore(environmentStore).getState().setEnvironments([env]);
     const view = renderItem(env);
     expect(view.container.textContent).toContain("Delete failed");
-    act(() => useEnvironmentStore.getState().setDeleting(env.id, true));
+    act(() => appCommandStore(environmentStore).getState().setDeleting(env.id, true));
     expect(view.container.textContent).not.toContain("Delete failed");
     expect(view.container.textContent).not.toContain("Still deleting after");
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
-    act(() => useEnvironmentStore.getState().setDeleting(env.id, false));
+    act(() => appCommandStore(environmentStore).getState().setDeleting(env.id, false));
     expect(view.container.textContent).toContain("Delete failed");
     expect(view.container.querySelector(".animate-spin") === null).toBe(true);
   });
@@ -1436,7 +1437,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
   test("disables Fork local when the project has no checkout", async () => {
     const onFork = mock((_environmentId: string, _environmentType: EnvironmentType) => {});
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -1534,7 +1535,7 @@ describe("EnvironmentItem multi-select", () => {
   });
 
   test("a deleting environment shows the delete spinner instead of the checkbox", () => {
-    useEnvironmentStore.getState().setDeleting("env-1", true);
+    appCommandStore(environmentStore).getState().setDeleting("env-1", true);
 
     const { container } = renderItem(makeEnvironment(), { isMultiSelectMode: true });
 

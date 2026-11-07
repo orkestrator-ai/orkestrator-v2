@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
   agentMailParticipantLabel,
   agentMailStatus,
   useAgentMailEnvironmentName,
 } from "./agent-mail-ui";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("agentMailStatus", () => {
   const stored = { placement: "stored" as const, placementReason: "recipient-cannot-inject" };
@@ -65,17 +66,17 @@ describe("agentMailParticipantLabel", () => {
 
 describe("useAgentMailEnvironmentName", () => {
   const initialMail = useAgentMailStore.getState();
-  const initialEnvironments = useEnvironmentStore.getState();
+  const initialEnvironments = appCommandStore(environmentStore).getState();
 
   beforeEach(() => {
     useAgentMailStore.setState({ mailboxes: new Map() });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   afterEach(() => {
     cleanup();
     useAgentMailStore.setState(initialMail, true);
-    useEnvironmentStore.setState(initialEnvironments, true);
+    appCommandStore(environmentStore).setState(initialEnvironments, true);
   });
 
   test("falls back to a loaded mailbox and prefers the live environment name", () => {
@@ -121,12 +122,12 @@ describe("useAgentMailEnvironmentName", () => {
     act(() => useAgentMailStore.getState().setMailbox(mailbox));
     expect(result.current).toBe("Mailbox name");
     act(() =>
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ id: "env-1", name: "Current name", order: 0 } as Environment],
       }),
     );
     expect(result.current).toBe("Current name");
-    act(() => useEnvironmentStore.setState({ environments: [] }));
+    act(() => appCommandStore(environmentStore).setState({ environments: [] }));
     expect(result.current).toBe("Mailbox name");
     rerender({ id: "missing" });
     expect(result.current).toBeUndefined();

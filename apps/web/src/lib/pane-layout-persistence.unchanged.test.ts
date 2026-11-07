@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 import {
   createPersistedPaneLayoutInput,
   startPaneLayoutPersistence,
 } from "./pane-layout-persistence";
+import { appCommandStore } from "@/test/app-command-store";
 
 type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
 
@@ -37,7 +38,7 @@ function countSerialisations(marker: string) {
 
 describe("pane layout persistence with unchanged environments", () => {
   beforeEach(() => {
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
     usePaneLayoutStore.setState({
       environments: new Map(),
       hydration: new Map(),

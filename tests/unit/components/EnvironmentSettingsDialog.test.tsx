@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentExtensionCatalog, AgentSkillProvider } from "@/lib/backend";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -195,7 +196,7 @@ describe("EnvironmentSettingsDialog", () => {
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {

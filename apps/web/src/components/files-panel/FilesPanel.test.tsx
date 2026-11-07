@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, useFilesPanelStore, useUIStore } from "@/stores";
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { Environment, Project } from "@/types";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalBackend = { ...realBackend };
 const deleteLocalFile = mock<(id: string, path: string) => Promise<string>>(
@@ -43,9 +44,11 @@ beforeEach(() => {
   deleteLocalFile.mockImplementation(async (_id, path) => path);
   remainingTree = folderTree;
   mockToastError.mockClear();
-  useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project-1", localPath: "/checkout" } as Project],
+  });
   useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   setFilesPanelTestState({
     isOpen: false,
     activeTab: "all-files",
@@ -94,9 +97,11 @@ test("two board file opens wait for home creation and retain their order", async
   expect(useFilesPanelStore.getState().pendingFileOpens.map((request) => request.filePath)).toEqual(
     ["first.txt", "second.txt"],
   );
-  expect(useEnvironmentStore.getState().environments.map((environment) => environment.id)).toEqual([
-    "home-1",
-  ]);
+  expect(
+    appCommandStore(environmentStore)
+      .getState()
+      .environments.map((environment) => environment.id),
+  ).toEqual(["home-1"]);
 });
 
 test("shows delayed announcements and a container's remote freshness without hiding the lists", async () => {
@@ -191,7 +196,7 @@ for (const fails of [false, true]) {
       worktreePath: "/checkout",
       status: "running",
     } as Environment;
-    useEnvironmentStore.setState({ environments: [environment] });
+    appCommandStore(environmentStore).setState({ environments: [environment] });
     useUIStore.setState({ selectedEnvironmentId: environment.id });
     render(
       <TerminalProvider>

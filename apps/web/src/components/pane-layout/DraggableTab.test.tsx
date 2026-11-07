@@ -9,7 +9,7 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { usePreviewServiceStore } from "@/stores/previewServiceStore";
 import {
@@ -21,6 +21,7 @@ import {
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realSortableSnapshot = { ...realSortable };
 
@@ -958,15 +959,15 @@ describe("DraggableTab tooltip and context menu structure", () => {
       type: "agent-native",
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
-    const config = structuredClone(useConfigStore.getInitialState().config);
+    const config = structuredClone(appCommandStore(configStore).getInitialState().config);
     config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: false };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const view = renderTab(tab);
     fireEvent.contextMenu(screen.getByText("Claude 1"));
     expect(screen.queryByText("Messages…") === null).toBe(true);
 
     config.global.agentMessaging.enabled = true;
-    useConfigStore.setState({ config: structuredClone(config) });
+    appCommandStore(configStore).setState({ config: structuredClone(config) });
     view.rerender(
       <DraggableTab
         tab={tab}

@@ -5,12 +5,12 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -304,14 +304,14 @@ const mockGetScopedResourceRevisionManifest = mock(async () => {
 const mockGetScopedResourceSnapshots = mock(async () => ({ entries: [] }));
 const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
-    useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
+    appCommandStore(environmentStore).getState().getEnvironmentById(environmentId) ?? null,
 );
 const mockPrepareEnvironmentAgentLaunch = mock(
   async (
     environmentId: string,
     input: Parameters<typeof realBackend.prepareEnvironmentAgentLaunch>[1],
   ): Promise<Environment> => ({
-    ...(useEnvironmentStore.getState().getEnvironmentById(environmentId) ??
+    ...(appCommandStore(environmentStore).getState().getEnvironmentById(environmentId) ??
       makeEnvironment(environmentId, "project-1")),
     pendingAgentLaunch: true,
     initialAgentPlatform: input.agent,
@@ -412,6 +412,7 @@ import App, {
   HOST_TOOL_STARTUP_CONFIRMATION_DELAY_MS,
 } from "./App";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
+import { appCommandStore } from "@/test/app-command-store";
 
 function deferDockerStartupConfirmation() {
   const originalSetTimeout = window.setTimeout;
@@ -513,7 +514,7 @@ function resetStores({
 }) {
   localStorage.clear();
 
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments,
     isLoading: false,
     error: null,
@@ -539,19 +540,19 @@ function resetStores({
     buildEnvironmentIds: new Set(),
   });
 
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [],
     isLoading: false,
     error: null,
   });
 
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config: mockConfig,
     isLoading: false,
     error: null,
   });
 
-  useClaudeOptionsStore.setState({
+  appCommandStore(claudeOptionsStore).setState({
     options: {},
   });
 
@@ -616,7 +617,7 @@ function resetAppMocks() {
   mockPrepareEnvironmentAgentLaunch.mockClear();
   mockGetEnvironment.mockImplementation(
     async (environmentId: string) =>
-      useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
+      appCommandStore(environmentStore).getState().getEnvironmentById(environmentId) ?? null,
   );
   mockSavePaneLayout.mockClear();
   mockApplyPaneLayoutIntent.mockClear();
@@ -727,7 +728,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: home.id,
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -887,7 +888,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: null,
       selectedEnvironmentId: null,
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-one",
@@ -1111,7 +1112,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    useEnvironmentStore.getState().updateEnvironment("env-pending-setup", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-pending-setup", {
       setupPhase: "pending",
     });
 
@@ -3494,7 +3495,9 @@ describe("App terminal overlay actions", () => {
         "env-visible",
         "Stand up the Codex session",
       );
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toMatchObject({
         launchAgent: true,
         agentType: "codex",
         initialPrompt: "Stand up the Codex session",
@@ -3529,7 +3532,9 @@ describe("App terminal overlay actions", () => {
       await Promise.resolve();
     });
     expect(mockStartEnvironment).not.toHaveBeenCalled();
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+    expect(
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+    ).toBeUndefined();
   });
 
   test("still starts a local environment while Docker is unavailable", async () => {
@@ -3574,7 +3579,7 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Prompt from terminal");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+    expect(appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")).toMatchObject({
       initialPrompt: "Prompt from terminal",
     });
   });
@@ -3622,7 +3627,8 @@ describe("App terminal overlay actions", () => {
     });
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-visible");
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-visible")?.initialPromptAttachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")
+        ?.initialPromptAttachments,
     ).toEqual([
       {
         id: "saved-image",
@@ -3664,7 +3670,7 @@ describe("App terminal overlay actions", () => {
         base64Data: "U1RBR0VE",
       },
     ];
-    useClaudeOptionsStore.getState().setOptions("env-visible", {
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-visible", {
       launchAgent: false,
       agentType: "opencode",
       initialPrompt: "",
@@ -3679,7 +3685,8 @@ describe("App terminal overlay actions", () => {
     });
     expect(mockGetEnvironment).not.toHaveBeenCalled();
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-visible")?.initialPromptAttachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")
+        ?.initialPromptAttachments,
     ).toEqual(stagedAttachments);
   });
 
@@ -3709,7 +3716,9 @@ describe("App terminal overlay actions", () => {
         });
       });
       expect(mockStartEnvironment).not.toHaveBeenCalled();
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toBeUndefined();
 
       act(() => screen.getByTestId("start-env-visible").click());
       await waitFor(() => {
@@ -3797,7 +3806,7 @@ describe("App terminal overlay actions", () => {
     });
     // Existing options carry an agentType but no initialPrompt, so the stored
     // prompt is rehydrated while the prior agentType wins over defaultAgent.
-    useClaudeOptionsStore.getState().setOptions("env-visible", {
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-visible", {
       launchAgent: false,
       agentType: "opencode",
       initialPrompt: "",
@@ -3811,7 +3820,9 @@ describe("App terminal overlay actions", () => {
 
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Resume the prior task");
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toMatchObject({
         launchAgent: true,
         agentType: "opencode",
         initialPrompt: "Resume the prior task",
@@ -3841,7 +3852,9 @@ describe("App terminal overlay actions", () => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Boot the default agent");
       // No existing options and no environment defaultAgent, so the agentType
       // falls back to config.global.defaultAgent ("claude").
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toMatchObject({
         launchAgent: true,
         agentType: "claude",
         initialPrompt: "Boot the default agent",
@@ -3872,7 +3885,9 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", undefined);
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+    expect(
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+    ).toBeUndefined();
   });
 
   test("normal overlay starts clear stale Claude options before starting", async () => {
@@ -3881,7 +3896,7 @@ describe("App terminal overlay actions", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    useClaudeOptionsStore.getState().setOptions("env-visible", {
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-visible", {
       launchAgent: true,
       agentType: "claude",
       initialPrompt: "stale",
@@ -3895,7 +3910,9 @@ describe("App terminal overlay actions", () => {
 
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", undefined);
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toBeUndefined();
     });
   });
 
@@ -3919,7 +3936,9 @@ describe("App terminal overlay actions", () => {
 
       await waitFor(() => {
         expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
-        expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+        expect(
+          appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+        ).toBeUndefined();
       });
     } finally {
       logs.restore();
@@ -3939,7 +3958,7 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+    expect(appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")).toMatchObject({
       launchAgent: true,
       initialPrompt: "Create setup script",
     });
@@ -3973,7 +3992,7 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+    expect(appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")).toMatchObject({
       launchAgent: true,
       agentType: "codex",
       initialPrompt: "Create setup script",

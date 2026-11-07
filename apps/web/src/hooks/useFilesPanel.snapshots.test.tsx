@@ -7,13 +7,14 @@ import {
 import * as backend from "@/lib/backend";
 import * as nativeEvents from "@/lib/native/events";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
-import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
-import { useConfigStore } from "@/stores/configStore";
+import { environmentStore, useFilesPanelStore, useUIStore } from "@/stores";
+import { configStore } from "@/stores/configStore";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import type { Environment } from "@/types";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { isAnnouncedNewer, useFilesPanel } from "./useFilesPanel";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * The Files panel's event-led reads over the backend's worktree snapshot
@@ -71,8 +72,10 @@ beforeEach(() => {
   legacy = false;
   useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
   useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: null });
-  useConfigStore.setState((state) => ({ config: { ...state.config, repositories: {} } }));
-  useEnvironmentStore.setState({
+  appCommandStore(configStore).setState((state) => ({
+    config: { ...state.config, repositories: {} },
+  }));
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -294,7 +297,7 @@ describe("useFilesPanel persisted diff baselines", () => {
   const advanced = "b".repeat(40);
   function update(fields: Partial<Environment>) {
     act(() =>
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         environments: state.environments.map((env) =>
           env.id === "env-1" ? { ...env, ...fields } : env,
         ),

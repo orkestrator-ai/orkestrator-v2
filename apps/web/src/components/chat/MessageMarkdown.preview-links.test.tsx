@@ -6,12 +6,13 @@ import {
   type TerminalBrowserTabRequest,
 } from "@/lib/terminal-links";
 import { invoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
 import type { PreviewCapabilities } from "@orkestrator/protocol/preview-services";
 import { PreviewLinkSourceContext } from "./link-source-context";
 import { MarkdownLink } from "./MessageMarkdown";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("agent loopback links", () => {
   const requests: TerminalBrowserTabRequest[] = [];
@@ -35,7 +36,7 @@ describe("agent loopback links", () => {
     window.removeEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, record);
     window.orkestrator = previousOrkestrator;
     window.orkestratorGateway = previousGateway;
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
     usePreviewServiceStore.setState({ status: "idle", capabilities: null });
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
@@ -87,7 +88,7 @@ describe("agent loopback links", () => {
         ...window.orkestrator,
         browserPreview: { openServiceExternally: openService },
       } as unknown as typeof window.orkestrator;
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ id: "env-a", environmentType: "local" }] as unknown as Environment[],
       });
       usePreviewServiceStore.setState({

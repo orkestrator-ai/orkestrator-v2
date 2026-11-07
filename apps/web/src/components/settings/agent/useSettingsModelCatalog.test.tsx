@@ -5,14 +5,15 @@ import * as federation from "@/components/federation/FederationProvider";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useProjectStore, useUIStore } from "@/stores";
+import { projectStore, useUIStore } from "@/stores";
 import { getAppVersion } from "@/lib/backend";
 import { AccountMachineProvider } from "../account-machine";
 import { useSettingsModelCatalog } from "./useSettingsModelCatalog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const workspace = invoke as unknown as ReturnType<typeof mock>;
 const initialModels = useAgentModelCatalogStore.getState();
-const initialProjects = useProjectStore.getState();
+const initialProjects = appCommandStore(projectStore).getState();
 const initialUI = useUIStore.getState();
 const initialPortal = portalStore.getState();
 afterEach(() => {
@@ -20,7 +21,7 @@ afterEach(() => {
   mock.restore();
   workspace.mockReset();
   useAgentModelCatalogStore.setState(initialModels);
-  useProjectStore.setState(initialProjects);
+  appCommandStore(projectStore).setState(initialProjects);
   useUIStore.setState(initialUI);
   portalStore.store.setState(initialPortal);
 });
@@ -33,7 +34,9 @@ afterEach(() => {
         { id: "leaf-model", name: "Leaf model", description: "", reasoningEfforts: [] },
       ],
     });
-    useProjectStore.setState({ projects: [{ id: "leaf-project", name: "Leaf project" }] as never });
+    appCommandStore(projectStore).setState({
+      projects: [{ id: "leaf-project", name: "Leaf project" }] as never,
+    });
     useUIStore.setState({ selectedProjectId: "leaf-project" });
     const owner = machine;
     const project = { ref: { projectId: `${owner}-project` }, name: `${owner} project` };

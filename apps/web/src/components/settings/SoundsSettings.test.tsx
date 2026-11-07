@@ -3,12 +3,13 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as backend from "@/lib/backend";
 import * as notificationSounds from "@/lib/notification-sounds";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { AccountMachineProvider } from "./account-machine";
 import { MachineConfigProvider } from "./settings-config";
 import { SoundsSettings } from "./SoundsSettings";
+import { appCommandStore } from "@/test/app-command-store";
 
-const originalConfig = structuredClone(useConfigStore.getState().config);
+const originalConfig = structuredClone(appCommandStore(configStore).getState().config);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,21 +22,21 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
-  useConfigStore.setState({ config: structuredClone(originalConfig) });
+  appCommandStore(configStore).setState({ config: structuredClone(originalConfig) });
 });
 
 afterEach(() => {
   cleanup();
   mock.restore();
-  useConfigStore.setState({ config: structuredClone(originalConfig) });
+  appCommandStore(configStore).setState({ config: structuredClone(originalConfig) });
 });
 
 describe("SoundsSettings", () => {
   test("persists each event independently", async () => {
     const update = spyOn(backend, "updateNotificationSoundSettings").mockImplementation(
       async (notificationSounds) => ({
-        ...useConfigStore.getState().config,
-        global: { ...useConfigStore.getState().config.global, notificationSounds },
+        ...appCommandStore(configStore).getState().config,
+        global: { ...appCommandStore(configStore).getState().config.global, notificationSounds },
       }),
     );
 
@@ -59,8 +60,8 @@ describe("SoundsSettings", () => {
   test("combines rapid switch changes before React commits a new render", async () => {
     const update = spyOn(backend, "updateNotificationSoundSettings").mockImplementation(
       async (notificationSounds) => ({
-        ...useConfigStore.getState().config,
-        global: { ...useConfigStore.getState().config.global, notificationSounds },
+        ...appCommandStore(configStore).getState().config,
+        global: { ...appCommandStore(configStore).getState().config.global, notificationSounds },
       }),
     );
 
@@ -116,8 +117,8 @@ describe("SoundsSettings", () => {
     const update = spyOn(backend, "updateNotificationSoundSettings")
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(async (notificationSounds) => ({
-        ...useConfigStore.getState().config,
-        global: { ...useConfigStore.getState().config.global, notificationSounds },
+        ...appCommandStore(configStore).getState().config,
+        global: { ...appCommandStore(configStore).getState().config.global, notificationSounds },
       }));
     const getConfig = spyOn(backend, "getConfig").mockResolvedValue(
       structuredClone(originalConfig),
@@ -171,15 +172,17 @@ describe("SoundsSettings", () => {
   });
 
   test("previews the two distinct cues even when their toggles are off", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: false,
-        prMerged: false,
-        coordinatorReport: true,
-        agentQuestion: true,
-        questionDesktopNotification: true,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: false,
+          prMerged: false,
+          coordinatorReport: true,
+          agentQuestion: true,
+          questionDesktopNotification: true,
+        },
+      });
     const play = spyOn(notificationSounds, "playNotificationSound").mockResolvedValue(true);
 
     render(<SoundsSettings />);
@@ -224,8 +227,8 @@ describe("question alerts", () => {
   const saving = () =>
     spyOn(backend, "updateNotificationSoundSettings").mockImplementation(
       async (notificationSounds) => ({
-        ...useConfigStore.getState().config,
-        global: { ...useConfigStore.getState().config.global, notificationSounds },
+        ...appCommandStore(configStore).getState().config,
+        global: { ...appCommandStore(configStore).getState().config.global, notificationSounds },
       }),
     );
 
@@ -264,15 +267,17 @@ describe("question alerts", () => {
 
   test("turning the notification on asks an undecided browser", async () => {
     permission = "default";
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: true,
-        prMerged: true,
-        coordinatorReport: true,
-        agentQuestion: true,
-        questionDesktopNotification: false,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: true,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: true,
+          questionDesktopNotification: false,
+        },
+      });
     const update = saving();
     render(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent questions desktop notification" }));
@@ -300,7 +305,7 @@ for (const machine of ["other"]) {
       agentQuestion: true,
       questionDesktopNotification: true,
     };
-    useConfigStore.setState({ config: leaf });
+    appCommandStore(configStore).setState({ config: leaf });
     const selected = structuredClone(originalConfig);
     selected.global.notificationSounds = {
       agentStopped: true,
@@ -346,7 +351,7 @@ for (const machine of ["other"]) {
           machine,
         ),
       );
-      expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
+      expect(appCommandStore(configStore).getState().config.global.notificationSounds).toEqual({
         agentStopped: true,
         prMerged: true,
         coordinatorReport: true,
@@ -356,7 +361,7 @@ for (const machine of ["other"]) {
       await act(async () => fail(new Error("write failed")));
       await waitFor(() => expect(toggle.getAttribute("data-state")).toBe("checked"));
       expect(read.mock.calls.filter(([target]) => target === machine).length).toBe(2);
-      expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
+      expect(appCommandStore(configStore).getState().config.global.notificationSounds).toEqual({
         agentStopped: true,
         prMerged: true,
         coordinatorReport: true,

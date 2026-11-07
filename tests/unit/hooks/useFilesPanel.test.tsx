@@ -2,8 +2,8 @@ import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { useConfigStore } from "../../../apps/web/src/stores/configStore";
-import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { configStore } from "../../../apps/web/src/stores/configStore";
+import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
@@ -16,6 +16,7 @@ import {
 } from "../../../apps/web/src/constants/terminal";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import { setFilesPanelTestState } from "../../../apps/web/src/test/files-panel-state";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 let logs: LogCapture;
@@ -174,7 +175,7 @@ function resetStores(
       }
     : null,
 ) {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: environment ? [environment] : [],
     isLoading: false,
     error: null,
@@ -203,7 +204,7 @@ function resetStores(
     activeEnvironmentId: null,
   });
 
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config: {
       version: "1.0",
       global: {
@@ -609,8 +610,8 @@ describe("useFilesPanel", () => {
     });
 
     act(() => {
-      const config = useConfigStore.getState().config;
-      useConfigStore.setState({
+      const config = appCommandStore(configStore).getState().config;
+      appCommandStore(configStore).setState({
         config: config
           ? {
               ...config,
@@ -854,7 +855,9 @@ describe("useFilesPanel", () => {
     let resolveFirstTree: (tree: FileNode[]) => void = () => {};
 
     resetStores(firstEnvironment);
-    useEnvironmentStore.setState({ environments: [firstEnvironment, secondEnvironment] });
+    appCommandStore(environmentStore).setState({
+      environments: [firstEnvironment, secondEnvironment],
+    });
     setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     mockGetGitStatus.mockImplementation((containerId) =>
       containerId === "container-a"
@@ -986,7 +989,9 @@ describe("useFilesPanel", () => {
     ];
     let resolveDelete: (path: string) => void = () => {};
     resetStores(firstEnvironment);
-    useEnvironmentStore.setState({ environments: [firstEnvironment, secondEnvironment] });
+    appCommandStore(environmentStore).setState({
+      environments: [firstEnvironment, secondEnvironment],
+    });
     mockDeleteContainerFile.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -1055,9 +1060,11 @@ describe("useFilesPanel", () => {
     const { result } = renderHook(() => useFilesPanel());
     await waitFor(() => expect(useFilesPanelStore.getState().targetBranch).toBe(advanced));
     act(() =>
-      useEnvironmentStore.getState().updateEnvironment(environment.id, {
-        diffBaseOverride: { ref: "refs/heads/main", commit: chosen },
-      }),
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment(environment.id, {
+          diffBaseOverride: { ref: "refs/heads/main", commit: chosen },
+        }),
     );
     await waitFor(() =>
       expect(mockGetLocalGitStatusSnapshot).toHaveBeenCalledWith(
@@ -1071,7 +1078,9 @@ describe("useFilesPanel", () => {
     });
     expect(mockRevertLocalFile).toHaveBeenLastCalledWith(environment.id, "src/App.tsx", chosen);
     act(() =>
-      useEnvironmentStore.getState().updateEnvironment(environment.id, { diffBaseOverride: null }),
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment(environment.id, { diffBaseOverride: null }),
     );
     await waitFor(() => expect(useFilesPanelStore.getState().targetBranch).toBe(advanced));
     await act(async () => {

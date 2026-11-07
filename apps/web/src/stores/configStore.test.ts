@@ -7,21 +7,17 @@ import { bindSettingsParent } from "@/lib/portal/command-node-config";
 import { requestResourceResync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
-import {
-  configStore,
-  effectiveConfig,
-  runScopedConfigCommand,
-  useConfigStore,
-} from "./configStore";
+import { configStore, effectiveConfig, runScopedConfigCommand } from "./configStore";
 import { defaultConfig } from "../../../backend/src/core/storage";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "../types";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
+import { appCommandStore } from "@/test/app-command-store";
 
 type FakeArgs = Readonly<Record<string, unknown>>;
 
 // `getInitialState()` returns the store's DEFAULT_CONFIG regardless of any
 // mutations other tests may have applied, so these assertions are isolation-safe.
-const initialGlobal = useConfigStore.getInitialState().config.global;
+const initialGlobal = appCommandStore(configStore).getInitialState().config.global;
 
 describe("configStore DEFAULT_CONFIG defaults", () => {
   test("uses the current default model selection", () => {
@@ -58,7 +54,7 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
   // now come from one protocol builder; compare the whole config so a future
   // second copy on either side fails here rather than in a user's first run.
   test("is exactly the backend's new-install defaultConfig()", () => {
-    expect(useConfigStore.getInitialState().config).toEqual(defaultConfig());
+    expect(appCommandStore(configStore).getInitialState().config).toEqual(defaultConfig());
   });
 
   test("uses the protocol's agent messaging defaults", () => {
@@ -69,25 +65,26 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
 
 describe("configStore review instruction updates", () => {
   beforeEach(() => {
-    useConfigStore.setState({
-      config: structuredClone(useConfigStore.getInitialState().config),
+    appCommandStore(configStore).setState({
+      config: structuredClone(appCommandStore(configStore).getInitialState().config),
       isLoading: false,
       error: null,
     });
   });
 
   test("sets and removes a custom review instruction without changing sibling config", () => {
-    const originalAgent = useConfigStore.getState().config.global.agentSettings?.defaultAgent;
+    const originalAgent =
+      appCommandStore(configStore).getState().config.global.agentSettings?.defaultAgent;
 
-    useConfigStore.getState().updateGlobalConfig({
+    appCommandStore(configStore).getState().updateGlobalConfig({
       reviewInstruction: "Review {{targetBranch}}.",
     });
-    expect(useConfigStore.getState().config.global.reviewInstruction).toBe(
+    expect(appCommandStore(configStore).getState().config.global.reviewInstruction).toBe(
       "Review {{targetBranch}}.",
     );
 
-    useConfigStore.getState().updateGlobalConfig({ reviewInstruction: undefined });
-    const global = useConfigStore.getState().config.global;
+    appCommandStore(configStore).getState().updateGlobalConfig({ reviewInstruction: undefined });
+    const global = appCommandStore(configStore).getState().config.global;
     expect(global.reviewInstruction).toBeUndefined();
     expect(Object.hasOwn(global, "reviewInstruction")).toBe(false);
     expect(global.agentSettings?.defaultAgent).toBe(originalAgent);
@@ -99,7 +96,7 @@ describe("configStore per node scope", () => {
   const LEAF = "bk_config-leaf" as BackendId;
 
   function nodeConfig(owner: "command" | "leaf"): AppConfig {
-    const base = structuredClone(useConfigStore.getInitialState().config);
+    const base = structuredClone(appCommandStore(configStore).getInitialState().config);
     return {
       ...base,
       global: {
@@ -258,7 +255,7 @@ describe("configStore per node scope", () => {
 
   test("the deprecated statics reach the app's command scope", () => {
     const app = getWindowScope().commandScope();
-    useConfigStore.getState().setConfig(nodeConfig("command"));
+    appCommandStore(configStore).getState().setConfig(nodeConfig("command"));
     expect(app.store(configStore).getState().config.global.terminalScrollback).toBe(5_000);
     expect(leafScope.store(configStore).getState().hasLoaded).toBe(false);
   });

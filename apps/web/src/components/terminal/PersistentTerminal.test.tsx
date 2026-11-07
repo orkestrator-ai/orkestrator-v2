@@ -424,13 +424,14 @@ mock.module("@/components/terminal/ComposeBar", () => ({
 
 // --- Real stores: import directly and control via setState in beforeEach ---
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import { ROOT_TERMINAL_USER } from "@/constants/terminal";
 import { createXtermTerminal } from "@/lib/terminal-xterm";
+import { appCommandStore } from "@/test/app-command-store";
 
 const { PersistentTerminal } = await import("./PersistentTerminal");
 
@@ -607,7 +608,7 @@ describe("PersistentTerminal", () => {
       composeDraftImages: new Map(),
     });
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -633,7 +634,7 @@ describe("PersistentTerminal", () => {
       },
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -1930,7 +1931,7 @@ describe("PersistentTerminal", () => {
       sessionId: "env-1:setup",
       serializedBuffer: "\u001b[?25h",
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) =>
         environment.id === "env-1"
           ? {
@@ -2942,7 +2943,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("uses replayed plain-terminal output for local workspace readiness", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) =>
         environment.id === "env-1"
           ? {
@@ -2996,7 +2997,7 @@ describe("PersistentTerminal", () => {
     ["percent prompt", "% "],
     ["long completed startup output", `${"x".repeat(501)}\n`],
   ])("recognizes %s as first-tab local readiness", async (_label, output) => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) =>
         environment.id === "env-1"
           ? {
@@ -3040,7 +3041,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("keeps local readiness detection working after truncating noisy startup output", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) =>
         environment.id === "env-1"
           ? {
@@ -3531,7 +3532,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("writes escaped local image paths from the image paste hook", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -3828,7 +3829,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("creates persistent sessions for local terminals with an empty container id", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -4180,7 +4181,7 @@ describe("PersistentTerminal", () => {
     // only ever set by a live OSC marker — so it resets to false on every mount.
     // Without the authoritative check, a reload would re-offer "Mark setup
     // complete" for setup that finished long ago.
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-1" ? { ...environment, setupScriptsComplete: true } : environment,

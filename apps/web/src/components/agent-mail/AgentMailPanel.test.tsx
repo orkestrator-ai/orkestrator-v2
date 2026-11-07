@@ -9,7 +9,7 @@ import type {
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
@@ -18,6 +18,7 @@ import {
 } from "../../../../../tests/mocks/sonner";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const AGENT_1 = "env-1\0tab-1";
 const AGENT_2 = "env-2\0tab-2";
@@ -186,9 +187,9 @@ function conversation(
 }
 
 function setMessagingEnabled(enabled: boolean): void {
-  const config = structuredClone(useConfigStore.getInitialState().config);
+  const config = structuredClone(appCommandStore(configStore).getInitialState().config);
   config.global.agentMessaging = { ...config.global.agentMessaging!, enabled };
-  useConfigStore.setState({ config });
+  appCommandStore(configStore).setState({ config });
 }
 
 function summaryEntry(overrides: { attentionCount?: number; failedInjectCount?: number }) {

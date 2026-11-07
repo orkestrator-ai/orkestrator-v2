@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { EnvironmentProcessGroup } from "@/lib/backend";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useProjectStore } from "@/stores";
+import { projectStore } from "@/stores";
 import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
 import { USAGE_READ_TIMEOUT_MS } from "@/hooks/useSystemUsage";
 import { READ_RETRY_MAX_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -26,6 +26,7 @@ import {
   sanitizeProcessCommand,
   sortEnvironmentProcessGroupsByCpu,
 } from "./SystemUsageIndicator";
+import { appCommandStore } from "@/test/app-command-store";
 
 const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
 
@@ -150,7 +151,7 @@ describe("SystemUsageIndicator", () => {
       if (command === "get_environment_process_usage") return processSnapshot();
       return undefined;
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -167,7 +168,7 @@ describe("SystemUsageIndicator", () => {
   afterEach(() => {
     cleanup();
     resetReadCoordinatorForTests();
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
   });
 
   test("renders rounded CPU, RAM, GPU and disk readings", async () => {

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import { SetupPendingOverlay } from "./SetupPendingOverlay";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<
   (command: string, args?: Record<string, unknown>) => Promise<unknown>
@@ -37,7 +38,7 @@ describe("SetupApprovalPanel", () => {
 
   beforeEach(() => {
     calls.length = 0;
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [heldEnvironment()],
       isLoading: false,
       error: null,
@@ -90,7 +91,9 @@ describe("SetupApprovalPanel", () => {
       }),
     );
     await waitFor(() =>
-      expect(useEnvironmentStore.getState().environments[0]?.setupApprovalRequired).toBe(false),
+      expect(
+        appCommandStore(environmentStore).getState().environments[0]?.setupApprovalRequired,
+      ).toBe(false),
     );
   });
 
@@ -193,7 +196,7 @@ describe("SetupApprovalPanel", () => {
   });
 
   test("an ordinary setup failure still offers a retry", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ ...heldEnvironment(), setupApprovalRequired: false }],
     });
     render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);

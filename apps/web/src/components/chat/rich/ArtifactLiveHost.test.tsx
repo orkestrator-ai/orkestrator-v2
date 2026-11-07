@@ -16,10 +16,11 @@ import {
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 import { ArtifactLiveHost, ArtifactLivePlaceholder } from "./ArtifactLiveHost";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -502,18 +503,23 @@ describe("ArtifactLiveHost scope invalidation", () => {
 
   afterEach(() => {
     act(() => {
-      useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
+      appCommandStore(environmentStore).setState({
+        environments: [],
+        deletingEnvironments: new Set(),
+      });
       useUIStore.setState({ selectedEnvironmentId: null, selectedEnvironmentIds: [] });
     });
   });
 
   test("deleting the conversation's environment disposes the live view with a reason", async () => {
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("env-1"), environment("env-2")] });
+      appCommandStore(environmentStore).setState({
+        environments: [environment("env-1"), environment("env-2")],
+      });
       useUIStore.setState({ selectedEnvironmentId: "env-1" });
     });
     await startA();
-    act(() => useEnvironmentStore.getState().removeEnvironment("env-1"));
+    act(() => appCommandStore(environmentStore).getState().removeEnvironment("env-1"));
     expect(useArtifactLiveHostStore.getState().active).toBeNull();
     expect(useArtifactLiveHostStore.getState().ended).toEqual({
       nodeId: owner().nodeId,
@@ -531,12 +537,16 @@ describe("ArtifactLiveHost scope invalidation", () => {
 
   test("switching the active environment disposes it; unrelated changes do not", async () => {
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("env-1"), environment("env-2")] });
+      appCommandStore(environmentStore).setState({
+        environments: [environment("env-1"), environment("env-2")],
+      });
       useUIStore.setState({ selectedEnvironmentId: "env-1" });
     });
     await startA();
     // An unrelated environment update keeps the view.
-    act(() => useEnvironmentStore.getState().updateEnvironment("env-2", { name: "renamed" }));
+    act(() =>
+      appCommandStore(environmentStore).getState().updateEnvironment("env-2", { name: "renamed" }),
+    );
     expect(useArtifactLiveHostStore.getState().active).not.toBeNull();
     act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
     expect(useArtifactLiveHostStore.getState().active).toBeNull();

@@ -8,9 +8,9 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
@@ -41,6 +41,7 @@ import type { ClaudeModelCatalogSnapshot, Environment, FileCandidate } from "@/t
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 import { resetPromptQueueRevisions } from "@/lib/prompt-queue-persistence";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 
@@ -576,7 +577,7 @@ function seedPane(
 }
 
 function seedEnvironment(overrides: Partial<Environment> = {}) {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -830,7 +831,7 @@ describe("ClaudeTmuxChatTab", () => {
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
     useAgentModelCatalogStore.setState({ claudeModels: [], claudeModelCatalogs: new Map() });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -843,7 +844,7 @@ describe("ClaudeTmuxChatTab", () => {
     }));
     clearPersistedVirtuosoState("claude-tmux-tab-1");
     clearPersistedVirtuosoState("claude-tmux-env:env-1:tab:tab-1");
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [],
       isLoading: false,
       error: null,
@@ -893,7 +894,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("passes the Default model through initial-prompt auto-start", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -927,7 +928,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("applies lifecycle events and preserves fast mode for a fresh restart", async () => {
     seedPane();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -1146,7 +1147,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("submits pasted local worktree images with escaped paths", async () => {
     mockRunningTmuxStatus();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -1354,7 +1355,7 @@ describe("ClaudeTmuxChatTab", () => {
         fast_mode: false,
       };
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2105,7 +2106,7 @@ describe("ClaudeTmuxChatTab", () => {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -2252,9 +2253,9 @@ describe("ClaudeTmuxChatTab", () => {
       expect(switchModelMock).toHaveBeenCalledWith("tab-1", "default", "env-1");
     });
     expect(patchGlobalConfigMock).not.toHaveBeenCalled();
-    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
-      "claude-sonnet-4-6",
-    );
+    expect(
+      appCommandStore(configStore).getState().config.global.agentSettings?.platforms?.claude?.model,
+    ).toBe("claude-sonnet-4-6");
     expect(screen.getByRole("button", { name: /Default/ })).toBeTruthy();
   });
 
@@ -2298,7 +2299,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("seeds fresh tmux sessions from the persisted Claude model default", async () => {
     seedPane();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2339,7 +2340,7 @@ describe("ClaudeTmuxChatTab", () => {
     seedEnvironment({
       agentSettings: { platforms: { claude: { model: "haiku" } } },
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2378,7 +2379,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("seeds fresh tmux sessions from a repository Claude model when the environment inherits", async () => {
     seedPane();
     seedEnvironment();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2388,11 +2389,13 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useConfigStore.getState().setRepositoryConfig("project-1", {
-      defaultBranch: "main",
-      prBaseBranch: "main",
-      agentSettings: { platforms: { claude: { model: "haiku" } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .setRepositoryConfig("project-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        agentSettings: { platforms: { claude: { model: "haiku" } } },
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -2453,7 +2456,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("maps a legacy persisted opus model id onto the Default sentinel", async () => {
     seedPane();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2488,7 +2491,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("passes the persisted Default model explicitly when starting Claude Code", async () => {
     seedPane();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2547,9 +2550,9 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
     expect(patchGlobalConfigMock).not.toHaveBeenCalled();
-    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
-      "claude-sonnet-4-6",
-    );
+    expect(
+      appCommandStore(configStore).getState().config.global.agentSettings?.platforms?.claude?.model,
+    ).toBe("claude-sonnet-4-6");
 
     cleanup();
     seedPane();
@@ -2588,9 +2591,9 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
     expect(patchGlobalConfigMock).not.toHaveBeenCalled();
-    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
-      "claude-sonnet-4-6",
-    );
+    expect(
+      appCommandStore(configStore).getState().config.global.agentSettings?.platforms?.claude?.model,
+    ).toBe("claude-sonnet-4-6");
   });
 
   test("locks compose and model controls while a model switch is in flight", async () => {
@@ -2738,7 +2741,7 @@ describe("ClaudeTmuxChatTab", () => {
       });
     });
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2921,7 +2924,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("switches fast mode through Claude's explicit /fast command", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2969,7 +2972,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("switches a running tmux session back to Normal", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3022,7 +3025,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("renders an unknown speed from the authoritative hydration snapshot", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3065,7 +3068,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("clears a pre-launch fast selection before starting an unsupported model", async () => {
     seedPane();
     seedModelsWithExplicitlyUnsupportedSpeed();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3113,7 +3116,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("keeps model and speed controls locked while Claude is thinking", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3154,7 +3157,7 @@ describe("ClaudeTmuxChatTab", () => {
     switchFastModeMock.mockImplementationOnce(async () => {
       throw new Error("fast mode unavailable");
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3208,7 +3211,7 @@ describe("ClaudeTmuxChatTab", () => {
     switchModelMock.mockImplementation(async (_tabId, model) => {
       operations.push(`model:${model}`);
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3267,7 +3270,7 @@ describe("ClaudeTmuxChatTab", () => {
     switchFastModeMock.mockImplementation(async (_tabId, enabled) => {
       if (!enabled) throw new Error("could not disable fast mode");
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3323,7 +3326,7 @@ describe("ClaudeTmuxChatTab", () => {
     switchModelMock.mockImplementationOnce(async () => {
       throw new Error("model switch failed");
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3438,7 +3441,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       ] as ClaudeModel[],
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3870,7 +3873,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("passes the persisted Default model through the resume picker", async () => {
     seedPane();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,

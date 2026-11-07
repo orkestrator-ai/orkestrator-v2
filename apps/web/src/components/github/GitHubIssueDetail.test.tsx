@@ -9,7 +9,8 @@ import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
@@ -128,7 +129,7 @@ describe("GitHubIssueDetail", () => {
 
   beforeEach(() => {
     cleanup();
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
     loadIssueMock.mockClear();
     saveIssueMock.mockReset();
     saveIssueMock.mockResolvedValue(detail);
@@ -537,7 +538,7 @@ describe("GitHubIssueDetail", () => {
   });
 
   test("blocks local builds for a project with no host checkout", async () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -568,7 +569,7 @@ describe("GitHubIssueDetail", () => {
 
   test("keeps local builds available while the project store is still hydrating", async () => {
     // An id the store does not know yet means "not loaded", not "no checkout".
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
     renderDetail();
 
     const localBuild = screen.getByRole("button", { name: "Build Local" });

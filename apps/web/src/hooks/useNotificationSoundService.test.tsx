@@ -8,12 +8,13 @@ import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinato
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { listen as nativeListen } from "@/lib/native/events";
 import * as realNotificationSounds from "@/lib/notification-sounds";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -74,17 +75,19 @@ beforeEach(() => {
   playConfiguredNotificationSound.mockResolvedValue(true);
   primeNotificationSounds.mockReset();
   primeNotificationSounds.mockResolvedValue(true);
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   useUIStore.setState({ selectedEnvironmentId: null });
-  useConfigStore.getState().updateGlobalConfig({
-    notificationSounds: {
-      agentStopped: true,
-      prMerged: true,
-      coordinatorReport: true,
-      agentQuestion: true,
-      questionDesktopNotification: true,
-    },
-  });
+  appCommandStore(configStore)
+    .getState()
+    .updateGlobalConfig({
+      notificationSounds: {
+        agentStopped: true,
+        prMerged: true,
+        coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
+      },
+    });
 });
 
 beforeEach(() => {
@@ -264,10 +267,10 @@ describe("from the backend's attention events", () => {
   });
 
   test("ignores badge edges, which the event already covers", async () => {
-    useEnvironmentStore.setState({ environments: [environment("worker", false)] });
+    appCommandStore(environmentStore).setState({ environments: [environment("worker", false)] });
     await mounted();
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("worker", true)] });
+      appCommandStore(environmentStore).setState({ environments: [environment("worker", true)] });
     });
     expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
   });
@@ -281,7 +284,7 @@ describe("from the backend's attention events", () => {
       Object.defineProperty(document, "hasFocus", { configurable: true, value: () => focused });
 
     test("plays the question cue, not the stop cue, and shows one notification", async () => {
-      useEnvironmentStore.setState({ environments: [environment("worker", true)] });
+      appCommandStore(environmentStore).setState({ environments: [environment("worker", true)] });
       await mounted();
       deliver(question("worker", "q1"));
       await act(async () => {});
@@ -349,15 +352,17 @@ describe("from the backend's attention events", () => {
     });
 
     test("follows each setting on its own", async () => {
-      useConfigStore.getState().updateGlobalConfig({
-        notificationSounds: {
-          agentStopped: true,
-          prMerged: true,
-          coordinatorReport: true,
-          agentQuestion: false,
-          questionDesktopNotification: true,
-        },
-      });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          notificationSounds: {
+            agentStopped: true,
+            prMerged: true,
+            coordinatorReport: true,
+            agentQuestion: false,
+            questionDesktopNotification: true,
+          },
+        });
       await mounted();
       deliver(question("worker", "q1"));
       await act(async () => {});
@@ -365,15 +370,17 @@ describe("from the backend's attention events", () => {
       // With no app cue, the operating system may sound its own.
       expect(shownNotifications[0]?.options.silent).toBe(false);
 
-      useConfigStore.getState().updateGlobalConfig({
-        notificationSounds: {
-          agentStopped: true,
-          prMerged: true,
-          coordinatorReport: true,
-          agentQuestion: true,
-          questionDesktopNotification: false,
-        },
-      });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          notificationSounds: {
+            agentStopped: true,
+            prMerged: true,
+            coordinatorReport: true,
+            agentQuestion: true,
+            questionDesktopNotification: false,
+          },
+        });
       deliver(question("worker", "q2"));
       await act(async () => {});
       expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
@@ -409,13 +416,13 @@ describe("from the backend's attention events", () => {
 
 describe("useNotificationSoundService", () => {
   test("sounds only for a newly raised completed-activity bell", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [environment("existing-unread", true), environment("worker", false)],
     });
     renderHook(() => useNotificationSoundService());
 
     act(() => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment("existing-unread", true), environment("worker", true)],
       });
     });
@@ -424,7 +431,7 @@ describe("useNotificationSoundService", () => {
     expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-stopped");
 
     act(() => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment("existing-unread", true), environment("worker", true)],
       });
     });
@@ -432,12 +439,12 @@ describe("useNotificationSoundService", () => {
   });
 
   test("a question edge from an older backend plays the question cue and notifies", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [environment("finished", false), environment("asking", false)],
     });
     renderHook(() => useNotificationSoundService());
     act(() => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           environment("finished", true),
           { ...environment("asking", true), unreadReason: "agent_question" },
@@ -457,28 +464,30 @@ describe("useNotificationSoundService", () => {
   test("baselines a newly hydrated unread environment without replaying it", () => {
     renderHook(() => useNotificationSoundService());
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("late-snapshot", true)] });
+      appCommandStore(environmentStore).setState({
+        environments: [environment("late-snapshot", true)],
+      });
     });
     expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
   });
 
   test("does not replay a cue when the selected environment unread clear is reconciled", () => {
     useUIStore.setState({ selectedEnvironmentId: "worker" });
-    useEnvironmentStore.setState({ environments: [environment("worker", true)] });
+    appCommandStore(environmentStore).setState({ environments: [environment("worker", true)] });
     renderHook(() => useNotificationSoundService());
 
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("worker", false)] });
+      appCommandStore(environmentStore).setState({ environments: [environment("worker", false)] });
     });
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("worker", true)] });
+      appCommandStore(environmentStore).setState({ environments: [environment("worker", true)] });
     });
 
     expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
   });
 
   test("coalesces simultaneous completion edges into one cue", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         environment("one", false),
         environment("two", false),
@@ -488,7 +497,7 @@ describe("useNotificationSoundService", () => {
     renderHook(() => useNotificationSoundService());
 
     act(() => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           environment("one", true),
           environment("two", true),
@@ -518,15 +527,17 @@ describe("useNotificationSoundService", () => {
   });
 
   test("does not register priming work when every cue is disabled", () => {
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped: false,
-        prMerged: false,
-        coordinatorReport: false,
-        agentQuestion: false,
-        questionDesktopNotification: true,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: false,
+          prMerged: false,
+          coordinatorReport: false,
+          agentQuestion: false,
+          questionDesktopNotification: true,
+        },
+      });
     renderHook(() => useNotificationSoundService());
 
     window.dispatchEvent(new Event("pointerdown"));
@@ -538,16 +549,26 @@ describe("useNotificationSoundService", () => {
 
 test("Home completion sounds while the board obscures it, but not while Home is visible", () => {
   const home = { ...environment("home", false), projectHome: true };
-  useEnvironmentStore.setState({ environments: [home] });
+  appCommandStore(environmentStore).setState({ environments: [home] });
   useUIStore.setState({ selectedEnvironmentId: home.id, projectBoardTab: "kanban" });
   renderHook(() => useNotificationSoundService());
-  act(() => useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: true }));
+  act(() =>
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment(home.id, { hasUnreadWork: true }),
+  );
   expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
   act(() => {
     useUIStore.getState().setProjectBoardTab("home");
-    useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: false });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment(home.id, { hasUnreadWork: false });
   });
-  act(() => useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: true }));
+  act(() =>
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment(home.id, { hasUnreadWork: true }),
+  );
   expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
 });
 
@@ -563,15 +584,17 @@ test.each([false, true])(
       },
     );
     useUIStore.setState({ selectedProjectId: null });
-    useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: {
-        agentStopped,
-        coordinatorReport: !agentStopped,
-        prMerged: false,
-        agentQuestion: false,
-        questionDesktopNotification: false,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        notificationSounds: {
+          agentStopped,
+          coordinatorReport: !agentStopped,
+          prMerged: false,
+          agentQuestion: false,
+          questionDesktopNotification: false,
+        },
+      });
     renderHook(() => useNotificationSoundService());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));

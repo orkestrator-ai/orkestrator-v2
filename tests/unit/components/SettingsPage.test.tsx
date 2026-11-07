@@ -3,7 +3,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { invoke } from "@/lib/native/backend";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { defaultConfig } from "../../../apps/backend/src/core/storage";
@@ -13,6 +13,7 @@ const realGlobalSettingsSnapshot = { ...realGlobalSettings };
 import * as realSkillsSettings from "../../../apps/web/src/components/settings/SkillsSettings";
 const realSkillsSettingsSnapshot = { ...realSkillsSettings };
 import * as previousFullscreenSettingsLayout from "../../../apps/web/src/components/settings/FullscreenSettingsLayout";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 const previousFullscreenSettingsLayoutSnapshot = { ...previousFullscreenSettingsLayout };
 
 mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => ({
@@ -84,7 +85,11 @@ describe("SettingsPage", () => {
     cleanup();
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(defaultConfig());
-    useConfigStore.setState({ config: defaultConfig(), isLoading: false, error: null });
+    appCommandStore(configStore).setState({
+      config: defaultConfig(),
+      isLoading: false,
+      error: null,
+    });
   });
 
   afterEach(() => {

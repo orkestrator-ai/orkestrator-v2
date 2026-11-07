@@ -21,12 +21,13 @@ mock.module("@/components/ui/dialog", () => ({
 
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import {
   BuildLaunchDialog,
   resolveStepState,
   type BuildLaunchSelection,
 } from "./BuildLaunchDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [
@@ -63,15 +64,15 @@ const STEP_LABELS = [
 ] as const;
 
 function setFavorites(favoriteModels: AgentModelRef[]) {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, favoriteModels } },
   });
 }
 
 function setEnabledPlatforms(enabledAgentPlatforms: AgentPlatform[]) {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, enabledAgentPlatforms } },
   });
 }

@@ -1,11 +1,12 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import { projectStore } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 describe("projectStore", () => {
   beforeEach(() => {
     // Reset store between tests
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [],
       isLoading: false,
       error: null,
@@ -13,7 +14,7 @@ describe("projectStore", () => {
   });
 
   test("initial state is empty", () => {
-    const state = useProjectStore.getState();
+    const state = appCommandStore(projectStore).getState();
     expect(state.projects).toEqual([]);
     expect(state.isLoading).toBe(false);
     expect(state.error).toBeNull();
@@ -29,9 +30,9 @@ describe("projectStore", () => {
       order: 0,
     };
 
-    useProjectStore.getState().addProject(project);
+    appCommandStore(projectStore).getState().addProject(project);
 
-    const state = useProjectStore.getState();
+    const state = appCommandStore(projectStore).getState();
     expect(state.projects).toHaveLength(1);
     expect(state.projects[0]).toEqual(project);
   });
@@ -46,11 +47,11 @@ describe("projectStore", () => {
       order: 0,
     };
 
-    useProjectStore.getState().addProject(project);
-    expect(useProjectStore.getState().projects).toHaveLength(1);
+    appCommandStore(projectStore).getState().addProject(project);
+    expect(appCommandStore(projectStore).getState().projects).toHaveLength(1);
 
-    useProjectStore.getState().removeProject("test-1");
-    expect(useProjectStore.getState().projects).toHaveLength(0);
+    appCommandStore(projectStore).getState().removeProject("test-1");
+    expect(appCommandStore(projectStore).getState().projects).toHaveLength(0);
   });
 
   test("updateProject updates a project in the store", () => {
@@ -63,10 +64,10 @@ describe("projectStore", () => {
       order: 0,
     };
 
-    useProjectStore.getState().addProject(project);
-    useProjectStore.getState().updateProject("test-1", { name: "updated-name" });
+    appCommandStore(projectStore).getState().addProject(project);
+    appCommandStore(projectStore).getState().updateProject("test-1", { name: "updated-name" });
 
-    const state = useProjectStore.getState();
+    const state = appCommandStore(projectStore).getState();
     expect(state.projects[0]?.name).toBe("updated-name");
   });
 
@@ -88,32 +89,32 @@ describe("projectStore", () => {
       order: 1,
     };
 
-    useProjectStore.getState().addProject(project1);
-    useProjectStore.getState().addProject(project2);
+    appCommandStore(projectStore).getState().addProject(project1);
+    appCommandStore(projectStore).getState().addProject(project2);
 
-    const found = useProjectStore.getState().getProjectById("test-2");
+    const found = appCommandStore(projectStore).getState().getProjectById("test-2");
     expect(found).toEqual(project2);
   });
 
   test("getProjectById returns undefined for non-existent project", () => {
-    const found = useProjectStore.getState().getProjectById("non-existent");
+    const found = appCommandStore(projectStore).getState().getProjectById("non-existent");
     expect(found).toBeUndefined();
   });
 
   test("setLoading updates loading state", () => {
-    useProjectStore.getState().setLoading(true);
-    expect(useProjectStore.getState().isLoading).toBe(true);
+    appCommandStore(projectStore).getState().setLoading(true);
+    expect(appCommandStore(projectStore).getState().isLoading).toBe(true);
 
-    useProjectStore.getState().setLoading(false);
-    expect(useProjectStore.getState().isLoading).toBe(false);
+    appCommandStore(projectStore).getState().setLoading(false);
+    expect(appCommandStore(projectStore).getState().isLoading).toBe(false);
   });
 
   test("setError updates error state", () => {
-    useProjectStore.getState().setError("Test error");
-    expect(useProjectStore.getState().error).toBe("Test error");
+    appCommandStore(projectStore).getState().setError("Test error");
+    expect(appCommandStore(projectStore).getState().error).toBe("Test error");
 
-    useProjectStore.getState().setError(null);
-    expect(useProjectStore.getState().error).toBeNull();
+    appCommandStore(projectStore).getState().setError(null);
+    expect(appCommandStore(projectStore).getState().error).toBeNull();
   });
 
   test("setProjects sorts the backend result by order", () => {
@@ -127,12 +128,13 @@ describe("projectStore", () => {
     } satisfies Project;
     const earlier = { ...later, id: "earlier", name: "earlier", order: 1 };
 
-    useProjectStore.getState().setProjects([later, earlier]);
+    appCommandStore(projectStore).getState().setProjects([later, earlier]);
 
-    expect(useProjectStore.getState().projects.map((project) => project.id)).toEqual([
-      "earlier",
-      "later",
-    ]);
+    expect(
+      appCommandStore(projectStore)
+        .getState()
+        .projects.map((project) => project.id),
+    ).toEqual(["earlier", "later"]);
   });
 
   test("reorderProjects updates order and drops IDs that are not in the store", () => {
@@ -145,11 +147,11 @@ describe("projectStore", () => {
       order: 0,
     } satisfies Project;
     const second = { ...first, id: "second", name: "second", order: 1 };
-    useProjectStore.getState().setProjects([first, second]);
+    appCommandStore(projectStore).getState().setProjects([first, second]);
 
-    useProjectStore.getState().reorderProjects(["second", "missing", "first"]);
+    appCommandStore(projectStore).getState().reorderProjects(["second", "missing", "first"]);
 
-    expect(useProjectStore.getState().projects).toEqual([
+    expect(appCommandStore(projectStore).getState().projects).toEqual([
       { ...second, order: 0 },
       { ...first, order: 2 },
     ]);
@@ -167,30 +169,42 @@ describe("projectStore", () => {
     const replacement = { ...original, id: "stale", name: "stale" };
 
     const assertMutationRejectsSnapshot = (mutate: () => void) => {
-      useProjectStore.getState().setProjects([original]);
-      const snapshotVersion = useProjectStore.getState().getMutationVersion();
+      appCommandStore(projectStore).getState().setProjects([original]);
+      const snapshotVersion = appCommandStore(projectStore).getState().getMutationVersion();
       mutate();
 
-      expect(useProjectStore.getState().applySnapshot([replacement], snapshotVersion)).toBe(false);
-      expect(useProjectStore.getState().projects.some((project) => project.id === "stale")).toBe(
-        false,
-      );
+      expect(
+        appCommandStore(projectStore).getState().applySnapshot([replacement], snapshotVersion),
+      ).toBe(false);
+      expect(
+        appCommandStore(projectStore)
+          .getState()
+          .projects.some((project) => project.id === "stale"),
+      ).toBe(false);
     };
 
     assertMutationRejectsSnapshot(() =>
-      useProjectStore.getState().addProject({ ...original, id: "added", name: "added", order: 1 }),
+      appCommandStore(projectStore)
+        .getState()
+        .addProject({ ...original, id: "added", name: "added", order: 1 }),
     );
-    assertMutationRejectsSnapshot(() => useProjectStore.getState().removeProject("original"));
     assertMutationRejectsSnapshot(() =>
-      useProjectStore.getState().updateProject("original", { name: "updated" }),
+      appCommandStore(projectStore).getState().removeProject("original"),
     );
-    assertMutationRejectsSnapshot(() => useProjectStore.getState().reorderProjects(["original"]));
-    assertMutationRejectsSnapshot(() => useProjectStore.getState().setProjects([]));
-    assertMutationRejectsSnapshot(() => useProjectStore.getState().invalidateSnapshots());
+    assertMutationRejectsSnapshot(() =>
+      appCommandStore(projectStore).getState().updateProject("original", { name: "updated" }),
+    );
+    assertMutationRejectsSnapshot(() =>
+      appCommandStore(projectStore).getState().reorderProjects(["original"]),
+    );
+    assertMutationRejectsSnapshot(() => appCommandStore(projectStore).getState().setProjects([]));
+    assertMutationRejectsSnapshot(() =>
+      appCommandStore(projectStore).getState().invalidateSnapshots(),
+    );
   });
 
   test("applies and sorts a snapshot when its mutation version is current", () => {
-    const currentVersion = useProjectStore.getState().getMutationVersion();
+    const currentVersion = appCommandStore(projectStore).getState().getMutationVersion();
     const later = {
       id: "later",
       name: "later",
@@ -201,11 +215,14 @@ describe("projectStore", () => {
     } satisfies Project;
     const earlier = { ...later, id: "earlier", name: "earlier", order: 1 };
 
-    expect(useProjectStore.getState().applySnapshot([later, earlier], currentVersion)).toBe(true);
-    expect(useProjectStore.getState().projects.map((project) => project.id)).toEqual([
-      "earlier",
-      "later",
-    ]);
+    expect(
+      appCommandStore(projectStore).getState().applySnapshot([later, earlier], currentVersion),
+    ).toBe(true);
+    expect(
+      appCommandStore(projectStore)
+        .getState()
+        .projects.map((project) => project.id),
+    ).toEqual(["earlier", "later"]);
   });
 
   test("arrangeProjects applies order and folder membership together", () => {
@@ -215,16 +232,22 @@ describe("projectStore", () => {
       localPath: null,
       addedAt: new Date().toISOString(),
     };
-    useProjectStore.getState().setProjects([
-      { ...base, id: "alpha", order: 0 },
-      { ...base, id: "beta", order: 1, folder: "Work" },
-      { ...base, id: "gamma", order: 2 },
-    ]);
+    appCommandStore(projectStore)
+      .getState()
+      .setProjects([
+        { ...base, id: "alpha", order: 0 },
+        { ...base, id: "beta", order: 1, folder: "Work" },
+        { ...base, id: "gamma", order: 2 },
+      ]);
 
-    useProjectStore.getState().arrangeProjects(["gamma", "alpha", "beta"], { gamma: "Work" });
+    appCommandStore(projectStore)
+      .getState()
+      .arrangeProjects(["gamma", "alpha", "beta"], { gamma: "Work" });
 
     expect(
-      useProjectStore.getState().projects.map(({ id, order, folder }) => ({ id, order, folder })),
+      appCommandStore(projectStore)
+        .getState()
+        .projects.map(({ id, order, folder }) => ({ id, order, folder })),
     ).toEqual([
       { id: "gamma", order: 0, folder: "Work" },
       { id: "alpha", order: 1, folder: undefined },
@@ -232,8 +255,10 @@ describe("projectStore", () => {
       { id: "beta", order: 2, folder: "Work" },
     ]);
     // Clearing membership removes the key rather than storing an explicit null.
-    useProjectStore.getState().arrangeProjects(["gamma", "alpha", "beta"], { gamma: null });
-    expect("folder" in useProjectStore.getState().projects[0]!).toBe(false);
+    appCommandStore(projectStore)
+      .getState()
+      .arrangeProjects(["gamma", "alpha", "beta"], { gamma: null });
+    expect("folder" in appCommandStore(projectStore).getState().projects[0]!).toBe(false);
   });
 
   test("arrangeProjects drops ids the store no longer knows about", () => {
@@ -243,8 +268,16 @@ describe("projectStore", () => {
       localPath: null,
       addedAt: new Date().toISOString(),
     };
-    useProjectStore.getState().setProjects([{ ...base, id: "alpha", order: 0 }]);
-    useProjectStore.getState().arrangeProjects(["alpha", "missing"], { missing: "Work" });
-    expect(useProjectStore.getState().projects.map(({ id }) => id)).toEqual(["alpha"]);
+    appCommandStore(projectStore)
+      .getState()
+      .setProjects([{ ...base, id: "alpha", order: 0 }]);
+    appCommandStore(projectStore)
+      .getState()
+      .arrangeProjects(["alpha", "missing"], { missing: "Work" });
+    expect(
+      appCommandStore(projectStore)
+        .getState()
+        .projects.map(({ id }) => id),
+    ).toEqual(["alpha"]);
   });
 });

@@ -12,7 +12,7 @@ import {
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
@@ -23,6 +23,7 @@ import {
 } from "@/test/web-annotation-fakes";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { BrowserTab } from "./BrowserTab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const happyDOM = (
   window as unknown as Window & {
@@ -230,7 +231,7 @@ describe("BrowserTab", () => {
     consoleErrorSpy = spyOn(console, "error").mockImplementation(() => undefined);
     delete window.orkestratorGateway;
     setBrowserTab();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",

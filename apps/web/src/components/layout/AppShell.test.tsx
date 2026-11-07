@@ -18,7 +18,7 @@ import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -40,6 +40,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { useOptionalNodeScope } from "@/lib/node-scope/providers";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -442,7 +443,7 @@ describe("AppShell", () => {
 
   for (const state of ["current", "stale", "blocked"] as const) {
     test(`selected remote title reacts to the checks setting with an unchanged ${state} PR summary`, async () => {
-      const initialConfig = useConfigStore.getState().config;
+      const initialConfig = appCommandStore(configStore).getState().config;
       const data = sharedIdDataset("idle");
       Object.assign(data.environments["project-1"]![0]!, {
         prUrl: "https://github.com/acme/repo/pull/4",
@@ -461,7 +462,9 @@ describe("AppShell", () => {
         active: { nodeId: "bk_leaf", projectId: "project-1", environmentId: "env-1" },
       });
       try {
-        useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ autoMergeRequireChecks: true });
         render(
           <FederationProvider>
             <AppShell>Workspace</AppShell>
@@ -481,7 +484,9 @@ describe("AppShell", () => {
         const title = screen.getByRole("button", { name: "app - feature", hidden: true });
         for (const requireChecks of [true, false, true]) {
           act(() =>
-            useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+            appCommandStore(configStore)
+              .getState()
+              .updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
           );
           expect(title.querySelector("[data-merge-ready]") !== null).toBe(
             state === "current" && !requireChecks,
@@ -493,7 +498,7 @@ describe("AppShell", () => {
         cleanup();
         uninstallDesktopFake();
         portalStore.store.setState(INITIAL_PORTAL, true);
-        useConfigStore.setState({ config: initialConfig });
+        appCommandStore(configStore).setState({ config: initialConfig });
       }
     });
   }

@@ -11,16 +11,17 @@ import {
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
-const baseConfig = useConfigStore.getState().config;
+const baseConfig = appCommandStore(configStore).getState().config;
 
 afterEach(() => {
   cleanup();
-  useConfigStore.setState({ config: baseConfig });
+  appCommandStore(configStore).setState({ config: baseConfig });
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
 });
 
@@ -38,7 +39,7 @@ function expectModelPickerTheme(picker: HTMLElement): void {
 
 describe("CreateEnvironmentDialog initial prompt attachments", () => {
   test("shows and submits every capability exposed by the selected Cursor model", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {
@@ -105,7 +106,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
   });
 
   test("labels an unqualified configured OpenCode model across environment and feature pickers", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...baseConfig,
         global: {

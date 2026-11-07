@@ -58,4 +58,11 @@ export const WEB_SYNC_LOG_AREAS = defineLogAreas({
       "environment.start-failed": "Starting an environment opened in a workspace window failed.",
     },
   },
+  "web.node-scope": {
+    description: "Per-node renderer scopes: their services, stores and cleanup.",
+    events: {
+      "service.failed": "A scoped service threw; only it stopped and its scope is marked failed.",
+      "finalizer.failed": "A cleanup step of a scope, service or store threw; the rest still ran.",
+    },
+  },
 });

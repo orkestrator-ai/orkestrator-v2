@@ -411,6 +411,42 @@ real subprocesses without a time budget and small fake pids. Existing offenders
 sit in a baseline that only shrinks; see
 [linting.md](linting.md#source-guards).
 
+### Rendering inside a node scope
+
+Components that read per-node state (`useScopedStore`, `useNodeScope`, from
+`apps/web/src/lib/node-scope/`) need a `WindowScopeProvider` and a
+`NodeScopeProvider` above them; outside one they throw in tests on purpose.
+Render them with `renderInNodeScope` (`apps/web/src/test/render-in-node-scope.tsx`):
+
+```tsx
+import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+
+afterEach(cleanupNodeScopes);
+
+const client = new FakeNodeClient({ invoke: { list_environments: [] } });
+const { scope } = renderInNodeScope(<EnvironmentList />, { client, role: "leaf" });
+client.emit("resource-changed", { kind: "environment" });
+expect(client.calls("list_environments")).toHaveLength(2);
+```
+
+- Each call creates its own `WindowScope` and node scope, never the app's, so
+  tests share no scope state. Options: `nodeId`, `role` (`command` by
+  default), `client`, and `windowScope` to render a second node beside the
+  first.
+- `FakeNodeClient` answers `invokeRaw` from its invoke map (a value or a
+  function of the arguments; an unmapped command rejects), records
+  `invocations`, delivers `emit(event, payload)` and `emitTerminalOutput`
+  synchronously, and exposes `connection` and `domains` as settable signals
+  plus `listenerCount()`.
+- Call `cleanupNodeScopes()` in `afterEach`. It unmounts what the helper
+  rendered and disposes each window scope, which stops every scoped service and
+  releases byte-budget reservations (invariant 15). Unmounting alone never
+  disposes a scope (invariant 2). A test that opens scopes without the helper
+  disposes its own `WindowScope`; one that touches the app's window scope
+  calls `resetWindowScopeForTests()`.
+- Plain modules take the scope explicitly, so their tests need no React:
+  open a scope with `new WindowScope().open({ role, client })` and pass it.
+
 ### Agent CLIs on `PATH`
 
 Default and slow-tier tests must not reach the network or a provider login. A

@@ -113,6 +113,7 @@ import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { CommandNodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
 
 const log = createLogger("web.app");
 
@@ -284,7 +285,16 @@ function App() {
       </div>
     );
   }
-  return <ConnectedApp />;
+  // The window scope and its command scope are the root of every per-node
+  // store and service. Only the command scope exists yet, and nothing reads
+  // it until the stores convert, so this mount changes no behaviour.
+  return (
+    <WindowScopeProvider>
+      <CommandNodeScopeProvider>
+        <ConnectedApp />
+      </CommandNodeScopeProvider>
+    </WindowScopeProvider>
+  );
 }
 
 function ConnectedApp() {

@@ -17,6 +17,8 @@ import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-c
 
 const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const base64 = (text: string) => Buffer.from(text).toString("base64");
+/** `Array.isArray` that narrows the tree result's readonly list away. */
+const isTreeList = (value: unknown): value is readonly unknown[] => Array.isArray(value);
 
 export default defineScenario({
   domain: "files",
@@ -47,7 +49,7 @@ export default defineScenario({
         `FI-${tag}2`,
         "the tree reads bare without a digest and conditionally with one",
         Array.isArray(tree) &&
-          !Array.isArray(conditional) &&
+          !isTreeList(conditional) &&
           typeof conditional.digest === "string" &&
           conditional.unchanged === false,
       );

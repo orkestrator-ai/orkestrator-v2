@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { useHydrateOncePerEnvironment } from "./useHydrateOncePerEnvironment";
 
 type Props = { environments: Array<{ id: string; status?: string }> };
@@ -63,5 +67,32 @@ describe("useHydrateOncePerEnvironment", () => {
 
     rerender({ environments: [{ id: "a" }, { id: "b" }] });
     expect(hydrate).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("useHydrateOncePerEnvironment per scope", () => {
+  test("a different scope starts with nothing restored", () => {
+    const windowScope = new WindowScope();
+    try {
+      const first = windowScope.open({
+        role: "command",
+        client: new FakeNodeClient({ nodeId: "bk_first" as BackendId }),
+      });
+      const second = windowScope.open({
+        role: "leaf",
+        client: new FakeNodeClient({ nodeId: "bk_second" as BackendId }),
+      });
+      const hydrate = mock(async (_id: string) => undefined);
+      const { rerender } = renderHook<void, { scope: NodeScope }>(
+        ({ scope }) => useHydrateOncePerEnvironment([{ id: "a" }], hydrate, noError, scope),
+        { initialProps: { scope: first } },
+      );
+      rerender({ scope: first });
+      expect(hydrate).toHaveBeenCalledTimes(1);
+      rerender({ scope: second });
+      expect(hydrate).toHaveBeenCalledTimes(2);
+    } finally {
+      windowScope.dispose();
+    }
   });
 });

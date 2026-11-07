@@ -17,19 +17,11 @@ import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
 import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
 import { useProjectStore } from "@/stores/projectStore";
-import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
-import { startDataSavingReadPolicy } from "@/lib/data-saving";
-import {
-  connectionListDisconnected,
-  setTransportDisconnected,
-  startTransportConnectivity,
-} from "@/lib/transport-connectivity";
+import { connectionListDisconnected, setTransportDisconnected } from "@/lib/transport-connectivity";
 import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBanner";
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
-import { startResourceSync } from "@/lib/resource-sync";
-import { startStoreResourceSync } from "@/lib/store-resource-sync";
-import { startBuildPipelineCompletionNotes } from "@/lib/build-pipeline-completion-notes";
+import { COMMAND_SCOPE_SERVICES, startScopeServices } from "@/lib/scope-services";
 import { hydrateBootMultiReviewWorkflows, hydrateBootPromptQueues } from "@/lib/boot-hydration";
 import { recordRealmFirstRender } from "@/lib/realm-boot-timing";
 import {
@@ -56,9 +48,6 @@ import {
   setGitHubCliReminderDismissed,
   getConfig,
   getEnvironment,
-  getResourceRevisionManifest,
-  getScopedResourceRevisionManifest,
-  getScopedResourceSnapshots,
   prepareEnvironmentAgentLaunch,
   syncAllEnvironmentsWithDocker,
   type GitHubCliStatus,
@@ -113,7 +102,11 @@ import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { CommandNodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
+import {
+  CommandNodeScopeProvider,
+  useNodeScope,
+  WindowScopeProvider,
+} from "@/lib/node-scope/providers";
 import { commandClient, getWindowScope } from "@/lib/node-scope/app-window-scope";
 
 const log = createLogger("web.app");
@@ -361,23 +354,12 @@ function ConnectedApp() {
   useUnreadEnvironmentSync();
   // Selecting a project activates the environment working in its checkout.
   const projectHomeActivation = useProjectHomeActivation();
-  // The backend change feed must be attached before the store bindings that
-  // consume it, and both before anything that reads a backend snapshot.
-  useEffect(
-    () =>
-      startResourceSync({
-        loadManifest: getResourceRevisionManifest,
-        loadScopedManifest: getScopedResourceRevisionManifest,
-        loadScopedSnapshots: getScopedResourceSnapshots,
-      }),
-    [],
-  );
-  useEffect(() => startStoreResourceSync(), []);
-  useEffect(() => startTransportConnectivity(), []);
-  useEffect(() => startDataSavingReadPolicy(), []);
-  useEffect(() => startPaneLayoutPersistence(), []);
-  // A run that finishes while this window watches opens its notes in a tab.
-  useEffect(() => startBuildPipelineCompletionNotes(), []);
+  // The command scope's services (`scope-services.ts`), in order: the backend
+  // change feed before the store bindings that consume it, and both before
+  // anything that reads a backend snapshot; then connectivity, the window's
+  // data-saving policy, pane-layout persistence and build completion notes.
+  const commandScope = useNodeScope();
+  useEffect(() => startScopeServices(commandScope, COMMAND_SCOPE_SERVICES), [commandScope]);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
       // Keep the legacy key intact so the next launch can retry after a
@@ -394,7 +376,12 @@ function ConnectedApp() {
     (environmentId: string) => hydrateBootPromptQueues(environmentId, promptQueueSources),
     [promptQueueSources],
   );
-  useHydrateOncePerEnvironment(environments, hydratePromptQueues, warnPromptQueueRestoreFailed);
+  useHydrateOncePerEnvironment(
+    environments,
+    hydratePromptQueues,
+    warnPromptQueueRestoreFailed,
+    commandScope,
+  );
 
   // The single renderer-side hydration pass for backend-owned reviews. Resource
   // change events perform incremental refreshes; this closes the gap after a
@@ -403,6 +390,7 @@ function ConnectedApp() {
     environments,
     hydrateBootMultiReviewWorkflows,
     warnMultiReviewRestoreFailed,
+    commandScope,
   );
 
   // Pipelines are stored per project, so restore once per project rather than
@@ -466,10 +454,15 @@ function ConnectedApp() {
         (connection) => connection.id === list.activeConnectionId,
       );
       setActiveConnectionName(activeConnection ? connectionDisplayName(activeConnection) : null);
-      // Presentation reads are keyed by server identity; a switch resets them.
-      setReadCoordinatorConnection(list.activeConnectionId);
+      // Presentation reads are keyed by server identity; a switch resets the
+      // command scope's (this list administers the command node)...
+      setReadCoordinatorConnection(list.activeConnectionId, getWindowScope().commandScope());
       // ...and pause while that connection is known to be down.
-      setTransportDisconnected("desktop-connection", connectionListDisconnected(list));
+      setTransportDisconnected(
+        "desktop-connection",
+        connectionListDisconnected(list),
+        getWindowScope().commandScope(),
+      );
       // So is protected rich transcript content (render caches, artifact reads),
       // noted on the command scope, whose connection this list administers.
       noteRichContentConnection(list.activeConnectionId, getWindowScope().commandScope());
@@ -714,8 +707,10 @@ function ConnectedApp() {
       intervalMs: DOCKER_AVAILABILITY_POLL_INTERVAL_MS,
       priority: "auxiliary",
       read: () => refreshDockerAvailability("poll"),
+      // Docker is the command node's; its outages and reconnects pace the poll.
+      scope: commandScope,
     });
-  }, [macOsPermissionsReady, refreshDockerAvailability]);
+  }, [macOsPermissionsReady, refreshDockerAvailability, commandScope]);
 
   // Host CLI availability is independent of Docker. Run it in parallel with
   // the daemon probe so local worktree workflows receive the same onboarding.

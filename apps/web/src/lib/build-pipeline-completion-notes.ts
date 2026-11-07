@@ -10,13 +10,11 @@
  */
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import { openKeyInformationTab } from "@/components/build-pipeline/key-information-open-tab";
+import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 const MAX_PENDING_NOTES = 64;
-
-/** Completions still waiting for their environment's layout, by pipeline. */
-const pendingNotes = new Map<string, string>();
 
 /** The pane holding the pipeline's own tab, so the notes open beside it. */
 function pipelinePaneId(environmentId: string, pipelineId: string): string | undefined {
@@ -48,7 +46,8 @@ function openNotes(environmentId: string, pipelineId: string): void {
   });
 }
 
-function reconcile(): void {
+/** `pendingNotes`: completions still waiting for their environment's layout, by pipeline. */
+function reconcile(pendingNotes: Map<string, string>): void {
   const panes = usePaneLayoutStore.getState();
   for (const [pipelineId, environmentId] of Array.from(pendingNotes)) {
     const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
@@ -63,8 +62,12 @@ function reconcile(): void {
   }
 }
 
-/** Starts watching for completions; returns the stop function. */
+/**
+ * Starts watching for completions; returns the stop function. Each watcher
+ * keeps its own pending completions, so a stopped one leaves nothing behind.
+ */
 export function startBuildPipelineCompletionNotes(): () => void {
+  const pendingNotes = new Map<string, string>();
   const offPipelines = useBuildPipelineStore.subscribe((state, previous) => {
     if (state.pipelines === previous.pipelines) return;
     for (const [pipelineId, environmentId] of Array.from(pendingNotes)) {
@@ -86,14 +89,14 @@ export function startBuildPipelineCompletionNotes(): () => void {
     while (pendingNotes.size > MAX_PENDING_NOTES) {
       pendingNotes.delete(pendingNotes.keys().next().value!);
     }
-    if (added) reconcile();
+    if (added) reconcile(pendingNotes);
   });
   const offPanes = usePaneLayoutStore.subscribe((state, previous) => {
     if (pendingNotes.size === 0) return;
     if (state.hydration === previous.hydration && state.environments === previous.environments) {
       return;
     }
-    reconcile();
+    reconcile(pendingNotes);
   });
   return () => {
     offPipelines();
@@ -101,3 +104,18 @@ export function startBuildPipelineCompletionNotes(): () => void {
     pendingNotes.clear();
   };
 }
+
+/**
+ * Completion notes as a scoped service (plan item 3014). Command scope only:
+ * it reads the build-pipeline and pane-layout stores, both still command-scope
+ * singletons (plan items 3011 and 3013 scope them).
+ */
+export const buildPipelineCompletionNotesService = defineScopedService(
+  "build-pipeline-completion-notes",
+  (scope) => {
+    if (scope.role !== "command") {
+      throw new Error("Completion notes run on the command scope until their stores are scoped.");
+    }
+    return { stop: startBuildPipelineCompletionNotes() };
+  },
+);

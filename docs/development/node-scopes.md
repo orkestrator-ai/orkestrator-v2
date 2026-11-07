@@ -189,6 +189,44 @@ the point.
 - **Testing the shim itself**: `setShimUseObserver((use) => uses.push(use))`
   returns a restore function. Call it in `afterEach`.
 
+## Services, change feeds and reads per scope
+
+Background work runs as scoped services (plan item 3014;
+[`lib/scope-services.ts`](../../apps/web/src/lib/scope-services.ts)).
+`defineScopedService(name, (scope, signal) => ({ stop, done? }))` starts once
+per scope; `scope.service(def)` returns its handle, and disposing the scope
+stops it. A service that throws on start, or whose `done` rejects, marks only
+its own scope `failed`. `App` starts `COMMAND_SCOPE_SERVICES` for the command
+scope with `startScopeServices(scope, services)`. A warm scope (plan item
+4002) starts `WARM_SCOPE_SERVICES`: the change feed, the store bindings and
+connectivity.
+
+| Per scope | Window-level |
+| --- | --- |
+| The change feed (`resource-sync.ts`): handlers, coalescing, transport. Every function takes an optional trailing `scope`. | The read policy (`read-window-policy.ts`): visibility, host-hidden, data saving, return hints. |
+| The read coordinator: `readCoordinatorFor(scope)`; `getReadCoordinator()` is the command scope's. | The connectivity aggregate (`useTransportConnectivity()`), for the title bar and banner. |
+| Connectivity: `setTransportDisconnected(source, down, scope?)`, `getNodeConnectivity(scope)`. | `dataSavingReadPolicyService` (runs on the command scope). |
+
+**Moving a store's change handlers.** `store-resource-sync.ts` binds the feed
+to stores through `StoreResourceHandlers` registrations, one per store, in
+`STORE_RESOURCE_HANDLERS`. When you scope a store, move its registration into
+the store's module and switch it to `every-scope`:
+
+```ts
+export const fooResourceHandlers = defineStoreResourceHandlers("foo", "every-scope", (context) => {
+  const store = context.scope.store(fooStore);
+  context.onResourceChanged("foo", ({ id }) => store.getState().reload(id));
+  context.onResync("dependents", (pass) => (pass.includes("foo") ? store.getState().loadAll() : undefined));
+});
+```
+
+Then import it into `STORE_RESOURCE_HANDLERS` in place of the old one.
+`context` also gives `listen` (the scope's events), `onStop`, `disposed()`,
+`requestResync` and `signal`. Resync phases run in order: `projects`, then
+`environments` (one participant after another), then `dependents` (all at
+once), then `layouts`. A `command-scope` registration never runs on another
+node's scope, because it writes command-scope singletons.
+
 ## Rules the guards hold
 
 - The `scoped-store-shim` source guard (`tests/unit/source-guards.test.ts`)

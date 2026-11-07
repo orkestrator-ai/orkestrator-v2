@@ -1,5 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { getReadCoordinator, type ReadPriority } from "@/lib/read-coordinator";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { getReadCoordinator, readCoordinatorFor, type ReadPriority } from "@/lib/read-coordinator";
 
 const log = createLogger("web.read-coordinator");
 
@@ -13,6 +14,12 @@ export interface CoordinatedPollOptions {
   priority?: ReadPriority;
   /** The caller's own read; applying the result stays with the caller. */
   read: () => unknown;
+  /**
+   * The node the read goes to: the poll is scheduled on that scope's
+   * coordinator, so its connectivity and reconnects pause and reconcile it.
+   * Defaults to the command scope.
+   */
+  scope?: NodeScope;
 }
 
 let nextInstance = 0;
@@ -34,9 +41,11 @@ export function startCoordinatedPoll({
   intervalMs,
   priority = "standard",
   read,
+  scope,
 }: CoordinatedPollOptions): () => void {
   nextInstance += 1;
-  const subscription = getReadCoordinator().subscribe<void>({
+  const coordinator = scope ? readCoordinatorFor(scope) : getReadCoordinator();
+  const subscription = coordinator.subscribe<void>({
     // Each poll applies its own result, so no two are equivalent reads.
     key: { resource, target, view: `poll-${nextInstance}` },
     demand: { intervalMs, priority },

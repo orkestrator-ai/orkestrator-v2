@@ -5,6 +5,9 @@ import {
 } from "@orkestrator/protocol/pane-layout";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedService } from "@/lib/node-scope/scoped-service";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { clearStoredPaneSelection, writeWindowPaneSelection } from "@/lib/pane-selection-storage";
 import {
   commitBuildPipelineSetupHandoff,
@@ -57,7 +60,41 @@ export interface PaneLayoutPersistenceOptions {
 
 type PaneLayoutWriteSettledHandler = (environmentId: string) => void;
 
-const writeSettledHandlers = new Set<PaneLayoutWriteSettledHandler>();
+type PaneLayoutEnqueue = (
+  environmentId: string,
+  input: PersistedPaneLayoutInput,
+  baseInput?: PersistedPaneLayoutInput,
+) => Promise<void>;
+type PaneLayoutAdopt = (environmentId: string, state: EnvironmentPaneState) => boolean;
+
+/**
+ * One node's persistence hooks (plan item 3014). `enqueue` and `adopt` are set
+ * while `startPaneLayoutPersistence` runs for the scope, so out-of-band writers
+ * join its per-environment write chain instead of racing it. Every function
+ * below takes an optional trailing scope, the command scope by default.
+ */
+interface PaneLayoutPersistenceSlot {
+  enqueue: PaneLayoutEnqueue | null;
+  adopt: PaneLayoutAdopt | null;
+  readonly writeSettledHandlers: Set<PaneLayoutWriteSettledHandler>;
+}
+
+const persistenceSlot = defineScopedSlot<PaneLayoutPersistenceSlot>(
+  "pane-layout-persistence",
+  (scope) => {
+    const slot: PaneLayoutPersistenceSlot = {
+      enqueue: null,
+      adopt: null,
+      writeSettledHandlers: new Set(),
+    };
+    scope.onDispose("pane-layout-persistence", () => {
+      slot.enqueue = null;
+      slot.adopt = null;
+      slot.writeSettledHandlers.clear();
+    });
+    return slot;
+  },
+);
 
 /**
  * Fires once an environment's write chain has fully drained, whether the last
@@ -67,7 +104,11 @@ const writeSettledHandlers = new Set<PaneLayoutWriteSettledHandler>();
  * because the write it deferred to eventually settles. Without this signal a
  * failed write silently strands the remote snapshot that was dropped for it.
  */
-export function onPaneLayoutWriteSettled(handler: PaneLayoutWriteSettledHandler): () => void {
+export function onPaneLayoutWriteSettled(
+  handler: PaneLayoutWriteSettledHandler,
+  scope?: NodeScope,
+): () => void {
+  const { writeSettledHandlers } = persistenceSlot(scope);
   writeSettledHandlers.add(handler);
   return () => {
     writeSettledHandlers.delete(handler);
@@ -187,24 +228,10 @@ function mergeSelectionIntents(
   };
 }
 
-type PaneLayoutEnqueue = (
-  environmentId: string,
-  input: PersistedPaneLayoutInput,
-  baseInput?: PersistedPaneLayoutInput,
-) => Promise<void>;
-type PaneLayoutAdopt = (environmentId: string, state: EnvironmentPaneState) => boolean;
-
 interface AuthoritativePaneLayout {
   input: PersistedPaneLayoutInput;
   revision: number;
 }
-
-/**
- * Set while `startPaneLayoutPersistence` is active so out-of-band writers can
- * join its per-environment write chain instead of racing it.
- */
-let activeEnqueue: PaneLayoutEnqueue | null = null;
-let activeAdopt: PaneLayoutAdopt | null = null;
 
 /**
  * Records that a store update came from the backend snapshot. This prevents
@@ -214,8 +241,9 @@ let activeAdopt: PaneLayoutAdopt | null = null;
 export function adoptPersistedPaneLayout(
   environmentId: string,
   state: EnvironmentPaneState,
+  scope?: NodeScope,
 ): boolean {
-  return activeAdopt?.(environmentId, state) ?? true;
+  return persistenceSlot(scope).adopt?.(environmentId, state) ?? true;
 }
 
 /**
@@ -230,7 +258,9 @@ export function flushPaneLayoutNow(
   input: PersistedPaneLayoutInput,
   save: SavePaneLayout = backend.savePaneLayout,
   load: LoadPaneLayout = backend.getPaneLayout,
+  scope?: NodeScope,
 ): Promise<void> {
+  const activeEnqueue = persistenceSlot(scope).enqueue;
   if (activeEnqueue) return activeEnqueue(environmentId, input);
   // Without the active mirror there is no trustworthy common base for a
   // three-way merge. A missing record is safe to create; an identical record
@@ -305,6 +335,7 @@ export async function migratePaneLayoutBrowserHistory(
   environmentId: string,
   snapshot: PersistedPaneLayout,
   save: SavePaneLayout = backend.savePaneLayout,
+  scope?: NodeScope,
 ): Promise<boolean> {
   if (!isPaneNode(snapshot.root)) return false;
   const raw: PersistedPaneLayoutInput = {
@@ -318,12 +349,18 @@ export async function migratePaneLayoutBrowserHistory(
     root: sanitizeBrowserHistoryRoot(raw.root),
   };
   if (JSON.stringify(raw) === JSON.stringify(desired)) return false;
+  const activeEnqueue = persistenceSlot(scope).enqueue;
   if (activeEnqueue) await activeEnqueue(environmentId, desired, raw);
   else await save(environmentId, desired, snapshot.revision);
   return true;
 }
 
-export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions = {}): () => void {
+export function startPaneLayoutPersistence(
+  options: PaneLayoutPersistenceOptions = {},
+  scope: NodeScope = appCommandScope(),
+): () => void {
+  const slot = persistenceSlot(scope);
+  const { writeSettledHandlers } = slot;
   const useBackendIntents = options.save === undefined && options.load === undefined;
   const save = options.save ?? backend.savePaneLayout;
   const load = options.load ?? backend.getPaneLayout;
@@ -718,7 +755,7 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
 
   window.addEventListener("pagehide", handlePageHide);
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  activeEnqueue = enqueueImmediate;
+  slot.enqueue = enqueueImmediate;
   const adoptAuthoritative: PaneLayoutAdopt = (environmentId, state) => {
     // An event for an older save can arrive while this renderer already has a
     // newer structural mutation queued or in flight. Do not let that self-echo
@@ -749,7 +786,7 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
     authoritative.set(environmentId, { input, revision });
     return true;
   };
-  activeAdopt = adoptAuthoritative;
+  slot.adopt = adoptAuthoritative;
 
   // Persistence can mount after pane hydration (for example after a renderer
   // remount). Seed the exact snapshot/revision that existing local state was
@@ -898,8 +935,8 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
 
   return () => {
     unsubscribe();
-    if (activeEnqueue === enqueueImmediate) activeEnqueue = null;
-    if (activeAdopt === adoptAuthoritative) activeAdopt = null;
+    if (slot.enqueue === enqueueImmediate) slot.enqueue = null;
+    if (slot.adopt === adoptAuthoritative) slot.adopt = null;
     window.removeEventListener("pagehide", handlePageHide);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     // Start all pending writes while the renderer/backend connection is still
@@ -908,3 +945,21 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
     void flushAll().catch((error) => reportWriteFailure("teardown", error));
   };
 }
+
+/**
+ * Pane-layout persistence as a scoped service (plan item 3014). Its write
+ * chain and adopt hook live on the scope, but it runs on the command scope
+ * only: it mirrors the pane-layout store, still a command-scope singleton.
+ * Plan item 3013 scopes the store and lets a live scope run its own.
+ */
+export const paneLayoutPersistenceService = defineScopedService(
+  "pane-layout-persistence",
+  (scope) => {
+    if (scope.role !== "command") {
+      throw new Error(
+        "Pane-layout persistence runs on the command scope until its store is scoped.",
+      );
+    }
+    return { stop: startPaneLayoutPersistence({}, scope) };
+  },
+);

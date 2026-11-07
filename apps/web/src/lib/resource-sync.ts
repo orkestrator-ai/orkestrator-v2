@@ -15,8 +15,9 @@ import {
   type ScopedResourceRevisionManifest,
   type ScopedResourceSnapshotBatch,
 } from "@orkestrator/protocol/resource-events";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
-import { primePrefetchedCommandResponses } from "@/lib/prefetched-command-responses";
+import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 import { notifyReadCoordinatorReconnected } from "@/lib/read-coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { nativeSessionInvalidationNamesDiscovery } from "@orkestrator/protocol/native-agent-observation";
@@ -40,6 +41,14 @@ const log = createLogger("web.resource-sync");
  * Pane/tab snapshots are included in the subscriber set. Their active-pane and
  * active-tab pointers are authoritative too, so the most recently selected tab
  * is restored consistently across mobile, web, and desktop reconnects.
+ *
+ * **Per node (plan item 3014).** Each node scope has its own feed: its
+ * handlers, its coalescing timers and its transport. Every function here takes
+ * an optional trailing `scope`; without one it acts on the command scope's
+ * feed, which is today's single backend. The transport runs as the scoped
+ * service `resourceSyncService` (`scope-services.ts`), so a node's change feed
+ * lives exactly as long as its scope runs it, and a disposed scope drops its
+ * handlers and coalescing timers.
  */
 
 type ResourceHandler = (change: ResourceChange) => unknown | Promise<unknown>;
@@ -64,9 +73,6 @@ export interface ResourceSyncOptions {
   ) => Promise<ScopedResourceRevisionManifest>;
   loadScopedSnapshots?: (changes: ResourceChange[]) => Promise<ScopedResourceSnapshotBatch>;
 }
-
-const handlers = new Map<ResourceKind, Set<ResourceHandler>>();
-const resyncHandlers = new Set<ResourceResyncHandler>();
 
 /**
  * Safety net for native/local transports that cannot surface a reconnect.
@@ -107,8 +113,39 @@ interface PendingDispatch {
  */
 const LEADING_EDGE_RESOURCES: ReadonlySet<ResourceKind> = new Set(["pane-layout"]);
 
-const pending = new Map<string, PendingDispatch>();
-const activeTransportStops = new Set<() => void>();
+export type ViewSafetyCheckReason = "interval" | "resource-gap";
+type ViewSafetyCheckHandler = (reason: ViewSafetyCheckReason) => void;
+
+/** One node's change feed. */
+interface ResourceFeed {
+  readonly handlers: Map<ResourceKind, Set<ResourceHandler>>;
+  readonly resyncHandlers: Set<ResourceResyncHandler>;
+  readonly viewSafetyCheckHandlers: Set<ViewSafetyCheckHandler>;
+  readonly pending: Map<string, PendingDispatch>;
+  readonly transportStops: Set<() => void>;
+}
+
+function clearFeed(feed: ResourceFeed): void {
+  for (const stop of Array.from(feed.transportStops)) stop();
+  for (const { timer } of feed.pending.values()) clearTimeout(timer);
+  feed.pending.clear();
+  feed.handlers.clear();
+  feed.resyncHandlers.clear();
+  feed.viewSafetyCheckHandlers.clear();
+}
+
+const resourceFeed = defineScopedSlot<ResourceFeed>("resource-feed", (scope) => {
+  const feed: ResourceFeed = {
+    handlers: new Map(),
+    resyncHandlers: new Set(),
+    viewSafetyCheckHandlers: new Set(),
+    pending: new Map(),
+    transportStops: new Set(),
+  };
+  // No coalescing timer or transport outlives its node (invariant 15).
+  scope.onDispose("resource-feed", () => clearFeed(feed));
+  return feed;
+});
 
 function coalesceKey(change: ResourceChange): string {
   return `${change.resource}\u0000${change.id}\u0000${change.agent ?? ""}\u0000${change.logicalSessionKey ?? ""}`;
@@ -131,7 +168,12 @@ function coalesceChanges(older: ResourceChange, newer: ResourceChange): Resource
  * Subscribes to one resource kind. Returns an unsubscribe function; callers in
  * React must call it on cleanup or a remounted component double-refetches.
  */
-export function onResourceChanged(resource: ResourceKind, handler: ResourceHandler): () => void {
+export function onResourceChanged(
+  resource: ResourceKind,
+  handler: ResourceHandler,
+  scope?: NodeScope,
+): () => void {
+  const { handlers } = resourceFeed(scope);
   let set = handlers.get(resource);
   if (!set) {
     set = new Set();
@@ -149,17 +191,21 @@ export function onResourceChanged(resource: ResourceKind, handler: ResourceHandl
  * event transport attaches/reconnects, when a sequence gap/reset is detected,
  * and periodically as a last-resort recovery path.
  */
-export function onResourceResync(handler: ResourceResyncHandler): () => void {
+export function onResourceResync(handler: ResourceResyncHandler, scope?: NodeScope): () => void {
+  const { resyncHandlers } = resourceFeed(scope);
   resyncHandlers.add(handler);
   return () => {
     resyncHandlers.delete(handler);
   };
 }
 
-async function deliverResourceResync(request: ResourceResyncRequest): Promise<boolean> {
+async function deliverResourceResyncIn(
+  feed: ResourceFeed,
+  request: ResourceResyncRequest,
+): Promise<boolean> {
   let succeeded = true;
   const pending: Promise<void>[] = [];
-  for (const handler of Array.from(resyncHandlers)) {
+  for (const handler of Array.from(feed.resyncHandlers)) {
     try {
       pending.push(
         Promise.resolve(handler(request)).catch((error) => {
@@ -176,10 +222,6 @@ async function deliverResourceResync(request: ResourceResyncRequest): Promise<bo
   return succeeded;
 }
 
-export type ViewSafetyCheckReason = "interval" | "resource-gap";
-type ViewSafetyCheckHandler = (reason: ViewSafetyCheckReason) => void;
-const viewSafetyCheckHandlers = new Set<ViewSafetyCheckHandler>();
-
 /**
  * Subscribes an ephemeral event-led view (PR monitor, diff statistics, later
  * file/tree/coordinator views) to the existing low-frequency safety cadence.
@@ -192,7 +234,8 @@ const viewSafetyCheckHandlers = new Set<ViewSafetyCheckHandler>();
  * may also have lost this view's events. No new high-frequency timer exists
  * per feature. Reconnects are handled by each view's own connection listener.
  */
-export function onViewSafetyCheck(handler: ViewSafetyCheckHandler): () => void {
+export function onViewSafetyCheck(handler: ViewSafetyCheckHandler, scope?: NodeScope): () => void {
+  const { viewSafetyCheckHandlers } = resourceFeed(scope);
   viewSafetyCheckHandlers.add(handler);
   return () => {
     viewSafetyCheckHandlers.delete(handler);
@@ -200,8 +243,12 @@ export function onViewSafetyCheck(handler: ViewSafetyCheckHandler): () => void {
 }
 
 /** Runs every registered view safety check. Exported for tests. */
-export function requestViewSafetyChecks(reason: ViewSafetyCheckReason): void {
-  for (const handler of Array.from(viewSafetyCheckHandlers)) {
+export function requestViewSafetyChecks(reason: ViewSafetyCheckReason, scope?: NodeScope): void {
+  runViewSafetyChecks(resourceFeed(scope), reason);
+}
+
+function runViewSafetyChecks(feed: ResourceFeed, reason: ViewSafetyCheckReason): void {
+  for (const handler of Array.from(feed.viewSafetyCheckHandlers)) {
     try {
       handler(reason);
     } catch (error) {
@@ -211,12 +258,12 @@ export function requestViewSafetyChecks(reason: ViewSafetyCheckReason): void {
 }
 
 /** Explicit, intentionally broad diagnostic and last-resort recovery action. */
-export function requestResourceResync(): void {
-  void deliverResourceResync({ resources: null, reason: "explicit" });
+export function requestResourceResync(scope?: NodeScope): void {
+  void deliverResourceResyncIn(resourceFeed(scope), { resources: null, reason: "explicit" });
 }
 
-async function deliver(change: ResourceChange): Promise<boolean> {
-  const set = handlers.get(change.resource);
+async function deliverIn(feed: ResourceFeed, change: ResourceChange): Promise<boolean> {
+  const set = feed.handlers.get(change.resource);
   if (!set) return true;
   let succeeded = true;
   const deliveries: Promise<unknown>[] = [];
@@ -242,7 +289,12 @@ async function deliver(change: ResourceChange): Promise<boolean> {
  * Routes one change to its subscribers, coalescing repeats for the same
  * resource id. Exported for tests and for the transport below.
  */
-export function dispatchResourceChange(change: ResourceChange): void {
+export function dispatchResourceChange(change: ResourceChange, scope?: NodeScope): void {
+  dispatchInFeed(resourceFeed(scope), change);
+}
+
+function dispatchInFeed(feed: ResourceFeed, change: ResourceChange): void {
+  const { pending } = feed;
   const key = coalesceKey(change);
   const existing = pending.get(key);
   if (existing) {
@@ -254,30 +306,42 @@ export function dispatchResourceChange(change: ResourceChange): void {
         : coalesceChanges(existing.latest, change);
   }
   const leading = !existing && LEADING_EDGE_RESOURCES.has(change.resource);
-  if (leading) void deliver(change);
+  if (leading) void deliverIn(feed, change);
   const trailing = leading ? null : change;
   const timer = setTimeout(() => {
     pending.delete(key);
-    if (trailing) void deliver(trailing);
+    if (trailing) void deliverIn(feed, trailing);
   }, COALESCE_MS);
   pending.set(key, { change: trailing, latest: change, timer });
 }
 
-/** Drops queued dispatches. Tests use this to avoid cross-file bleed. */
-export function resetResourceSync(): void {
-  for (const stop of Array.from(activeTransportStops)) stop();
-  for (const { timer } of pending.values()) clearTimeout(timer);
-  pending.clear();
-  handlers.clear();
-  resyncHandlers.clear();
-  viewSafetyCheckHandlers.clear();
+/**
+ * Stops the feed's transports and drops its handlers and queued dispatches
+ * (the command scope's by default). Tests use this to avoid cross-file bleed.
+ */
+export function resetResourceSync(scope?: NodeScope): void {
+  clearFeed(resourceFeed(scope));
 }
 
 /**
- * Installs the backend event listener. Call once at app start; the returned
- * function detaches it.
+ * Installs `scope`'s backend event listener (the command scope's by default).
+ * Production starts it through `resourceSyncService` (`scope-services.ts`),
+ * which passes the node's manifest reads; the returned function
+ * detaches it.
  */
-export function startResourceSync(options: ResourceSyncOptions = {}): () => void {
+export function startResourceSync(
+  options: ResourceSyncOptions = {},
+  scope: NodeScope = appCommandScope(),
+): () => void {
+  const feed = resourceFeed(scope);
+  const deliver = (change: ResourceChange) => deliverIn(feed, change);
+  const deliverResourceResync = (request: ResourceResyncRequest) =>
+    deliverResourceResyncIn(feed, request);
+  const requestResourceResync = () => {
+    void deliverResourceResync({ resources: null, reason: "explicit" });
+  };
+  const requestViewSafetyChecks = (reason: ViewSafetyCheckReason) =>
+    runViewSafetyChecks(feed, reason);
   const loadManifest = options.loadManifest;
   const loadScopedManifest = options.loadScopedManifest;
   const loadScopedSnapshots = options.loadScopedSnapshots;
@@ -358,7 +422,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
           log.warn("snapshots.batch-failed", { error: formatLogError(error) });
         }
       }
-      clearPrefetched = primePrefetchedCommandResponses(prefetched);
+      clearPrefetched = scope.prefetched.prime(prefetched);
     }
     const deliverSerial = async (items: ResourceChange[]): Promise<boolean> => {
       for (const change of items) {
@@ -524,7 +588,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
   };
 
   const attach = (event: string, handler: (event: { payload: unknown }) => void): void => {
-    void listen<unknown>(event, handler)
+    void listenInScope<unknown>(scope, event, (payload) => handler({ payload }))
       .then((stop) => {
         if (disposed) {
           stop();
@@ -567,7 +631,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
       requestViewSafetyChecks("resource-gap");
     }
     lastRevision = revision;
-    dispatchResourceChange(event.payload);
+    dispatchInFeed(feed, event.payload);
   });
 
   attach(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
@@ -585,7 +649,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
     }
     // Presentation reads reconcile on the same confirmed-miss signal: the
     // coordinator resets read backoff and re-reads active keys, critical first.
-    notifyReadCoordinatorReconnected();
+    notifyReadCoordinatorReconnected(scope);
     requestManifestResync();
   });
 
@@ -599,8 +663,8 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
     disposed = true;
     clearInterval(intervalId);
     for (const unlisten of unlistens.splice(0)) unlisten();
-    activeTransportStops.delete(stop);
+    feed.transportStops.delete(stop);
   };
-  activeTransportStops.add(stop);
+  feed.transportStops.add(stop);
   return stop;
 }

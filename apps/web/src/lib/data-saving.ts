@@ -1,3 +1,4 @@
+import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { setReadCoordinatorDataSaving } from "@/lib/read-coordinator";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -7,9 +8,10 @@ interface DataSavingSource {
 }
 
 /**
- * Feeds this client's data-saving preference into the shared read
- * coordinator, now and whenever it changes. The preference only changes how
- * often this client reads; nothing is sent to the backend.
+ * Feeds this client's data-saving preference into the window's read policy,
+ * now and whenever it changes, so every node's reads follow it. The
+ * preference only changes how often this client reads; nothing is sent to
+ * the backend.
  */
 export function startDataSavingReadPolicy(
   store: DataSavingSource = useUIStore,
@@ -23,3 +25,19 @@ export function startDataSavingReadPolicy(
     apply(current);
   });
 }
+
+/**
+ * Window-level (plan item 3014): the preference and the policy it feeds are
+ * the window's, not a node's. It runs on the command scope only, because that
+ * scope lives exactly as long as the window, and starting it on a second
+ * scope would be a second writer of one window value.
+ */
+export const dataSavingReadPolicyService = defineScopedService(
+  "data-saving-read-policy",
+  (scope) => {
+    if (scope.role !== "command") {
+      throw new Error("The data-saving read policy is window-level; it runs on the command scope.");
+    }
+    return { stop: startDataSavingReadPolicy() };
+  },
+);

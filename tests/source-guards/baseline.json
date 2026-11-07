@@ -7,7 +7,7 @@
     "apps/backend/src/core/change-tracking/object-store-write-path.test.ts": 2,
     "apps/backend/src/core/change-tracking/review-regressions.test.ts": 2,
     "apps/backend/src/core/commands-agent-tools.test.ts": 3,
-    "apps/backend/src/core/commands-environment-cleanup.test.ts": 2,
+    "apps/backend/src/core/commands-environment-cleanup.test.ts": 1,
     "apps/backend/src/core/commands-merge-cleanup-recovery.test.ts": 4,
     "apps/backend/src/core/commands-terminal-terminate.test.ts": 1,
     "apps/backend/src/core/control-mcp-port.test.ts": 2,

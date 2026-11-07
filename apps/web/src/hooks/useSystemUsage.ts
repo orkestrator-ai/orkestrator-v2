@@ -238,31 +238,47 @@ export function useSystemUsage({
 /**
  * One machine's host sample, for a view of several machines. The machine this
  * window is on shares the title-bar meters' read, so both show the same figure.
- * Every other machine has a read of its own through the command node, so a slow
- * or unreachable machine holds up nothing but its own figure.
+ * A machine this window has a node scope for (one shown in the window's own
+ * tree, plan items 4001 and 5002) is read on that scope, the same read its
+ * title-bar meters and popovers join (`useSystemUsage({ scope })`). Every
+ * other machine has a read of its own through the command node, so a slow or
+ * unreachable machine holds up nothing but its own figure.
  */
 export function useMachineSystemUsage({
   nodeId,
   bound,
   intervalMs,
   active = true,
+  scope,
 }: {
   nodeId: BackendId;
   bound: boolean;
   intervalMs: number;
   active?: boolean;
+  /** `nodeId`'s scope in this window, when it has one. */
+  scope?: NodeScope | null;
 }): UsageView<SystemUsageSnapshot> {
+  const onScope = !bound && scope && !isAppCommandScope(scope) ? scope : null;
   return useUsageRead({
-    key: bound ? SYSTEM_USAGE_READ_KEY : { ...SYSTEM_USAGE_READ_KEY, target: `node:${nodeId}` },
+    key:
+      bound || onScope
+        ? SYSTEM_USAGE_READ_KEY
+        : { ...SYSTEM_USAGE_READ_KEY, target: `node:${nodeId}` },
     active,
     intervalMs,
     read: bound
       ? getSystemUsage
-      : () =>
-          asSystemModel<SystemUsageSnapshot>(
-            systemApi(routedClient(nodeId)).get_system_usage(NO_ARGS),
-          ),
+      : onScope
+        ? () =>
+            asSystemModel<SystemUsageSnapshot>(
+              systemApi(scopeBackendClient(onScope)).get_system_usage(NO_ARGS),
+            )
+        : () =>
+            asSystemModel<SystemUsageSnapshot>(
+              systemApi(routedClient(nodeId)).get_system_usage(NO_ARGS),
+            ),
     isSample: isSystemUsageSnapshot,
+    ...(onScope ? { scope: onScope } : {}),
   });
 }
 
@@ -279,20 +295,32 @@ function routedClient(nodeId: BackendId) {
   );
 }
 
-/** Per-environment process list; only read while a panel shows it. */
+/**
+ * Per-environment process list; only read while a panel shows it. With
+ * `scope` (another node shown in the window's tree) the list is that node's.
+ */
 export function useEnvironmentProcessUsage({
   intervalMs,
   active = true,
+  scope,
 }: {
   intervalMs: number;
   active?: boolean;
+  scope?: NodeScope;
 }): UsageView<EnvironmentProcessUsageSnapshot> {
+  const own = !scope || isAppCommandScope(scope);
   return useUsageRead({
     key: ENVIRONMENT_PROCESS_USAGE_READ_KEY,
     active,
     intervalMs,
-    read: getEnvironmentProcessUsage,
+    read: own
+      ? getEnvironmentProcessUsage
+      : () =>
+          asSystemModel<EnvironmentProcessUsageSnapshot>(
+            systemApi(scopeBackendClient(scope)).get_environment_process_usage(NO_ARGS),
+          ),
     isSample: isProcessUsageSnapshot,
+    ...(own ? {} : { scope }),
   });
 }
 

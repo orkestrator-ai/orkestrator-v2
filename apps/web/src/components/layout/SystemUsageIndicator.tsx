@@ -18,7 +18,10 @@ import {
   useSystemUsage,
 } from "@/hooks/useSystemUsage";
 import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
-import { getReadCoordinator } from "@/lib/read-coordinator";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useOptionalNodeScope } from "@/lib/node-scope/providers";
+import { isAppCommandScope } from "@/lib/node-scope-slots";
+import { getReadCoordinator, readCoordinatorFor } from "@/lib/read-coordinator";
 import { useProjectStore } from "@/stores";
 import { cn } from "@/lib/utils";
 import { SystemUsagePanel } from "./AgentInfoButton.panels";
@@ -275,9 +278,12 @@ export function SystemUsageIndicator({
    */
   remote?: RealmPanelControl;
 }) {
+  // The nearest node's: this document's own, or another node shown in the
+  // window's tree, whose title bar this then is (plan item 5002).
+  const nodeScope = useOptionalNodeScope() ?? undefined;
   // One shared read with every other host-meter consumer; the coordinator
   // pauses it while the document is hidden and reconciles once on return.
-  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
+  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS, scope: nodeScope });
   const usage = usageView.sample;
   const [open, setOpen] = useState(remote?.request?.open ?? false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -394,24 +400,31 @@ export function SystemUsageIndicator({
           ) : null}
         </header>
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
-          {open ? <EnvironmentProcessPanel /> : null}
+          {open ? <EnvironmentProcessPanel scope={nodeScope} /> : null}
         </div>
       </section>
     </div>
   );
 }
 
-function EnvironmentProcessPanel() {
+function EnvironmentProcessPanel({ scope }: { scope?: NodeScope }) {
   // Mounted only while the popover is open: process enumeration stays demand
   // driven, joins other clients' concurrent reads at the backend, and pauses
   // with the document.
   const processView = useEnvironmentProcessUsage({
     intervalMs: ENVIRONMENT_PROCESS_POLL_INTERVAL_MS,
+    scope,
   });
   const snapshot = processView.sample;
   // A reopened panel may first show the list retained from its last opening.
   // Only a sample read while this panel is open decides the frozen ranking.
-  const [openedAt] = useState(() => getReadCoordinator().clock.now());
+  // `observedAt` is on the reading scope's coordinator clock.
+  const [openedAt] = useState(() =>
+    (scope && !isAppCommandScope(scope)
+      ? readCoordinatorFor(scope)
+      : getReadCoordinator()
+    ).clock.now(),
+  );
   const rankable = processView.observedAt !== null && processView.observedAt >= openedAt;
   const [frozenIds, setFrozenIds] = useState<string[]>([]);
   const projects = useProjectStore((state) => state.projects);

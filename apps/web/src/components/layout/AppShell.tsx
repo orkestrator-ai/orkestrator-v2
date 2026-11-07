@@ -39,8 +39,8 @@ import {
   useRealmPanelDismiss,
 } from "@/components/federation/RealmTitleBar";
 import { useFederation } from "@/components/federation/FederationProvider";
+import { NodeTitleBarAgentInfo, NodeTitleBarUsage, useShownInTreeNode } from "./ShownNodeTitleBar";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
-import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { retainAppShortcutRouter, setUnhandledAppShortcut } from "@/lib/app-shortcuts";
 import {
   useRemoteWorkspaceStore,
@@ -93,10 +93,10 @@ export function AppShell({ children }: AppShellProps) {
     workspaceRealm ? null : state.active,
   );
   const remoteNames = useRemoteWorkspaceNames(remoteWorkspace);
-  // A node shown in this window's tree has its own ⌘⇧P (`InTreeWorkspace`).
-  const inTreeShown = useInTreeNodesStore((state) =>
-    remoteWorkspace ? isInTreeNode(remoteWorkspace.nodeId, state.nodes) : false,
-  );
+  // A node shown in this window's tree has its own ⌘⇧P (`InTreeWorkspace`),
+  // and the title bar's meters and popovers are its scope's (plan item 5002).
+  const shownInTree = useShownInTreeNode(remoteWorkspace?.nodeId ?? null);
+  const inTreeShown = shownInTree !== null;
   const [centralColumn, setCentralColumn] = useState<HTMLDivElement | null>(null);
   const [mobileContent, setMobileContent] = useState<HTMLDivElement | null>(null);
   // The desktop and mobile layouts are different trees, so rendering `children`
@@ -181,7 +181,8 @@ export function AppShell({ children }: AppShellProps) {
     // A realm's document title is not shown; the window's is.
     if (!workspaceRealm) document.title = windowTitle;
   }, [windowTitle, workspaceRealm]);
-  useRealmPanelDismiss(isMobile ? null : (remoteWorkspace?.nodeId ?? null));
+  // A realm's popovers only; an in-tree node's are ordinary popovers.
+  useRealmPanelDismiss(isMobile || inTreeShown ? null : (remoteWorkspace?.nodeId ?? null));
 
   if (workspaceRealm) {
     return (
@@ -231,7 +232,11 @@ export function AppShell({ children }: AppShellProps) {
           agentInfoButton={
             <div className="flex items-center gap-1">
               <AgentMailButton />
-              <AgentInfoButton activeTab={activeTab} mobile />
+              {shownInTree ? (
+                <NodeTitleBarAgentInfo scope={shownInTree.scope} mobile />
+              ) : (
+                <AgentInfoButton activeTab={activeTab} mobile />
+              )}
             </div>
           }
           sidebar={<Sidebar />}
@@ -288,7 +293,9 @@ export function AppShell({ children }: AppShellProps) {
                 Another node's workspace reports its agent and machine, so
                 they show here as this node's do.
               */}
-              {remoteWorkspace ? (
+              {shownInTree ? (
+                <NodeTitleBarUsage scope={shownInTree.scope} />
+              ) : remoteWorkspace ? (
                 <RealmSystemUsageMeters nodeId={remoteWorkspace.nodeId} region={centralColumn} />
               ) : (
                 <SystemUsageIndicator />
@@ -300,7 +307,9 @@ export function AppShell({ children }: AppShellProps) {
               />
               <div className="flex items-center gap-1">
                 <AgentMailButton />
-                {remoteWorkspace ? (
+                {shownInTree ? (
+                  <NodeTitleBarAgentInfo scope={shownInTree.scope} />
+                ) : remoteWorkspace ? (
                   <RealmAgentInfoTrigger nodeId={remoteWorkspace.nodeId} region={centralColumn} />
                 ) : (
                   <AgentInfoButton activeTab={activeTab} />

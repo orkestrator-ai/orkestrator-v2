@@ -4,6 +4,8 @@ import { formatSampleTime, useMachineSystemUsage } from "@/hooks/useSystemUsage"
 import { machineTextClass } from "@/lib/federation/machine-colors";
 import { inMachineOrder } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
@@ -31,6 +33,10 @@ function Readings() {
       inMachineOrder(views, (machine) => machine.connectionId, machineOrder, portalState.selfId),
     [machineOrder, portalState.selfId, views],
   );
+  // A machine shown in this window's tree is read on its own scope, the read
+  // the title bar's meters join while it is shown (plan item 5002).
+  const { windowScope } = useScopesWithCommandFallback();
+  const scopes = useSignal(windowScope.nodeScopes);
   if (machines.length < 2) return null;
   return (
     <>
@@ -48,6 +54,13 @@ function Readings() {
             colorToken={machine.colorToken}
             bound={machine.bound}
             connected={machine.bound || machine.transport === "connected"}
+            scope={
+              machine.bound
+                ? null
+                : (scopes.find(
+                    (scope) => scope.role === "leaf" && scope.nodeId === machine.backendId,
+                  ) ?? null)
+            }
           />
         ))}
       </div>
@@ -62,18 +75,21 @@ const MachineCpuReading = memo(function MachineCpuReading({
   colorToken,
   bound,
   connected,
+  scope,
 }: {
   nodeId: BackendId;
   name: string;
   colorToken: string | undefined;
   bound: boolean;
   connected: boolean;
+  scope: NodeScope | null;
 }) {
   const usage = useMachineSystemUsage({
     nodeId,
     bound,
     intervalMs: MACHINE_CPU_POLL_INTERVAL_MS,
     active: connected,
+    scope,
   });
   const cpu = usage.sample && !usage.stale ? usage.sample.cpuPercent : null;
   const reading = cpu === null ? "—" : `${Math.round(cpu)}%`;

@@ -38,6 +38,10 @@ import type { TabInfo } from "@/types/paneLayout";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { useOptionalNodeScope } from "@/lib/node-scope/providers";
+import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -128,6 +132,7 @@ mock.module("./AgentInfoButton", () => ({
     ) : (
       <div
         data-testid="agent-info-button"
+        data-node={useOptionalNodeScope()?.nodeId ?? "none"}
         data-active-tab-id={activeTab?.id ?? "none"}
         data-active-tab-type={activeTab?.type ?? "none"}
         data-mobile={String(mobile ?? false)}
@@ -138,7 +143,12 @@ mock.module("./AgentInfoButton", () => ({
 // The real poll is exercised in its own suite; here it only needs to be
 // observable as a slot so the desktop/mobile split can be asserted.
 mock.module("./SystemUsageIndicator", () => ({
-  SystemUsageIndicator: () => <div data-testid="system-usage-indicator" />,
+  SystemUsageIndicator: () => (
+    <div
+      data-testid="system-usage-indicator"
+      data-node={useOptionalNodeScope()?.nodeId ?? "none"}
+    />
+  ),
 }));
 
 // Another node's title-bar controls, exercised in their own suite.
@@ -860,6 +870,59 @@ describe("AppShell", () => {
     // This window's own node's controls are not shown for another node's workspace.
     expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
     expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
+  });
+
+  test("an in-tree node's meters and agent button are the window's own, on its scope, and switch with the shown node", async () => {
+    isMobile = false;
+    const windowScope = getWindowScope();
+    const leafA = "bk_in-tree-a" as BackendId;
+    const leafB = "bk_in-tree-b" as BackendId;
+    useInTreeNodesStore.setState({ nodes: [leafA, leafB] });
+    const scopes = [] as Array<{ dispose(): void }>;
+    try {
+      act(() =>
+        useRemoteWorkspaceStore.setState({
+          active: { nodeId: leafA, projectId: "project-9", environmentId: null },
+        }),
+      );
+      render(<AppShell>Workspace</AppShell>);
+      // Its scope is still opening: empty meters, no realm triggers.
+      expect(screen.getByTestId("node-system-usage-opening")).toBeTruthy();
+      expect(screen.queryByTestId("realm-system-usage-meters") === null).toBe(true);
+      expect(screen.queryByTestId("realm-agent-info-trigger") === null).toBe(true);
+
+      act(() => {
+        scopes.push(
+          windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: leafA }) }),
+        );
+        scopes.push(
+          windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: leafB }) }),
+        );
+      });
+      const slot = screen.getByTestId("desktop-agent-info-slot");
+      await waitFor(() =>
+        expect(screen.getByTestId("system-usage-indicator").getAttribute("data-node")).toBe(leafA),
+      );
+      expect(slot.contains(screen.getByTestId("system-usage-indicator"))).toBe(true);
+      expect(screen.getByTestId("agent-info-button").getAttribute("data-node")).toBe(leafA);
+
+      act(() =>
+        useRemoteWorkspaceStore.setState({
+          active: { nodeId: leafB, projectId: "project-9", environmentId: null },
+        }),
+      );
+      expect(screen.getByTestId("system-usage-indicator").getAttribute("data-node")).toBe(leafB);
+      expect(screen.getByTestId("agent-info-button").getAttribute("data-node")).toBe(leafB);
+
+      // Back on this window's own node: its own controls, outside any leaf scope.
+      act(() => useRemoteWorkspaceStore.setState({ active: null }));
+      expect(screen.getByTestId("system-usage-indicator").getAttribute("data-node")).toBe("none");
+      expect(screen.queryByTestId("realm-system-usage-meters") === null).toBe(true);
+    } finally {
+      cleanup();
+      for (const scope of scopes) scope.dispose();
+      useInTreeNodesStore.setState({ nodes: [] });
+    }
   });
 
   test("a realm draws the title bar's popovers instead of controls in its toolbar", () => {

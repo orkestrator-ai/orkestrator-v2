@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type Ref,
 } from "react";
@@ -215,6 +216,7 @@ import {
 import { useFederation } from "@/components/federation/FederationProvider";
 import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
+import type { WorkspaceConnectionPath } from "@/lib/portal/workspaces";
 
 export {
   describeRewindTarget,
@@ -224,6 +226,48 @@ export {
   summarizeRewindPreview,
   windowDurationMinutes,
 } from "./AgentInfoButton.panels";
+
+/** What a route signal of a leaf's client carries (`LeafNodeClient.route`). */
+interface RouteSignal {
+  get(): WorkspaceConnectionPath;
+  subscribe(listener: (route: WorkspaceConnectionPath) => void): () => void;
+}
+
+function routeSignalOf(scope: NodeScope): RouteSignal | null {
+  const route = (scope.client as { route?: Partial<RouteSignal> }).route;
+  return route && typeof route.get === "function" && typeof route.subscribe === "function"
+    ? (route as RouteSignal)
+    : null;
+}
+
+/**
+ * How this window reaches the popover's node when that is not the command
+ * node it connected to: a realm document's page target, or for another node
+ * shown in the window's tree (plan item 5002) its client's current route
+ * (a browser's; the desktop's goes through main, which reports none).
+ */
+function useConnectionPath(scope: NodeScope): WorkspaceConnectionPath | null {
+  const [pageTarget] = useState(workspaceTarget);
+  const route = scope.role === "command" ? null : routeSignalOf(scope);
+  const subscribe = useCallback(
+    (listener: () => void) => (route ? route.subscribe(listener) : () => undefined),
+    [route],
+  );
+  const current = useSyncExternalStore(
+    subscribe,
+    () => route?.get() ?? null,
+    () => route?.get() ?? null,
+  );
+  if (scope.role === "command") return pageTarget;
+  if (!current) return null;
+  const { nodeName, path, routeKind, via } = current;
+  return {
+    nodeName,
+    path,
+    ...(routeKind ? { routeKind } : {}),
+    ...(via ? { via } : {}),
+  };
+}
 
 /** The agent-information trigger, shared with a window's title bar over a realm. */
 export function AgentInfoTrigger({
@@ -272,7 +316,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const projections = nodeScope.store(nativeAgentProjectionStore);
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.
-  const [connectionPath] = useState(workspaceTarget);
+  const connectionPath = useConnectionPath(nodeScope);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [runtimeNoticeDialogId, setRuntimeNoticeDialogId] = useState<string | null>(null);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
@@ -281,6 +325,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const systemUsage = useSystemUsage({
     intervalMs: AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS,
     active: open,
+    scope: nodeScope,
   });
   const [steerState, setSteerState] = useState<SessionValueState<string>>({
     sessionIdentity: null,
@@ -756,6 +801,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     platform: accountAgent,
     accountId: usageAccount?.id,
     refreshKey: `${neutralProjection?.generation}:${neutralProjection?.turn.phase}`,
+    scope: nodeScope,
   });
 
   const openForkTab = async (
@@ -1007,7 +1053,11 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
           <ConnectionPathPanel
             path={connectionPath}
-            boundMachineName={federation.enabled ? (federation.boundMachine?.name ?? null) : null}
+            boundMachineName={
+              federation.enabled && nodeScope.role === "command"
+                ? (federation.boundMachine?.name ?? null)
+                : null
+            }
           />
           <SystemUsagePanel
             usage={systemUsage.sample}

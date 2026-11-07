@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { getAgentAccountUsage } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
 
@@ -14,6 +16,9 @@ import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native
  * open, and again whenever `refreshKey` changes (a turn ending, a restart), so
  * a long-open panel does not keep a reading from before the turn it watched.
  *
+ * `scope` is the session's node (another node shown in the window's tree,
+ * plan item 5002); without one, this document's own backend.
+ *
  * Returns the windows only for the account they were read for; a pending
  * first read, a failed read or an unavailable plan returns undefined, which
  * shows nothing rather than a guess.
@@ -23,11 +28,13 @@ export function useAccountPlanUsage({
   platform,
   accountId,
   refreshKey,
+  scope,
 }: {
   enabled: boolean;
   platform: string | undefined;
   accountId: string | undefined;
   refreshKey?: string;
+  scope?: NodeScope;
 }): NativeAgentAccountUsageWindow[] | undefined {
   const identity =
     enabled && accountId && isAgentAccountPlatform(platform)
@@ -41,7 +48,8 @@ export function useAccountPlanUsage({
   useEffect(() => {
     if (!identity || !accountId || !isAgentAccountPlatform(platform)) return;
     let cancelled = false;
-    void getAgentAccountUsage(platform, accountId)
+    const read = scope ? backendForScope(scope).getAgentAccountUsage : getAgentAccountUsage;
+    void read(platform, accountId)
       .then((snapshot) => {
         if (cancelled) return;
         setReading({ identity, windows: snapshot.status === "ok" ? snapshot.windows : [] });
@@ -52,7 +60,7 @@ export function useAccountPlanUsage({
     return () => {
       cancelled = true;
     };
-  }, [accountId, identity, platform, refreshKey]);
+  }, [accountId, identity, platform, refreshKey, scope]);
 
   // A refresh of the same account keeps showing the previous reading until it lands.
   if (!identity || reading?.identity !== identity || reading.windows.length === 0) return undefined;

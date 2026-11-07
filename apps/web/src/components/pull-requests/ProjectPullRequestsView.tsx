@@ -24,7 +24,9 @@ import { PullRequestView } from "./PullRequestView";
  * requests opened from it, each in its own closable tab.
  */
 export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
-  const targetId = currentFilesPanelTargetId();
+  const scope = useShimNodeScope(projectPullRequestsStore.name);
+  // This node's files panel target (an in-tree node's own, plan item 5002).
+  const targetId = currentFilesPanelTargetId(scope);
   const panePR = useFilesPanelStore((state) =>
     targetId
       ? state.pullRequestTabs[targetId]?.find(
@@ -38,7 +40,6 @@ export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
   const closePullRequest = useProjectPullRequestsStore((state) => state.closePullRequest);
   const setActive = useProjectPullRequestsStore((state) => state.setActive);
   const updateTab = useProjectPullRequestsStore((state) => state.updateTab);
-  const scope = useShimNodeScope(projectPullRequestsStore.name);
   const projectPullRequests = scope.store(projectPullRequestsStore);
   const openInApp = useCallback(
     (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) =>

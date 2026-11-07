@@ -7,7 +7,12 @@ import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { environmentStore } from "@/stores/environmentStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { projectStore } from "@/stores/projectStore";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import {
   currentFilesPanelTargetId,
   openPullRequestInApp,
@@ -129,6 +134,33 @@ test("another machine's workspace has its own pane, so the window falls back", (
   useRemoteWorkspaceStore.getState().open("node-2", {});
   expect(openPullRequestInApp(ref)).toBe(false);
   expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
+});
+
+test("with a leaf shown in the window's tree, the pull request opens in the leaf's files panel", () => {
+  // The command node has a selection of its own, which must not receive it.
+  useEnvironmentStore.setState({ environments: [environment] });
+  useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
+  const windowScope = getWindowScope();
+  const leafId = "bk_leaf-pr" as BackendId;
+  const leaf = windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: leafId }) });
+  leaf.store(projectStore).setState({ projects: [project] });
+  leaf.store(environmentStore).setState({ environments: [{ ...environment, id: "leaf-env" }] });
+  // The window shows the leaf's environment, as a sidebar click on it does.
+  windowScope.select({ nodeId: leafId, projectId: "project", environmentId: "leaf-env" });
+
+  expect(openPullRequestInApp(ref, "timeline")).toBe(true);
+  const tabs = leaf.store(filesPanelStore).getState().pullRequestTabs["leaf-env"];
+  expect(tabs?.[0]?.ref).toEqual(ref);
+  expect(tabs?.[0]?.view).toBe("timeline");
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
+  // Nothing went to the command node's panel.
+  expect(
+    windowScope.commandScope().store(filesPanelStore).getState().pullRequestTabs.env,
+  ).toBeUndefined();
+
+  // A node the window shows by a realm has no scope here: the window falls back.
+  windowScope.select({ nodeId: "bk_realm-only" as BackendId, projectId: "p", environmentId: null });
+  expect(openPullRequestInApp(ref)).toBe(false);
 });
 
 test("subtree providers route links to their host and acknowledge handling", () => {

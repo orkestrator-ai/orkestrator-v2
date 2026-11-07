@@ -10,6 +10,7 @@ import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
 import { appCommandScope } from "@/lib/node-scope-slots";
+import { shownNodeScope } from "@/lib/node-scope/shown-scope";
 import { projectStore } from "@/stores/projectStore";
 import { uiStore } from "@/stores/uiStore";
 
@@ -74,15 +75,19 @@ export function currentFilesPanelTargetId(scope: NodeScope = appCommandScope()):
  * changes (no selection, board tab or pane tab), so closing the panel returns
  * the user exactly where they were.
  *
- * `scope` is the node whose files panel shows it; without one, the app's
- * command scope (for callers with no scope yet).
+ * `scope` is the node whose files panel shows it. Without one, the node the
+ * window shows (`shownNodeScope`, plan item 5002): the command node, or
+ * another node shown in the window's own tree. A node shown by a realm has
+ * no scope here, so the caller falls back to the browser (its realm opens
+ * pull requests in its own panel).
  */
 export function openPullRequestInApp(
   ref: GitHubPullRequestRef,
   view?: GitHubPullRequestViewTab,
-  scope: NodeScope = appCommandScope(),
+  scope: NodeScope | null = shownNodeScope(),
 ): boolean {
-  // Null while the window shows another node: its workspace has its own panel.
+  if (!scope) return false;
+  // Null while nothing is selected on that node.
   const targetId = currentFilesPanelTargetId(scope);
   if (!targetId) return false;
   armPullRequestFallback(ref);

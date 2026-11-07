@@ -8,7 +8,7 @@ import {
 } from "@/components/layout/SystemUsageIndicator";
 import { SYSTEM_USAGE_STALE_AFTER_MS, useSystemUsage } from "@/hooks/useSystemUsage";
 import { type RealmPanel, type RealmPanelRequest } from "@/lib/federation/workspace-realm";
-import { useRealmChannel } from "@/lib/federation/realm-channel";
+import { useRealmChannel, type RealmChannel } from "@/lib/federation/realm-channel";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { realmPanel, useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
@@ -30,11 +30,27 @@ const OTHER_PANEL: Record<RealmPanel, RealmPanel> = { usage: "agent", agent: "us
 
 /**
  * Realm side: the node's host meters for the window's title bar, and the
- * popovers it opens, placed under that title bar's triggers.
+ * popovers it opens, placed under that title bar's triggers. Only a realm
+ * document draws them: for a node in the window's own tree the title bar
+ * shows that node's meters and popovers itself (`ShownNodeTitleBar`, plan
+ * item 5002), so no `titleBar`, `panel` or `panelDismissed` crosses its
+ * loopback.
  */
 export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }) {
   // The page's transport in a realm document, the window's loopback in its tree.
   const channel = useRealmChannel();
+  return channel.kind === "loopback" ? null : (
+    <PageRealmTitleBarPanels channel={channel} activeTab={activeTab} />
+  );
+}
+
+function PageRealmTitleBarPanels({
+  channel,
+  activeTab,
+}: {
+  channel: RealmChannel;
+  activeTab: TabInfo | null;
+}) {
   // The same coordinated read the popover's own meters join, on this node.
   const { scope } = useScopesWithCommandFallback();
   const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS, scope });

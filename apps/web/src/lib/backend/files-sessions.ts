@@ -1,5 +1,7 @@
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import { files } from "@/lib/node-scope/domains/files";
+import type { FileContentSchema } from "@orkestrator/protocol/contract/domains/files";
+import type * as Schema from "effect/Schema";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { FileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -63,12 +65,8 @@ export interface FileSubtree {
   truncated: boolean;
 }
 
-/** File content with metadata */
-export interface FileContent {
-  path: string;
-  content: string;
-  language: string;
-}
+/** File content with metadata (the `files` domain's `FileContentSchema`, plan item 7002). */
+export type FileContent = Schema.Schema.Type<typeof FileContentSchema>;
 
 export interface ConditionalSnapshot<T> {
   unchanged: boolean;

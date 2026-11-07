@@ -19,6 +19,12 @@ import {
 } from "./shared";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 import { terminals } from "@/lib/node-scope/domains/terminals";
+import type { ResultOf } from "@orkestrator/protocol/contract/command";
+import type {
+  bootstrapTerminalSessionCommand,
+  getTerminalSessionCommand,
+  launchTerminalJobCommand,
+} from "@orkestrator/protocol/contract/domains/terminals";
 export type { TerminalSessionCreateResult } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -27,26 +33,11 @@ export interface ClaudeTerminalStateSnapshot {
   occurredAt: string;
 }
 
-export interface TerminalSessionStatus {
-  id: string;
-  running: boolean;
-  bootstrapped?: boolean;
-}
-
-export interface BootstrapTerminalResult {
-  bootstrapped: boolean;
-  delivered: boolean;
-  duplicate: boolean;
-}
-
-export interface TerminalJobLaunchResult {
-  jobId: string;
-  environmentId: string;
-  tabId: string;
-  tabType: string;
-  sessionId?: string;
-  status: "started";
-}
+// The `terminals` domain's result types (plan item 7002), inferred from the
+// protocol definitions rather than restated here.
+export type TerminalSessionStatus = ResultOf<typeof getTerminalSessionCommand>;
+export type BootstrapTerminalResult = ResultOf<typeof bootstrapTerminalSessionCommand>;
+export type TerminalJobLaunchResult = ResultOf<typeof launchTerminalJobCommand>;
 
 export interface TerminalOutputSnapshot {
   mode?: "full" | "delta";
@@ -137,8 +128,7 @@ export function createTerminalsApi(client: BackendClient) {
     fastMode?: boolean;
     activateTab?: boolean;
   }): Promise<TerminalJobLaunchResult> {
-    const result = await domain().launch_terminal_job(input);
-    return result as TerminalJobLaunchResult;
+    return domain().launch_terminal_job(input);
   }
 
   async function bootstrapTerminalSession(

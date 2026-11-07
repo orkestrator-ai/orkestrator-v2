@@ -21,7 +21,9 @@ const CURRENT: NegotiatedDomains = {
 };
 
 function fakeClient(answer: (command: string) => unknown, domains?: NegotiatedDomains | null) {
-  const invokeRaw = mock(async (command: string) => answer(command));
+  const invokeRaw = mock(async (command: string, _args?: unknown, _options?: unknown) =>
+    answer(command),
+  );
   const signal =
     domains === undefined ? undefined : createSignal<NegotiatedDomains | null>(domains);
   const client: BackendClient = {

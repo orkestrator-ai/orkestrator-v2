@@ -1,8 +1,16 @@
 import {
   BACKEND_CAPABILITIES,
+  domainRange,
   hasBackendCapability,
   type BackendHello,
 } from "@orkestrator/protocol/backend-profile";
+import {
+  buildInvokeEnvelope,
+  type AnyCommandDef,
+  type EncodedArgsOf,
+  type EncodedResultOf,
+} from "@orkestrator/protocol/contract/command";
+import type { InvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
 import {
   CONTROLLER_HEADER,
   NodeRefusalError,
@@ -48,6 +56,27 @@ export const NODE_HELLO_TIMEOUT_MS = 10_000;
 export const NODE_INVOKE_TIMEOUT_MS = 60_000;
 export const NODE_HEARTBEAT_MS = 30_000;
 const MAX_INVOKE_RESPONSE_BYTES = 64 * 1024 * 1024;
+
+/** The envelope fields an invoke adds next to `command` and `args`. */
+export type ContractEnvelope = Pick<InvokeEnvelope, "domain" | "version" | "critical">;
+
+/**
+ * The envelope a defined command's invoke carries to a node with this hello,
+ * or `undefined` when the hello advertises no range for the command's domain
+ * (a pre-contract node, §11.4, or one with no defined commands there yet):
+ * that node gets today's `{ command, args }`. The version sent is the
+ * definition's own; a node whose range excludes it answers
+ * `unsupported-version` with its range.
+ */
+export function contractEnvelopeFor<C extends AnyCommandDef>(
+  hello: BackendHello | null,
+  def: C,
+  args: EncodedArgsOf<C>,
+): ContractEnvelope | undefined {
+  if (!domainRange(hello, def.domain.name)) return undefined;
+  const { domain, version, critical } = buildInvokeEnvelope(def, args);
+  return critical ? { domain, version, critical } : { domain, version };
+}
 
 export class NodeUnavailableError extends Error {
   readonly code = "node-unavailable";
@@ -216,6 +245,33 @@ export class NodeLink {
       throw new NodeUnavailableError(`${this.label()} is not connected.`);
     }
     return this.request<T>(active.opened.baseUrl, token, command, args, options);
+  }
+
+  /**
+   * Run one defined command on the node over the active route. The invoke
+   * carries the contract envelope (`domain`, `version`, `critical`) when the
+   * node's hello advertises the command's domain ({@link contractEnvelopeFor});
+   * otherwise it is today's `{ command, args }`. The result is the node's wire
+   * value, not decoded here: the domain adapters (plan item 1009) do that.
+   */
+  async invokeCommand<C extends AnyCommandDef>(
+    def: C,
+    args: EncodedArgsOf<C>,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<EncodedResultOf<C>> {
+    const active = this.active;
+    const token = this.record.credential?.token;
+    if (!active || !token || this.state !== "connected") {
+      throw new NodeUnavailableError(`${this.label()} is not connected.`);
+    }
+    const envelope = contractEnvelopeFor(active.hello, def, args);
+    return this.request<EncodedResultOf<C>>(
+      active.opened.baseUrl,
+      token,
+      def.name,
+      args as Record<string, unknown>,
+      envelope ? { ...options, envelope } : options,
+    );
   }
 
   /**
@@ -484,7 +540,7 @@ export class NodeLink {
     token: string,
     command: string,
     args: Record<string, unknown>,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; envelope?: ContractEnvelope } = {},
   ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(
@@ -502,7 +558,9 @@ export class NodeLink {
           "content-type": "application/json",
           [CONTROLLER_HEADER]: this.deps.selfId,
         },
-        body: JSON.stringify({ command, args }),
+        body: JSON.stringify(
+          options.envelope ? { command, args, ...options.envelope } : { command, args },
+        ),
         redirect: "manual",
         signal: controller.signal,
       });

@@ -107,6 +107,12 @@ export interface BackendHelloIdentity {
   profile: import("@orkestrator/protocol/backend-profile").BackendProfile;
   /** Command-node role; absent from embedded gateways without command nodes. */
   nodeMode?: "standalone" | "command" | "leaf";
+  /**
+   * The contract domain ranges the command registry accepts
+   * (`CommandRegistry.helloDomains`). Absent means none are defined, which the
+   * hello still advertises as an empty `domains` object.
+   */
+  domains?: Readonly<Record<string, { readonly min: number; readonly max: number }>>;
 }
 
 /** Command-node hooks: attached controllers' portal origins and their last contact. */

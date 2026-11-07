@@ -1,6 +1,7 @@
 import { AGENT_MAIL_LOG_AREAS } from "./agent-mail.js";
 import { BACKEND_LOG_AREAS } from "./backend.js";
 import { BRIDGE_LOG_AREAS } from "./bridge.js";
+import { CONTRACT_LOG_AREAS } from "./contract.js";
 import { DESKTOP_LOG_AREAS } from "./desktop.js";
 import { ENVIRONMENT_LOG_AREAS } from "./environment.js";
 import { GATEWAY_LOG_AREAS } from "./gateway.js";
@@ -67,6 +68,7 @@ export const LOG_VOCABULARY = {
   ...AGENT_MAIL_LOG_AREAS,
   ...BACKEND_LOG_AREAS,
   ...BRIDGE_LOG_AREAS,
+  ...CONTRACT_LOG_AREAS,
   ...DESKTOP_LOG_AREAS,
   ...ENVIRONMENT_LOG_AREAS,
   ...GATEWAY_LOG_AREAS,

@@ -138,6 +138,17 @@ than GET gets `405`. The response (`parseBackendHello`) contains:
   when the build has one ([releasing.md](../development/releasing.md#build-commit)).
   A value that does not match `/^[0-9a-f]{7,40}$/` is dropped and the hello
   still parses.
+- `domains`: contract domain name to the version range `{ min, max }` this
+  backend accepts ([unified federation §11.2](../reports/unified-federation.md#112-design)),
+  from the command registry's defined commands (`CommandRegistry.helloDomains`).
+  Always sent, empty while no domain has a defined command. It is a top-level
+  field, never a capability, and `schemaVersion` stays 1. The parser keeps
+  unknown names and accepts at most 64 entries, names in the capability
+  pattern and integers `0 <= min <= max <= 1000`. Anything else drops the
+  whole field (logged as `contract hello.domains-malformed` with a `reason`
+  only) and the hello still parses. A hello without `domains` is a
+  pre-contract backend (`isPreContract`); `domainRange(hello, name)` reads one
+  range.
 
 The hello never includes data paths, the auth-file path, the token or the
 process ID. It is served with `cache-control: no-store`.

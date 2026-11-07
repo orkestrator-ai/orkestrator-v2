@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import type { NodeRecord } from "@orkestrator/protocol/command-nodes";
-import { NodeLink } from "./node-link.js";
+import { defineCommand } from "@orkestrator/protocol/contract/command";
+import { defineDomain } from "@orkestrator/protocol/contract/domain";
+import * as Schema from "effect/Schema";
+import { contractEnvelopeFor, NodeLink } from "./node-link.js";
 import { NodeOutcomeLedger, routeToNode } from "./node-routing.js";
 import { TestNodeNetwork, settle } from "./node-network-test-support.js";
 
@@ -152,5 +155,50 @@ for (const malformed of [false, true])
     expect(dispatches).toBe(1);
     expect(durable).toEqual(outcomes.list());
     expect(outcomes.list()).toHaveLength(1);
+    link.stop();
+  });
+
+// A throwaway definition: no node command is converted yet (plan item 1010).
+const probeSystem = defineDomain({ name: "system", version: 2, min: 1 });
+const probeMutate = defineCommand({
+  domain: probeSystem,
+  name: "mutate",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ value: Schema.String, steer: Schema.optionalKey(Schema.Boolean) }),
+  result: Schema.Struct({}),
+  critical: ["steer"],
+});
+
+for (const [label, domains, expected] of [
+  [
+    "advertises the domain",
+    { system: { min: 1, max: 2 } },
+    { domain: "system", version: 2, critical: ["steer"] },
+  ],
+  ["is contract-aware without the domain", {}, undefined],
+  ["is pre-contract", undefined, undefined],
+] as const)
+  test(`a defined command's invoke carries the envelope only when the node ${label}`, async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { leaf, link } = await setup(async (_input, init) => {
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      if (body?.command === "mutate") bodies.push(body);
+      return null;
+    });
+    if (domains) leaf.helloOverrides = { domains };
+    leaf.commands.set("mutate", async () => ({}));
+    await link.start();
+    expect(link.hello?.domains).toEqual(domains);
+    await link.invokeCommand(probeMutate, { value: "x", steer: true });
+    expect(bodies).toEqual([{ command: "mutate", args: { value: "x", steer: true }, ...expected }]);
+    // A critical field the call does not carry is not listed.
+    expect(contractEnvelopeFor(link.hello, probeMutate, { value: "x" })).toEqual(
+      expected ? { domain: "system", version: 2 } : undefined,
+    );
+    // The untyped path is unchanged.
+    await link.invoke("mutate", { value: "y" });
+    expect(bodies[1]).toEqual({ command: "mutate", args: { value: "y" } });
     link.stop();
   });

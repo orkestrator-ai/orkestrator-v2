@@ -622,6 +622,11 @@ export class GatewayAuth {
     };
     if (identity.nodeMode) hello.nodeMode = identity.nodeMode;
     if (identity.buildCommit) hello.buildCommit = identity.buildCommit;
+    // Contract domains are a top-level field, never capabilities, and the
+    // schema version stays 1 (§11.2 "Negotiation"). Always present, empty
+    // until a domain has defined commands, so a peer can tell this backend
+    // from a pre-contract one.
+    hello.domains = { ...identity.domains };
     jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 

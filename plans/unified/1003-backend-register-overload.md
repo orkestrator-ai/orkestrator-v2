@@ -3,7 +3,7 @@ id: 1003
 title: "Backend: register(def, handler) and the invoke envelope"
 phase: 1
 plan: "§11.2 and §12 Phase 1.2"
-status: in-progress
+status: done
 depends_on: [1002]
 blocked_by: ""
 owner: claude-worker
@@ -60,7 +60,7 @@ String-registered commands keep working unchanged.
 - [x] Result validation in `NODE_ENV=development|test` only. Skip `encoded: true` results (the transcript splice).
 - [x] HTTP: parse the envelope fields next to `command` and `args`. When `domain` and `version` are present and outside the backend's range, answer `unsupported-version` with the range.
 - [x] Desktop IPC: the envelope travels in the optional third argument's `envelope` field (`orkestrator:invoke(command, args, { nodeId?, envelope? })`, the shape agreed with [2007](2007-desktop-node-ipc-and-events.md), which added the argument), and main forwards it to the backend client. Older renderers send two arguments and keep working.
-- [ ] Node link: send the envelope from `node-link.ts` when the peer's hello advertises the domain (after [1004](1004-hello-domains.md); leave a TODO box there).
+- [x] Node link: send the envelope from `node-link.ts` when the peer's hello advertises the domain (after [1004](1004-hello-domains.md); leave a TODO box there).
 - [x] Mixed strictness rule from §11.4, enforced in review: never switch a lenient handler to rejecting unknown keys. A strict handler that adopts `defineCommand` becomes tolerant with critical fields.
 
 ## Tests
@@ -96,9 +96,10 @@ String-registered commands keep working unchanged.
 - **Relay.** `node-relay.ts` already forwards the raw body, so the envelope passes through unchanged; no code change, a test drives a real command-node gateway relaying to a real leaf gateway.
 - **Desktop (wording, 2026-11-07).** The item said "an optional third `envelope` argument"; the shape agreed with 2007/2008 is the third argument's `envelope` field, `orkestrator:invoke(command, args, { nodeId?, envelope? })`, and the preload's `invoke(command, args, { envelope })`. 2007 added and bounds it (4096 serialised characters); this item wires main → `ConnectionManager.invoke(command, args, scope, { envelope })` → `BackendHttpClient.invoke(command, args, { envelope })` for the window's scope and for node scopes (`DesktopNodeIpc.backendFor`). The client takes only `domain`, `version` and `critical` from the envelope (`invokeEnvelopeFields`); `command` and `args` always come from the call. Recommendation for 1009/2011: over IPC send the envelope without `args` (they travel positionally), or a large argument object would exceed 2007's 4096 bound. Terminal input and lifecycle commands keep their sequencer, which sends the plain body; no terminal command has a definition yet (7002 carries it). Over IPC only the error message crosses today; keeping `code`/`details` is 1005's desktop box.
 - **Mixed strictness (§11.4).** Enforced by construction: a defined command only ever strips unknown keys (never rejects them), so adopting `defineCommand` cannot make a lenient handler strict, and a strict handler that adopts it becomes tolerant with critical fields. Reviewers still check that a conversion does not add a hand-written unknown-key rejection.
-- **Node link** box left open on purpose: `node-link.ts` should send the envelope once the peer's hello advertises the domain, which needs [1004](1004-hello-domains.md). The orchestrator should add that TODO box to 1004 (or keep it here); status stays `in-progress` until it is done.
+- **Node link** box was left open for [1004](1004-hello-domains.md), which needed the hello's `domains`; done there on 2026-11-07 (`NodeLink.invokeCommand`, see the Work log), so the status is now `done`.
 - Aggregate suite left to review preparation.
 
 ## Work log
 
 - 2026-11-07 (claude-worker): backend: `CommandRegistrar` overload, `commands-registry-contracts.ts` (`CommandRegistry`, `createRegistryRegistrar`, `contractCommandHandler`, `untypedCommandHandler`, `assertInvocationVersion`, `commandArgsErrorMessage`, `wrapRegistrar`, `registerTarget`, `registrarFrom`, `contractResultValidationDefault`), `CommandInvocation` on `CommandHandler`, backend `invoke` and `BackendInvoker` third argument, gateway envelope decoding and `toWire` error bodies; the four wrapping registrars (`gatedRegistrar`, `mcpCorrelatedRegistrar`, `designAdmissionRegistrar`, `containerBridgeStartRegistrar`) forward both forms; 66 test registrar lambdas wrapped in `registrarFrom` (commit 25623b096). Desktop: envelope from main through `ConnectionManager` and `DesktopNodeIpc` to `BackendHttpClient` (commit c94c980b3). Tests: `commands-registry-contracts.test.ts` (20 pass), `tests/gateway-invoke-envelope.test.ts` (HTTP and relay, 7 pass), `apps/desktop/tests/invoke-envelope-ipc.test.ts` (5 pass) and a node-ipc test; the 52 touched/related backend files pass, 18 node/preview files pass, desktop ipc/node-ipc/main-ipc/backend-process/connection-manager/preload pass. Backend and desktop typecheck, oxlint and `bun fmt` clean.
+- 2026-11-07 (claude-worker, during 1004): node link envelope: `NodeLink.invokeCommand(def, args, options)` sends `buildInvokeEnvelope`'s `domain`/`version`/`critical` next to `command`/`args` only when the peer's hello advertises the command's domain (`contractEnvelopeFor(hello, def, args)`, via 1004's `domainRange`); a pre-contract peer, or one without the domain, gets today's `{ command, args }`. String `invoke` is unchanged. Tests in `apps/backend/src/core/nodes/node-link.test.ts` (3 cases).

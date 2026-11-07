@@ -2931,8 +2931,9 @@ export class OrkestratorBackend {
 
   /**
    * Safe identity for the gateway's authenticated hello handshake: the
-   * installation identity, this process's resource generation, the version
-   * and the canonical machine profile. No paths or credentials.
+   * installation identity, this process's resource generation, the version,
+   * the canonical machine profile and the contract domain ranges the command
+   * registry accepts (plan item 1004). No paths or credentials.
    */
   async backendHelloIdentity(): Promise<{
     installationId: string;
@@ -2941,6 +2942,7 @@ export class OrkestratorBackend {
     buildCommit: string | null;
     profile: BackendProfile;
     nodeMode: NodeMode;
+    domains: Record<string, { min: number; max: number }>;
   }> {
     const storage = this.context.storage;
     const [identity, profile] = await Promise.all([
@@ -2954,6 +2956,7 @@ export class OrkestratorBackend {
       buildCommit: BUILD_COMMIT,
       profile,
       nodeMode: this.nodes.mode(),
+      domains: this.commands.helloDomains(),
     };
   }
 

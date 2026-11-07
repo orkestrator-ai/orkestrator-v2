@@ -109,6 +109,22 @@ export class CommandRegistry extends Map<string, CommandHandler> {
     this.contracts.set(name, target);
     if (!known) this.domainRanges.set(domain.name, { min: domain.min, max: domain.version });
   }
+
+  /**
+   * The hello's `domains` (plan item 1004): every domain with a defined
+   * command, as `{ min, max }` where `max` is the domain's current version and
+   * `min` the oldest version declared next to it (`defineDomain({ min })`).
+   * Sorted by name, and empty until a command is registered with its
+   * definition. A fresh object each call.
+   */
+  helloDomains(): Record<string, VersionRange> {
+    const domains: Record<string, VersionRange> = {};
+    for (const name of [...this.domainRanges.keys()].sort()) {
+      const range = this.domainRanges.get(name)!;
+      domains[name] = { min: range.min, max: range.max };
+    }
+    return domains;
+  }
 }
 
 /** Whether results are validated by default: in development and tests only. */

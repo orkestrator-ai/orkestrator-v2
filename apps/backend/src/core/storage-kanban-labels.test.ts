@@ -6,12 +6,14 @@ import { TICKET_LABEL_LIMITS } from "@orkestrator/protocol/ticket-labels";
 import { StorageService } from "./storage.js";
 import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
 
-async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Promise<T> {
+async function withStorage<T>(
+  run: (storage: StorageService, dataDir: string) => Promise<T>,
+): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-kanban-labels-"));
   const storage = new StorageService(dataDir);
   await storage.init();
   try {
-    return await run(storage);
+    return await run(storage, dataDir);
   } finally {
     storage.close?.();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -55,6 +57,75 @@ describe("ticket label catalogue", () => {
     });
   });
 
+  test.each(["", "  \t "])(
+    "explicit description %j clears metadata; omission preserves it",
+    async (description) => {
+      await withStorage(async ({ kanban }) => {
+        await kanban.createKanbanLabel("project-1", { name: "Bug", description: "Old" });
+        await kanban.createKanbanLabel("project-1", parseKanbanLabelInput({ name: "bug" }));
+        expect(await kanban.getKanbanLabels("project-1")).toMatchObject([{ description: "Old" }]);
+        await kanban.createKanbanLabel(
+          "project-1",
+          parseKanbanLabelInput({ name: "BUG", description }),
+        );
+        const [label] = await kanban.getKanbanLabels("project-1");
+        expect(label?.description).toBeUndefined();
+      });
+    },
+  );
+
+  test("catalogue capacity refuses a new name but permits an existing name's metadata update", async () => {
+    await withStorage(async ({ kanban }) => {
+      for (let i = 0; i < TICKET_LABEL_LIMITS.maxCatalogue; i++) {
+        await kanban.createKanbanLabel("project-1", { name: "label-" + i });
+      }
+      await expect(kanban.createKanbanLabel("project-1", { name: "overflow" })).rejects.toThrow(
+        "at most 200",
+      );
+      expect(
+        await kanban.createKanbanLabel("project-1", { name: "LABEL-0", color: "#ff0000" }),
+      ).toMatchObject({
+        created: false,
+        label: { name: "label-0", color: "#ff0000" },
+      });
+      expect(await kanban.getKanbanLabels("project-1")).toHaveLength(
+        TICKET_LABEL_LIMITS.maxCatalogue,
+      );
+    });
+  });
+
+  test("concurrent label changes through two handles preserve independent writes and one catalogue entry", async () => {
+    await withStorage(async (first, dataDir) => {
+      const second = new StorageService(dataDir);
+      await second.init();
+      try {
+        const ticket = await first.kanban.addKanbanTask("project-1", "Ticket", "");
+        await Promise.all([
+          first.kanban.setKanbanTaskLabel(ticket.id, "bug", true),
+          second.kanban.setKanbanTaskLabel(ticket.id, "ui", true),
+        ]);
+        expect((await second.kanban.getKanbanTask(ticket.id))?.labels).toEqual(["bug", "ui"]);
+        const results = await Promise.all([
+          first.kanban.createKanbanLabel("project-1", { name: "Shared", color: "#ff0000" }),
+          second.kanban.createKanbanLabel("project-1", { name: "SHARED", description: "Details" }),
+        ]);
+        expect(results.map((result) => result.created).sort()).toEqual([false, true]);
+        expect(
+          (await first.kanban.getKanbanLabels("project-1")).filter((label) => label.createdAt),
+        ).toMatchObject([{ name: "Shared", color: "#ff0000", description: "Details" }]);
+        await Promise.all([
+          first.kanban.createKanbanLabel("project-1", { name: "shared", color: "#00ff00" }),
+          second.kanban.createKanbanLabel("project-1", { name: "Shared", description: "Updated" }),
+        ]);
+        expect(await second.kanban.getKanbanLabels("project-1")).toContainEqual(
+          expect.objectContaining({ name: "Shared", color: "#00ff00", description: "Updated" }),
+        );
+      } finally {
+        second.close();
+      }
+    });
+  });
+
   test("refuses invalid input", () => {
     expect(() => parseKanbanLabelInput({ name: "" })).toThrow("must not be empty");
     expect(() => parseKanbanLabelInput({ name: "x", color: "red" })).toThrow("#rrggbb");
@@ -94,6 +165,16 @@ describe("labels on tickets", () => {
         "only",
       ]);
       expect((await kanban.updateKanbanTask(task.id, { labels: [] })).labels).toBeUndefined();
+    });
+  });
+
+  test("replacement preserves spelling from the only ticket using an uncatalogued label", async () => {
+    await withStorage(async ({ kanban }) => {
+      const task = await kanban.addKanbanTask("project-1", "Ticket", "", { labels: ["bug"] });
+      expect((await kanban.updateKanbanTask(task.id, { labels: ["BUG", "ui"] })).labels).toEqual([
+        "bug",
+        "ui",
+      ]);
     });
   });
 

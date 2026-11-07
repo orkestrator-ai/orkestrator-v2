@@ -43,7 +43,7 @@ export function parseKanbanLabelInput(input: {
   return {
     name: normalizeTicketLabelName(input.name),
     ...(input.color !== undefined ? { color: normalizeTicketLabelColor(input.color) } : {}),
-    ...(description ? { description } : {}),
+    ...(description !== undefined ? { description } : {}),
   };
 }
 

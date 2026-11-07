@@ -543,9 +543,10 @@ describe("operator tools over public actions", () => {
       projectId,
       name: "Needs design",
       color: "#a855f7",
+      description: "Waiting",
     });
     expect(label.structuredContent).toMatchObject({
-      name: "Needs design",
+      label: { name: "Needs design", color: "#a855f7", description: "Waiting" },
       created: true,
       receipt: { action: "ticket.label.create" },
     });

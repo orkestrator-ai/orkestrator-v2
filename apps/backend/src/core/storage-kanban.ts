@@ -392,7 +392,7 @@ export class KanbanRepository {
         const next = boardLabels(
           labels,
           this.labelCatalogue.list(task.projectId),
-          tasks.filter((candidate) => candidate.id !== taskId),
+          tasks,
           task.projectId,
         );
         if (next.length) task.labels = next;

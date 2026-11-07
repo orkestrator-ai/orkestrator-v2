@@ -1,6 +1,7 @@
 /** The shared ticket tools, on this node's board or, for a coordinator, another node's. */
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { normalizeTicketLabelName, ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
 import {
   ticketKindField,
   ticketLabelColorField,
@@ -360,8 +361,8 @@ export function registerTicketTools(
 }
 
 function hasLabel(task: JsonRecord, label: string): boolean {
-  const key = label.toLowerCase();
-  return asLabels(task).some((name) => name.toLowerCase() === key);
+  const key = ticketLabelKey(normalizeTicketLabelName(label));
+  return asLabels(task).some((name) => ticketLabelKey(name) === key);
 }
 
 function asLabels(task: JsonRecord): string[] {

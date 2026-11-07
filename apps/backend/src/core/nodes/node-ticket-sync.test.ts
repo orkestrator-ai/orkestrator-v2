@@ -470,6 +470,72 @@ describe("labels", () => {
     expect((await f.leafTicket(ticket.id))?.labels).toBeUndefined();
   });
 
+  test("an older command snapshot without labels preserves labels already on a replica", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Kept", "Old", {
+      labels: ["bug"],
+    });
+    await f.sync.sync(LEAF_ID);
+    await f.command.kanban.updateKanbanTask(ticket.id, { description: "New" });
+    const batch = await f.command.kanban.ticketSyncChangesSince(f.commandProject.id, 0, undefined);
+    const items = batch.items.map((item) => {
+      if ("deleted" in item) return item;
+      const { labels: _labels, ...older } = item;
+      return older;
+    });
+    await f.leaf.kanban.applyTicketSync({
+      controllerId: COMMAND_ID,
+      projectId: f.leafProject.id,
+      sourceProjectId: f.commandProject.id,
+      epoch: batch.epoch,
+      items,
+      cursor: batch.cursor,
+    });
+    expect(await f.leafTicket(ticket.id)).toMatchObject({ description: "New", labels: ["bug"] });
+    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+  });
+
+  test.each(["command", "leaf"] as const)(
+    "concurrent text and label edits conflict as shared content (%s changes labels)",
+    async (labelWriter) => {
+      const f = await fleet();
+      const ticket = await f.command.kanban.addKanbanTask(
+        f.commandProject.id,
+        "Conflict",
+        "Original",
+        { labels: ["bug"] },
+      );
+      await f.sync.sync(LEAF_ID);
+      f.link.connected = false;
+      if (labelWriter === "command") {
+        await f.command.kanban.setKanbanTaskLabel(ticket.id, "ui", true);
+        await f.leaf.kanban.updateKanbanTask(ticket.id, { description: "Leaf text" });
+      } else {
+        await f.command.kanban.updateKanbanTask(ticket.id, { description: "Command text" });
+        await f.leaf.kanban.setKanbanTaskLabel(ticket.id, "ui", true);
+      }
+      f.link.connected = true;
+      expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(1);
+      const expected =
+        labelWriter === "command"
+          ? { description: "Original", labels: ["bug", "ui"] }
+          : { description: "Command text", labels: ["bug"] };
+      expect(await f.commandTicket(ticket.id)).toMatchObject(expected);
+      expect(await f.leafTicket(ticket.id)).toMatchObject(expected);
+      expect((await f.sync.status(f.commandProject.id)).conflicts).toEqual([
+        expect.objectContaining({
+          ticketId: ticket.id,
+          field: "content",
+          reason: "stale-revision",
+          fromNodeId: LEAF_ID,
+        }),
+      ]);
+      expect((await f.commandTicket(ticket.id))?.comments.at(-1)?.text).toContain("Sync conflict");
+      expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+      expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(0);
+    },
+  );
+
   test("content from a node that predates labels leaves the labels alone", async () => {
     const f = await fleet();
     const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Kept", "Old", {

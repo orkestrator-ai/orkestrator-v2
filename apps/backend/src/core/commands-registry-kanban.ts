@@ -148,9 +148,10 @@ export function registerKanbanCommands(
       checks,
     );
   });
-  register("get_kanban_labels", (args, { storage }) =>
-    storage.kanban.getKanbanLabels(asNonBlankString(args.projectId, "projectId")),
-  );
+  register("get_kanban_labels", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    return storage.kanban.getKanbanLabels(asNonBlankString(args.projectId, "projectId"));
+  });
   register("create_kanban_label", (args, { storage }) => {
     assertOnlyKeys(args, ["projectId", "name", "color", "description"], "arguments");
     return storage.kanban.createKanbanLabel(

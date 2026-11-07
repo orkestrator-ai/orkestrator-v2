@@ -101,6 +101,70 @@ describe("ticket label actions", () => {
     expect(removed.ok && removed.result.labels).toEqual(["bug"]);
   });
 
+  test("ticket.update preserves uncatalogued spelling on the sole labelled ticket", async () => {
+    const { harness, projectId } = await setup();
+    const created = await harness.call<{ ticketId: string }>(
+      "ticket.create",
+      { projectId, title: "Bug", labels: ["bug"] },
+      { requestId: "create" },
+    );
+    if (!created.ok) throw new Error(created.error.message);
+    const ticketId = created.result.ticketId;
+    expect(
+      (
+        await harness.call(
+          "ticket.update",
+          { projectId, ticketId, labels: ["BUG", "ui"] },
+          { requestId: "update" },
+        )
+      ).ok,
+    ).toBe(true);
+    const detail = await harness.call<PublicTicketDetail>("ticket.get", { projectId, ticketId });
+    expect(detail.ok && detail.result.labels).toEqual(["bug", "ui"]);
+  });
+
+  test.each(["", "  \t "])(
+    "ticket.label.create clears a supplied empty description %j",
+    async (description) => {
+      const { harness, projectId } = await setup();
+      expect(
+        (
+          await harness.call(
+            "ticket.label.create",
+            { projectId, name: "Bug", description: "Old" },
+            { requestId: "create" },
+          )
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await harness.call(
+            "ticket.label.create",
+            { projectId, name: "bug" },
+            { requestId: "omit" },
+          )
+        ).ok,
+      ).toBe(true);
+      const retained = await harness.call<{ labels: PublicTicketLabel[] }>("ticket.labels", {
+        projectId,
+      });
+      expect(retained.ok && retained.result.labels[0]?.description).toBe("Old");
+      expect(
+        (
+          await harness.call(
+            "ticket.label.create",
+            { projectId, name: "BUG", description },
+            { requestId: "clear" },
+          )
+        ).ok,
+      ).toBe(true);
+      const cleared = await harness.call<{ labels: PublicTicketLabel[] }>("ticket.labels", {
+        projectId,
+      });
+      expect(cleared.ok && cleared.result.labels[0]?.description).toBeUndefined();
+    },
+  );
+
   test("update replaces or clears labels; invalid labels are refused before admission", async () => {
     const { harness, projectId } = await setup();
     const ticket = await harness.call<{ ticketId: string }>(

@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { StorageService } from "./storage.js";
+import { registerKanbanCommands } from "./commands-registry-kanban.js";
+import type { CommandHandler } from "./commands-context.js";
 import { type ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import {
@@ -561,6 +567,81 @@ describe("Orkestrator control MCP server", () => {
       agent: "codex",
       messages: [],
     });
+  });
+
+  test("coordinator credentials create, list, assign, filter and remove ticket labels", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "coordinator-labels-"));
+    const storage = new StorageService(dir);
+    await storage.init();
+    const commands = new Map<string, CommandHandler>();
+    registerKanbanCommands((name, handler) => commands.set(name, handler), {} as never);
+    for (const name of ["get_kanban_labels", "create_kanban_label", "set_kanban_task_label"]) {
+      overrides.set(name, (args) => commands.get(name)!(args, { storage } as never));
+    }
+    overrides.set("get_kanban_tasks", ({ projectId }) =>
+      storage.kanban.getKanbanTasks(projectId as string),
+    );
+    const descriptor = coordinatorCredential(["discovery", "tickets"]);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name,
+        arguments: { projectId: "project-1", ...args },
+      });
+      expect(result.body.error).toBeUndefined();
+      return result.body.result;
+    };
+    try {
+      expect((await call("list_ticket_labels", {}))?.structuredContent).toEqual({
+        labels: [],
+        total: 0,
+      });
+      const created = await call("create_ticket_label", {
+        requestId: "label",
+        name: "Needs  design",
+        color: "#A855F7",
+        description: "Waiting",
+      });
+      expect(created?.structuredContent).toMatchObject({
+        label: { name: "Needs design", color: "#a855f7", description: "Waiting" },
+        created: true,
+      });
+      const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "");
+      await storage.kanban.addKanbanTask("project-1", "Unlabelled", "");
+      expect(
+        (await call("set_ticket_label", { ticketId: task.id, name: "needs design" }))
+          ?.structuredContent,
+      ).toMatchObject({ ticket: { labels: ["Needs design"] } });
+      for (const label of ["NEEDS DESIGN", " needs  design ", "needs\tdesign"]) {
+        expect((await call("list_tickets", { label }))?.structuredContent).toMatchObject({
+          total: 1,
+          tickets: [{ id: task.id, labels: ["Needs design"] }],
+        });
+      }
+      expect((await call("list_ticket_labels", {}))?.structuredContent).toMatchObject({
+        labels: [{ name: "Needs design", ticketCount: 1 }],
+        total: 1,
+      });
+      expect(
+        (
+          await call("set_ticket_label", {
+            ticketId: task.id,
+            name: "NEEDS DESIGN",
+            present: false,
+          })
+        )?.structuredContent,
+      ).toMatchObject({ ticket: { labels: [] } });
+      expect(
+        (await call("list_tickets", { label: "needs design" }))?.structuredContent,
+      ).toMatchObject({ total: 0, tickets: [] });
+      const elsewhere = await storage.kanban.addKanbanTask("project-2", "Elsewhere", "");
+      expect(
+        (await call("set_ticket_label", { ticketId: elsewhere.id, name: "bug" }))?.isError,
+      ).toBe(true);
+      expect((await storage.kanban.getKanbanTask(elsewhere.id))?.labels).toBeUndefined();
+    } finally {
+      storage.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("scopes ticket tools and forwards durable request IDs", async () => {

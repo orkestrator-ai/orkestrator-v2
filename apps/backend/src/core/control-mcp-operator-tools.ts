@@ -1,6 +1,7 @@
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { allPublicPages as allPages } from "./control-mcp-pages.js";
 import { randomUUID } from "node:crypto";
+import { ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { PUBLIC_ALL_NODES, type PublicActionName } from "@orkestrator/protocol/public-api";
 import {
@@ -9,6 +10,7 @@ import {
   type PublicProjectSummary,
   type PublicSessionSummary,
   type PublicTicketDetail,
+  type PublicTicketLabel,
   type PublicTicketSummary,
 } from "@orkestrator/protocol/public-api-resources";
 import {
@@ -423,8 +425,22 @@ export async function operatorCreateTicketLabel(
     undefined,
   );
   if (!envelope.ok) return failure(envelope);
+  const listed = await runPublicAction(
+    caller,
+    "ticket.labels",
+    { projectId: input.projectId },
+    undefined,
+    undefined,
+  );
+  if (!listed.ok) return failure(listed);
+  const label = (listed.result as { labels: PublicTicketLabel[] }).labels.find(
+    (candidate) =>
+      ticketLabelKey(candidate.name) === ticketLabelKey((envelope.result as { name: string }).name),
+  );
+  if (!label) throw new Error("Created label was not found in the project catalogue");
   return legacyResult({
-    ...(envelope.result as JsonRecord),
+    label,
+    created: (envelope.result as JsonRecord).created,
     ...(envelope.receipt ? { receipt: envelope.receipt } : {}),
   });
 }

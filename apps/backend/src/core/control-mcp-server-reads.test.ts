@@ -27,7 +27,7 @@ describe("Orkestrator control MCP server", () => {
     expect(listed.response.status).toBe(200);
     // The full profile lists the original tools first; the voice core, the
     // gateway and the direct tools follow (control-mcp-voice.test.ts).
-    expect(listed.body.result?.tools?.map(({ name }) => name).slice(0, 18)).toEqual([
+    expect(listed.body.result?.tools?.map(({ name }) => name).slice(0, 21)).toEqual([
       "list_projects",
       "get_launch_options",
       "list_environments",
@@ -41,6 +41,9 @@ describe("Orkestrator control MCP server", () => {
       "create_ticket",
       "update_ticket",
       "add_ticket_comment",
+      "list_ticket_labels",
+      "create_ticket_label",
+      "set_ticket_label",
       "launch_environment",
       "launch_job",
       "send_prompt_to_tab",

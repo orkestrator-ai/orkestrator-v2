@@ -3,6 +3,10 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   ticketKindField,
+  ticketLabelColorField,
+  ticketLabelDescriptionField,
+  ticketLabelNameField,
+  ticketLabelsField,
   ticketSectionsField,
   ticketStructuredOutput,
 } from "./ticket-tool-fields.js";
@@ -18,8 +22,11 @@ import {
 import {
   operatorAddTicketComment,
   operatorCreateTicket,
+  operatorCreateTicketLabel,
   operatorGetTicket,
+  operatorListTicketLabels,
   operatorListTickets,
+  operatorSetTicketLabel,
   operatorUpdateTicket,
 } from "./control-mcp-operator-tools.js";
 import type { ControlMcpToolContext } from "./control-mcp-tools-shared.js";
@@ -37,6 +44,7 @@ function ticketSummary(task: JsonRecord): JsonRecord {
     environmentId: task.environmentId,
     prUrl: task.prUrl,
     prState: task.prState,
+    labels: Array.isArray(task.labels) ? task.labels : [],
     ...ticketSyncSummary(task),
   };
 }
@@ -82,7 +90,11 @@ function ticketDetail(task: JsonRecord): JsonRecord {
   };
 }
 
-/** `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket` and `add_ticket_comment`. */
+/**
+ * `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`,
+ * `add_ticket_comment`, and the label tools `list_ticket_labels`,
+ * `create_ticket_label` and `set_ticket_label`.
+ */
 export function registerTicketTools(
   server: McpServer,
   { invoke, operator, nodeTickets }: ControlMcpToolContext,
@@ -96,21 +108,24 @@ export function registerTicketTools(
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200),
         status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+        label: ticketLabelNameField.optional().describe("Only tickets with this label."),
         nodeId: nodeIdField,
       }),
       annotations: readAnnotations(),
     },
-    async ({ projectId, status, nodeId }) => {
+    async ({ projectId, status, label, nodeId }) => {
       if (operator)
         return operatorListTickets(callerOnNode(operator, nodeId), {
           projectId,
           ...(status ? { status } : {}),
+          ...(label ? { label } : {}),
         });
       const remote = await nodeTickets(nodeId, projectId, "list", {});
       const tasks = asArray(
         remote ? remote.tickets : await invoke("get_kanban_tasks", { projectId }),
       )
         .filter((task) => !status || task.status === status)
+        .filter((task) => !label || hasLabel(task, label))
         .map(ticketSummary);
       return toolResult({
         tickets: tasks,
@@ -161,6 +176,7 @@ export function registerTicketTools(
         description: z.string().max(100_000).default(""),
         acceptanceCriteria: z.string().max(100_000).default(""),
         status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
+        labels: ticketLabelsField,
         nodeId: nodeIdField,
       }),
       annotations: {
@@ -179,9 +195,14 @@ export function registerTicketTools(
       description,
       acceptanceCriteria,
       status,
+      labels,
       nodeId,
     }) => {
-      const structured = { ...(kind ? { kind } : {}), ...(sections ? { sections } : {}) };
+      const structured = {
+        ...(kind ? { kind } : {}),
+        ...(sections ? { sections } : {}),
+        ...(labels ? { labels } : {}),
+      };
       if (operator) {
         return operatorCreateTicket(callerOnNode(operator, nodeId), {
           requestId,
@@ -238,16 +259,18 @@ export function registerTicketTools(
           description: z.string().max(100_000).optional(),
           acceptanceCriteria: z.string().max(100_000).optional(),
           status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+          labels: ticketLabelsField,
           nodeId: nodeIdField,
         })
         .refine(
-          ({ title, kind, sections, description, acceptanceCriteria, status }) =>
+          ({ title, kind, sections, description, acceptanceCriteria, status, labels }) =>
             title !== undefined ||
             kind !== undefined ||
             sections !== undefined ||
             description !== undefined ||
             acceptanceCriteria !== undefined ||
-            status !== undefined,
+            status !== undefined ||
+            labels !== undefined,
           "Provide at least one field to update",
         ),
       annotations: {
@@ -329,6 +352,124 @@ export function registerTicketTools(
         requestId,
       });
       if (!isRecord(task)) throw new Error("Kanban comment creation returned no ticket");
+      return toolResult({ ticket: ticketDetail(task) });
+    },
+  );
+
+  registerTicketLabelTools(server, { invoke, operator });
+}
+
+function hasLabel(task: JsonRecord, label: string): boolean {
+  const key = label.toLowerCase();
+  return asLabels(task).some((name) => name.toLowerCase() === key);
+}
+
+function asLabels(task: JsonRecord): string[] {
+  return Array.isArray(task.labels)
+    ? task.labels.filter((name): name is string => typeof name === "string")
+    : [];
+}
+
+/**
+ * The label tools act on this machine's board, which syncs to every machine
+ * with the project; `update_ticket` with `nodeId` and `labels` labels a ticket
+ * that exists only on another machine.
+ */
+function registerTicketLabelTools(
+  server: McpServer,
+  { invoke, operator }: Pick<ControlMcpToolContext, "invoke" | "operator">,
+): void {
+  const projectIdField = z.string().trim().min(1).max(200);
+  server.registerTool(
+    "list_ticket_labels",
+    {
+      title: "List Kanban ticket labels",
+      description:
+        "List the labels a project's tickets can carry: its label catalogue and every label in use, with ticketCount.",
+      inputSchema: z.object({ projectId: projectIdField }),
+      annotations: readAnnotations(),
+    },
+    async ({ projectId }) => {
+      if (operator) return operatorListTicketLabels(operator, { projectId });
+      const project = await invoke<unknown>("get_project", { projectId });
+      if (!isRecord(project)) throw new Error(`Project not found: ${projectId}`);
+      const labels = asArray(await invoke("get_kanban_labels", { projectId }));
+      return toolResult({ labels, total: labels.length });
+    },
+  );
+
+  server.registerTool(
+    "create_ticket_label",
+    {
+      title: "Create a Kanban ticket label",
+      description:
+        "Add a label to a project's catalogue so tickets can use it. An existing name (any case) is kept, taking a color or description given here.",
+      inputSchema: z.object({
+        requestId: z.string().trim().min(1).max(256),
+        projectId: projectIdField,
+        name: ticketLabelNameField,
+        color: ticketLabelColorField,
+        description: ticketLabelDescriptionField,
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ requestId, projectId, name, color, description }) => {
+      const label = {
+        name,
+        ...(color !== undefined ? { color } : {}),
+        ...(description !== undefined ? { description } : {}),
+      };
+      if (operator) return operatorCreateTicketLabel(operator, { requestId, projectId, ...label });
+      const project = await invoke<unknown>("get_project", { projectId });
+      if (!isRecord(project)) throw new Error(`Project not found: ${projectId}`);
+      const result = await invoke<unknown>("create_kanban_label", { projectId, ...label });
+      if (!isRecord(result) || !isRecord(result.label)) {
+        throw new Error("Label creation returned no label");
+      }
+      return toolResult({ label: result.label, created: result.created === true });
+    },
+  );
+
+  server.registerTool(
+    "set_ticket_label",
+    {
+      title: "Add or remove a ticket label",
+      description:
+        "Add one label to a ticket, or remove it with present false. A name the project already uses keeps its spelling; a new name starts a label.",
+      inputSchema: z.object({
+        requestId: z.string().trim().min(1).max(256).optional(),
+        projectId: projectIdField,
+        ticketId: z.string().trim().min(1).max(200),
+        name: ticketLabelNameField,
+        present: z.boolean().default(true).describe("False removes the label."),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ requestId, projectId, ticketId, name, present }) => {
+      if (operator) {
+        return operatorSetTicketLabel(operator, { requestId, projectId, ticketId, name, present });
+      }
+      const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
+        (candidate) => candidate.id === ticketId,
+      );
+      if (!existing) throw new Error(`Kanban ticket not found in project: ${ticketId}`);
+      const task = await invoke<unknown>("set_kanban_task_label", {
+        taskId: ticketId,
+        name,
+        present,
+        projectId,
+      });
+      if (!isRecord(task)) throw new Error("Ticket label change returned no ticket");
       return toolResult({ ticket: ticketDetail(task) });
     },
   );

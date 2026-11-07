@@ -110,6 +110,11 @@ export class StorageFiles {
     return this.file("kanban-sync.json");
   }
 
+  /** Each project's ticket label catalogue; written only through `updateStoreRow`. */
+  kanbanLabelsFile(): string {
+    return this.file("kanban-labels.json");
+  }
+
   projectNotesFile(): string {
     return this.file("project-notes.json");
   }

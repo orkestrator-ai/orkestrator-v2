@@ -17,9 +17,11 @@ import { z } from "zod";
 import { parseTicketSectionsPatch } from "@orkestrator/protocol/ticket-sections";
 import {
   ticketKindField,
+  ticketLabelsField,
   ticketSectionsField,
   ticketStructuredOutput,
 } from "./ticket-tool-fields.js";
+import { registerAgentTicketLabelTools } from "./agent-tools-ticket-labels.js";
 import { AGENT_MAIL_MAX_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import { SUBORK_RESULT_KIND } from "@orkestrator/protocol/suborks";
@@ -239,6 +241,7 @@ function ticketSummary(task: KanbanTask): Record<string, unknown> {
     ...(task.environmentId ? { environmentId: task.environmentId } : {}),
     ...(task.prUrl ? { prUrl: task.prUrl } : {}),
     ...(task.prState ? { prState: task.prState } : {}),
+    labels: task.labels ?? [],
     ...(title.truncated ? { titleTruncated: true } : {}),
   };
 }
@@ -451,6 +454,7 @@ function registerKanbanTicketTools(
           description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
           acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
           status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
+          labels: ticketLabelsField,
         }),
         annotations: {
           readOnlyHint: false,
@@ -459,11 +463,21 @@ function registerKanbanTicketTools(
           openWorldHint: false,
         },
       },
-      async ({ title, kind, sections, description, acceptanceCriteria, status, requestId }) => {
+      async ({
+        title,
+        kind,
+        sections,
+        description,
+        acceptanceCriteria,
+        status,
+        labels,
+        requestId,
+      }) => {
         const ticket = await storage.kanban.addKanbanTask(scope.projectId, title, description, {
           acceptanceCriteria,
           status,
           requestId,
+          ...(labels ? { labels } : {}),
           ...(kind ? { kind } : {}),
           ...(sections ? { sections: parseTicketSectionsPatch(sections) } : {}),
         });
@@ -485,6 +499,7 @@ function registerKanbanTicketTools(
           description: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
           acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
           status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+          labels: ticketLabelsField,
         }),
         annotations: {
           readOnlyHint: false,
@@ -493,7 +508,16 @@ function registerKanbanTicketTools(
           openWorldHint: false,
         },
       },
-      async ({ ticketId, title, kind, sections, description, acceptanceCriteria, status }) => {
+      async ({
+        ticketId,
+        title,
+        kind,
+        sections,
+        description,
+        acceptanceCriteria,
+        status,
+        labels,
+      }) => {
         await scopedTicket(storage, scope.projectId, ticketId);
         const updates: Parameters<typeof storage.kanban.updateKanbanTask>[1] = {
           ...(title !== undefined ? { title } : {}),
@@ -502,6 +526,7 @@ function registerKanbanTicketTools(
           ...(description !== undefined ? { description } : {}),
           ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
           ...(status !== undefined ? { status: status as KanbanStatus } : {}),
+          ...(labels !== undefined ? { labels } : {}),
         };
         if (Object.keys(updates).length === 0) {
           throw new Error("Provide at least one ticket field to update");
@@ -541,6 +566,7 @@ function registerKanbanTicketTools(
       },
     );
   }
+  registerAgentTicketLabelTools(server, storage, scope, access, (ticket) => ticketResult(ticket));
 }
 
 /**

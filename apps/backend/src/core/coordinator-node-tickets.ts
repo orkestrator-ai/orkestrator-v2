@@ -146,7 +146,15 @@ function where(node: TicketNode): JsonRecord {
 
 function contentInput(input: JsonRecord): JsonRecord {
   const content: JsonRecord = {};
-  for (const key of ["title", "description", "acceptanceCriteria", "status", "kind", "sections"]) {
+  for (const key of [
+    "title",
+    "description",
+    "acceptanceCriteria",
+    "status",
+    "kind",
+    "sections",
+    "labels",
+  ]) {
     if (input[key] !== undefined) content[key] = input[key];
   }
   return content;
@@ -184,6 +192,7 @@ export function registerCoordinatorNodeTicketCommands(register: CommandRegistrar
               ...(typeof args.status === "string" ? { status: args.status as never } : {}),
               ...(typeof args.kind === "string" ? { kind: args.kind as never } : {}),
               ...(record(args.sections) ? { sections: args.sections as never } : {}),
+              ...(Array.isArray(args.labels) ? { labels: args.labels as string[] } : {}),
             },
           );
           return {

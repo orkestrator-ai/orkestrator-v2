@@ -22,6 +22,7 @@ import {
   type AgentInteractionPolicy,
   type AgentInteractionResolutionJournal,
 } from "@orkestrator/protocol/agent-interactions";
+import type { TicketLabelDefinition } from "@orkestrator/protocol/ticket-labels";
 import type { TicketKind, TicketSections } from "@orkestrator/protocol/ticket-sections";
 import type { TicketSyncMeta } from "@orkestrator/protocol/ticket-sync";
 import {
@@ -159,6 +160,11 @@ export type KanbanTask = {
   sections?: TicketSections;
   /** Fingerprint of the mirrors `sections` was written with. */
   sectionsBasis?: string;
+  /**
+   * Label names, in the order they were added; absent or empty when it has
+   * none. Synced with the content (`@orkestrator/protocol/ticket-labels`).
+   */
+  labels?: string[];
   status: KanbanStatus;
   comments: KanbanComment[];
   images: KanbanImage[];
@@ -177,6 +183,12 @@ export type KanbanTask = {
    * (`@orkestrator/protocol/ticket-sync`). Absent on rows never changed since.
    */
   sync?: TicketSyncMeta;
+};
+
+/** One project's label catalogue: labels created ahead of use. */
+export type KanbanLabelCatalogue = {
+  projectId: string;
+  labels: TicketLabelDefinition[];
 };
 
 export type ProjectNotes = {

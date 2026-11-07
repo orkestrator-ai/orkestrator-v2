@@ -525,6 +525,74 @@ describe("operator tools over public actions", () => {
     expect(elsewhere.isError).toBe(true);
   });
 
+  test("ticket label tools list, create and set labels over ticket.label*", async () => {
+    const harness = await open();
+    const projectId = harness.projectId;
+    const created = await harness.call(harness.defaultToken, "create_ticket", {
+      requestId: "labelled-1",
+      projectId,
+      title: "Labelled",
+      labels: ["bug"],
+    });
+    const ticket = (created.structuredContent as { ticket: { id: string; labels: string[] } })
+      .ticket;
+    expect(ticket.labels).toEqual(["bug"]);
+
+    const label = await harness.call(harness.defaultToken, "create_ticket_label", {
+      requestId: "label-1",
+      projectId,
+      name: "Needs design",
+      color: "#a855f7",
+    });
+    expect(label.structuredContent).toMatchObject({
+      name: "Needs design",
+      created: true,
+      receipt: { action: "ticket.label.create" },
+    });
+    const set = await harness.call(harness.defaultToken, "set_ticket_label", {
+      projectId,
+      ticketId: ticket.id,
+      name: "needs design",
+    });
+    expect(set.structuredContent).toMatchObject({
+      ticket: { labels: ["bug", "Needs design"] },
+      receipt: { action: "ticket.label" },
+    });
+    const labels = await harness.call(harness.defaultToken, "list_ticket_labels", { projectId });
+    expect(labels.structuredContent).toMatchObject({
+      total: 2,
+      labels: [
+        { name: "Needs design", color: "#a855f7", ticketCount: 1 },
+        { name: "bug", ticketCount: 1 },
+      ],
+    });
+    const filtered = await harness.call(harness.defaultToken, "list_tickets", {
+      projectId,
+      label: "BUG",
+    });
+    expect(filtered.structuredContent).toMatchObject({
+      total: 1,
+      tickets: [{ id: ticket.id, labels: ["bug", "Needs design"] }],
+    });
+
+    // The same actions as direct tools.
+    const direct = await harness.call(harness.defaultToken, "ticket_label", {
+      requestId: "direct-1",
+      projectId,
+      ticketId: ticket.id,
+      name: "bug",
+      present: false,
+    });
+    expect(direct.isError).not.toBe(true);
+    const listedDirect = await harness.call(harness.defaultToken, "ticket_labels", { projectId });
+    expect(JSON.stringify(listedDirect.structuredContent)).toContain("Needs design");
+    const fetched = await harness.call(harness.defaultToken, "ticket_get", {
+      projectId,
+      ticketId: ticket.id,
+    });
+    expect(JSON.stringify(fetched.structuredContent)).toContain('"labels":["Needs design"]');
+  });
+
   test("send_message returns a body-free result over mail.send", async () => {
     const harness = await open();
     const config = await harness.harness.storage.loadConfig();

@@ -450,6 +450,58 @@ describe("conflicts and tombstones", () => {
   });
 });
 
+describe("labels", () => {
+  test("labels sync both ways with the content", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Labelled", "", {
+      labels: ["bug"],
+    });
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(ticket.id))?.labels).toEqual(["bug"]);
+
+    await f.leaf.kanban.setKanbanTaskLabel(ticket.id, "ui", true);
+    const queued = await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0);
+    expect(queued.items.map((item) => item.op.kind)).toEqual(["set-content"]);
+    expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(0);
+    expect((await f.commandTicket(ticket.id))?.labels).toEqual(["bug", "ui"]);
+
+    await f.command.kanban.updateKanbanTask(ticket.id, { labels: [] });
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(ticket.id))?.labels).toBeUndefined();
+  });
+
+  test("content from a node that predates labels leaves the labels alone", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Kept", "Old", {
+      labels: ["bug"],
+    });
+    const result = await f.command.kanban.applyTicketSyncOps({
+      nodeId: LEAF_ID,
+      epoch: "older-leaf",
+      items: [
+        {
+          seq: 1,
+          ticketId: ticket.id,
+          sourceProjectId: f.commandProject.id,
+          createdAt: new Date().toISOString(),
+          // An older leaf's content has no labels field.
+          op: {
+            kind: "set-content",
+            value: { description: "New", acceptanceCriteria: "" },
+            baseRev: (await f.commandTicket(ticket.id))?.sync?.revs.content ?? 0,
+          },
+          bytes: 100,
+        },
+      ],
+    });
+    expect(result.conflicts).toEqual([]);
+    expect(await f.commandTicket(ticket.id)).toMatchObject({
+      description: "New",
+      labels: ["bug"],
+    });
+  });
+});
+
 describe("older leaves", () => {
   test("a leaf without ticket-sync is reported as needing an update and is never called", async () => {
     const f = await fleet({ capability: false });

@@ -59,6 +59,9 @@ export const OPERATOR_TOOL_ACTIONS: Readonly<Record<string, readonly PublicActio
     create_ticket: ["ticket.create", "ticket.get"],
     update_ticket: ["ticket.update", "ticket.get"],
     add_ticket_comment: ["ticket.comment", "ticket.get"],
+    list_ticket_labels: ["ticket.labels"],
+    create_ticket_label: ["ticket.label.create"],
+    set_ticket_label: ["ticket.label", "ticket.get"],
     launch_environment: ["environment.launch"],
     launch_job: ["session.start"],
     send_prompt_to_tab: ["session.prompt"],
@@ -259,6 +262,7 @@ function legacyTicketSummary(ticket: PublicTicketSummary): JsonRecord {
     environmentId: ticket.environmentId ?? undefined,
     prUrl: ticket.pr.url ?? undefined,
     prState: ticket.pr.state ?? undefined,
+    labels: ticket.labels ?? [],
   };
 }
 
@@ -305,7 +309,7 @@ export async function operatorListProjects(caller: ControlMcpCaller) {
 
 export async function operatorListTickets(
   caller: ControlMcpCaller,
-  input: { projectId: string; status?: string },
+  input: { projectId: string; status?: string; label?: string },
 ) {
   const pages = await allPages<PublicTicketSummary>(caller, "ticket.list", input);
   if ("envelope" in pages) return failure(pages.envelope);
@@ -351,6 +355,7 @@ export async function operatorCreateTicket(
     status: string;
     kind?: string;
     sections?: JsonRecord;
+    labels?: string[];
   },
 ) {
   const { requestId, ...fields } = input;
@@ -386,6 +391,63 @@ export async function operatorAddTicketComment(
 ) {
   const { requestId, ...fields } = input;
   const envelope = await runPublicAction(caller, "ticket.comment", fields, requestId, undefined);
+  if (!envelope.ok) return failure(envelope);
+  return ticketDetail(caller, input.projectId, input.ticketId, envelope.receipt);
+}
+
+export async function operatorListTicketLabels(
+  caller: ControlMcpCaller,
+  input: { projectId: string },
+) {
+  const envelope = await runPublicAction(caller, "ticket.labels", input, undefined, undefined);
+  if (!envelope.ok) return failure(envelope);
+  return legacyResult(envelope.result as JsonRecord);
+}
+
+export async function operatorCreateTicketLabel(
+  caller: ControlMcpCaller,
+  input: {
+    requestId: string;
+    projectId: string;
+    name: string;
+    color?: string;
+    description?: string;
+  },
+) {
+  const { requestId, ...fields } = input;
+  const envelope = await runPublicAction(
+    caller,
+    "ticket.label.create",
+    fields,
+    requestId,
+    undefined,
+  );
+  if (!envelope.ok) return failure(envelope);
+  return legacyResult({
+    ...(envelope.result as JsonRecord),
+    ...(envelope.receipt ? { receipt: envelope.receipt } : {}),
+  });
+}
+
+/** Like `update_ticket`, each change gets a fresh key unless the caller supplies one. */
+export async function operatorSetTicketLabel(
+  caller: ControlMcpCaller,
+  input: {
+    requestId?: string;
+    projectId: string;
+    ticketId: string;
+    name: string;
+    present: boolean;
+  },
+) {
+  const { requestId, ...fields } = input;
+  const envelope = await runPublicAction(
+    caller,
+    "ticket.label",
+    fields,
+    requestId ?? `set-ticket-label-${randomUUID()}`,
+    undefined,
+  );
   if (!envelope.ok) return failure(envelope);
   return ticketDetail(caller, input.projectId, input.ticketId, envelope.receipt);
 }

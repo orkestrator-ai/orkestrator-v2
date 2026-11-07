@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  TICKET_LABEL_COLOR_PATTERN,
+  TICKET_LABEL_LIMITS,
+} from "@orkestrator/protocol/ticket-labels";
+import {
   DELIVERY_POLICIES,
   TICKET_KIND_GUIDANCE,
   TICKET_KINDS,
@@ -10,7 +14,7 @@ import {
 } from "@orkestrator/protocol/ticket-sections";
 
 /*
- * The ticket `kind` and `sections` fields shared by the worker agent tools and
+ * The ticket `kind`, `sections` and label fields shared by the worker agent tools and
  * the coordinator Control MCP. Values are checked again by
  * `parseTicketSectionsPatch` wherever they reach storage.
  */
@@ -67,6 +71,34 @@ export const ticketSectionsField = z
   .describe(TICKET_SECTIONS_GUIDANCE);
 
 export type TicketSectionsFieldValue = z.infer<typeof ticketSectionsField>;
+
+/** One label name; storage normalizes it again (`@orkestrator/protocol/ticket-labels`). */
+export const ticketLabelNameField = z
+  .string()
+  .trim()
+  .min(1)
+  .max(TICKET_LABEL_LIMITS.maxNameLength)
+  .describe("Label name; case is ignored when matching.");
+
+export const ticketLabelsField = z
+  .array(ticketLabelNameField)
+  .max(TICKET_LABEL_LIMITS.maxPerTicket)
+  .optional()
+  .describe(
+    "Label names (list_ticket_labels has the project's). Replaces every label; [] removes them all.",
+  );
+
+export const ticketLabelColorField = z
+  .string()
+  .regex(TICKET_LABEL_COLOR_PATTERN, "A colour is #rrggbb")
+  .optional()
+  .describe("Colour as #rrggbb.");
+
+export const ticketLabelDescriptionField = z
+  .string()
+  .max(TICKET_LABEL_LIMITS.maxDescriptionLength)
+  .optional()
+  .describe("What the label means.");
 
 /** Each criterion's text in tool output; the full text is in `acceptanceCriteria`. */
 const MAX_CRITERION_OUTPUT_CHARS = 500;

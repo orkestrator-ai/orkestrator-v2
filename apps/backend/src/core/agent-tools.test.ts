@@ -60,6 +60,9 @@ const ALL_AGENT_TOOL_NAMES = [
   "create_ticket",
   "update_ticket",
   "add_ticket_comment",
+  "list_ticket_labels",
+  "create_ticket_label",
+  "set_ticket_label",
 ];
 describe("dropInheritedAgentToolConnection", () => {
   test("forgets only the inherited agent tool connection", () => {
@@ -1526,6 +1529,9 @@ describe("agent Kanban tools", () => {
       "create_ticket",
       "update_ticket",
       "add_ticket_comment",
+      "list_ticket_labels",
+      "create_ticket_label",
+      "set_ticket_label",
     ]);
   });
 
@@ -1596,6 +1602,46 @@ describe("agent Kanban tools", () => {
     expect(
       changes.every((change) => change.resource === "kanban" && change.id === "project-1"),
     ).toBe(true);
+  });
+
+  test("labels project tickets: create, set, list and replace", async () => {
+    const connection = server.connection("env-labels", "project-labels", "host");
+    const call = async (name: string, args: Record<string, unknown>) =>
+      (await rpc(connection.url, connection.token, "tools/call", { name, arguments: args })).body
+        .result?.structuredContent as Record<string, unknown>;
+    const created = await call("create_ticket", { title: "Labelled", labels: ["bug"] });
+    const ticket = created.ticket as { id: string; labels: string[] };
+    expect(ticket.labels).toEqual(["bug"]);
+
+    expect(
+      await call("create_ticket_label", { name: "Needs design", color: "#a855f7" }),
+    ).toMatchObject({ created: true, label: { name: "Needs design", color: "#a855f7" } });
+    const set = await call("set_ticket_label", { ticketId: ticket.id, name: "NEEDS DESIGN" });
+    expect((set.ticket as { labels: string[] }).labels).toEqual(["bug", "Needs design"]);
+    expect(await call("list_ticket_labels", {})).toMatchObject({
+      total: 2,
+      labels: [
+        { name: "Needs design", ticketCount: 1 },
+        { name: "bug", ticketCount: 1 },
+      ],
+    });
+    const removed = await call("set_ticket_label", {
+      ticketId: ticket.id,
+      name: "bug",
+      present: false,
+    });
+    expect((removed.ticket as { labels: string[] }).labels).toEqual(["Needs design"]);
+    const replaced = await call("update_ticket", { ticketId: ticket.id, labels: [] });
+    expect((replaced.ticket as { labels: string[] }).labels).toEqual([]);
+    const listed = await call("list_tickets", {});
+    expect(listed.tickets).toEqual([expect.objectContaining({ id: ticket.id, labels: [] })]);
+
+    const other = server.connection("env-other", "project-other", "host");
+    const hidden = await rpc(other.url, other.token, "tools/call", {
+      name: "set_ticket_label",
+      arguments: { ticketId: ticket.id, name: "leak" },
+    });
+    expect(hidden.body.result?.isError).toBe(true);
   });
 
   test("paginates ticket lists and comments across later pages", async () => {

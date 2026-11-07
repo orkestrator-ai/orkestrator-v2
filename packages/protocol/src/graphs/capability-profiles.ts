@@ -668,8 +668,14 @@ export function checkGraphCapabilities(
 export const GRAPH_ORKESTRATOR_GROUP_TOOLS: Readonly<
   Record<NativeAgentOrkestratorCapabilityGroup, readonly string[]>
 > = Object.freeze({
-  "tickets.read": Object.freeze(["get_ticket", "list_tickets"]),
-  "tickets.write": Object.freeze(["create_ticket", "update_ticket", "add_ticket_comment"]),
+  "tickets.read": Object.freeze(["get_ticket", "list_tickets", "list_ticket_labels"]),
+  "tickets.write": Object.freeze([
+    "create_ticket",
+    "update_ticket",
+    "add_ticket_comment",
+    "create_ticket_label",
+    "set_ticket_label",
+  ]),
   mail: AGENT_MAIL_TOOL_NAMES,
   artifacts: ARTIFACT_TOOL_NAMES,
   schedules: Object.freeze(["create_schedule", "list_schedules", "cancel_schedule"]),

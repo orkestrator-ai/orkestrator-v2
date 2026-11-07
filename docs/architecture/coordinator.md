@@ -632,6 +632,11 @@ optional `nodeId` (`coordinator-node-tickets.ts`):
 | `list_tickets`, `get_ticket` | The leaf's board: this board's copies (`syncedFromCommandNode`) and tickets made only there. Disconnected: this board, with a note. | The leaf's board. Disconnected: refused. |
 | `update_ticket`, `add_ticket_comment` | A ticket of this board is changed here and synced; a ticket made only on the leaf is changed there. | Changed on the leaf. Disconnected: refused. |
 
+The label tools (`list_ticket_labels`, `create_ticket_label`, `set_ticket_label`)
+take no `nodeId`: they act on this board, whose labels sync with the tickets.
+To label a ticket that exists only on a leaf, pass `labels` to `update_ticket`
+with that `nodeId`.
+
 `start_build_pipeline` with a `nodeId` and a ticket of this board syncs the
 leaf first (refusing if that does not finish) and starts the build there
 under the same id; the ticket then shows where its build runs (`runsOn` in

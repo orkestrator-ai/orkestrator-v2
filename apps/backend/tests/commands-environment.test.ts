@@ -43,16 +43,34 @@ describe("Electron backend command registry", () => {
   test("routes all manifest-backed snapshot commands through their resource cursor", async () => {
     const generation = "a".repeat(32);
     const revision = "b".repeat(32);
+    // Real records: results are validated against their schemas in tests.
+    const project = {
+      id: "project-1",
+      name: "project",
+      gitUrl: "https://github.com/acme/project.git",
+      localPath: null,
+      addedAt: "2026-11-07T00:00:00.000Z",
+      order: 0,
+    };
+    const requiredGlobal = {
+      containerResources: { cpuCores: 2, memoryGb: 4 },
+      envFilePatterns: [],
+      allowedDomains: [],
+      codexMaxConcurrentThreads: 4,
+      terminalAppearance: { fontFamily: "Menlo", fontSize: 13, backgroundColor: "#000" },
+      terminalScrollback: 1000,
+    };
     const rawConfig = {
       version: "1.0.0",
       global: {
+        ...requiredGlobal,
         githubToken: "configured-token",
         cursorApiKey: "configured-cursor-key",
       },
       repositories: {},
     };
     const storage = {
-      loadProjects: mock(async () => [{ id: "project-1" }]),
+      loadProjects: mock(async () => [project]),
       loadConfig: mock(async () => rawConfig),
       getEnvironmentsByProject: mock(async () => []),
       getSessionsByEnvironment: mock(async () => []),
@@ -81,7 +99,7 @@ describe("Electron backend command registry", () => {
     const context = { storage } as unknown as CommandContext;
     const commands = createCommandRegistry();
     const cases = [
-      { command: "get_projects", resource: "project", args: {}, snapshot: [{ id: "project-1" }] },
+      { command: "get_projects", resource: "project", args: {}, snapshot: [project] },
       {
         command: "get_config",
         resource: "config",
@@ -89,6 +107,7 @@ describe("Electron backend command registry", () => {
         snapshot: {
           version: "1.0.0",
           global: {
+            ...requiredGlobal,
             githubTokenConfigured: true,
             anthropicApiKeyConfigured: false,
             anthropicApiKeySource: "none",

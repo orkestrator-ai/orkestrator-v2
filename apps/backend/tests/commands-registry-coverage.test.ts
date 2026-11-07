@@ -850,6 +850,57 @@ describe("direct backend command registry coverage", () => {
 
   test("forwards storage reads and deletes with validated identifiers and revisions", async () => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
+    // Real records: results are validated against their schemas in tests.
+    const at = "2026-08-03T00:00:00.000Z";
+    const paneLayout = {
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: { type: "leaf", id: "default" },
+      updatedAt: at,
+      revision: 3,
+    };
+    const pipeline = {
+      version: 1,
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      snapshot: {},
+      updatedAt: at,
+      revision: 1,
+    };
+    const queue = {
+      queueKey: "queue-1",
+      environmentId: "env-1",
+      messages: [],
+      updatedAt: at,
+      revision: 1,
+    };
+    const composeDraft = {
+      draftKey: "compose-1",
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: {},
+      updatedAt: at,
+      revision: 7,
+    };
+    const fileDraft = {
+      draftKey: "file-1",
+      environmentId: "env-1",
+      filePath: "a.txt",
+      content: "new",
+      originalContent: "old",
+      updatedAt: at,
+      revision: 1,
+    };
+    const handoff = {
+      version: 1,
+      id: "handoff-1",
+      environmentId: "env-1",
+      snapshot: {},
+      createdAt: at,
+    };
     const value = (method: string, result: unknown) =>
       mock(async (...args: unknown[]) => {
         calls.push({ method, args });
@@ -858,7 +909,7 @@ describe("direct backend command registry coverage", () => {
     const context = contextWithStorage({
       loadSessionBuffer: value("loadSessionBuffer", "terminal output"),
       deletePaneLayout: value("deletePaneLayout", undefined),
-      getPaneLayout: value("getPaneLayout", { revision: 3 }),
+      getPaneLayout: value("getPaneLayout", paneLayout),
       getMultiReviewWorkflow: value("getMultiReviewWorkflow", {
         version: 2,
         id: "workflow-1",
@@ -887,20 +938,20 @@ describe("direct backend command registry coverage", () => {
           },
         },
       ]),
-      getBuildPipeline: value("getBuildPipeline", { id: "pipeline-1" }),
-      listBuildPipelines: value("listBuildPipelines", [{ id: "pipeline-1" }]),
+      getBuildPipeline: value("getBuildPipeline", pipeline),
+      listBuildPipelines: value("listBuildPipelines", [pipeline]),
       deleteBuildPipeline: value("deleteBuildPipeline", undefined),
-      getPromptQueue: value("getPromptQueue", { queueKey: "queue-1" }),
-      listPromptQueues: value("listPromptQueues", [{ queueKey: "queue-1" }]),
-      enqueuePromptQueueMessage: value("enqueuePromptQueueMessage", { queueKey: "queue-1" }),
+      getPromptQueue: value("getPromptQueue", queue),
+      listPromptQueues: value("listPromptQueues", [queue]),
+      enqueuePromptQueueMessage: value("enqueuePromptQueueMessage", queue),
       removePromptQueueMessage: value("removePromptQueueMessage", { removed: { id: "m1" } }),
-      movePromptQueueMessage: value("movePromptQueueMessage", { queueKey: "queue-1" }),
-      getComposeDraft: value("getComposeDraft", { draftKey: "compose-1" }),
-      listComposeDrafts: value("listComposeDrafts", [{ draftKey: "compose-1" }]),
+      movePromptQueueMessage: value("movePromptQueueMessage", queue),
+      getComposeDraft: value("getComposeDraft", composeDraft),
+      listComposeDrafts: value("listComposeDrafts", [composeDraft]),
       deleteComposeDraft: value("deleteComposeDraft", undefined),
-      getFileDraft: value("getFileDraft", { draftKey: "file-1" }),
+      getFileDraft: value("getFileDraft", fileDraft),
       deleteFileDraft: value("deleteFileDraft", undefined),
-      getAgentHandoff: value("getAgentHandoff", { handoffId: "handoff-1" }),
+      getAgentHandoff: value("getAgentHandoff", handoff),
       deleteAgentHandoff: value("deleteAgentHandoff", true),
       pruneAgentHandoffs: value("pruneAgentHandoffs", ["handoff-2"]),
     });
@@ -920,7 +971,7 @@ describe("direct backend command registry coverage", () => {
       {
         command: "get_pane_layout",
         args: { environmentId: "env-1" },
-        expected: { revision: 3 },
+        expected: paneLayout,
         call: { method: "getPaneLayout", args: ["env-1"] },
       },
       {
@@ -960,13 +1011,13 @@ describe("direct backend command registry coverage", () => {
       {
         command: "get_build_pipeline",
         args: { pipelineId: "pipeline-1" },
-        expected: { id: "pipeline-1" },
+        expected: pipeline,
         call: { method: "getBuildPipeline", args: ["pipeline-1"] },
       },
       {
         command: "list_build_pipelines",
         args: { projectId: "project-1" },
-        expected: [{ id: "pipeline-1" }],
+        expected: [pipeline],
         call: { method: "listBuildPipelines", args: ["project-1"] },
       },
       {
@@ -978,19 +1029,19 @@ describe("direct backend command registry coverage", () => {
       {
         command: "get_prompt_queue",
         args: { queueKey: "queue-1" },
-        expected: { queueKey: "queue-1" },
+        expected: queue,
         call: { method: "getPromptQueue", args: ["queue-1"] },
       },
       {
         command: "list_prompt_queues",
         args: { environmentId: "env-1" },
-        expected: [{ queueKey: "queue-1" }],
+        expected: [queue],
         call: { method: "listPromptQueues", args: ["env-1"] },
       },
       {
         command: "enqueue_prompt_queue_message",
         args: { queueKey: "queue-1", environmentId: "env-1", message: { id: "m1" } },
-        expected: { queueKey: "queue-1" },
+        expected: queue,
         call: { method: "enqueuePromptQueueMessage", args: ["queue-1", "env-1", { id: "m1" }] },
       },
       {
@@ -1002,19 +1053,19 @@ describe("direct backend command registry coverage", () => {
       {
         command: "move_prompt_queue_message",
         args: { queueKey: "queue-1", environmentId: "env-1", messageId: "m1", direction: "up" },
-        expected: { queueKey: "queue-1" },
+        expected: queue,
         call: { method: "movePromptQueueMessage", args: ["queue-1", "env-1", "m1", "up"] },
       },
       {
         command: "get_compose_draft",
         args: { draftKey: "compose-1" },
-        expected: { draftKey: "compose-1" },
+        expected: composeDraft,
         call: { method: "getComposeDraft", args: ["compose-1"] },
       },
       {
         command: "list_compose_drafts",
         args: { ownerType: "environment", ownerId: "env-1" },
-        expected: [{ draftKey: "compose-1" }],
+        expected: [composeDraft],
         call: { method: "listComposeDrafts", args: ["environment", "env-1"] },
       },
       {
@@ -1026,7 +1077,7 @@ describe("direct backend command registry coverage", () => {
       {
         command: "get_file_draft",
         args: { draftKey: "file-1" },
-        expected: { draftKey: "file-1" },
+        expected: fileDraft,
         call: { method: "getFileDraft", args: ["file-1"] },
       },
       {
@@ -1038,7 +1089,7 @@ describe("direct backend command registry coverage", () => {
       {
         command: "get_agent_handoff",
         args: { handoffId: "handoff-1" },
-        expected: { handoffId: "handoff-1" },
+        expected: handoff,
         call: { method: "getAgentHandoff", args: ["handoff-1"] },
       },
       {

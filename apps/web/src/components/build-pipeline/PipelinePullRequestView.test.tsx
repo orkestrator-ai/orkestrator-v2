@@ -11,6 +11,8 @@ import {
   pipelineCheckState,
   pipelineCheckSummary,
 } from "./PipelinePullRequestView";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -18,7 +20,7 @@ afterEach(() => {
   cleanup();
   useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
   useEnvironmentStore.setState({ environments: [] });
-  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+  setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
 });
 
 function renderShippedPullRequest() {
@@ -44,7 +46,7 @@ test.each([
   invokeMock.mockClear();
   renderShippedPullRequest();
   fireEvent.click(target());
-  await waitFor(() => expect(useFilesPanelStore.getState().isOpen).toBe(true));
+  await waitFor(() => expect(useFilesPanelChromeStore.getState().isOpen).toBe(true));
   expect(useFilesPanelStore.getState().pullRequestTabs["pipeline-env"]?.[0]?.ref).toEqual({
     owner: "acme",
     repo: "app",
@@ -62,7 +64,7 @@ test.each([
   const url = renderShippedPullRequest();
   act();
   await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("open_in_browser", { url }));
-  expect(useFilesPanelStore.getState().isOpen).toBe(false);
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
 });
 
 test("failed checks take precedence over simultaneous pending checks", () => {

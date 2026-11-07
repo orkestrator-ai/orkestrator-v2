@@ -1,10 +1,40 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { gitHubPullRequestKey } from "@orkestrator/protocol/github-pull-requests";
-import { useFilesPanelStore as store } from "./filesPanelStore";
+import type { StoreApi } from "zustand/vanilla";
+import { COMMAND_STORAGE_NODE, desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { FILES_PANEL_DEFAULT_WIDTH_PX, useFilesPanelChromeStore } from "./filesPanelChromeStore";
+import {
+  filesPanelStore,
+  mergePersistedFilesPanelState as merge,
+  type FilesPanelState,
+} from "./filesPanelStore";
+
 const ref = (number: number) => ({ owner: "acme", repo: "repo", number });
 const key = (number: number) => gitHubPullRequestKey(ref(number));
+const LEAF_ID = "bk_leaf-node" as BackendId;
+
+let windowScope: WindowScope;
+let command: NodeScope;
+let store: StoreApi<FilesPanelState>;
 const tabs = (id = "one") => store.getState().pullRequestTabs[id] ?? [];
-beforeEach(() => store.setState({ pullRequestTabs: {}, activeTab: "changes", isOpen: false }));
+const openLeaf = () =>
+  windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: LEAF_ID }) });
+
+beforeEach(() => {
+  localStorage.clear();
+  windowScope = new WindowScope();
+  command = windowScope.open({ role: "command", client: new FakeNodeClient() });
+  store = command.store(filesPanelStore);
+  useFilesPanelChromeStore.setState({ isOpen: false, panelWidth: FILES_PANEL_DEFAULT_WIDTH_PX });
+});
+afterEach(() => {
+  windowScope.dispose();
+  localStorage.clear();
+});
 
 test("opening and reopening deduplicates refs and reapplies the requested view", () => {
   store.getState().openPullRequest("one", ref(1), "code");
@@ -48,7 +78,6 @@ test("tab and target bounds evict oldest entries", () => {
 });
 
 test("persisted tabs reject malformed refs, recompute keys and reset transient requests", () => {
-  const merge = store.persist.getOptions().merge!;
   const values = [
     null,
     { ref: ref(0) },
@@ -81,7 +110,6 @@ test("persisted tabs reject malformed refs, recompute keys and reset transient r
 test("persisted state enforces target and tab bounds and ignores invalid containers", () => {
   const values = Array.from({ length: 15 }, (_, i) => ({ ref: ref(i + 1) }));
   const entries = Object.fromEntries(Array.from({ length: 55 }, (_, i) => [`saved-${i}`, values]));
-  const merge = store.persist.getOptions().merge!;
   const restored = merge({ pullRequestTabs: entries }, store.getState());
   expect(Object.keys(restored.pullRequestTabs)).toHaveLength(50);
   expect(restored.pullRequestTabs["saved-0"]).toBeUndefined();
@@ -169,4 +197,63 @@ test("load guards deduplicate, failures preserve contents, and retry allows a fr
   const retry = state.beginFolderLoad("A", "parent", false)!;
   state.finishFolderLoad("A", "parent", retry, subtree);
   expect(store.getState().failedFolders).toEqual([]);
+});
+
+test("opening the panel on one node opens it for all; folders and tabs stay per node", () => {
+  const leaf = openLeaf().store(filesPanelStore);
+  leaf.getState().openPullRequest("env", ref(1));
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
+  expect(leaf.getState().activeTab).toBe(`pull-request:${key(1)}`);
+  // The command node's tab and pull request tabs are its own.
+  expect(store.getState().activeTab).toBe("changes");
+  expect(store.getState().pullRequestTabs).toEqual({});
+
+  useFilesPanelChromeStore.getState().closePanel();
+  store.getState().openPanelOnAllFiles();
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
+  expect(store.getState().activeTab).toBe("all-files");
+  expect(leaf.getState().activeTab).toBe(`pull-request:${key(1)}`);
+
+  store.getState().setFolderExpanded("src", true);
+  leaf.getState().setFolderExpanded("lib", true);
+  expect(store.getState().expandedFolders).toEqual(["src"]);
+  expect(leaf.getState().expandedFolders).toEqual(["lib"]);
+});
+
+test("persistence keys are per node, and a reopened scope reads its own node's state", () => {
+  const leafScope = openLeaf();
+  store.getState().setFolderExpanded("src", true);
+  leafScope.store(filesPanelStore).getState().setFolderExpanded("lib", true);
+  const commandKey = desktopConnectionStorageKey("files-panel-storage", command);
+  const leafKey = desktopConnectionStorageKey("files-panel-storage", leafScope);
+  expect(leafKey).not.toBe(commandKey);
+  expect(JSON.parse(localStorage.getItem(commandKey)!).state.expandedFolders).toEqual(["src"]);
+  expect(JSON.parse(localStorage.getItem(leafKey)!).state.expandedFolders).toEqual(["lib"]);
+  // The window's width is not part of a node's stored panel state.
+  expect(JSON.parse(localStorage.getItem(commandKey)!).state.panelWidth).toBeUndefined();
+
+  windowScope.dispose();
+  windowScope = new WindowScope();
+  command = windowScope.open({ role: "command", client: new FakeNodeClient() });
+  expect(command.store(filesPanelStore).getState().expandedFolders).toEqual(["src"]);
+  expect(openLeaf().store(filesPanelStore).getState().expandedFolders).toEqual(["lib"]);
+});
+
+test("a stored value from before the split restores folders and leaves the width to the window", () => {
+  localStorage.setItem(
+    desktopConnectionStorageKey("files-panel-storage", COMMAND_STORAGE_NODE),
+    JSON.stringify({
+      state: { panelWidth: 400, expandedFolders: ["src", 7], collapsedFolders: ["tests"] },
+      version: 0,
+    }),
+  );
+  windowScope.dispose();
+  windowScope = new WindowScope();
+  const restored = windowScope
+    .open({ role: "command", client: new FakeNodeClient() })
+    .store(filesPanelStore)
+    .getState();
+  expect(restored.expandedFolders).toEqual(["src"]);
+  expect("panelWidth" in restored).toBe(false);
+  expect("collapsedFolders" in restored).toBe(false);
 });

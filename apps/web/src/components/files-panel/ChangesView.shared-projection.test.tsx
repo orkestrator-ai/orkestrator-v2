@@ -9,7 +9,6 @@ import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { invoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useFilesPanelStore } from "@/stores";
 import type { Environment } from "@/types";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
 import {
@@ -20,6 +19,7 @@ import {
 } from "./change-projection-test-fixture";
 import { ChangesView } from "./ChangesView";
 import { FilesPanelHeader } from "./FilesPanelHeader";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
 
 // `@/lib/native/backend` and `@/lib/native/events` are mocked in tests/setup.ts.
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -81,7 +81,7 @@ describe("V01: one backend projection across the sidebar badge and Files → Cha
     resetChangeSubscriptionsForTests();
     resetChangeProjectionStore();
     setMobileViewport(false);
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       changes: [],

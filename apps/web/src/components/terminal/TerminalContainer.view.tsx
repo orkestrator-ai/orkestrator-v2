@@ -42,6 +42,8 @@ import {
   useFilesPanelStore,
   getAllLeaves,
 } from "@/stores";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -1996,12 +1998,14 @@ export function TerminalContainer({
   const pendingFileOpen = useFilesPanelStore((state) =>
     state.pendingFileOpens.find((request) => request.environmentId === environmentId),
   );
+  const filesPanel = useScopedStoreApi(filesPanelStore);
   useEffect(() => {
     if (!pendingFileOpen || pendingFileOpen.environmentId !== environmentId) return;
     if (!isActive || !isEnvironmentRunning || !(containerId || isLocalEnvironmentReady)) return;
-    useFilesPanelStore.getState().clearPendingFileOpen(pendingFileOpen);
+    filesPanel.getState().clearPendingFileOpen(pendingFileOpen);
     handleCreateFileTab(pendingFileOpen.filePath, pendingFileOpen.options);
   }, [
+    filesPanel,
     pendingFileOpen,
     environmentId,
     isActive,

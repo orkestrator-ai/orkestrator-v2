@@ -1,7 +1,19 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { StoreApi } from "zustand/vanilla";
 import type { FileNode } from "@/lib/backend";
-import { useFilesPanelStore as store } from "@/stores/filesPanelStore";
-import { loadFileSubtree } from "./file-subtree-loads";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { filesPanelStore, type FilesPanelState } from "@/stores/filesPanelStore";
+import { loadFileSubtree as loadFileSubtreeIn } from "./file-subtree-loads";
+
+let windowScope: WindowScope;
+let scope: NodeScope;
+let store: StoreApi<FilesPanelState>;
+type LoadArgs =
+  Parameters<typeof loadFileSubtreeIn> extends [NodeScope, ...infer Rest] ? Rest : never;
+const loadFileSubtree = (...args: LoadArgs) => loadFileSubtreeIn(scope, ...args);
 
 const fresh = (children: FileNode[] = [], digest = "") => ({
   unchanged: false,
@@ -9,7 +21,10 @@ const fresh = (children: FileNode[] = [], digest = "") => ({
   value: { children, truncated: false },
 });
 
-beforeEach(() =>
+beforeEach(() => {
+  windowScope = new WindowScope();
+  scope = windowScope.open({ role: "command", client: new FakeNodeClient() });
+  store = scope.store(filesPanelStore);
   store.setState({
     fileSubtreeKey: "target",
     fileSubtrees: {},
@@ -18,8 +33,9 @@ beforeEach(() =>
     loadingFolders: [],
     failedFolders: [],
     expandedFolders: [],
-  }),
-);
+  });
+});
+afterEach(() => windowScope.dispose());
 
 test("initial loads and refreshes share a four-read concurrency limit across mounts", async () => {
   const paths = Array.from({ length: 12 }, (_, i) => `dir-${i}`);
@@ -166,4 +182,38 @@ test("a retried or collapsed directory is read without a digest", async () => {
   store.getState().setFolderExpanded("dir", true);
   await loadFileSubtree("target", "dir", false, read);
   expect(asked).toEqual([undefined, undefined, undefined]);
+});
+
+test("each node has its own store and its own four-read limit", async () => {
+  const leaf = windowScope.open({
+    role: "leaf",
+    client: new FakeNodeClient({ nodeId: "bk_leaf" as BackendId }),
+  });
+  const leafStore = leaf.store(filesPanelStore);
+  const paths = ["a", "b", "c", "d"];
+  store.setState({ expandedFolders: paths });
+  leafStore.setState({
+    fileSubtreeKey: "target",
+    expandedFolders: paths,
+    fileSubtrees: {},
+    folderLoadTokens: new Map(),
+  });
+  let running = 0;
+  const releases: Array<() => void> = [];
+  const read = async () => {
+    running += 1;
+    await new Promise<void>((resolve) => releases.push(resolve));
+    running -= 1;
+    return fresh();
+  };
+  const loads = [
+    ...paths.map((path) => loadFileSubtree("target", path, false, read)),
+    ...paths.map((path) => loadFileSubtreeIn(leaf, "target", path, false, read)),
+  ];
+  // Four on each node: neither waits for the other's reads.
+  expect(running).toBe(8);
+  releases.splice(0).forEach((release) => release());
+  await Promise.all(loads);
+  expect(Object.keys(store.getState().fileSubtrees)).toEqual(paths);
+  expect(Object.keys(leafStore.getState().fileSubtrees)).toEqual(paths);
 });

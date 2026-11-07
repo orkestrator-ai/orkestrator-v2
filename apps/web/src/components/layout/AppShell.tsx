@@ -24,6 +24,7 @@ import {
   PULL_REQUEST_PANEL_MIN_WIDTH_PX,
   PULL_REQUEST_PANEL_WIDTH_PX,
 } from "@/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { DEFAULT_TERMINAL_APPEARANCE, resolveTerminalBackgroundColor } from "@/constants/terminal";
 import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
@@ -167,7 +168,7 @@ export function AppShell({ children }: AppShellProps) {
   // a window that narrows keeps showing what the user was working on.
   const [desktopShown, setDesktopShown] = useState(!isMobile);
   if (!isMobile && !desktopShown) setDesktopShown(true);
-  const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
+  const filesPanelOpen = useFilesPanelChromeStore((state) => state.isOpen);
   const filesPanelRef = useFilesPanelPullRequestWidth(filesPanelOpen);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   // The phone layout's drawer stays a full list; the choice is kept for desktop widths.

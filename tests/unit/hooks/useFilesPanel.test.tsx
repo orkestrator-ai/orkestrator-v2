@@ -15,6 +15,7 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK,
 } from "../../../apps/web/src/constants/terminal";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
+import { setFilesPanelTestState } from "../../../apps/web/src/test/files-panel-state";
 
 const realBackendSnapshot = { ...realBackend };
 let logs: LogCapture;
@@ -186,7 +187,7 @@ function resetStores(
     selectedEnvironmentIds: [],
   });
 
-  useFilesPanelStore.setState({
+  setFilesPanelTestState({
     isOpen: false,
     activeTab: "changes",
     changes: [],
@@ -319,7 +320,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 
     renderHook(() => useFilesPanel());
@@ -344,7 +345,7 @@ describe("useFilesPanel", () => {
       createdFromCommit: "abc123def456",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 
     renderHook(() => useFilesPanel());
@@ -364,7 +365,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     mockGetFileTree.mockImplementation(() => Promise.resolve(tree));
     mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
 
@@ -391,7 +392,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
 
     renderHook(() => useFilesPanel());
@@ -414,7 +415,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     mockGetGitStatus.mockImplementation(() => Promise.resolve([{ ...change }]));
     mockGetFileTree.mockImplementation(() => Promise.resolve(JSON.parse(JSON.stringify(tree))));
 
@@ -451,7 +452,7 @@ describe("useFilesPanel", () => {
       },
     ];
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     mockGetGitStatusSnapshot
       .mockResolvedValueOnce({
         unchanged: false,
@@ -530,7 +531,7 @@ describe("useFilesPanel", () => {
       createdFromCommit: "abc123def456",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
 
     renderHook(() => useFilesPanel());
@@ -550,7 +551,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     mockGetLocalFileTree.mockImplementation(() => Promise.resolve(tree));
 
     const { result } = renderHook(() => useFilesPanel());
@@ -575,7 +576,7 @@ describe("useFilesPanel", () => {
     });
     // Legacy repository configs predate prBaseBranch.
     resetStores(environment, { defaultBranch: "trunk" } as RepositoryConfig);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 
     renderHook(() => useFilesPanel());
@@ -596,7 +597,7 @@ describe("useFilesPanel", () => {
     });
     const releaseChange = { ...change, additions: 11 };
     resetStores(environment, { defaultBranch: "trunk", prBaseBranch: "develop" });
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation((_path, comparisonRef) =>
       Promise.resolve(comparisonRef === "release" ? [releaseChange] : [change]),
     );
@@ -638,7 +639,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       changes: [change],
@@ -854,7 +855,7 @@ describe("useFilesPanel", () => {
 
     resetStores(firstEnvironment);
     useEnvironmentStore.setState({ environments: [firstEnvironment, secondEnvironment] });
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     mockGetGitStatus.mockImplementation((containerId) =>
       containerId === "container-a"
         ? new Promise((resolve) => {
@@ -1050,7 +1051,7 @@ describe("useFilesPanel", () => {
       diffBaseline: { createdFromCommit: created, commit: advanced },
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     const { result } = renderHook(() => useFilesPanel());
     await waitFor(() => expect(useFilesPanelStore.getState().targetBranch).toBe(advanced));
     act(() =>
@@ -1873,7 +1874,7 @@ describe("useFilesPanel", () => {
         status: "running",
       });
       resetStores(environment);
-      useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+      setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
       mockGetGitStatus
         .mockImplementationOnce(() => Promise.resolve([]))
         .mockImplementationOnce(() => Promise.resolve([change]));
@@ -1920,7 +1921,7 @@ describe("useFilesPanel", () => {
         },
       ];
       resetStores(environment);
-      useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+      setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
       mockGetGitStatus
         .mockImplementationOnce(() => Promise.resolve([]))
         .mockImplementationOnce(() => Promise.resolve([refreshedChange]));

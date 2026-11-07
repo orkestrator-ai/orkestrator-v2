@@ -41,6 +41,17 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/claudeOptionsStore",
     hook: "useClaudeOptionsStore",
   },
+  // Plan item 3007: the files panel's per-node state (its chrome is a window store).
+  {
+    store: "files-panel",
+    module: "apps/web/src/stores/filesPanelStore",
+    hook: "useFilesPanelStore",
+  },
+  {
+    store: "project-pull-requests",
+    module: "apps/web/src/stores/projectPullRequestsStore",
+    hook: "useProjectPullRequestsStore",
+  },
 ];
 
 /** The statics a zustand hook carries, which the shim keeps as deprecated. */

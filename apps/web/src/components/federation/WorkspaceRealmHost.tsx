@@ -23,7 +23,7 @@ import {
   type RealmSelectRequest,
 } from "@/lib/federation/workspace-realm";
 import { useConfigStore } from "@/stores/configStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
@@ -111,11 +111,11 @@ export function WorkspaceRealmHost() {
         // The window owns the files panel's state; applying it is not a new choice to report.
         if (
           message.type === "filesPanel" &&
-          useFilesPanelStore.getState().isOpen !== message.open
+          useFilesPanelChromeStore.getState().isOpen !== message.open
         ) {
           applyingShellFilesPanel.current = true;
           try {
-            useFilesPanelStore.setState({ isOpen: message.open });
+            useFilesPanelChromeStore.setState({ isOpen: message.open });
           } finally {
             applyingShellFilesPanel.current = false;
           }
@@ -152,7 +152,7 @@ export function WorkspaceRealmHost() {
   );
   useEffect(
     () =>
-      useFilesPanelStore.subscribe((state, previous) => {
+      useFilesPanelChromeStore.subscribe((state, previous) => {
         if (state.isOpen !== previous.isOpen && !applyingShellFilesPanel.current) {
           postToShell({ type: "filesPanel", open: state.isOpen });
         }

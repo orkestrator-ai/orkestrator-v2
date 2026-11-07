@@ -1,5 +1,6 @@
 import type { ChangeFileRow } from "@orkestrator/protocol/change-resources";
 import { useFilesPanelStore } from "@/stores";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { ChangedFileItem } from "./ChangedFileItem";
 import { ChangeFileRowItem, changeRowPath, changeRowStatusLetter } from "./ChangeFileRowItem";
@@ -53,7 +54,7 @@ export function ChangesView({
 }: ChangesViewProps = {}) {
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingChanges = useFilesPanelStore((state) => state.isLoadingChanges);
-  const closePanel = useFilesPanelStore((state) => state.closePanel);
+  const closePanel = useFilesPanelChromeStore((state) => state.closePanel);
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
   const changeRows = useEnvironmentChangeRows(environmentId);

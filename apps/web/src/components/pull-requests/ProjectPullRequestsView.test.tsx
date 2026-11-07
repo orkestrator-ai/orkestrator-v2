@@ -2,8 +2,11 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TerminalProvider, useTerminalContext } from "@/contexts/TerminalContext";
-import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import {
+  mergePersistedProjectPullRequests,
+  useProjectPullRequestsStore,
+} from "@/stores/projectPullRequestsStore";
+import { mergePersistedFilesPanelState, useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useUIStore } from "@/stores/uiStore";
 import { FilesPanelPullRequests } from "@/components/files-panel/FilesPanelPullRequests";
 import { FilesPanelHeader } from "@/components/files-panel/FilesPanelHeader";
@@ -71,10 +74,7 @@ test("project host opens, focuses, closes and restores tabs across projects", as
   expect(await screen.findByRole("heading", { name: "Detail 43" })).toBeTruthy();
   // Simulate persisted reload: the saved refs and summary survive, view requests reset.
   const state = useProjectPullRequestsStore.getState();
-  const restored = useProjectPullRequestsStore.persist.getOptions().merge!(
-    { projects: state.projects },
-    state,
-  );
+  const restored = mergePersistedProjectPullRequests({ projects: state.projects }, state);
   act(() => useProjectPullRequestsStore.setState(restored));
   rerender(<ProjectPullRequestsView projectId="project" />);
   expect(await screen.findByRole("heading", { name: "Detail 43" })).toBeTruthy();
@@ -133,10 +133,7 @@ test("sidebar keeps targets separate, restores tabs, and expands only after main
   const state = useFilesPanelStore.getState();
   act(() =>
     useFilesPanelStore.setState(
-      useFilesPanelStore.persist.getOptions().merge!(
-        { pullRequestTabs: state.pullRequestTabs },
-        state,
-      ),
+      mergePersistedFilesPanelState({ pullRequestTabs: state.pullRequestTabs }, state),
     ),
   );
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();

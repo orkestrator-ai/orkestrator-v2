@@ -25,7 +25,7 @@ import {
 } from "@/lib/federation/workspace-realm";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { isGlobalSettingsSection, requestGlobalSettings } from "@/lib/settings-navigation";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
@@ -168,7 +168,7 @@ function useRealmRequests(
 ) {
   const request = useRemoteWorkspaceStore((state) => state.requests[nodeId]);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
-  const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
+  const filesPanelOpen = useFilesPanelChromeStore((state) => state.isOpen);
   // The phone layout's files panel is a full-screen sheet of this window's own
   // node, and a realm shows none there, so the state is only shared on desktop.
   const phoneLayout = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
@@ -299,8 +299,8 @@ function useRealmRequests(
         if (ui.sidebarOpen !== message.open) ui.toggleSidebar();
       } else if (message.type === "filesPanel") {
         if (latest.current.phoneLayout) return;
-        if (useFilesPanelStore.getState().isOpen !== message.open) {
-          useFilesPanelStore.setState({ isOpen: message.open });
+        if (useFilesPanelChromeStore.getState().isOpen !== message.open) {
+          useFilesPanelChromeStore.setState({ isOpen: message.open });
         }
       } else if (message.type === "settings") {
         if (isGlobalSettingsSection(message.section)) requestGlobalSettings(message.section);

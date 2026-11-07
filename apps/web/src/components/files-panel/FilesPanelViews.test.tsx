@@ -15,6 +15,8 @@ import { fileNameStemLength, RenameFileDialog } from "./RenameFileDialog";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 const createFileTab = mock(() => undefined);
 
@@ -123,7 +125,7 @@ describe("files panel views", () => {
     mockToastError.mockClear();
     mockToastSuccess.mockClear();
     setMobileViewport(false);
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       expandedFolders: [],
@@ -179,7 +181,7 @@ describe("files panel views", () => {
       isDiff: true,
       gitStatus: "M",
     });
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("without environment panes, file clicks fall back to the project-root opener", async () => {
@@ -1140,6 +1142,6 @@ describe("files panel views", () => {
     fireEvent.click(iconButtons.at(-2)!);
     expect(onRefresh).toHaveBeenCalledTimes(1);
     fireEvent.click(iconButtons.at(-1)!);
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 });

@@ -20,6 +20,7 @@ import {
 } from "./change-projection-test-fixture";
 import { ChangesView } from "./ChangesView";
 import { FilesPanelHeader } from "./FilesPanelHeader";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const RESOURCE_KEY = "environment-net/environment/env-1/live";
@@ -69,7 +70,7 @@ describe("ChangesView on the environment change projection", () => {
     invokeMock.mockReset();
     installBackend({});
     setMobileViewport(false);
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       changes: [],

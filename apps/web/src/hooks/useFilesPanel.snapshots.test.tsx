@@ -13,6 +13,7 @@ import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import type { Environment } from "@/types";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { isAnnouncedNewer, useFilesPanel } from "./useFilesPanel";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
 
 /**
  * The Files panel's event-led reads over the backend's worktree snapshot
@@ -82,7 +83,7 @@ beforeEach(() => {
       } as Environment,
     ],
   });
-  useFilesPanelStore.setState({ isOpen: true, activeTab: "changes", changes: [], fileTree: [] });
+  setFilesPanelTestState({ isOpen: true, activeTab: "changes", changes: [], fileTree: [] });
   spies = [
     spyOn(nativeEvents, "listen").mockImplementation(async (event, callback) => {
       callbacks.set(event, callback as (event: { payload: unknown }) => void);

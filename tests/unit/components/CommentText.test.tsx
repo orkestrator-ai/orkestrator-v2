@@ -1,8 +1,9 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { CommentText } from "@/components/kanban/KanbanTaskDialog";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useUIStore } from "@/stores/uiStore";
+import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 // `openInBrowser` reaches the browser through the desktop shell; stand in for it.
 const mockOpenInBrowser = mock((_url: string) => Promise.resolve());
@@ -17,7 +18,7 @@ describe("CommentText", () => {
       shell: { ...originalOrkestrator?.shell, openExternal: mockOpenInBrowser },
     } as never;
     useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
   });
 
   afterEach(() => {
@@ -82,7 +83,7 @@ describe("CommentText", () => {
     render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
     fireEvent.click(screen.getByRole("button"));
     expect(mockOpenInBrowser).not.toHaveBeenCalled();
-    const panel = useFilesPanelStore.getState();
+    const panel = filesPanelTestState();
     expect(panel.isOpen).toBe(true);
     expect(panel.activeTab).toBe("pull-request:org/repo#42");
     expect(panel.pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
@@ -95,7 +96,7 @@ describe("CommentText", () => {
     render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
     fireEvent.click(screen.getByRole("button"), { metaKey: true });
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/org/repo/pull/42");
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("handles http (non-https) URLs", () => {

@@ -32,6 +32,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { getWindowScope } from "./app-window-scope";
 import { useOptionalNodeScope } from "./providers";
+import type { NodeScope } from "./node-scope";
 import type { ScopedStoreDef } from "./scoped-store";
 
 /** How the shim was reached: a deprecated static, or the hook with no node scope above it. */
@@ -74,6 +75,27 @@ export function setShimUseObserver(observer: ShimUseObserver | null): () => void
 /** `def`'s instance in the app's command scope: what the deprecated statics use. */
 export function commandScopeStore<S>(def: ScopedStoreDef<S>): StoreApi<S> {
   return getWindowScope().commandScope().store(def);
+}
+
+/**
+ * The nearest node scope, for a component or hook that reaches a converted
+ * store (or that store's per-node helpers) imperatively, in a callback or an
+ * effect, and renders where the store's hook does. Outside a provider it is
+ * the app's command scope, noted as a shim use of `store` exactly as the hook
+ * notes one, so a reader whose tests still render without a provider keeps
+ * working until they move to `renderInNodeScope`. New code under a provider
+ * uses `useNodeScope()`.
+ */
+export function useShimNodeScope(store: string): NodeScope {
+  const scope = useOptionalNodeScope();
+  if (scope) return scope;
+  noteShimUse(store, "hook-without-provider");
+  return getWindowScope().commandScope();
+}
+
+/** `def`'s instance in `useShimNodeScope(def.name)`. */
+export function useScopedStoreApi<S>(def: ScopedStoreDef<S>): StoreApi<S> {
+  return useShimNodeScope(def.name).store(def);
 }
 
 /** A converted store's hook: reads the nearest node scope, plus the deprecated statics. */

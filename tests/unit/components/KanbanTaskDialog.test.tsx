@@ -10,6 +10,8 @@ import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 type KanbanTaskUpdates = Partial<
   Pick<
@@ -415,7 +417,7 @@ describe("KanbanTaskDialog", () => {
     const ui = useUIStore.getState();
     const panel = useFilesPanelStore.getState();
     useUIStore.setState({ selectedEnvironmentId: "env-pr" });
-    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     function Ticket() {
       const [open, setOpen] = useState(true);
       return (
@@ -430,7 +432,7 @@ describe("KanbanTaskDialog", () => {
       render(<Ticket />);
       fireEvent.click(screen.getByRole("link", { name: "Review PR" }));
       await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
       expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
     } finally {
@@ -444,7 +446,7 @@ describe("KanbanTaskDialog", () => {
     const ui = useUIStore.getState();
     const panel = useFilesPanelStore.getState();
     useUIStore.setState({ selectedEnvironmentId: "env-pr" });
-    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     function Ticket() {
       const [open, setOpen] = useState(true);
       return (
@@ -467,7 +469,7 @@ describe("KanbanTaskDialog", () => {
       render(<Ticket />);
       fireEvent.click(screen.getByRole("button", { name: "https://github.com/o/r/pull/42" }));
       await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
       expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
     } finally {
@@ -481,7 +483,7 @@ describe("KanbanTaskDialog", () => {
     const ui = useUIStore.getState();
     const panel = useFilesPanelStore.getState();
     useUIStore.setState({ selectedEnvironmentId: "env-pr" });
-    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     const onOpenChange = mock(() => {});
     const url = "https://github.com/o/r/pull/42";
     try {
@@ -500,7 +502,7 @@ describe("KanbanTaskDialog", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: url }));
       await waitFor(() => expect(openInBrowserMock).toHaveBeenCalledWith(url));
-      expect(useFilesPanelStore.getState().isOpen).toBe(false);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
       expect((screen.getByLabelText("Ticket text") as HTMLTextAreaElement).value).toBe(
         "Unsaved draft",
       );

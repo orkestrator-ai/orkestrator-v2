@@ -8,9 +8,10 @@ import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { DiffBaseDialog } from "./DiffBaseDialog";
 import { DiffBaseNotice } from "./DiffBaseNotice";
 import { useFilesPanelStore, useUIStore } from "@/stores";
-import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
+import { filesPanelStore, isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { errorText } from "@/components/settings/machines/machine-ui";
 import type { CreateFileTabOptions } from "@/contexts";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,6 +28,7 @@ function resolveLocalFilePath(worktreePath: string, filePath: string): string {
 export function FilesPanel() {
   const activeTab = useFilesPanelStore((state) => state.activeTab);
   const targetBranch = useFilesPanelStore((state) => state.targetBranch);
+  const scope = useShimNodeScope(filesPanelStore.name);
   const [pendingAction, setPendingAction] = useState<PendingFileAction | null>(null);
   const [diffBaseDialogOpen, setDiffBaseDialogOpen] = useState(false);
 
@@ -53,9 +55,11 @@ export function FilesPanel() {
   const openInProjectHome = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {
       if (!projectScopeProjectId) return;
-      void ensureProjectHomeInStore(projectScopeProjectId)
+      void ensureProjectHomeInStore(projectScopeProjectId, scope)
         .then((home) => {
-          useFilesPanelStore
+          if (scope.disposed) return;
+          scope
+            .store(filesPanelStore)
             .getState()
             .requestFileOpen({ environmentId: home.id, filePath, options });
           const ui = useUIStore.getState();
@@ -68,7 +72,7 @@ export function FilesPanel() {
           });
         });
     },
-    [projectScopeProjectId],
+    [projectScopeProjectId, scope],
   );
   const onOpenFile = projectScopeProjectId ? openInProjectHome : undefined;
 

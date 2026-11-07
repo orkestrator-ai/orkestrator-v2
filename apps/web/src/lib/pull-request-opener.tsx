@@ -6,7 +6,13 @@ import {
 } from "@orkestrator/protocol/github-pull-requests";
 import { armPullRequestFallback } from "./pull-request-load-fallback";
 import { openInBrowser } from "@/lib/backend";
-import { projectRootFilesTargetId, useFilesPanelStore } from "@/stores/filesPanelStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  filesPanelStore,
+  projectRootFilesTargetId,
+  useFilesPanelStore,
+} from "@/stores/filesPanelStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -69,16 +75,23 @@ export function currentFilesPanelTargetId(): string | null {
  * or environment the pull request belongs to. Nothing in the main view
  * changes (no selection, board tab or pane tab), so closing the panel returns
  * the user exactly where they were.
+ *
+ * `scope` is the node whose files panel shows it; without one, the command
+ * node's (the deprecated shim, for callers with no scope yet).
  */
 export function openPullRequestInApp(
   ref: GitHubPullRequestRef,
   view?: GitHubPullRequestViewTab,
+  scope?: NodeScope,
 ): boolean {
   if (useRemoteWorkspaceStore.getState().active) return false;
   const targetId = currentFilesPanelTargetId();
   if (!targetId) return false;
   armPullRequestFallback(ref);
-  useFilesPanelStore.getState().openPullRequest(targetId, ref, view);
+  const filesPanel = scope
+    ? scope.store(filesPanelStore).getState()
+    : useFilesPanelStore.getState();
+  filesPanel.openPullRequest(targetId, ref, view);
   return true;
 }
 
@@ -101,6 +114,13 @@ export async function openPullRequestUrl(
   return false;
 }
 
+/** The nearest provider's opener, else `openPullRequestInApp` on the nearest node scope. */
 export function usePullRequestOpener(): PullRequestOpener {
-  return useContext(PullRequestOpenerContext) ?? openPullRequestInApp;
+  const provided = useContext(PullRequestOpenerContext);
+  const scope = useShimNodeScope(filesPanelStore.name);
+  const inScope = useMemo<PullRequestOpener>(
+    () => (ref, view) => openPullRequestInApp(ref, view, scope),
+    [scope],
+  );
+  return provided ?? inScope;
 }

@@ -52,6 +52,8 @@ import {
   reviewerRuntimeSummary,
   reviewerStatusNote,
 } from "./multi-review-steps";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 /**
  * A node of the flow graph. Nodes are tabs controlling the inspector, named
@@ -460,7 +462,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       fireEvent.click(pr);
       // It opens in the right-hand PR pane; the review stays the main view.
       useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
-      useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+      setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
       fireEvent.click(screen.getByRole("button", { name: "View pull request" }));
       await waitFor(() =>
         expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
@@ -469,16 +471,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           number: 42,
         }),
       );
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
       const external = spyOn(backend, "openInBrowser").mockResolvedValue(undefined);
       try {
         for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
-          useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+          setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
           fireEvent.click(screen.getByRole("button", { name: "View pull request" }), modifier);
           await waitFor(() =>
             expect(external).toHaveBeenCalledWith("https://github.com/o/r/pull/42"),
           );
-          expect(useFilesPanelStore.getState().isOpen).toBe(false);
+          expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
           external.mockClear();
         }
         fireEvent.contextMenu(pr);
@@ -486,7 +488,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         await waitFor(() =>
           expect(external).toHaveBeenCalledWith("https://github.com/o/r/pull/42"),
         );
-        expect(useFilesPanelStore.getState().isOpen).toBe(false);
+        expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
       } finally {
         external.mockRestore();
       }
@@ -497,7 +499,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     } finally {
       useEnvironmentStore.setState({ environments });
       useUIStore.setState({ selectedEnvironmentId: null });
-      useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+      setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     }
   });
 

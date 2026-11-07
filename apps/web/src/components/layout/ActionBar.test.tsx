@@ -15,6 +15,7 @@ import * as realContextMenu from "@/components/ui/context-menu";
 import * as realTooltip from "@/components/ui/tooltip";
 import * as realSettings from "@/components/settings";
 import * as realStores from "@/stores";
+import * as realFilesPanelChrome from "@/stores/filesPanelChromeStore";
 import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
@@ -63,6 +64,7 @@ const realContextMenuSnapshot = { ...realContextMenu };
 const realTooltipSnapshot = { ...realTooltip };
 const realSettingsSnapshot = { ...realSettings };
 const realStoresSnapshot = { ...realStores };
+const realFilesPanelChromeSnapshot = { ...realFilesPanelChrome };
 const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
@@ -674,20 +676,10 @@ mock.module("@/stores", () => ({
     },
   ),
   useFilesPanelStore: <T,>(
-    selector?: (state: {
-      isOpen: boolean;
-      togglePanel: () => void;
-      openPanelOnAllFiles: () => void;
-      changes: unknown[];
-    }) => T,
+    selector?: (state: { openPanelOnAllFiles: () => void; changes: unknown[] }) => T,
   ) =>
     selectState(
-      {
-        isOpen: currentFilesPanelOpen,
-        togglePanel: toggleFilesPanelMock,
-        openPanelOnAllFiles: openFilesPanelOnAllFilesMock,
-        changes: currentChanges,
-      },
+      { openPanelOnAllFiles: openFilesPanelOnAllFilesMock, changes: currentChanges },
       selector,
     ),
   useProjectStore: Object.assign(
@@ -830,6 +822,13 @@ mock.module("@/lib/pane-layout-authoritative", () => ({
 
 // The hydrator has its own test file. Snapshot and restore per the Bun mock
 // rules in AGENTS.md so a non-isolated run does not leave it faked.
+mock.module("@/stores/filesPanelChromeStore", () => ({
+  ...realFilesPanelChromeSnapshot,
+  useFilesPanelChromeStore: <T,>(
+    selector?: (state: { isOpen: boolean; togglePanel: () => void }) => T,
+  ) => selectState({ isOpen: currentFilesPanelOpen, togglePanel: toggleFilesPanelMock }, selector),
+}));
+
 mock.module("@/lib/multi-review-persistence", () => ({
   ...realMultiReviewPersistenceSnapshot,
   findActiveMultiReviewWorkflow: findActiveMultiReviewWorkflowMock,
@@ -859,6 +858,7 @@ afterAll(() => {
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
   mock.module("@/components/settings", () => realSettingsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
+  mock.module("@/stores/filesPanelChromeStore", () => realFilesPanelChromeSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);

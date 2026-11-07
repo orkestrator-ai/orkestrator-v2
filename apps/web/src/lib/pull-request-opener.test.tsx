@@ -14,6 +14,8 @@ import {
   PullRequestOpenerProvider,
   usePullRequestOpener,
 } from "./pull-request-opener";
+import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 const ref = { owner: "acme", repo: "repo", number: 7 };
 const environment: Environment = {
@@ -41,7 +43,7 @@ beforeEach(() => {
   });
   useEnvironmentStore.setState({ environments: [] });
   useProjectStore.setState({ projects: [project] });
-  useFilesPanelStore.setState({ pullRequestTabs: {}, isOpen: false, activeTab: "changes" });
+  setFilesPanelTestState({ pullRequestTabs: {}, isOpen: false, activeTab: "changes" });
   useProjectPullRequestsStore.setState({ projects: {} });
   useRemoteWorkspaceStore.setState({ active: null });
 });
@@ -61,14 +63,14 @@ function mainView() {
 test("returns false for browser fallback without a selected host", () => {
   expect(currentFilesPanelTargetId()).toBeNull();
   expect(openPullRequestInApp(ref)).toBe(false);
-  expect(useFilesPanelStore.getState().isOpen).toBe(false);
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
 });
 
 test("a project page opens the pull request in the project root's pane, not its Pull requests tab", () => {
   useUIStore.setState({ selectedProjectId: "project", projectBoardTab: "coordinator" as never });
   const before = mainView();
   expect(openPullRequestInApp(ref, "timeline")).toBe(true);
-  const panel = useFilesPanelStore.getState();
+  const panel = filesPanelTestState();
   expect(panel.isOpen).toBe(true);
   expect(panel.activeTab).toBe("pull-request:acme/repo#7");
   expect(panel.pullRequestTabs["project-root:project"]?.[0]?.view).toBe("timeline");
@@ -88,7 +90,7 @@ test.each([false, true])(
     const before = mainView();
     expect(openPullRequestInApp(ref, "code")).toBe(true);
     expect(useFilesPanelStore.getState().pullRequestTabs.env?.[0]?.view).toBe("code");
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
     expect(mainView()).toEqual(before);
   },
 );
@@ -103,7 +105,7 @@ test("project home on a board page opens in the pane and keeps the board tab", (
   const before = mainView();
   expect(openPullRequestInApp(ref)).toBe(true);
   expect(useFilesPanelStore.getState().pullRequestTabs.env).toHaveLength(1);
-  expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   expect(mainView()).toEqual(before);
 });
 
@@ -123,7 +125,7 @@ test("another machine's workspace has its own pane, so the window falls back", (
     active: { nodeId: "node-2", projectId: null, environmentId: null },
   });
   expect(openPullRequestInApp(ref)).toBe(false);
-  expect(useFilesPanelStore.getState().isOpen).toBe(false);
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
 });
 
 test("subtree providers route links to their host and acknowledge handling", () => {

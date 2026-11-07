@@ -1,10 +1,33 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { gitHubPullRequestKey } from "@orkestrator/protocol/github-pull-requests";
-import { useProjectPullRequestsStore as store } from "./projectPullRequestsStore";
+import type { StoreApi } from "zustand/vanilla";
+import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import {
+  mergePersistedProjectPullRequests,
+  projectPullRequestsStore,
+  type ProjectPullRequestsState,
+} from "./projectPullRequestsStore";
 const ref = (number: number) => ({ owner: "acme", repo: "repo", number });
 const key = (number: number) => gitHubPullRequestKey(ref(number));
+let windowScope: WindowScope;
+let command: NodeScope;
+let store: StoreApi<ProjectPullRequestsState>;
 const tabs = (id = "one") => store.getState().projects[id]?.tabs ?? [];
-beforeEach(() => store.setState({ projects: {} }));
+const merge = mergePersistedProjectPullRequests;
+beforeEach(() => {
+  localStorage.clear();
+  windowScope = new WindowScope();
+  command = windowScope.open({ role: "command", client: new FakeNodeClient() });
+  store = command.store(projectPullRequestsStore);
+});
+afterEach(() => {
+  windowScope.dispose();
+  localStorage.clear();
+});
 
 test("opening and reopening deduplicates refs and reapplies the requested view", () => {
   store.getState().openPullRequest("one", ref(1), "code");
@@ -48,7 +71,6 @@ test("tab and target bounds evict oldest entries", () => {
 });
 
 test("persisted tabs reject malformed refs, recompute keys and reset transient requests", () => {
-  const merge = store.persist.getOptions().merge!;
   const values = [
     null,
     { ref: ref(0) },
@@ -87,7 +109,7 @@ test("selection accepts only open tabs and null shows the project list", () => {
   expect(store.getState().projects.one?.activeKey).toBe(key(1));
   store.getState().setActive("one", null);
   expect(store.getState().projects.one?.activeKey).toBeNull();
-  const restored = store.persist.getOptions().merge!(
+  const restored = merge(
     { projects: { one: { tabs: [{ ref: ref(1) }], activeKey: "missing" } } },
     store.getState(),
   );
@@ -99,7 +121,6 @@ test("persisted state enforces target and tab bounds and ignores invalid contain
   const entries = Object.fromEntries(
     Array.from({ length: 55 }, (_, i) => [`saved-${i}`, { tabs: values, activeKey: key(1) }]),
   );
-  const merge = store.persist.getOptions().merge!;
   const restored = merge({ projects: entries }, store.getState());
   expect(Object.keys(restored.projects)).toHaveLength(50);
   expect(restored.projects["saved-0"]).toBeUndefined();
@@ -107,4 +128,25 @@ test("persisted state enforces target and tab bounds and ignores invalid contain
   for (const invalid of [null, [], true, "invalid"]) {
     expect(merge({ projects: invalid }, store.getState()).projects).toEqual({});
   }
+});
+
+test("each node keeps its own tabs under its own key", () => {
+  const leaf = windowScope.open({
+    role: "leaf",
+    client: new FakeNodeClient({ nodeId: "bk_leaf-node" as BackendId }),
+  });
+  store.getState().openPullRequest("project", ref(1));
+  leaf.store(projectPullRequestsStore).getState().openPullRequest("project", ref(2));
+  expect(tabs("project").map((tab) => tab.ref.number)).toEqual([1]);
+  expect(
+    leaf
+      .store(projectPullRequestsStore)
+      .getState()
+      .projects.project?.tabs.map((tab) => tab.ref.number),
+  ).toEqual([2]);
+  const commandKey = desktopConnectionStorageKey("project-pull-requests", command);
+  const leafKey = desktopConnectionStorageKey("project-pull-requests", leaf);
+  expect(leafKey).not.toBe(commandKey);
+  expect(localStorage.getItem(commandKey)).toContain('"number":1');
+  expect(localStorage.getItem(leafKey)).toContain('"number":2');
 });

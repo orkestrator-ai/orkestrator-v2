@@ -5,6 +5,7 @@ import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } 
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { Environment, Project } from "@/types";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
 
 const originalBackend = { ...realBackend };
 const deleteLocalFile = mock<(id: string, path: string) => Promise<string>>(
@@ -45,7 +46,7 @@ beforeEach(() => {
   useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
   useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
   useEnvironmentStore.setState({ environments: [] });
-  useFilesPanelStore.setState({
+  setFilesPanelTestState({
     isOpen: false,
     activeTab: "all-files",
     pendingFileOpens: [],
@@ -101,7 +102,7 @@ test("two board file opens wait for home creation and retain their order", async
 test("shows delayed announcements and a container's remote freshness without hiding the lists", async () => {
   const { useWorktreeSnapshotStore } = await import("@/stores/worktreeSnapshotStore");
   useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
-  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes" });
+  setFilesPanelTestState({ isOpen: false, activeTab: "changes" });
   useWorktreeSnapshotStore.setState({
     syncStatus: "current",
     entries: new Map([

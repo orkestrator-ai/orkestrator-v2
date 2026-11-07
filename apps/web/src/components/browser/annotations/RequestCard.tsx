@@ -23,7 +23,9 @@ import { openConversationAtMessage } from "@/lib/web-annotations/conversation-na
 import { openConversationTab, openWebAnnotationRequest } from "@/lib/web-annotations/navigation";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { cn } from "@/lib/utils";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
 import { destinationName } from "./DestinationPicker";
 import { lastActivity } from "./format";
 import { useAnnotationPanel } from "./panel-context";
@@ -114,6 +116,7 @@ export function RequestCard({
   // The annotation's environment is on the node of the scope this card renders in.
   const scopeNodeId = useScopesWithCommandFallback().scope.nodeId;
   const [busy, setBusy] = useState<string | null>(null);
+  const filesPanel = useScopedStoreApi(filesPanelStore);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [response, setResponse] = useState<{
@@ -625,9 +628,8 @@ export function RequestCard({
               className="h-6 px-2 text-[11px]"
               title="Shows every change in this workspace, not only this request's"
               onClick={() => {
-                const files = useFilesPanelStore.getState();
-                files.setActiveTab("changes");
-                files.openPanel();
+                filesPanel.getState().setActiveTab("changes");
+                useFilesPanelChromeStore.getState().openPanel();
               }}
             >
               Open changes (current workspace diff)

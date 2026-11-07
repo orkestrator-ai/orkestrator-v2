@@ -9,7 +9,6 @@ import {
 import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createFakeCaptureApi,
@@ -22,6 +21,7 @@ import {
   navigateToPageMock,
   seedBrowserLayout,
 } from "@/test/web-annotation-harness";
+import { filesPanelTestState } from "@/test/files-panel-state";
 
 let backend: FakeWebAnnotationBackend;
 let bus: ReturnType<typeof installFakeOrkestrator>;
@@ -165,7 +165,7 @@ describe("request cards", () => {
     fireEvent.click(
       within(article).getByRole("button", { name: "Open changes (current workspace diff)" }),
     );
-    expect(useFilesPanelStore.getState()).toMatchObject({ isOpen: true, activeTab: "changes" });
+    expect(filesPanelTestState()).toMatchObject({ isOpen: true, activeTab: "changes" });
 
     fireEvent.click(within(article).getByRole("button", { name: "Accept and resolve" }));
     await waitFor(() => expect(backend.annotations.get("annotation-1")!.state).toBe("resolved"));

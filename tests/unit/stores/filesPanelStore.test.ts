@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { useFilesPanelStore, filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import {
+  FILES_PANEL_DEFAULT_WIDTH_PX,
+  legacyFilesPanelWidth,
+  useFilesPanelChromeStore,
+} from "../../../apps/web/src/stores/filesPanelChromeStore";
+import { WindowScope } from "../../../apps/web/src/lib/node-scope/window-scope";
+import { FakeNodeClient } from "../../../apps/web/src/test/render-in-node-scope";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 
 const change: GitFileChange = {
@@ -21,9 +28,8 @@ const tree: FileNode[] = [
 ];
 
 function resetStore() {
+  useFilesPanelChromeStore.setState({ isOpen: false, panelWidth: FILES_PANEL_DEFAULT_WIDTH_PX });
   useFilesPanelStore.setState({
-    isOpen: false,
-    panelWidth: 320,
     activeTab: "changes",
     expandedFolders: [],
     changes: [],
@@ -39,33 +45,33 @@ describe("filesPanelStore", () => {
     resetStore();
   });
 
-  test("toggles and explicitly opens or closes the panel", () => {
-    const store = useFilesPanelStore.getState();
+  test("toggles and explicitly opens or closes the window's panel", () => {
+    const chrome = useFilesPanelChromeStore.getState();
 
-    store.togglePanel();
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    chrome.togglePanel();
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
 
-    useFilesPanelStore.getState().closePanel();
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    useFilesPanelChromeStore.getState().closePanel();
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
 
-    useFilesPanelStore.getState().openPanel();
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    useFilesPanelChromeStore.getState().openPanel();
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   });
 
   test("updates tab, panel width, loading flags, target branch, and loaded data", () => {
     const store = useFilesPanelStore.getState();
 
     store.setActiveTab("all-files");
-    store.setPanelWidth(480);
+    useFilesPanelChromeStore.getState().setPanelWidth(480);
     store.setChanges([change]);
     store.setFileTree(tree);
     store.setLoadingChanges(true);
     store.setLoadingTree(true);
     store.setTargetBranch("release");
 
+    expect(useFilesPanelChromeStore.getState().panelWidth).toBe(480);
     expect(useFilesPanelStore.getState()).toMatchObject({
       activeTab: "all-files",
-      panelWidth: 480,
       changes: [change],
       fileTree: tree,
       isLoadingChanges: true,
@@ -102,7 +108,7 @@ describe("filesPanelStore", () => {
     expect(useFilesPanelStore.getState().expandedFolders).toEqual(["a", "c"]);
   });
 
-  test("ignores legacy persisted collapsedFolders so folders default to collapsed", async () => {
+  test("ignores legacy persisted collapsedFolders so folders default to collapsed", () => {
     // Simulate an existing user whose persisted payload predates the
     // expanded-by-exception model (it only recorded collapsed folders).
     localStorage.setItem(
@@ -112,16 +118,19 @@ describe("filesPanelStore", () => {
         version: 0,
       }),
     );
-
+    const windowScope = new WindowScope();
     try {
-      await useFilesPanelStore.persist.rehydrate();
-      const state = useFilesPanelStore.getState();
+      const state = windowScope
+        .open({ role: "command", client: new FakeNodeClient() })
+        .store(filesPanelStore)
+        .getState();
 
-      // Persisted width still restores.
-      expect(state.panelWidth).toBe(400);
+      // The width there is now the window's, read while it has none of its own.
+      expect(legacyFilesPanelWidth()).toBe(400);
       // No expandedFolders were persisted, so everything starts collapsed.
       expect(state.expandedFolders).toEqual([]);
     } finally {
+      windowScope.dispose();
       localStorage.removeItem("files-panel-storage");
     }
   });

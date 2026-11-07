@@ -12,6 +12,7 @@ import {
   environmentProjectionFixture,
   resetChangeProjectionStore,
 } from "@/components/files-panel/change-projection-test-fixture";
+import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
 
 const realBackendSnapshot = { ...realBackend };
 const copyExternalFileMock = mock(
@@ -111,7 +112,7 @@ beforeEach(() => {
       } as Environment,
     ],
   });
-  useFilesPanelStore.setState({
+  setFilesPanelTestState({
     isOpen: false,
     activeTab: "all-files",
     changes: [],
@@ -275,7 +276,7 @@ describe("useFilesPanel on the project root", () => {
   });
 
   test("reads the project's own checkout when no environment is selected", async () => {
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     const { result } = renderHook(() => useFilesPanel());
     await act(async () => {
       await Promise.resolve();
@@ -387,9 +388,9 @@ describe("useFilesPanel on the project root", () => {
   });
 
   test("opening from the project board starts on all files", () => {
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes" });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes" });
     useFilesPanelStore.getState().openPanelOnAllFiles();
-    expect(useFilesPanelStore.getState()).toMatchObject({ isOpen: true, activeTab: "all-files" });
+    expect(filesPanelTestState()).toMatchObject({ isOpen: true, activeTab: "all-files" });
   });
 });
 
@@ -419,7 +420,7 @@ describe("useFilesPanel truncated folders", () => {
       digest: "bounded-tree",
       value: boundedTree as never[],
     }));
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "all-files",
       expandedFolders: ["skills", "skills/release"],
@@ -604,7 +605,7 @@ describe("useFilesPanel truncated folders", () => {
   });
 
   test("a closed panel reads no folders", async () => {
-    useFilesPanelStore.setState({ isOpen: false });
+    setFilesPanelTestState({ isOpen: false });
     renderHook(() => useFilesPanel());
     await settle();
     expect(getLocalFileSubtreeMock).not.toHaveBeenCalled();
@@ -618,7 +619,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
   });
 
   async function openPanel(activeTab: "all-files" | "changes" = "all-files") {
-    useFilesPanelStore.setState({ isOpen: true, activeTab });
+    setFilesPanelTestState({ isOpen: true, activeTab });
     const view = renderHook(() => useFilesPanel());
     // The open read stays a direct, immediate load.
     await act(async () => {
@@ -767,7 +768,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 
   test("a closed panel keeps no periodic demand", async () => {
     const { clock } = installFakeReadCoordinator();
-    useFilesPanelStore.setState({ isOpen: false });
+    setFilesPanelTestState({ isOpen: false });
     renderHook(() => useFilesPanel());
     await act(() => clock.advance(30_000));
     expect(snapshotCalls()).toEqual({ tree: 0, changes: 0 });
@@ -875,7 +876,7 @@ test("the board follows a changed checkout and stops reading or mutating when it
   useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
   useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
   useEnvironmentStore.setState({ environments: [projectHome] });
-  useFilesPanelStore.setState({ isOpen: true });
+  setFilesPanelTestState({ isOpen: true });
   const { result } = renderHook(() => useFilesPanel());
   await act(async () => {
     await Promise.resolve();

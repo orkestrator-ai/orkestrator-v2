@@ -3,7 +3,8 @@ import { toast } from "sonner";
 import { errorText } from "@/components/settings/machines/machine-ui";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
-import { projectRootFilesTargetId, useFilesPanelStore } from "@/stores/filesPanelStore";
+import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 
 const CLEANUP_IN_PROGRESS_MESSAGE =
@@ -41,6 +42,8 @@ export function useProjectHomeActivation() {
         (environment) => environment.id === selectedEnvironmentId && environment.projectHome,
       )?.id ?? null,
   );
+  // The selected project's node: its home and files panel tabs are that node's.
+  const scope = useShimNodeScope(filesPanelStore.name);
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const reconciled = useRef<string | null>(null);
@@ -90,7 +93,8 @@ export function useProjectHomeActivation() {
     );
     if (!selectedEnvironmentId && known) {
       reconciled.current = null;
-      useFilesPanelStore
+      scope
+        .store(filesPanelStore)
         .getState()
         .movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), known.id);
       useUIStore.getState().selectEnvironment(known.id);
@@ -98,11 +102,12 @@ export function useProjectHomeActivation() {
     }
     if (reconciled.current === key) return;
     let cancelled = false;
-    void ensureProjectHomeInStore(selectedProjectId)
+    void ensureProjectHomeInStore(selectedProjectId, scope)
       .then((home) => {
         const ui = useUIStore.getState();
         if (
           cancelled ||
+          scope.disposed ||
           ui.selectedProjectId !== selectedProjectId ||
           isProjectHomeDeletionInProgress(selectedProjectId)
         )
@@ -111,7 +116,8 @@ export function useProjectHomeActivation() {
         setFailure(null);
         if (!ui.selectedEnvironmentId || ui.selectedEnvironmentId === selectedHomeId) {
           if (!ui.selectedEnvironmentId) {
-            useFilesPanelStore
+            scope
+              .store(filesPanelStore)
               .getState()
               .movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), home.id);
           }
@@ -141,6 +147,7 @@ export function useProjectHomeActivation() {
     homeDeleting,
     key,
     retry,
+    scope,
   ]);
 
   return { error: failure?.key === key ? failure.message : null, retry };

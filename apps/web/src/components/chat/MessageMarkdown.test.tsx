@@ -6,7 +6,7 @@ import type { PluggableList } from "unified";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
-import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
+import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
 import type { Environment, Project } from "@/types";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
@@ -18,6 +18,7 @@ import {
   MessageMarkdown,
   markdownRenderSource,
 } from "./MessageMarkdown";
+import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -387,7 +388,7 @@ describe("MessageMarkdown pull request links", () => {
     cleanup();
     useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
     useEnvironmentStore.setState({ environments: [] });
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
   });
 
   test("opens a pull request link with the surrounding opener on its matching view", () => {
@@ -435,7 +436,7 @@ describe("MessageMarkdown pull request links", () => {
 
     fireEvent.click(screen.getByRole("link", { name: "PR" }));
 
-    const panel = useFilesPanelStore.getState();
+    const panel = filesPanelTestState();
     expect(panel.isOpen).toBe(true);
     expect(panel.activeTab).toBe("pull-request:acme/widgets#42");
     expect(panel.pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
@@ -461,7 +462,7 @@ describe("MessageMarkdown pull request links", () => {
 
       fireEvent.click(screen.getByRole("link", { name: "PR" }));
 
-      const panel = useFilesPanelStore.getState();
+      const panel = filesPanelTestState();
       expect(panel.isOpen).toBe(true);
       expect(panel.activeTab).toBe("pull-request:acme/widgets#42");
       expect(panel.pullRequestTabs["project-root:project-1"]?.map((tab) => tab.ref)).toEqual([

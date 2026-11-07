@@ -6,6 +6,11 @@ import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
 import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { createMockEnvironment } from "../utils/testFactories";
+import {
+  filesPanelTestState,
+  setFilesPanelTestState,
+} from "../../../apps/web/src/test/files-panel-state";
+import { useFilesPanelChromeStore } from "../../../apps/web/src/stores/filesPanelChromeStore";
 
 // Mock backend module BEFORE importing the hook
 const mockGetEnvironmentPrUrl = mock<(environmentId: string) => Promise<string | null>>(() =>
@@ -65,7 +70,7 @@ describe("usePullRequest", () => {
     });
 
     usePrMonitorStore.setState({ states: new Map() });
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
     // The main view shows env-1, so its files panel is the right-hand PR pane.
     useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
 
@@ -208,7 +213,7 @@ describe("usePullRequest", () => {
     });
 
     expect(mockOpenInBrowser).not.toHaveBeenCalled();
-    const panel = useFilesPanelStore.getState();
+    const panel = filesPanelTestState();
     expect(panel.isOpen).toBe(true);
     expect(panel.activeTab).toBe("pull-request:test/repo#123");
   });
@@ -229,7 +234,7 @@ describe("usePullRequest", () => {
     });
 
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/test/repo/pull/123");
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("viewPR falls back to the browser for a URL the viewer cannot show", async () => {

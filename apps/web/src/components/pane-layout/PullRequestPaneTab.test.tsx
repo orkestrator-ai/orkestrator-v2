@@ -10,13 +10,13 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "@/components/pull-requests/pull-request-test-fixtures";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useUIStore } from "@/stores/uiStore";
 import { PullRequestPaneTab } from "./PullRequestPaneTab";
+import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
 
 beforeEach(() => {
   resetPullRequestsStore();
-  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+  setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
   useUIStore.setState({ selectedProjectId: "project", selectedEnvironmentId: "env" });
   installBackend({
     get_github_pull_request: () =>
@@ -58,7 +58,7 @@ test("a pull request linked from a main-area pull request opens in the right-han
 
   fireEvent.click(await screen.findByRole("link", { name: "the API change" }));
 
-  const panel = useFilesPanelStore.getState();
+  const panel = filesPanelTestState();
   expect(panel.isOpen).toBe(true);
   expect(panel.activeTab).toBe("pull-request:acme/api#7");
   expect(panel.pullRequestTabs.env?.map((tab) => tab.ref)).toEqual([

@@ -23,6 +23,7 @@ import {
   useFilesPanelStore,
   useMultiReviewStore,
 } from "@/stores";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent, Environment } from "@/types";
 import type {
@@ -148,8 +149,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const getProjectById = useProjectStore((state) => state.getProjectById);
   const config = useConfigStore((state) => state.config);
   const { createTab, selectTab, tabCount } = useTerminalContext();
-  const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
-  const toggleFilesPanelStore = useFilesPanelStore((state) => state.togglePanel);
+  const filesPanelOpen = useFilesPanelChromeStore((state) => state.isOpen);
+  const toggleFilesPanelStore = useFilesPanelChromeStore((state) => state.togglePanel);
   const openFilesPanelOnAllFiles = useFilesPanelStore((state) => state.openPanelOnAllFiles);
   const changes = useFilesPanelStore((state) => state.changes);
   // The Files button's dot follows the environment's backend measurement; the

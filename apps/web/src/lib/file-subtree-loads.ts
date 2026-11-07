@@ -1,35 +1,57 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { ConditionalSnapshot, FileSubtree } from "@/lib/backend";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedSlot } from "@/lib/node-scope-slots";
+import { filesPanelStore } from "@/stores/filesPanelStore";
 
 const log = createLogger("web.files");
 
-// Shared by panel mounts, including target switches. A refresh joins one queued
-// follow-up, never the observation that was already running at its boundary.
-const pending = new Map<symbol, { promise: Promise<boolean>; followup?: Promise<void> }>();
 const MAX_CONCURRENT_READS = 4;
-let running = 0;
-const waiting: Array<() => void> = [];
 
-async function admitted<T>(read: () => Promise<T>): Promise<T> {
-  if (running >= MAX_CONCURRENT_READS) await new Promise<void>((resolve) => waiting.push(resolve));
-  else running += 1;
+/**
+ * One node's directory reads (plan item 3007, report Appendix B): shared by
+ * that node's panel mounts, including target switches, and bounded to four at
+ * once per node. A refresh joins one queued follow-up, never the observation
+ * that was already running at its boundary.
+ */
+interface SubtreeLoads {
+  pending: Map<symbol, { promise: Promise<boolean>; followup?: Promise<void> }>;
+  running: number;
+  waiting: Array<() => void>;
+}
+
+const subtreeLoads = defineScopedSlot<SubtreeLoads>("file-subtree-loads", () => ({
+  pending: new Map(),
+  running: 0,
+  waiting: [],
+}));
+
+async function admitted<T>(loads: SubtreeLoads, read: () => Promise<T>): Promise<T> {
+  if (loads.running >= MAX_CONCURRENT_READS) {
+    await new Promise<void>((resolve) => loads.waiting.push(resolve));
+  } else loads.running += 1;
   try {
     return await read();
   } finally {
-    const next = waiting.shift();
+    const next = loads.waiting.shift();
     if (next) next();
-    else running -= 1;
+    else loads.running -= 1;
   }
 }
 
+/** Reads `directory` of the target `key` into `scope`'s files panel store. */
 export async function loadFileSubtree(
+  scope: NodeScope,
   key: string,
   directory: string,
   reload: boolean,
   read: (knownDigest: string | undefined) => Promise<ConditionalSnapshot<FileSubtree> | null>,
 ): Promise<void> {
-  const state = useFilesPanelStore.getState();
+  // Held across awaits: the scope may be disposed while a read is in flight.
+  const store = scope.store(filesPanelStore);
+  const loads = subtreeLoads(scope);
+  const { pending } = loads;
+  const state = store.getState();
   if (state.fileSubtreeKey !== key || !state.expandedFolders.includes(directory)) return;
   const current = state.folderLoadTokens.get(directory);
   const previous = current ? pending.get(current) : undefined;
@@ -39,15 +61,15 @@ export async function loadFileSubtree(
       return;
     }
     previous.followup ??= previous.promise.then(async (accepted) => {
-      if (accepted) await loadFileSubtree(key, directory, true, read);
+      if (accepted && !scope.disposed) await loadFileSubtree(scope, key, directory, true, read);
     });
     return previous.followup;
   }
   const token = state.beginFolderLoad(key, directory, reload);
   if (!token) return;
-  const promise = admitted(async () => {
+  const promise = admitted(loads, async () => {
     // Queued work may have been collapsed or superseded before admission.
-    const admittedState = useFilesPanelStore.getState();
+    const admittedState = store.getState();
     if (admittedState.folderLoadTokens.get(directory) !== token) return false;
     // Only a directory still held can be answered "unchanged".
     const knownDigest = Object.hasOwn(admittedState.fileSubtrees, directory)
@@ -59,7 +81,7 @@ export async function loadFileSubtree(
     } catch (err) {
       log.error("folder.load-failed", { error: formatLogError(err) });
     }
-    const { finishFolderLoad } = useFilesPanelStore.getState();
+    const { finishFolderLoad } = store.getState();
     return snapshot?.unchanged
       ? finishFolderLoad(key, directory, token, "unchanged")
       : finishFolderLoad(key, directory, token, snapshot?.value ?? null, snapshot?.digest);

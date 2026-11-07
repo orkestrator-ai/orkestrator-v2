@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
 import * as realStores from "@/stores";
+import * as realFilesPanelChrome from "@/stores/filesPanelChromeStore";
 import * as realHooks from "@/hooks";
 import * as realNativeWindow from "@/lib/native/window";
 import * as realActionBar from "./ActionBar";
@@ -54,6 +55,7 @@ const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
 const realFilesPanelComponentsSnapshot = { ...realFilesPanelComponents };
 const realStoresSnapshot = { ...realStores };
+const realFilesPanelChromeSnapshot = { ...realFilesPanelChrome };
 const realHooksSnapshot = { ...realHooks };
 const realNativeWindowSnapshot = { ...realNativeWindow };
 const realActionBarSnapshot = { ...realActionBar };
@@ -162,8 +164,8 @@ mock.module("@/hooks", () => ({
 
 mock.module("@/stores", () => ({
   ...realStoresSnapshot,
-  useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean; activeTab: string }) => T) =>
-    selectState({ isOpen: filesPanelOpen, activeTab: "changes" }, selector),
+  useFilesPanelStore: <T,>(selector?: (state: { activeTab: string }) => T) =>
+    selectState({ activeTab: "changes" }, selector),
   useUIStore: Object.assign(
     <T,>(selector?: (state: ReturnType<typeof uiStore.getState>) => T) =>
       uiStore((state) =>
@@ -190,6 +192,12 @@ mock.module("@/stores", () => ({
   useConfigStore: realStoresSnapshot.useConfigStore,
 }));
 
+mock.module("@/stores/filesPanelChromeStore", () => ({
+  ...realFilesPanelChromeSnapshot,
+  useFilesPanelChromeStore: <T,>(selector?: (state: { isOpen: boolean }) => T) =>
+    selectState({ isOpen: filesPanelOpen }, selector),
+}));
+
 mock.module("@/lib/native/window", () => ({
   getCurrentWindow: () => ({ startDragging: startDraggingMock }),
 }));
@@ -200,6 +208,7 @@ afterAll(() => {
   mock.module("@/components/ui/resizable", () => realResizableSnapshot);
   mock.module("@/components/files-panel", () => realFilesPanelComponentsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
+  mock.module("@/stores/filesPanelChromeStore", () => realFilesPanelChromeSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/lib/native/window", () => realNativeWindowSnapshot);
   mock.module("./ActionBar", () => realActionBarSnapshot);

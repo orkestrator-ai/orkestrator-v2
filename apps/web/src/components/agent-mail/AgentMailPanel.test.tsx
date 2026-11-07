@@ -16,6 +16,8 @@ import {
   mockToastError as toastError,
   mockToastInfo as toastInfo,
 } from "../../../../../tests/mocks/sonner";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 const AGENT_1 = "env-1\0tab-1";
 const AGENT_2 = "env-2\0tab-2";
@@ -649,7 +651,7 @@ describe("pull request links in mail", () => {
 
   test("open in the right-hand PR pane and close the mail sheet that covers it", async () => {
     useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
     try {
       fireEvent.click(await openMailWithPullRequestLink());
       expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
@@ -657,12 +659,12 @@ describe("pull request links in mail", () => {
         repo: "widget",
         number: 42,
       });
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
       expect(useAgentMailStore.getState().panel).toBeNull();
       expect(openInBrowser).not.toHaveBeenCalled();
     } finally {
       useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
-      useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+      setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     }
   });
 

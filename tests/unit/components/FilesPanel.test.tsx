@@ -19,6 +19,8 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
 } from "react";
+import { setFilesPanelTestState } from "../../../apps/web/src/test/files-panel-state";
+import { useFilesPanelChromeStore } from "../../../apps/web/src/stores/filesPanelChromeStore";
 
 const realHooksSnapshot = { ...realHooks };
 const realContextMenuSnapshot = { ...realContextMenu };
@@ -192,7 +194,7 @@ describe("Files panel components", () => {
     mockIsLocalEnvironment = false;
     mockWorktreePath = null;
     invokeMock.mockClear();
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: false,
       activeTab: "changes",
       expandedFolders: [],
@@ -410,7 +412,7 @@ describe("Files panel components", () => {
   });
 
   test("FilesPanelHeader switches tabs, refreshes, and closes the panel", () => {
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       isLoadingChanges: false,
@@ -427,7 +429,7 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(refreshMock).toHaveBeenCalledTimes(1);
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("view components render loading and empty states", () => {
@@ -467,7 +469,7 @@ describe("Files panel components", () => {
   test("file views open regular and diff tabs and close on mobile", async () => {
     const createFileTab = mock((_filePath: string, _options?: CreateFileTabOptions) => {});
     mockIsMobile = true;
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "all-files",
       expandedFolders: ["src"],
@@ -485,9 +487,9 @@ describe("Files panel components", () => {
     await waitFor(() => expect(screen.getByText("App.tsx")).toBeTruthy());
     fireEvent.click(screen.getByText("App.tsx"));
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
 
-    act(() => useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" }));
+    act(() => setFilesPanelTestState({ isOpen: true, activeTab: "changes" }));
     rerender(
       <TerminalProvider>
         <FileViewHarness createFileTab={createFileTab}>
@@ -497,7 +499,7 @@ describe("Files panel components", () => {
     );
     fireEvent.click(screen.getByTitle(change.path));
     expect(createFileTab).toHaveBeenCalledWith(change.path, { isDiff: true, gitStatus: "M" });
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("FileActionDialog describes and dispatches revert and delete actions", () => {

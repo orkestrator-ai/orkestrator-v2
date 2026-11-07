@@ -17,6 +17,7 @@ is the worked example (plan item 3001).
 | `scope.store(def)` | `NodeScope` | The scope's `StoreApi<S>` instance, created on first use and dropped when the scope is disposed. Imperative code goes through this. |
 | `useScopedStore(def, selector)` | `lib/node-scope/scoped-store.ts` | The strict hook. It reads the nearest `NodeScopeProvider`, and it throws outside one in development and tests. |
 | `scopedStoreHook(def)` | `lib/node-scope/scoped-store-shim.ts` | The migration hook. It is called like the old zustand hook, reads the nearest node scope, and falls back to the command scope outside a provider. It keeps `getState`, `setState`, `subscribe` and `getInitialState` as `@deprecated` statics on the **command scope's** instance. |
+| `useShimNodeScope(name)`, `useScopedStoreApi(def)` | `lib/node-scope/scoped-store-shim.ts` | The nearest node scope (or `def`'s instance in it) for imperative code in a component or hook, falling back to the command scope outside a provider and noting a shim use, as the hook does. For readers whose tests still render without a provider (plan item 3007). |
 | `noteShimUse(store, via)` | `lib/node-scope/scoped-store-shim.ts` | Called by every shim use: each static, and the hook when it falls back. It does nothing until plan item 4004 installs the runtime guard (`setShimUseObserver`). |
 | `scoped-store-shim` guard | `tests/source-guards/scoped-store-shim.ts` | Counts static calls on a converted hook, per store and per file. Its baseline only falls. |
 | `createXApi(client)` | every `lib/backend/<x>.ts` | That file's command functions on `client`'s node (plan item 3002). `client` is anything with `invokeRaw` (a `NodeClient`). The file's named exports are `createXApi(commandBackendClient)`: the command-scope shim. |
@@ -66,6 +67,16 @@ steps in one change.
      belongs in a scoped service (`defineScopedService`).
    - Module state next to the store (`let cache = …`) belongs in the store's
      state or in a scoped slot, not at module level.
+   - A persisted store wraps its creator in `persist` and keys it by its
+     node: `name: nodeStorageKey("foo-storage", scope)` (`lib/persistence-keys.ts`;
+     a `NodeScope` is a `StorageNode`). `persist` hydrates synchronously from
+     `localStorage` when the scope first creates the store. Export the
+     `merge` function, so tests check it without the `persist` API, which the
+     def's `StateCreator<S>` type does not carry
+     (`filesPanelStore`, `projectPullRequestsStore`).
+   - A store with window state too (open state, widths) splits it into an
+     ordinary window store (`filesPanelChromeStore`, `windowStorageKey`) that
+     every node shares, and the scoped part.
 
 2. **Keep the barrel.** If `@/stores` (`apps/web/src/stores/index.ts`)
    re-exports the hook, export the def beside it:
@@ -94,6 +105,7 @@ steps in one change.
    | Where the call is | Write instead |
    | --- | --- |
    | A component or hook under a provider (anything `App` renders) | `const scope = useNodeScope();` then `scope.store(fooStore).getState()` in the callback. Add `scope` to the callback's dependencies. |
+   | The same, while the reader's tests still render without a provider | `const foo = useScopedStoreApi(fooStore);` (or `useShimNodeScope(fooStore.name)` for a scope), then `foo.getState()`. Switch to `useNodeScope()` when the tests move to `renderInNodeScope`. |
    | Plain code a component calls | Add a `scope: NodeScope` parameter and pass `useNodeScope()` from the caller. |
    | Plain code with no caller that has a scope yet (a module-level listener, a boot path) | Leave it. It stays in the baseline until its own item threads a scope through. |
    | Inside the store's own creator | Use the creator's `get`/`set`, not the hook's statics. |

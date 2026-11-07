@@ -20,12 +20,13 @@ import { onAppShortcut } from "@/lib/app-shortcuts";
 import { frameEnvelope } from "@/lib/federation/workspace-realm";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const INITIAL_UI = useUIStore.getState();
@@ -85,7 +86,7 @@ afterEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIStore.setState(INITIAL_UI, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
-  useFilesPanelStore.setState({ isOpen: false });
+  setFilesPanelTestState({ isOpen: false });
   window.location.reload = originalReload;
   document.body.innerHTML = "";
 });
@@ -237,7 +238,7 @@ describe("desktop: another machine's workspace in the central region", () => {
 
   test("the files panel is one state across this window and every open realm", async () => {
     const fake = install(true);
-    useFilesPanelStore.setState({ isOpen: true });
+    setFilesPanelTestState({ isOpen: true });
     renderRegion(anchorElement());
     act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
     await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
@@ -253,7 +254,7 @@ describe("desktop: another machine's workspace in the central region", () => {
     });
 
     // Toggled on this window's own node, the realm follows.
-    act(() => useFilesPanelStore.getState().closePanel());
+    act(() => useFilesPanelChromeStore.getState().closePanel());
     expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-1", {
       type: "filesPanel",
       open: false,
@@ -267,7 +268,7 @@ describe("desktop: another machine's workspace in the central region", () => {
         message: { type: "filesPanel", open: true },
       }),
     );
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
     expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-1", {
       type: "filesPanel",
       open: true,
@@ -275,7 +276,7 @@ describe("desktop: another machine's workspace in the central region", () => {
 
     // Going back to this window's own workspace keeps the state, and it stays open.
     act(() => useRemoteWorkspaceStore.getState().showLocal());
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   });
 
   test("a realm broadcasts files state to another ready realm and initializes a later listener", async () => {
@@ -300,7 +301,7 @@ describe("desktop: another machine's workspace in the central region", () => {
         message: { type: "filesPanel", open: true },
       }),
     );
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
     for (const viewId of ["view-1", "view-2"]) {
       expect(fake.workspaceViews.send).toHaveBeenCalledWith(viewId, {
         type: "filesPanel",
@@ -323,7 +324,7 @@ describe("desktop: another machine's workspace in the central region", () => {
         message: { type: "filesPanel", open: false },
       }),
     );
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
     for (const viewId of ["view-1", "view-2", "view-3"]) {
       expect(fake.workspaceViews.send).toHaveBeenCalledWith(viewId, {
         type: "filesPanel",
@@ -410,7 +411,7 @@ describe("desktop: another machine's workspace in the central region", () => {
           message: { type: "filesPanel", open: true },
         }),
       );
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
       fake.workspaceViews.send.mockClear();
       act(() => {
         phone = true;
@@ -423,8 +424,8 @@ describe("desktop: another machine's workspace in the central region", () => {
           message: { type: "filesPanel", open: false },
         }),
       );
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
-      act(() => useFilesPanelStore.getState().closePanel());
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
+      act(() => useFilesPanelChromeStore.getState().closePanel());
       expect(fake.workspaceViews.send).not.toHaveBeenCalled();
       act(() => {
         phone = false;
@@ -448,7 +449,7 @@ describe("desktop: another machine's workspace in the central region", () => {
     })) as unknown as typeof window.matchMedia;
     try {
       const fake = install(true);
-      useFilesPanelStore.setState({ isOpen: false });
+      setFilesPanelTestState({ isOpen: false });
       renderRegion(anchorElement());
       act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
       await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
@@ -463,8 +464,8 @@ describe("desktop: another machine's workspace in the central region", () => {
           message: { type: "filesPanel", open: true },
         }),
       );
-      expect(useFilesPanelStore.getState().isOpen).toBe(false);
-      act(() => useFilesPanelStore.getState().openPanel());
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
+      act(() => useFilesPanelChromeStore.getState().openPanel());
       expect(fake.workspaceViews.send).not.toHaveBeenCalledWith("view-1", {
         type: "filesPanel",
         open: true,
@@ -843,7 +844,7 @@ test("frame title-bar reports and sequenced panel requests use the current docum
 
 test("a browser frame initializes and round-trips files state through its workspace envelope", async () => {
   install(false);
-  useFilesPanelStore.setState({ isOpen: true });
+  setFilesPanelTestState({ isOpen: true });
   renderRegion(anchorElement());
   act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
   const frame = (await screen.findByTitle(/^Workspace on /)) as HTMLIFrameElement;
@@ -860,15 +861,15 @@ test("a browser frame initializes and round-trips files state through its worksp
   );
   post.mockClear();
   act(() => frameMessage(frame, "wrong-workspace", { type: "filesPanel", open: false }));
-  expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   expect(post).not.toHaveBeenCalled();
   act(() => frameMessage(frame, "workspace-1", { type: "filesPanel", open: false }));
-  expect(useFilesPanelStore.getState().isOpen).toBe(false);
+  expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   expect(post).toHaveBeenLastCalledWith(
     frameEnvelope("workspace-1", { type: "filesPanel", open: false }),
     window.location.origin,
   );
-  act(() => useFilesPanelStore.getState().openPanel());
+  act(() => useFilesPanelChromeStore.getState().openPanel());
   expect(post).toHaveBeenLastCalledWith(
     frameEnvelope("workspace-1", { type: "filesPanel", open: true }),
     window.location.origin,

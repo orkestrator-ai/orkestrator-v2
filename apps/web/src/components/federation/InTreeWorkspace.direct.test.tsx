@@ -156,7 +156,7 @@ beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project", sidebarOpen: true });
   useMachineViewStore.setState({ grouping: "machine" });
-  useInTreeNodesStore.setState({ nodes: [LEAF] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   sessionStorage.clear();
   // The window's own node, so entry points tell it from another node's.
   portalStore.store.setState({ selfId: SELF_NODE_ID });
@@ -191,7 +191,7 @@ afterEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
   useUIChromeStore.setState(INITIAL_CHROME, true);
-  useInTreeNodesStore.setState({ nodes: [] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   setFilesPanelTestState({ isOpen: false });
   useAppDialogStore.setState({ request: null });
   useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null });

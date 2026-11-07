@@ -20,6 +20,7 @@ import { onAppShortcut } from "@/lib/app-shortcuts";
 import { frameEnvelope } from "@/lib/federation/workspace-realm";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { portalStore } from "@/lib/portal/portal-store";
+import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -73,6 +74,9 @@ function renderRegion(anchor: HTMLElement) {
 }
 
 beforeEach(() => {
+  // Every case here is a realm's, so it runs under the rollback setting:
+  // in-tree is the default (plan item 6001; InTreeWorkspace.test.tsx).
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project" });
   useMachineViewStore.setState({ grouping: "machine" });
@@ -84,6 +88,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   uninstallDesktopFake();
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIStore.setState(INITIAL_UI, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);

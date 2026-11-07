@@ -1,51 +1,52 @@
 import { afterEach, expect, test } from "bun:test";
-import {
-  developmentInTreeOverride,
-  isInTreeNode,
-  MAX_IN_TREE_NODES,
-  normalizeInTreeNodes,
-  useInTreeNodesStore,
-} from "./inTreeNodesStore";
+import { windowStorageKey } from "@/lib/desktop-storage-key";
+import { nodesInTree, useInTreeNodesStore } from "./inTreeNodesStore";
 
-afterEach(() => useInTreeNodesStore.setState({ nodes: [] }));
+const KEY = windowStorageKey("use-realms-for-remote-machines");
 
-test("the setting is empty by default and turns nodes on and off for this window", () => {
-  expect(useInTreeNodesStore.getState().nodes).toEqual([]);
-  const { setInTree } = useInTreeNodesStore.getState();
-  setInTree("bk_a", true);
-  setInTree("bk_b", true);
-  setInTree("bk_a", true);
-  expect(useInTreeNodesStore.getState().nodes).toEqual(["bk_b", "bk_a"]);
-  setInTree("bk_b", false);
-  expect(useInTreeNodesStore.getState().nodes).toEqual(["bk_a"]);
-  setInTree("", true);
-  expect(useInTreeNodesStore.getState().nodes).toEqual(["bk_a"]);
+afterEach(() => {
+  localStorage.removeItem(KEY);
+  localStorage.removeItem(windowStorageKey("in-tree-nodes"));
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
 });
 
-test("a stored list is bounded and deduplicated; anything else reads as empty", () => {
-  expect(normalizeInTreeNodes(undefined)).toEqual([]);
-  expect(normalizeInTreeNodes("bk_a")).toEqual([]);
-  expect(normalizeInTreeNodes(["bk_a", 3, "", "bk_a", "x".repeat(201), "bk_b"])).toEqual([
-    "bk_a",
-    "bk_b",
-  ]);
-  const many = Array.from({ length: MAX_IN_TREE_NODES + 5 }, (_, index) => `bk_${index}`);
-  expect(normalizeInTreeNodes(many)).toHaveLength(MAX_IN_TREE_NODES);
+test("every node is in-tree by default; the rollback setting brings realms back", () => {
+  expect(useInTreeNodesStore.getState().useRealmsForRemoteMachines).toBe(false);
+  expect(nodesInTree()).toBe(true);
+  useInTreeNodesStore.getState().setUseRealmsForRemoteMachines(true);
+  expect(nodesInTree()).toBe(false);
+  expect(nodesInTree({ useRealmsForRemoteMachines: false })).toBe(true);
+  useInTreeNodesStore.getState().setUseRealmsForRemoteMachines(false);
+  expect(nodesInTree()).toBe(true);
 });
 
-test("the development override adds nodes in a development build only", () => {
-  expect(developmentInTreeOverride({ DEV: false, VITE_ORKESTRATOR_IN_TREE_NODES: "*" })).toEqual(
-    new Set(),
-  );
-  expect(developmentInTreeOverride({ DEV: true, VITE_ORKESTRATOR_IN_TREE_NODES: "*" })).toBe("*");
-  const listed = developmentInTreeOverride({
-    DEV: true,
-    VITE_ORKESTRATOR_IN_TREE_NODES: " bk_a, ,bk_b ",
+test("the rollback is saved for this window and only an explicit true turns it on", async () => {
+  useInTreeNodesStore.getState().setUseRealmsForRemoteMachines(true);
+  expect(JSON.parse(localStorage.getItem(KEY) ?? "null")?.state).toEqual({
+    useRealmsForRemoteMachines: true,
   });
-  expect(listed).toEqual(new Set(["bk_a", "bk_b"]));
-  expect(isInTreeNode("bk_a", [], listed)).toBe(true);
-  expect(isInTreeNode("bk_c", [], listed)).toBe(false);
-  expect(isInTreeNode("bk_c", ["bk_c"], listed)).toBe(true);
-  expect(isInTreeNode("bk_z", [], "*")).toBe(true);
-  expect(isInTreeNode("bk_a", [], new Set())).toBe(false);
+
+  for (const stored of ["yes", 1, null, undefined]) {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({ state: { useRealmsForRemoteMachines: stored }, version: 1 }),
+    );
+    await useInTreeNodesStore.persist.rehydrate();
+    expect(useInTreeNodesStore.getState().useRealmsForRemoteMachines).toBe(false);
+  }
+  localStorage.setItem(
+    KEY,
+    JSON.stringify({ state: { useRealmsForRemoteMachines: true }, version: 1 }),
+  );
+  await useInTreeNodesStore.persist.rehydrate();
+  expect(useInTreeNodesStore.getState().useRealmsForRemoteMachines).toBe(true);
+});
+
+test("4001's per-node opt-in list is no longer read: an empty list does not mean realms", async () => {
+  localStorage.setItem(
+    windowStorageKey("in-tree-nodes"),
+    JSON.stringify({ state: { nodes: [] }, version: 1 }),
+  );
+  await useInTreeNodesStore.persist.rehydrate();
+  expect(nodesInTree()).toBe(true);
 });

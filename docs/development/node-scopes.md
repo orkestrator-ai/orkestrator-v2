@@ -300,11 +300,14 @@ node's scope, because it writes command-scope singletons.
 
 ## A node's workspace in the window's tree
 
-With the per-window `inTreeNodes` setting on for a node (Settings → Machines →
-"Workspace in this window", `stores/inTreeNodesStore.ts`; development override
-`VITE_ORKESTRATOR_IN_TREE_NODES=<ids>|*`), `RemoteWorkspaceRegion` renders
-`InTreeWorkspace` for it instead of a realm (plan item 4001). Every other node
-keeps its realm. The pieces:
+Every other node's workspace renders in the window's own tree by default, on
+desktop, browser and iOS: `RemoteWorkspaceRegion` renders `InTreeWorkspace`
+for it (plan items 4001 and 6001). The per-window rollback setting
+`useRealmsForRemoteMachines` (default off; Settings → Machines → a machine →
+"Workspace in this window" → "Use separate workspace windows (realms)";
+`stores/inTreeNodesStore.ts`, `nodesInTree()`, `useNodesInTree()`) brings back
+a realm for every other node in that window, for one release. Plan items 6002
+and 6003 delete realms and the setting. The pieces:
 
 | Piece | Where | What it does |
 | --- | --- | --- |

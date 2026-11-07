@@ -500,7 +500,8 @@ the desktop main process all use.
   (`MAX_OPEN_REALMS`). An evicted realm unmounts and ends this window's view of
   that node; work on the node continues. Realms that are not shown stay
   mounted, hidden, so going back is instant. A node shown in the window's own
-  tree (`inTreeNodes`) is not counted: the window's node-scope lifecycle
+  tree (every node by default; realms only under the rollback setting
+  `useRealmsForRemoteMachines`, plan item 6001) is not counted: the window's node-scope lifecycle
   (`WindowScope.lifecycle`, plan item 4002) moves it between warm, live,
   suspended and summary by its memory and byte budgets instead, and
   `InTreeWorkspace` keeps its views mounted only while it is warm, live or

@@ -50,7 +50,7 @@ import type { NodeScope, NodeScopeTier } from "@/lib/node-scope/node-scope";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import { environmentStore } from "@/stores/environmentStore";
-import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
+import { nodesInTree, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
 
@@ -122,10 +122,7 @@ function commandNodeIdOf(windowScope: WindowScope): string | null {
 
 /** Nodes a realm renderer shows (not in-tree): their realm alerts for them. */
 function realmNodes(): ReadonlySet<string> {
-  const stored = useInTreeNodesStore.getState().nodes;
-  return new Set(
-    useRemoteWorkspaceStore.getState().realms.filter((nodeId) => !isInTreeNode(nodeId, stored)),
-  );
+  return new Set(nodesInTree() ? [] : useRemoteWorkspaceStore.getState().realms);
 }
 
 class WindowAttentionImpl implements WindowAttention {

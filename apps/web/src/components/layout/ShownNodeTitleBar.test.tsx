@@ -59,7 +59,7 @@ function TitleBarMeters({ nodeId }: { nodeId: string | null }) {
 afterEach(() => {
   cleanup();
   for (const windowScope of windows.splice(0)) windowScope.dispose();
-  useInTreeNodesStore.setState({ nodes: [] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   resetReadCoordinatorForTests();
 });
 
@@ -69,7 +69,7 @@ function cpuReading() {
 
 test("the meters read the shown in-tree node's scope and switch with the shown node", async () => {
   const { windowScope, command, a, b } = windowWithLeaves();
-  useInTreeNodesStore.setState({ nodes: [LEAF_A, LEAF_B] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   const view = render(
     <WindowScopeProvider windowScope={windowScope}>
       <TitleBarMeters nodeId={LEAF_A} />
@@ -89,7 +89,7 @@ test("the meters read the shown in-tree node's scope and switch with the shown n
   expect(command.calls("get_system_usage")).toEqual([]);
 
   // A node the window shows by a realm keeps the window's other path.
-  act(() => useInTreeNodesStore.setState({ nodes: [] }));
+  act(() => useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true }));
   expect(screen.getByTestId("own-meters")).toBeTruthy();
 });
 
@@ -100,7 +100,7 @@ test("while the in-tree node's scope opens the meters read nothing and show dash
     role: "command",
     client: new FakeNodeClient({ nodeId: "bk_command" as BackendId }),
   });
-  useInTreeNodesStore.setState({ nodes: [LEAF_A] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   render(
     <WindowScopeProvider windowScope={windowScope}>
       <TitleBarMeters nodeId={LEAF_A} />
@@ -112,7 +112,7 @@ test("while the in-tree node's scope opens the meters read nothing and show dash
 
 test("the process popover is the node's, and focus returns to its trigger on dismissal", async () => {
   const { windowScope, a } = windowWithLeaves();
-  useInTreeNodesStore.setState({ nodes: [LEAF_A] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   render(
     <WindowScopeProvider windowScope={windowScope}>
       <TitleBarMeters nodeId={LEAF_A} />

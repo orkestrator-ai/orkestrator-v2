@@ -86,8 +86,8 @@ const NO_HEALTH = constantSignal<NodeScopeHealth>({ state: "disposed" });
 
 /**
  * Another node's workspace in this window's own React tree (plan item 4001,
- * report §5.2), in place of its realm while the window's `inTreeNodes`
- * setting has it.
+ * report §5.2): how every node is shown by default (6001), in place of the
+ * realm the window's rollback setting brings back.
  *
  * It holds the node's scope (`holdInTreeScope`: the node-client registry in a
  * browser, main's node scope on the desktop, then the warm services), and

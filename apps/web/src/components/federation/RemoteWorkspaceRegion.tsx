@@ -15,7 +15,7 @@ import {
 } from "@/lib/portal/workspaces";
 import { removeRealmWorkspace, writeRealmWorkspace } from "@/lib/portal/workspace-target-storage";
 import { cn } from "@/lib/utils";
-import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
+import { useNodesInTree } from "@/stores/inTreeNodesStore";
 import {
   startRemoteWorkspaceSelectionSync,
   useRemoteWorkspaceStore,
@@ -37,17 +37,18 @@ const STILL_CAPTURE_TIMEOUT_MS = 250;
  * current layout — so a realm is never moved in the page (a moved frame would
  * reload). Realms that are not shown stay open behind it, hidden.
  *
- * A node whose `inTreeNodes` setting is on renders in this window's own tree
- * instead (`InTreeWorkspace`, plan item 4001): the same workspace subtree in
- * the node's scope, driven through the same request delivery over a loopback.
- * Every other node keeps its realm, and switching a node between the two
- * only changes this window's view of it: the node's work keeps running.
+ * Every node renders in this window's own tree by default (`InTreeWorkspace`,
+ * plan items 4001 and 6001): the same workspace subtree in the node's scope,
+ * driven through the same request delivery over a loopback. Only the
+ * one-release rollback setting (`useRealmsForRemoteMachines`) brings back a
+ * realm per node, and switching between the two only changes this window's
+ * view of a node: its work keeps running.
  */
 export function RemoteWorkspaceRegion({ anchor }: { anchor: HTMLElement | null }) {
   const { kind, portalState } = useFederation();
   const realms = useRemoteWorkspaceStore((state) => state.realms);
-  // Nodes this window shows in its own tree instead of a realm (plan item 4001).
-  const inTreeNodes = useInTreeNodesStore((state) => state.nodes);
+  // In-tree by default; realms only under the rollback setting (plan item 6001).
+  const inTree = useNodesInTree();
   const activeNodeId = useRemoteWorkspaceStore((state) => state.active?.nodeId ?? null);
   const rect = useAnchorRect(activeNodeId ? anchor : null);
 
@@ -75,7 +76,7 @@ export function RemoteWorkspaceRegion({ anchor }: { anchor: HTMLElement | null }
       data-node={activeNodeId ?? undefined}
     >
       {realms.map((nodeId) =>
-        isInTreeNode(nodeId, inTreeNodes) ? (
+        inTree ? (
           <InTreeWorkspace key={nodeId} nodeId={nodeId} shown={shown && nodeId === activeNodeId} />
         ) : kind === "desktop" ? (
           <NativeRealm

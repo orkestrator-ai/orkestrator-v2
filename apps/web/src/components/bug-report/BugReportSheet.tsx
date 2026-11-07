@@ -46,8 +46,9 @@ import {
 } from "@/lib/node-scope/providers";
 import { createSessionKey } from "@/lib/utils";
 import { useBugReportStore } from "@/stores/bugReportStore";
-import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
+import { useNodesInTree } from "@/stores/inTreeNodesStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 const DRAFT_POLL_MS = 3_000;
 
@@ -80,9 +81,13 @@ export function BugReportSheetHost() {
   const sheetNodeId = useBugReportStore((state) => state.sheetNodeId);
   const { windowScope } = useScopesWithCommandFallback();
   useSignal(windowScope.nodeScopes);
-  const opening = useInTreeNodesStore((state) =>
-    sheetNodeId ? isInTreeNode(sheetNodeId, state.nodes) : false,
+  // Opening: the region holds the node (`openBugReport` opens it) and shows
+  // it in this window's tree, so its scope is on the way.
+  const inTree = useNodesInTree();
+  const held = useRemoteWorkspaceStore((state) =>
+    sheetNodeId ? state.realms.includes(sheetNodeId) : false,
   );
+  const opening = inTree && held;
   const scope = sheetNodeId ? windowScope.get(sheetNodeId as BackendId) : null;
   const unresolved = sheetNodeId !== null && !scope && !opening;
   useEffect(() => {

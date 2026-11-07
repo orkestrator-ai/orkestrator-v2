@@ -331,7 +331,7 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
 
   afterEach(() => {
     cleanup();
-    useInTreeNodesStore.setState({ nodes: [] });
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
     resetWindowScopeForTests();
   });
@@ -358,7 +358,7 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
       },
     });
     const scope = getWindowScope().open({ role: "leaf", client: leaf });
-    useInTreeNodesStore.setState({ nodes: [LEAF] });
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     useRemoteWorkspaceStore.setState({
       active: { nodeId: LEAF, projectId: "p1", environmentId: null },
       realms: [LEAF],

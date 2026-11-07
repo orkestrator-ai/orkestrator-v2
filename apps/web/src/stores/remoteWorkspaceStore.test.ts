@@ -7,11 +7,13 @@ const INITIAL = useRemoteWorkspaceStore.getState();
 
 beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL, true);
+  // The realm cases run under the rollback setting (plan item 6001).
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
 });
 
 afterEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL, true);
-  useInTreeNodesStore.setState({ nodes: [] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   resetWindowScopeForTests();
 });
 
@@ -21,18 +23,17 @@ test("realms are capped at MAX_OPEN_REALMS, least recently opened first", () => 
   expect(useRemoteWorkspaceStore.getState().realms).toEqual(ids.slice(-MAX_OPEN_REALMS));
 });
 
-test("nodes shown in the window's tree are not counted: the lifecycle's budgets bound them (4002)", () => {
-  useInTreeNodesStore.setState({ nodes: ["bk_t1", "bk_t2", "bk_t3", "bk_t4"] });
-  const order = ["bk_t1", "bk_r1", "bk_t2", "bk_r2", "bk_t3", "bk_r3", "bk_t4", "bk_r4"];
+test("in-tree by default, no node is counted: the lifecycle's budgets bound them (4002)", () => {
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
+  const order = ["bk_1", "bk_2", "bk_3", "bk_4", "bk_5", "bk_6", "bk_2"];
   for (const id of order) useRemoteWorkspaceStore.getState().open(id, {});
   expect(useRemoteWorkspaceStore.getState().realms).toEqual([
-    "bk_t1",
-    "bk_t2",
-    "bk_r2",
-    "bk_t3",
-    "bk_r3",
-    "bk_t4",
-    "bk_r4",
+    "bk_1",
+    "bk_3",
+    "bk_4",
+    "bk_5",
+    "bk_6",
+    "bk_2",
   ]);
-  expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_r4");
+  expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_2");
 });

@@ -10,7 +10,7 @@ import {
   useSignal,
   WindowScopeProvider,
 } from "@/lib/node-scope/providers";
-import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
+import { useNodesInTree } from "@/stores/inTreeNodesStore";
 
 /**
  * The title bar's meters and agent button for another node shown in the
@@ -30,9 +30,7 @@ export function useShownInTreeNode(nodeId: string | null): { scope: NodeScope | 
   const { windowScope } = useScopesWithCommandFallback();
   // Re-read when the node's scope opens or closes.
   useSignal(windowScope.nodeScopes);
-  const inTree = useInTreeNodesStore((state) =>
-    nodeId ? isInTreeNode(nodeId, state.nodes) : false,
-  );
+  const inTree = useNodesInTree();
   if (!nodeId || !inTree) return null;
   const scope = windowScope.get(nodeId as BackendId);
   return { scope: scope && !scope.disposed ? scope : null };

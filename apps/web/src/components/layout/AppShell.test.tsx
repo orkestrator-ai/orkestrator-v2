@@ -852,8 +852,10 @@ describe("AppShell", () => {
     expect(screen.queryByTestId("title-bar-usage-separator") === null).toBe(true);
   });
 
-  test("shows another node's meters and agent button in the same title-bar places", () => {
+  test("under the rollback setting, shows a realm node's meters and agent button in the same title-bar places", () => {
     isMobile = false;
+    // A realm's title bar (plan item 6001 keeps realms behind this setting).
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
     act(() =>
       useRemoteWorkspaceStore.setState({
         active: { nodeId: "bk_a", projectId: "project-9", environmentId: "environment-9" },
@@ -870,6 +872,7 @@ describe("AppShell", () => {
     // This window's own node's controls are not shown for another node's workspace.
     expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
     expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   });
 
   test("an in-tree node's meters and agent button are the window's own, on its scope, and switch with the shown node", async () => {
@@ -877,7 +880,7 @@ describe("AppShell", () => {
     const windowScope = getWindowScope();
     const leafA = "bk_in-tree-a" as BackendId;
     const leafB = "bk_in-tree-b" as BackendId;
-    useInTreeNodesStore.setState({ nodes: [leafA, leafB] });
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     const scopes = [] as Array<{ dispose(): void }>;
     try {
       act(() =>
@@ -921,7 +924,7 @@ describe("AppShell", () => {
     } finally {
       cleanup();
       for (const scope of scopes) scope.dispose();
-      useInTreeNodesStore.setState({ nodes: [] });
+      useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     }
   });
 

@@ -110,9 +110,7 @@ export function MachineSettingsDialog({
           <ProfileSection machine={machine} onChanged={onChanged} />
           <StatusSection machine={machine} snapshot={snapshot} api={api} onChanged={onChanged} />
           {node ? <NodeRoutesSection key={node.nodeId} node={node} onSaved={onChanged} /> : null}
-          {node && machine.role !== "self" ? (
-            <InTreeWorkspaceSection nodeId={node.nodeId} name={machine.name} />
-          ) : null}
+          {node && machine.role !== "self" ? <InTreeWorkspaceSection /> : null}
           {api && connection ? (
             <DeviceConnectionSection
               api={api}

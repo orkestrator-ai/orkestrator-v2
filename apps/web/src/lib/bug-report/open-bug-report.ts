@@ -2,7 +2,7 @@ import { isWorkspaceRealm, postToShell } from "@/lib/federation/workspace-realm"
 import { portalStore } from "@/lib/portal/portal-store";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useBugReportStore } from "@/stores/bugReportStore";
-import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
+import { nodesInTree } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 /**
@@ -63,7 +63,7 @@ export function openBugReport(nodeId?: BugReportMachineId): void {
     ...(active?.projectId ? { projectId: active.projectId } : {}),
     ...(active?.projectId && active.environmentId ? { environmentId: active.environmentId } : {}),
   };
-  if (isInTreeNode(target, useInTreeNodesStore.getState().nodes)) {
+  if (nodesInTree()) {
     // Shown in this window's tree: its sheet runs here, on its scope.
     if (!active) remote.open(target, selection);
     useBugReportStore.getState().openSheet(target);

@@ -188,7 +188,7 @@ beforeEach(async () => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project" });
   useMachineViewStore.setState({ grouping: "machine" });
-  useInTreeNodesStore.setState({ nodes: [LEAF] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   sessionStorage.clear();
   commands = [];
   store = createNodeSnapshotStore(memorySnapshotBackend());
@@ -233,7 +233,7 @@ afterEach(() => {
   uninstallDesktopFake();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
-  useInTreeNodesStore.setState({ nodes: [] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   setFilesPanelTestState({ isOpen: false });
   resetWindowScopeForTests();
   document.body.innerHTML = "";

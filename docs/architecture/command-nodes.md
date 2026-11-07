@@ -512,6 +512,13 @@ environment, its tabs and panes, and the files panel. Only that region gets
 its data from the other node; it runs this client's own code, served by the
 command node.
 
+By default that workspace renders in the window's own tree, in the node's own
+scope (plan item 6001; [node scopes](../development/node-scopes.md#a-nodes-workspace-in-the-windows-tree)),
+on desktop, browser and iOS. The realms described below remain for one
+release behind **Settings → Machines → a machine → Workspace in this window →
+Use separate workspace windows (realms)** (per window, default off), as a
+rollback; plan items 6002 and 6003 remove them.
+
 - **Workspace realms.** The central region of another node is a *realm*: a
   separate renderer of this client bound to that node's workspace and to
   nothing else (`lib/federation/workspace-realm.ts`). On the desktop it is a

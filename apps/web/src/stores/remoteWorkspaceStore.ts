@@ -7,7 +7,7 @@ import type {
 } from "@/lib/federation/workspace-realm";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeSelection } from "@/lib/node-scope/window-scope";
-import { isInTreeNode, useInTreeNodesStore } from "./inTreeNodesStore";
+import { nodesInTree } from "./inTreeNodesStore";
 import { isCommandNodeSelection, noteNodeSelectionRecents } from "./windowSelectionStore";
 
 /**
@@ -170,9 +170,8 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
     panelRequests: {},
     open: (nodeId, request) => {
       const order = [...get().realms.filter((id) => id !== nodeId), nodeId];
-      const inTree = useInTreeNodesStore.getState().nodes;
-      const keptRealms = order.filter((id) => !isInTreeNode(id, inTree)).slice(-MAX_OPEN_REALMS);
-      const realms = order.filter((id) => isInTreeNode(id, inTree) || keptRealms.includes(id));
+      // In-tree nodes are bounded by the scope lifecycle (4002), not this cap.
+      const realms = nodesInTree() ? order : order.slice(-MAX_OPEN_REALMS);
       const requests: Record<string, RealmRequest> = {};
       for (const id of realms) {
         const existing = get().requests[id];

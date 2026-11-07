@@ -31,7 +31,7 @@ afterEach(() => {
   useMergePrRequestStore.setState({ request: null });
   useAppDialogStore.setState({ request: null });
   useGlobalSettingsStore.setState({ open: false, section: undefined, sectionRequest: 0 });
-  useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
+  useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null, draftInProgress: false });
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
 });
@@ -873,11 +873,15 @@ for (const remoteReport of [false, true]) {
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
       if (remoteReport) {
-        expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request).toMatchObject({
-          bugReport: true,
-          projectId: "p",
-          environmentId: "e",
+        // In-tree by default (plan item 6001): the window opens that node's
+        // sheet on its scope; no realm is asked.
+        expect(useBugReportStore.getState()).toMatchObject({
+          sheetOpen: true,
+          sheetNodeId: "bk_remote",
         });
+        expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request.bugReport).toBe(
+          undefined,
+        );
       } else expect(useBugReportStore.getState().sheetOpen).toBe(true);
     } finally {
       useRemoteWorkspaceStore.setState(remote, true);

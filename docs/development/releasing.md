@@ -38,6 +38,19 @@ tailnet HTTPS URL stays the same. Unknown or foreign Serve targets remain
 conflicts and require host-side inspection. Development Electron launches now
 use a free browser port and log the bound URL.
 
+## Pending release note: other machines' workspaces open in the window
+
+Include this note in the next release containing plan item 6001:
+
+Another machine's workspace now opens directly in the window, in the window's
+own tree, on desktop, in a browser and in the iOS app, instead of in a separate
+workspace view. Its work keeps running when you switch between machines. If
+something looks wrong, open **Settings → Machines**, choose any other machine,
+and turn on **Use separate workspace windows (realms)** under **Workspace in
+this window**. That brings back the separate views for every machine in that
+window; turn it off to return. The setting is temporary and is removed in a
+later release, so please report what made you need it.
+
 ## Update channels
 
 Each host chooses the releases it updates to in **Settings → Machines →

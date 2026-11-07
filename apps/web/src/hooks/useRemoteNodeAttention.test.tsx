@@ -148,7 +148,7 @@ function inTreeLeaf(): FakeNodeClient {
   const client = new FakeNodeClient({ nodeId: "bk_leaf" as BackendId });
   leafScopes.push(getWindowScope().open({ role: "leaf", client, tier: "live" }));
   act(() => {
-    useInTreeNodesStore.setState({ nodes: ["bk_leaf"] });
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] });
   });
   return client;
@@ -157,7 +157,7 @@ function inTreeLeaf(): FakeNodeClient {
 afterEach(() => {
   cleanup();
   for (const scope of leafScopes.splice(0)) scope.dispose();
-  useInTreeNodesStore.setState({ nodes: [] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   getWindowScope().select(null);
   subscribe.mockRestore();
   portalStore.store.setState(initialPortal, true);
@@ -176,13 +176,15 @@ describe("subscriptions", () => {
     expect(live("bk_leaf")?.subscriber.events).toEqual([ENVIRONMENT_ATTENTION_EVENT]);
   });
 
-  test("leaves a node with an open realm to that realm", () => {
+  test("under the rollback setting, leaves a node with an open realm to that realm", () => {
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
     useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] });
     renderHook(() => useRemoteNodeAttention(() => undefined));
     expect(subscriptions.has("bk_leaf")).toBe(false);
   });
 
-  test("drops a node when its realm opens and takes it back when it closes", () => {
+  test("under the rollback setting, drops a node when its realm opens and takes it back when it closes", () => {
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
     setNodes(node("bk_leaf", "Leaf"), node("bk_other", "Other"));
     renderHook(() => useRemoteNodeAttention(() => undefined));
     const first = live("bk_leaf")!;
@@ -273,7 +275,8 @@ describe("through the notification sound service", () => {
     expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-stopped");
   });
 
-  test("a leaf with an open realm makes no sound from the shell", async () => {
+  test("under the rollback setting, a leaf with an open realm makes no sound from the shell", async () => {
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
     useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] });
     await mounted();
     expect(live("bk_leaf")).toBeUndefined();

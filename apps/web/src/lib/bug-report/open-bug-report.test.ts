@@ -1,12 +1,16 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { openBugReport } from "./open-bug-report";
 
+// The realm cases run under the rollback setting (plan item 6001); the
+// in-tree cases turn it off, as the default is.
+beforeEach(() => useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true }));
+
 afterEach(() => {
   useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null, draftInProgress: false });
-  useInTreeNodesStore.setState({ nodes: [] });
+  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   useRemoteWorkspaceStore.setState({ active: null, realms: [], requests: {} });
 });
 
@@ -44,7 +48,7 @@ describe("openBugReport", () => {
   });
 
   test("a node shown in the window's tree gets the window's sheet on its scope, without a realm request", () => {
-    useInTreeNodesStore.setState({ nodes: ["node-b"] });
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     useRemoteWorkspaceStore.setState({
       active: { nodeId: "node-b", projectId: "p1", environmentId: "e1" },
       realms: ["node-b"],
@@ -57,7 +61,7 @@ describe("openBugReport", () => {
   });
 
   test("an in-tree node not in front is shown on its launcher, and its sheet opens here", () => {
-    useInTreeNodesStore.setState({ nodes: ["node-c"] });
+    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     openBugReport("node-c");
     expect(useRemoteWorkspaceStore.getState().requests["node-c"]?.request).toEqual({
       type: "select",

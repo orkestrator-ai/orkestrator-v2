@@ -3,89 +3,58 @@ import { persist } from "zustand/middleware";
 import { windowStorageKey } from "@/lib/desktop-storage-key";
 
 /**
- * Which other nodes this window shows in its own React tree instead of a
- * workspace realm (plan item 4001, report §12 Phase 4).
+ * Whether this window shows other nodes' workspaces in its own React tree
+ * (plan item 6001, report §12 Phase 6.1).
  *
- * A per-window device setting, default empty, persisted under the window's
- * key and edited per machine in Settings → Machines. It is a rollback switch
- * while in-tree workspaces reach parity, not version skew: any node can be
- * shown either way, so nothing here depends on the node's version
- * (`docs/architecture/version-compatibility.md`). Phase 6 deletes realms and
- * this setting with them.
+ * Every node renders in-tree by default, on desktop, browser and iOS. The one
+ * setting, `useRealmsForRemoteMachines` (default off), brings back the
+ * separate workspace views (realms) for every other node in this window, as a
+ * rollback for one release. It is a per-window device setting, persisted
+ * under the window's key and edited in Settings → Machines. It is a rollback
+ * switch, not version skew: any node can be shown either way, so nothing here
+ * depends on the node's version (`docs/architecture/version-compatibility.md`).
+ * Plan items 6002 and 6003 delete realms and this setting with them.
  *
- * Development override: `VITE_ORKESTRATOR_IN_TREE_NODES` in a development
- * build, a comma-separated list of node ids or `*` for every node, is added
- * to the stored list (it never removes one).
+ * It replaces 4001's per-node opt-in list (`in-tree-nodes`), which is no
+ * longer read: with in-tree the default, the opt-in has nothing to add.
  */
 interface InTreeNodesState {
-  /** Node ids, unique, in the order they were turned on. */
-  nodes: string[];
-  setInTree: (nodeId: string, inTree: boolean) => void;
-}
-
-/** Most nodes one window keeps a choice for; the oldest goes first. */
-export const MAX_IN_TREE_NODES = 64;
-const MAX_NODE_ID_LENGTH = 200;
-
-function isNodeId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_NODE_ID_LENGTH;
-}
-
-/** A stored list, bounded and deduplicated; anything else is empty. */
-export function normalizeInTreeNodes(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter(isNodeId))].slice(-MAX_IN_TREE_NODES);
+  /** The rollback: show other nodes in separate workspace views. Default off. */
+  useRealmsForRemoteMachines: boolean;
+  setUseRealmsForRemoteMachines: (on: boolean) => void;
 }
 
 export const useInTreeNodesStore = create<InTreeNodesState>()(
   persist(
-    (set, get) => ({
-      nodes: [],
-      setInTree: (nodeId, inTree) => {
-        if (!isNodeId(nodeId)) return;
-        const without = get().nodes.filter((id) => id !== nodeId);
-        set({ nodes: inTree ? [...without, nodeId].slice(-MAX_IN_TREE_NODES) : without });
-      },
+    (set) => ({
+      useRealmsForRemoteMachines: false,
+      setUseRealmsForRemoteMachines: (on) => set({ useRealmsForRemoteMachines: on === true }),
     }),
     {
-      name: windowStorageKey("in-tree-nodes"),
+      name: windowStorageKey("use-realms-for-remote-machines"),
       version: 1,
-      partialize: (state) => ({ nodes: state.nodes }),
+      partialize: (state) => ({ useRealmsForRemoteMachines: state.useRealmsForRemoteMachines }),
       merge: (persisted, current) => ({
         ...current,
-        nodes: normalizeInTreeNodes((persisted as { nodes?: unknown } | undefined)?.nodes),
+        useRealmsForRemoteMachines:
+          (persisted as { useRealmsForRemoteMachines?: unknown } | undefined)
+            ?.useRealmsForRemoteMachines === true,
       }),
     },
   ),
 );
 
-/** The development override's node ids, `"*"` for all, or none. */
-export function developmentInTreeOverride(
-  env: Record<string, unknown> | undefined = import.meta.env as unknown as
-    Record<string, unknown> | undefined,
-): ReadonlySet<string> | "*" {
-  if (env?.DEV !== true) return new Set();
-  const raw = env.VITE_ORKESTRATOR_IN_TREE_NODES;
-  if (typeof raw !== "string" || !raw.trim()) return new Set();
-  if (raw.trim() === "*") return "*";
-  return new Set(
-    raw
-      .split(",")
-      .map((id) => id.trim())
-      .filter(isNodeId),
-  );
-}
-
-/** Whether `nodeId` is shown in the window's tree, for `stored` and an override. */
-export function isInTreeNode(
-  nodeId: string,
-  stored: readonly string[],
-  override: ReadonlySet<string> | "*" = developmentInTreeOverride(),
+/**
+ * Whether this window shows other nodes in its own tree: true unless the
+ * rollback is on. Every node is treated the same.
+ */
+export function nodesInTree(
+  state: Pick<InTreeNodesState, "useRealmsForRemoteMachines"> = useInTreeNodesStore.getState(),
 ): boolean {
-  return override === "*" || override.has(nodeId) || stored.includes(nodeId);
+  return !state.useRealmsForRemoteMachines;
 }
 
-/** Whether this window shows `nodeId` in its own tree. */
-export function useInTreeNode(nodeId: string): boolean {
-  return useInTreeNodesStore((state) => isInTreeNode(nodeId, state.nodes));
+/** Whether this window shows other nodes in its own tree (a hook). */
+export function useNodesInTree(): boolean {
+  return useInTreeNodesStore(nodesInTree);
 }

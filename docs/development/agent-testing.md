@@ -140,6 +140,17 @@ churn all four loads can still lose, and its error then says so.
 `playwright.browser.config.ts` uses neither, creates a context it does not
 route, or another case opts out.
 
+With `ORKESTRATOR_AGENT_TEST_OBSERVE_INVOKES=<directory>` set, every context
+`browser-test.ts` routes also records which path each `window.orkestrator`
+`invoke` and `listen` took (`e2e/agent-testing/invoke-observer.ts`): through
+the command scope's client (`lib/node-scope/command-client.ts`), from a spec's
+own `page.evaluate`, or directly from another page module, read from the call
+stack of the Vite dev renderer, plus the `/__orkestrator/invoke` requests that
+left the page. Each context writes one JSON file of names, paths and counts
+(never arguments) when it closes; `summarizeObservations` totals them. Plan item
+2010 used it on a full `test:agent:browser` run to check that every invoke goes
+through the command scope's client. It is off by default.
+
 `mise run test:browser` (the component and public-site suites) needs only
 loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
 private user and network namespace with only loopback raised, where no host

@@ -420,3 +420,37 @@ Measured 2026-11-07 for plan item
   against the budget and a jetsam-free run of N switches remain unmeasured.
 - Not measured: transcripts (no provider turn), a packaged desktop build, a
   real LAN or tailnet, WebKit.
+
+### Re-run after the realm code was deleted
+
+Measured 2026-11-07 at `9d061d7aa` (6002 and 6003 landed: in-tree is the
+only path), same host, flags and topology as above (profiles `uf-final-cmd`,
+`uf-final-leaf`, six leaves), from a detached worktree with a frozen install.
+Browser 7 passed, 1 skipped (desktop-only flow); desktop 8 passed. The
+4006 fixes hold: the desktop leaf preview renders and the lapsed grant's
+terminal takes input again.
+
+| Measure | Browser (Chromium) | Desktop (Electron) |
+|---|---|---|
+| First open of a leaf (6 leaves, one after another) | 240–345 ms | 205–307 ms |
+| First open of the command node's environment | 788 ms | 594 ms |
+| Warm switch between leaves (rounds 2 and 3, 12 switches) | 178–289 ms | 185–297 ms |
+| Reload: snapshot painted (since navigation) | 2.4 s | 0.7 s |
+| Reload: live workspace (grant held 3 s on purpose) | 5.9 s | 4.2 s |
+| JS heap after GC, six leaves warm (one shown) | 105.5 MB | 103.6 MB |
+| JS heap after GC, one shown, five back to summary | 97.5 MB | 96.4 MB |
+| Per warm scope (difference / 5) | 1.6 MB | 1.4 MB |
+| Reopen of a leaf from summary | 304 ms | 234 ms |
+| Grant lapse to new grant, no reload | 0.67 s | 0.68 s (terminal takes input after) |
+
+- Budgets behaved as before on both hosts: estimate minus 2.5 scopes left
+  `suspended ×3, warm ×2, live`; one scope left only the shown leaf.
+- The shim guard saw no command-scope store use in 33 (browser) and 34
+  (desktop) checks.
+- **Invoke paths during the browser smoke run** (plan item
+  [2010](../../plans/unified/2010-command-scope-wiring.md), same commit,
+  profile `uf-final-smoke`; 53 passed, 1 failed, the base-failing vim case):
+  across 87 browser contexts, 14,535 invokes (185 commands) and 12,540
+  listens (39 events) were all called from the command scope's client; none
+  from another module or a spec; all 14,160 invoke requests that left a page
+  had passed through it.

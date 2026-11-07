@@ -457,8 +457,13 @@ digest:
   `ownedObject<T>()`, `asModel<T>()` and `mutableArray()`. Where a schema is
   the model, the protocol exports the model type (`Mutable`/`DeepMutable` of
   the schema's type) and `apps/backend/src/core/models.ts` and
-  `apps/web/src/types/index.ts` re-export it; `tests/unit/model-type-convergence.test.ts`
-  fails when a name both files export is not the same protocol type.
+  `apps/web/src/types/index.ts` re-export it (or declare a view of it, such
+  as the web's records generic over an opaque snapshot); such a schema
+  requires every field the storage always writes, and its vocabularies are
+  literals where the backend keeps only the values it knows (a new value
+  bumps the domain). `tests/unit/model-type-convergence.test.ts` fails when a
+  name both files export is not the same protocol type, or when either file
+  declares its own copy of a type a contract domain exports.
 
 ### Tolerant reader and critical fields
 

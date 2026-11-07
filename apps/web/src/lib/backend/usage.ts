@@ -1,7 +1,8 @@
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { accountsOn } from "@/lib/node-scope/domains/accounts";
+import { commandBackendClient, type BackendClient } from "./client";
 
 export type {
   UsageDayPoint,
@@ -19,14 +20,15 @@ export type {
  * over the window's command scope.
  */
 export function createUsageApi(client: BackendClient) {
-  const machineInvoke = machineInvoker(client);
+  // `get_usage_history` is in the `accounts` domain (plan item 7008).
+  const on = accountsOn(client);
 
   /** Recorded token and spend history for a range of days ending today. */
   async function getUsageHistory(
     query: UsageHistoryQuery = {},
     machine?: AccountMachine,
   ): Promise<UsageHistoryReport> {
-    return machineInvoke<UsageHistoryReport>(machine, "get_usage_history", { ...query });
+    return on(machine).get_usage_history({ ...query });
   }
 
   return { getUsageHistory };

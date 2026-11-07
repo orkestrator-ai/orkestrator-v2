@@ -46,6 +46,7 @@ import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
+import { accountsOn } from "@/lib/node-scope/domains/accounts";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
@@ -59,6 +60,14 @@ import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./d
  * Workspace machine settings with the command node's inherited preferences.
  * `machine` reads another machine's, as Settings does for the one it edits.
  */
+/**
+ * The Cursor SDK login's web types (`types/index.ts`) name its state and
+ * source as literal unions; the protocol keeps them strings (plan item 7008).
+ */
+function asCursorModel<T>(result: Promise<unknown>): Promise<T> {
+  return result as Promise<T>;
+}
+
 export async function getConfig(machine?: AccountMachine): Promise<AppConfig> {
   return invokeGlobalConfigCommand("get_config", undefined, machine);
 }
@@ -325,6 +334,8 @@ export function createConfigIntegrationsApi(client: BackendClient) {
       : backendDomainApi(machineBackendClient(client, machine), environmentsClient)();
   const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
+  // Plan usage and the Cursor SDK login are in the `accounts` domain (plan item 7008).
+  const accountsOn_ = accountsOn(client);
 
   /**
    * Load the host-wide last-known-good catalogues, seeding Pi on first use. With
@@ -453,7 +464,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     options: { force?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<PlanUsageSnapshot> {
-    return machineInvoke<PlanUsageSnapshot>(machine, "get_plan_usage", {
+    return accountsOn_(machine).get_plan_usage({
       platform,
       ...(options.force ? { force: true } : {}),
     });
@@ -470,21 +481,19 @@ export function createConfigIntegrationsApi(client: BackendClient) {
    * through the command node.
    */
   async function cursorSdkLoginStart(machine?: AccountMachine): Promise<{ loginUrl: string }> {
-    return machineInvoke<{ loginUrl: string }>(machine, "cursor_sdk_login_start", {
-      openBrowser: false,
-    });
+    return accountsOn_(machine).cursor_sdk_login_start({ openBrowser: false });
   }
 
   async function cursorSdkLoginStatus(machine?: AccountMachine): Promise<CursorSdkLoginProgress> {
-    return machineInvoke<CursorSdkLoginProgress>(machine, "cursor_sdk_login_status");
+    return asCursorModel<CursorSdkLoginProgress>(accountsOn_(machine).cursor_sdk_login_status({}));
   }
 
   async function cursorSdkLoginCancel(machine?: AccountMachine): Promise<void> {
-    await machineInvoke<{ cancelled: boolean }>(machine, "cursor_sdk_login_cancel");
+    await accountsOn_(machine).cursor_sdk_login_cancel({});
   }
 
   async function cursorSdkLogout(machine?: AccountMachine): Promise<CursorSdkAuthStatus> {
-    return machineInvoke<CursorSdkAuthStatus>(machine, "cursor_sdk_logout");
+    return asCursorModel<CursorSdkAuthStatus>(accountsOn_(machine).cursor_sdk_logout({}));
   }
 
   async function getControlMcpSettings(): Promise<ControlMcpSettings> {

@@ -1,4 +1,4 @@
-import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
+import { accountsOn, commandNodeAccounts } from "@/lib/node-scope/domains/accounts";
 import type {
   AgentAccountLoginProgress,
   AgentAccountPlatform,
@@ -13,14 +13,12 @@ import type {
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
-  SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
   type CoordinatorAccountSwitchGrantState,
 } from "@orkestrator/protocol/coordinator-account-switch-grant";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import {
-  clientInvoke,
   commandBackendClient,
   machineInvoker,
   type BackendClient,
@@ -47,7 +45,7 @@ export const machineInvoke: MachineInvoke = machineInvoker(commandBackendClient)
 
 /** Every machine's accounts, collected by the command node. */
 export async function listMachineAgentAccounts(): Promise<MachineAgentAccountsResult> {
-  return invokeCommandNodeSetting<MachineAgentAccountsResult>("list_machine_agent_accounts");
+  return commandNodeAccounts().list_machine_agent_accounts({});
 }
 
 /**
@@ -59,10 +57,7 @@ export async function setPreferredAgentIdentity(
   platform: AgentAccountPlatform,
   email: string | null,
 ): Promise<PreferredAgentIdentities> {
-  return invokeCommandNodeSetting<PreferredAgentIdentities>("set_preferred_agent_identity", {
-    platform,
-    email,
-  });
+  return commandNodeAccounts().set_preferred_agent_identity({ platform, email });
 }
 
 /**
@@ -71,11 +66,11 @@ export async function setPreferredAgentIdentity(
  * over the window's command scope.
  */
 export function createAgentAccountsApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
-  const machineInvoke = machineInvoker(client);
+  // The `accounts` domain (plan item 7008), on this client's node or another machine.
+  const on = accountsOn(client);
 
   async function listAgentAccounts(machine?: AccountMachine): Promise<AgentAccountsSnapshot> {
-    return machineInvoke<AgentAccountsSnapshot>(machine, "list_agent_accounts");
+    return on(machine).list_agent_accounts({});
   }
 
   /**
@@ -87,7 +82,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     platform: AgentPlatform,
     machine?: AccountMachine,
   ): Promise<NativeAgentAuthStatus> {
-    return machineInvoke<NativeAgentAuthStatus>(machine, "get_agent_sign_in_status", { platform });
+    return on(machine).get_agent_sign_in_status({ platform });
   }
 
   async function setActiveAgentAccount(
@@ -95,10 +90,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     accountId: string,
     machine?: AccountMachine,
   ): Promise<AgentAccountsSnapshot> {
-    return machineInvoke<AgentAccountsSnapshot>(machine, "set_active_agent_account", {
-      platform,
-      accountId,
-    });
+    return on(machine).set_active_agent_account({ platform, accountId });
   }
 
   /**
@@ -114,9 +106,9 @@ export function createAgentAccountsApi(client: BackendClient) {
     pinned: boolean,
     machine?: AccountMachine,
   ): Promise<AgentAccountsSnapshot> {
-    await invokeCommandNodeSetting("set_agent_account_auto_switch", { platform, enabled });
+    await commandNodeAccounts().set_agent_account_auto_switch({ platform, enabled });
     if (enabled && pinned) {
-      await machineInvoke(machine, "resume_agent_account_auto_switch", { platform });
+      await on(machine).resume_agent_account_auto_switch({ platform });
     }
     return listAgentAccounts(machine);
   }
@@ -134,17 +126,9 @@ export function createAgentAccountsApi(client: BackendClient) {
     machine?: AccountMachine,
   ): Promise<AgentAccountsSnapshot> {
     if (email) {
-      await invokeCommandNodeSetting("set_agent_account_auto_switch", {
-        platform,
-        email,
-        included,
-      });
+      await commandNodeAccounts().set_agent_account_auto_switch({ platform, email, included });
     } else {
-      await machineInvoke(machine, "set_agent_account_auto_switch", {
-        platform,
-        accountId,
-        included,
-      });
+      await on(machine).set_agent_account_auto_switch({ platform, accountId, included });
     }
     return listAgentAccounts(machine);
   }
@@ -160,11 +144,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     machine?: AccountMachine,
   ): Promise<CoordinatorAccountSwitchGrantState | null> {
     try {
-      return await machineInvoke<CoordinatorAccountSwitchGrantState>(
-        machine,
-        GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
-        { platform },
-      );
+      return await on(machine).get_coordinator_account_switch_grant({ platform });
     } catch (error) {
       if (
         incompatibility(error, GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND)?.code ===
@@ -180,11 +160,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     enabled: boolean,
     machine?: AccountMachine,
   ): Promise<CoordinatorAccountSwitchGrantState> {
-    return machineInvoke<CoordinatorAccountSwitchGrantState>(
-      machine,
-      SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
-      { platform, enabled },
-    );
+    return on(machine).set_coordinator_account_switch_grant({ platform, enabled });
   }
 
   async function renameAgentAccount(
@@ -193,11 +169,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     label: string,
     machine?: AccountMachine,
   ): Promise<AgentAccountsSnapshot> {
-    return machineInvoke<AgentAccountsSnapshot>(machine, "rename_agent_account", {
-      platform,
-      accountId,
-      label,
-    });
+    return on(machine).rename_agent_account({ platform, accountId, label });
   }
 
   async function removeAgentAccount(
@@ -205,10 +177,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     accountId: string,
     machine?: AccountMachine,
   ): Promise<AgentAccountsSnapshot> {
-    return machineInvoke<AgentAccountsSnapshot>(machine, "remove_agent_account", {
-      platform,
-      accountId,
-    });
+    return on(machine).remove_agent_account({ platform, accountId });
   }
 
   async function getAgentAccountUsage(
@@ -217,7 +186,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     options: { force?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<PlanUsageSnapshot> {
-    return machineInvoke<PlanUsageSnapshot>(machine, "get_agent_account_usage", {
+    return on(machine).get_agent_account_usage({
       platform,
       accountId,
       ...(options.force ? { force: true } : {}),
@@ -234,7 +203,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     options: { reauthenticate?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<AgentAccountLoginProgress> {
-    return machineInvoke<AgentAccountLoginProgress>(machine, "start_agent_account_login", {
+    return on(machine).start_agent_account_login({
       platform,
       ...(options.reauthenticate ? { reauthenticate: true } : {}),
     });
@@ -243,27 +212,21 @@ export function createAgentAccountsApi(client: BackendClient) {
   async function getAgentAccountLogin(
     machine?: AccountMachine,
   ): Promise<AgentAccountLoginProgress> {
-    return machineInvoke<AgentAccountLoginProgress>(machine, "get_agent_account_login");
+    return on(machine).get_agent_account_login({});
   }
 
   async function submitAgentAccountLoginCode(
     code: string,
     machine?: AccountMachine,
   ): Promise<AgentAccountLoginProgress> {
-    return machineInvoke<AgentAccountLoginProgress>(machine, "submit_agent_account_login_code", {
-      code,
-    });
+    return on(machine).submit_agent_account_login_code({ code });
   }
 
   async function cancelAgentAccountLogin(
     operationId?: string,
     machine?: AccountMachine,
   ): Promise<AgentAccountLoginProgress> {
-    return machineInvoke<AgentAccountLoginProgress>(
-      machine,
-      "cancel_agent_account_login",
-      operationId ? { operationId } : {},
-    );
+    return on(machine).cancel_agent_account_login(operationId ? { operationId } : {});
   }
 
   /** Which of its machine's accounts one session's bridge uses. Asked of the session's own backend. */
@@ -271,15 +234,12 @@ export function createAgentAccountsApi(client: BackendClient) {
     environmentId: string,
     agent: string,
   ): Promise<AgentSessionAccount | null> {
-    return invoke<AgentSessionAccount | null>("get_native_agent_session_account", {
-      environmentId,
-      agent,
-    });
+    return on().get_native_agent_session_account({ environmentId, agent });
   }
 
   /** Grok's and Pi's login on `machine`, read without a session. Older machines reject it. */
   async function readHostAgentSignIns(machine?: AccountMachine): Promise<HostAgentSignIns> {
-    return machineInvoke<HostAgentSignIns>(machine, "read_host_agent_sign_ins");
+    return on(machine).read_host_agent_sign_ins({});
   }
 
   /**
@@ -291,7 +251,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     machine?: AccountMachine,
     environmentId?: string,
   ): Promise<AgentSignInTerminal> {
-    return machineInvoke<AgentSignInTerminal>(machine, "open_agent_sign_in_terminal", {
+    return on(machine).open_agent_sign_in_terminal({
       platform,
       ...(environmentId ? { environmentId } : {}),
     });

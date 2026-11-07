@@ -154,6 +154,14 @@ export const COMPATIBILITY_PATH_IDS = [
    * desktop's main process from before it took per-node relayed events.
    */
   "relayed-node-event.legacy-desktop-stream",
+  /**
+   * A retired per-provider CLI check (`check_opencode_cli`, `check_codex_cli`,
+   * `check_cursor_cli`, `check_grok_cli`, `check_pi_cli`) was called: no
+   * renderer in the support window asks them (plan item 7009).
+   */
+  "retired-command.provider-cli-check",
+  /** The retired no-op `cleanup_stale_local_servers_cmd` was called (plan item 7009). */
+  "retired-command.cleanup-stale-local-servers",
 ] as const;
 
 /**
@@ -165,14 +173,6 @@ export const COMPATIBILITY_PATH_IDS = [
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number] | DomainAdapterPathId;
 
 /** One path's persisted usage. */
-  /**
-   * A retired per-provider CLI check (`check_opencode_cli`, `check_codex_cli`,
-   * `check_cursor_cli`, `check_grok_cli`, `check_pi_cli`) was called: no
-   * renderer in the support window asks them (plan item 7009).
-   */
-  "retired-command.provider-cli-check",
-  /** The retired no-op `cleanup_stale_local_servers_cmd` was called (plan item 7009). */
-  "retired-command.cleanup-stale-local-servers",
 export interface CompatibilityPathUsageEntry {
   count: number;
   firstSeenAt: string;

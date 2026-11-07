@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
+import { worktreeSnapshotChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  WORKTREE_SNAPSHOT_CHANGED_EVENT,
   WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
   isWorktreeSnapshotEvent,
   isWorktreeSnapshotRevisionsSnapshot,
@@ -129,15 +129,11 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
 
     const subscribe = async () => {
       try {
-        const stop = await listenInScope<unknown>(
-          scope,
-          WORKTREE_SNAPSHOT_CHANGED_EVENT,
-          (payload) => {
-            // Crosses a process boundary and drives reads: validate, never trust.
-            if (!isWorktreeSnapshotEvent(payload)) return;
-            hydration.receive(toWorktreeSnapshotUpdate(payload));
-          },
-        );
+        const stop = await listenInScope(scope, worktreeSnapshotChangedEvent, (payload) => {
+          // Crosses a process boundary and drives reads: validate, never trust.
+          if (!isWorktreeSnapshotEvent(payload)) return;
+          hydration.receive(toWorktreeSnapshotUpdate(payload));
+        });
         if (disposed) stop();
         else unlisteners.push(stop);
       } catch {

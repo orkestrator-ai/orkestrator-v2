@@ -6,7 +6,6 @@ import {
   isScopedResourceRevisionManifest,
   isScopedResourceSnapshotBatch,
   RESOURCE_MANIFEST_KINDS,
-  RESOURCE_CHANGED_EVENT,
   type ResourceChange,
   type ResourceKind,
   type ResourceManifestKind,
@@ -15,6 +14,7 @@ import {
   type ScopedResourceRevisionManifest,
   type ScopedResourceSnapshotBatch,
 } from "@orkestrator/protocol/resource-events";
+import { resourceChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
@@ -587,8 +587,18 @@ export function startResourceSync(
     })();
   };
 
-  const attach = (event: string, handler: (event: { payload: unknown }) => void): void => {
-    void listenInScope<unknown>(scope, event, (payload) => handler({ payload }))
+  const attach = (
+    event: typeof resourceChangedEvent | typeof NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+    handler: (event: { payload: unknown }) => void,
+  ): void => {
+    // `resource-changed` by its definition (plan item 7011): a payload that
+    // does not decode is dropped and logged by name before it gets here.
+    const eventName = typeof event === "string" ? event : event.name;
+    const listening =
+      typeof event === "string"
+        ? listenInScope<unknown>(scope, event, (payload) => handler({ payload }))
+        : listenInScope(scope, event, (payload) => handler({ payload }));
+    void listening
       .then((stop) => {
         if (disposed) {
           stop();
@@ -609,11 +619,11 @@ export function startResourceSync(
         }
       })
       .catch((error) => {
-        log.error("subscribe.failed", { eventName: event, error: formatLogError(error) });
+        log.error("subscribe.failed", { eventName, error: formatLogError(error) });
       });
   };
 
-  attach(RESOURCE_CHANGED_EVENT, (event) => {
+  attach(resourceChangedEvent, (event) => {
     if (!isResourceChange(event.payload)) {
       // Shape facts only: the payload itself is never logged.
       log.warn("change.malformed", {

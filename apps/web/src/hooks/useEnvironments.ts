@@ -2,6 +2,12 @@ import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 // Hook for managing environment operations with Electron backend
 import { useCallback, useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
+import {
+  environmentRenamedEvent,
+  environmentSetupCompleteEvent,
+  environmentSetupStartedEvent,
+  nativeAgentAsyncQuestionEvent,
+} from "@orkestrator/protocol/contract/domains/events";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
 import type { StoreApi } from "zustand";
@@ -97,12 +103,6 @@ function describeForToast(context: ErrorContext, message: string): string {
 }
 
 /** Payload emitted when an environment is renamed in the background */
-interface EnvironmentRenamedPayload {
-  environment_id: string;
-  new_name: string;
-  new_branch: string;
-}
-
 interface EnvironmentSetupStartedPayload {
   environment_id: string;
   session_id: string;
@@ -114,11 +114,6 @@ interface EnvironmentSetupCompletePayload {
   success: boolean;
   environment?: Environment;
   error?: string;
-}
-
-interface NativeAgentAsyncQuestionPayload {
-  environment_id: string;
-  session_key: string;
 }
 
 interface UseEnvironmentsOptions {
@@ -650,35 +645,32 @@ export function useEnvironmentLifecycleService(): void {
     let disposed = false;
 
     const setupListeners = async () => {
-      const stopStarted = await listenInScope<EnvironmentSetupStartedPayload>(
-        scope,
-        "environment-setup-started",
-        (payload) => {
-          const { environment_id, session_id, environment } = payload;
-          setupLog.info("setup.started-received", {
-            environmentId: environment_id,
-            sessionId: session_id,
-            hasEnvironment: !!environment,
-            environmentType: environment?.environmentType ?? null,
-            containerId: environment?.containerId ?? null,
-          });
-          const node = environmentNode(scope);
-          if (environment) {
-            node.environments
-              .getState()
-              .updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
-            reconcileNodeLifecycleErrors(node);
-            bindSetupTerminalSession(environment, session_id, scope);
-          }
-        },
-      );
+      // The definitions pin the ids (plan item 7011); the environment in a
+      // setup payload is the web's model, delivered as sent.
+      const stopStarted = await listenInScope(scope, environmentSetupStartedEvent, (payload) => {
+        const { environment_id, session_id, environment } =
+          payload as EnvironmentSetupStartedPayload;
+        setupLog.info("setup.started-received", {
+          environmentId: environment_id,
+          sessionId: session_id,
+          hasEnvironment: !!environment,
+          environmentType: environment?.environmentType ?? null,
+          containerId: environment?.containerId ?? null,
+        });
+        const node = environmentNode(scope);
+        if (environment) {
+          node.environments
+            .getState()
+            .updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
+          reconcileNodeLifecycleErrors(node);
+          bindSetupTerminalSession(environment, session_id, scope);
+        }
+      });
       if (disposed) stopStarted();
       else unlistenStarted = stopStarted;
 
-      const stopComplete = await listenInScope<EnvironmentSetupCompletePayload>(
-        scope,
-        "environment-setup-complete",
-        (payload) => applyEnvironmentSetupComplete(payload, scope),
+      const stopComplete = await listenInScope(scope, environmentSetupCompleteEvent, (payload) =>
+        applyEnvironmentSetupComplete(payload as EnvironmentSetupCompletePayload, scope),
       );
       if (disposed) stopComplete();
       else unlistenComplete = stopComplete;
@@ -700,33 +692,29 @@ export function useEnvironmentLifecycleService(): void {
     let unlisten: UnlistenFn | null = null;
     let disposed = false;
 
-    void listenInScope<NativeAgentAsyncQuestionPayload>(
-      scope,
-      "native-agent-async-question",
-      (payload) => {
-        const selectedEnvironmentId = scope.store(uiStore).getState().selectedEnvironmentId;
-        if (selectedEnvironmentId === payload.environment_id) {
-          const root = scope.store(paneLayoutStore).getState().getRoot(selectedEnvironmentId);
-          const owningTabIsVisible = getAllLeaves(root).some((pane) => {
-            const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
-            const data = activeTab ? getNativeAgentData(activeTab) : null;
-            return (
-              data?.platform === "codex" &&
-              createNativeSessionKey(selectedEnvironmentId, activeTab!.id) === payload.session_key
-            );
-          });
-          if (owningTabIsVisible) return;
-        }
-        const environment = environmentNode(scope)
-          .environments.getState()
-          .getEnvironmentById(payload.environment_id);
-        toast.info("Codex has a question", {
-          description: environment
-            ? `Open ${environment.name} to answer it.`
-            : "Open the agent session to answer it.",
+    void listenInScope(scope, nativeAgentAsyncQuestionEvent, (payload) => {
+      const selectedEnvironmentId = scope.store(uiStore).getState().selectedEnvironmentId;
+      if (selectedEnvironmentId === payload.environment_id) {
+        const root = scope.store(paneLayoutStore).getState().getRoot(selectedEnvironmentId);
+        const owningTabIsVisible = getAllLeaves(root).some((pane) => {
+          const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
+          const data = activeTab ? getNativeAgentData(activeTab) : null;
+          return (
+            data?.platform === "codex" &&
+            createNativeSessionKey(selectedEnvironmentId, activeTab!.id) === payload.session_key
+          );
         });
-      },
-    ).then((stop) => {
+        if (owningTabIsVisible) return;
+      }
+      const environment = environmentNode(scope)
+        .environments.getState()
+        .getEnvironmentById(payload.environment_id);
+      toast.info("Codex has a question", {
+        description: environment
+          ? `Open ${environment.name} to answer it.`
+          : "Open the agent session to answer it.",
+      });
+    }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
     });
@@ -829,34 +817,30 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
     let disposed = false;
 
     const setupListener = async () => {
-      const stop = await listenInScope<EnvironmentRenamedPayload>(
-        scope,
-        "environment-renamed",
-        (payload) => {
-          log.debug("rename.received", () => ({ environmentId: payload.environment_id }));
-          const { environment_id, new_name, new_branch } = payload;
+      const stop = await listenInScope(scope, environmentRenamedEvent, (payload) => {
+        log.debug("rename.received", () => ({ environmentId: payload.environment_id }));
+        const { environment_id, new_name, new_branch } = payload;
 
-          // The backend clears prUrl/prState/hasMergeConflicts in the same
-          // write that advances the branch, so this only mirrors that into the
-          // local store. Never clear it on the backend from here: every
-          // connected client receives this event, and a late clear could wipe a
-          // PR the monitor has just found for the new branch.
-          const currentEnv = scope
-            .store(environmentStore)
-            .getState()
-            .getEnvironmentById(environment_id);
-          if (currentEnv && currentEnv.branch !== new_branch && currentEnv.prUrl) {
-            log.debug("rename.pr-state-cleared", () => ({ environmentId: environment_id }));
-            setPRInStore(environment_id, null, null, null);
-          }
+        // The backend clears prUrl/prState/hasMergeConflicts in the same
+        // write that advances the branch, so this only mirrors that into the
+        // local store. Never clear it on the backend from here: every
+        // connected client receives this event, and a late clear could wipe a
+        // PR the monitor has just found for the new branch.
+        const currentEnv = scope
+          .store(environmentStore)
+          .getState()
+          .getEnvironmentById(environment_id);
+        if (currentEnv && currentEnv.branch !== new_branch && currentEnv.prUrl) {
+          log.debug("rename.pr-state-cleared", () => ({ environmentId: environment_id }));
+          setPRInStore(environment_id, null, null, null);
+        }
 
-          // Update the environment in the store with the new name and branch
-          updateEnvironmentInStore(environment_id, {
-            name: new_name,
-            branch: new_branch,
-          });
-        },
-      );
+        // Update the environment in the store with the new name and branch
+        updateEnvironmentInStore(environment_id, {
+          name: new_name,
+          branch: new_branch,
+        });
+      });
       if (disposed) stop();
       else unlisten = stop;
     };

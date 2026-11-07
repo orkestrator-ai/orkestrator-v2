@@ -26,8 +26,8 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  PR_MONITOR_CHANGED_EVENT,
   isPrMonitorEvent,
   isPrMonitorSnapshot,
   type PrMonitorEnvironmentState,
@@ -152,7 +152,7 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
       if (disposed || stopChanges || changeSubscriptionPending) return;
       changeSubscriptionPending = true;
       try {
-        const stop = await listenInScope<unknown>(scope, PR_MONITOR_CHANGED_EVENT, (event) => {
+        const stop = await listenInScope(scope, prMonitorChangedEvent, (event) => {
           // The payload crosses a process boundary; validate rather than trust.
           if (!isPrMonitorEvent(event)) return;
           const payload = event;

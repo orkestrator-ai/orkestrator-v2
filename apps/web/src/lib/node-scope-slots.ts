@@ -20,11 +20,13 @@
  * `@/lib/backend/client` (plan item 3002), which apply the same rule.
  */
 
+import type { AnyEventDef, PayloadOf } from "@orkestrator/protocol/contract/event";
 import { invoke } from "@/lib/native/backend";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { invokeInScope } from "@/lib/node-scope/scope-transport";
+import { typedHandler } from "@/lib/node-scope/typed-listen";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 
 /** The scope of the node this window is connected to. */
@@ -68,14 +70,39 @@ export function scopeInvoker(scope: NodeScope): ScopeInvoke {
   return (command, args) => invokeInScope(scope, command, args);
 }
 
-/** Listens for `event` on `scope`'s node (see the module comment). */
+/**
+ * Listens for `event` on `scope`'s node (see the module comment). An event
+ * with a definition is passed as the definition (plan item 7011): its
+ * payloads are typed, and one that does not decode is dropped, on the app's
+ * command scope as on any other. A name is for an event without one (the
+ * client's own `native-event-stream-connected`).
+ */
+export function listenInScope<E extends AnyEventDef>(
+  scope: NodeScope,
+  event: E,
+  handler: (payload: PayloadOf<E>) => void,
+): Promise<UnlistenFn>;
 export function listenInScope<T>(
   scope: NodeScope,
   event: string,
   handler: (payload: T) => void,
+): Promise<UnlistenFn>;
+export function listenInScope(
+  scope: NodeScope,
+  event: string | AnyEventDef,
+  handler: (payload: never) => void,
 ): Promise<UnlistenFn> {
-  if (isAppCommandScope(scope)) return listen<T>(event, (message) => handler(message.payload));
-  return Promise.resolve(scope.client.listenRaw<T>(event, handler));
+  const deliver = handler as (payload: unknown) => void;
+  if (typeof event !== "string") {
+    if (isAppCommandScope(scope)) {
+      const typed = typedHandler(event, deliver);
+      return listen<unknown>(event.name, (message) => typed(message.payload));
+    }
+    return Promise.resolve(scope.client.listen(event, deliver));
+  }
+  if (isAppCommandScope(scope))
+    return listen<unknown>(event, (message) => deliver(message.payload));
+  return Promise.resolve(scope.client.listenRaw<unknown>(event, deliver));
 }
 
 /**

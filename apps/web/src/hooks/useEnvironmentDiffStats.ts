@@ -1,6 +1,6 @@
 import { useEffect } from "react";
+import { environmentDiffStatsChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  DIFF_STATS_CHANGED_EVENT,
   isEnvironmentDiffStatsEvent,
   isEnvironmentDiffStatsSnapshot,
   type EnvironmentDiffStatsChange,
@@ -119,9 +119,9 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
 
     const subscribe = async () => {
       try {
-        const stopChanges = await listenInScope<unknown>(
+        const stopChanges = await listenInScope(
           scope,
-          DIFF_STATS_CHANGED_EVENT,
+          environmentDiffStatsChangedEvent,
           (payload) => {
             // The payload crosses a process boundary and is the only thing
             // driving the badge, so it is validated rather than trusted.

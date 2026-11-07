@@ -11,7 +11,10 @@ import {
   onResourceResync,
   type ResourceResyncRequest,
 } from "@/lib/resource-sync";
+import { environmentSetupCompleteEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { AnyEventDef, PayloadOf } from "@orkestrator/protocol/contract/event";
 import { listen, type UnlistenFn } from "@/lib/native/events";
+import { typedHandler } from "@/lib/node-scope/typed-listen";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { appCommandScope, isAppCommandScope, listenInScope } from "@/lib/node-scope-slots";
@@ -158,11 +161,16 @@ export interface StoreResourceSyncContext {
   /** Joins the authoritative resync in `phase`. */
   onResync(phase: StoreResyncPhase, participant: StoreResyncParticipant): void;
   /**
-   * Listens for `event` on this scope's node (through `options.listen` when a
-   * test passes one), stopped when the sync stops. A failed subscribe is
-   * passed to `onError`.
+   * Listens for `def` on this scope's node (through `options.listen` when a
+   * test passes one), stopped when the sync stops. Payloads are typed and
+   * decoded by the definition (plan item 7011); a failed subscribe is passed
+   * to `onError`.
    */
-  listen<T>(event: string, handler: (payload: T) => void, onError?: (error: unknown) => void): void;
+  listen<E extends AnyEventDef>(
+    def: E,
+    handler: (payload: PayloadOf<E>) => void,
+    onError?: (error: unknown) => void,
+  ): void;
   /** Runs `stop` when the sync stops, before the subscriptions are dropped. */
   onStop(stop: () => void): void;
   /** Queues a resync in the serialized loop; resolves when the loop is idle. */
@@ -184,11 +192,6 @@ export function defineStoreResourceHandlers(
   register: (context: StoreResourceSyncContext) => void,
 ): StoreResourceHandlers {
   return Object.freeze({ name, runsOn, register });
-}
-
-/** Only the identity is needed here; the environment body is read authoritatively. */
-interface EnvironmentSetupCompletePayload {
-  environment_id: string;
 }
 
 interface DeferredPaneLayoutRefresh {
@@ -486,8 +489,9 @@ const paneLayoutHandlers = defineStoreResourceHandlers("pane-layout", "every-sco
   // the single frame that carries it and sit on the setup tab while the agent
   // works out of sight. Re-read the authoritative layout on the completion
   // event itself so the handoff never depends on one frame surviving.
-  context.listen<EnvironmentSetupCompletePayload>(
-    "environment-setup-complete",
+  // Only the identity is needed here; the environment body is read authoritatively.
+  context.listen(
+    environmentSetupCompleteEvent,
     (payload) => {
       if (context.disposed()) return;
       requestPaneLayoutRefresh(payload.environment_id);
@@ -707,11 +711,13 @@ export function startStoreResourceSync(
     onResync(phase, participant) {
       participants.get(phase)!.push(participant);
     },
-    listen<T>(event: string, handler: (payload: T) => void, onError?: (error: unknown) => void) {
+    listen(def, handler, onError) {
       let unlisten: UnlistenFn | null = null;
-      const subscribed = options.listen
-        ? options.listen<T>(event, (message) => handler(message.payload))
-        : listenInScope<T>(scope, event, handler);
+      const injected = options.listen;
+      const deliver = typedHandler(def, handler);
+      const subscribed = injected
+        ? injected<unknown>(def.name, (message) => deliver(message.payload))
+        : listenInScope(scope, def, handler);
       void subscribed
         .then((stop) => {
           if (disposed) stop();

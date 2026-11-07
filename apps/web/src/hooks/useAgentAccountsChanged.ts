@@ -4,6 +4,7 @@ import {
   isAgentAccountsChangedEvent,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
+import { agentAccountsChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { isAppCommandScope, listenInScope, onReconnectInScope } from "@/lib/node-scope-slots";
@@ -33,7 +34,7 @@ export function useAgentAccountsChanged(
         if (stopped) stop();
         else stops.push(stop);
       };
-      void listenInScope<unknown>(nodeScope, AGENT_ACCOUNTS_CHANGED_EVENT, (payload) => {
+      void listenInScope(nodeScope, agentAccountsChangedEvent, (payload) => {
         if (isAgentAccountsChangedEvent(payload) && payload.platform === platform) changed();
       })
         .then(keep)

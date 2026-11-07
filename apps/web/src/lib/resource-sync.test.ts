@@ -453,29 +453,29 @@ describe("startResourceSync", () => {
       await tick(COALESCED);
 
       expect(calls).toBe(0);
+      // What the event's definition refuses (plan item 7011) is dropped by the
+      // typed listen, logged by name; what it accepts but this reader does not
+      // (an unknown kind, an empty id) is this reader's shape-facts line.
+      const refused = expect.objectContaining({
+        level: "warn",
+        area: "contract",
+        event: "listen.payload-invalid",
+        fields: { event: "resource-changed" },
+      });
       expect(logs.records()).toEqual([
+        refused,
+        refused,
         expect.objectContaining({
           level: "warn",
           area: "web.resource-sync",
           event: "change.malformed",
-          fields: { payloadType: "object", hasResource: false },
-        }),
-        expect.objectContaining({
-          event: "change.malformed",
-          fields: { payloadType: "string", hasResource: false },
-        }),
-        expect.objectContaining({
-          event: "change.malformed",
           fields: { payloadType: "object", hasResource: true },
         }),
         expect.objectContaining({
           event: "change.malformed",
           fields: { payloadType: "object", hasResource: true },
         }),
-        expect.objectContaining({
-          event: "change.malformed",
-          fields: { payloadType: "object", hasResource: true },
-        }),
+        refused,
       ]);
       // Shape facts only: no value from a payload reaches the line.
       const text = logs.lines.join("\n");

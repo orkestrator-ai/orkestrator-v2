@@ -27,10 +27,11 @@
 import {
   WEB_ANNOTATION_COMMANDS,
   WEB_ANNOTATION_LIMITS,
-  WEB_ANNOTATIONS_CHANGED_EVENT,
   type WebAnnotationChangeHint,
   type WebAnnotationListResult,
 } from "@orkestrator/protocol/web-annotations";
+import { webAnnotationsChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { AnyEventDef, PayloadOf } from "@orkestrator/protocol/contract/event";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
@@ -182,13 +183,19 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
-function listen<T>(
+/**
+ * Listens on `scope`'s client: a defined event by its definition (plan item
+ * 7011, typed and decoded), the client's own reconnect notice by name.
+ */
+function listen<E extends AnyEventDef>(
   scope: NodeScope,
-  event: string,
-  callback: (payload: T) => void,
+  event: E | typeof NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  callback: (payload: PayloadOf<E>) => void,
 ): (() => void) | undefined {
   try {
-    return scope.client.listenRaw<T>(event, callback);
+    return typeof event === "string"
+      ? scope.client.listenRaw(event, callback as (payload: unknown) => void)
+      : scope.client.listen(event, callback);
   } catch {
     return undefined;
   }
@@ -228,10 +235,8 @@ class EnvironmentSync {
     this.pending = emptyWork();
     // Subscribe first: any change committed while the snapshot is in flight
     // arrives as a buffered hint rather than being lost.
-    const hint = listen<WebAnnotationChangeHint>(
-      this.node.scope,
-      WEB_ANNOTATIONS_CHANGED_EVENT,
-      (payload) => this.onHint(payload),
+    const hint = listen(this.node.scope, webAnnotationsChangedEvent, (payload) =>
+      this.onHint(payload as WebAnnotationChangeHint),
     );
     const reconnect = listen(this.node.scope, NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
       this.node.store

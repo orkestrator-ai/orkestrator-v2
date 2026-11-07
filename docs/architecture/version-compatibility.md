@@ -415,6 +415,12 @@ manifest's `events` section is generated from.
   from `listenEvent` over `listenRaw`). The handler receives payloads that
   decode against the schema, as sent; a payload that does not decode is
   dropped and logged by name only (`contract` `listen.payload-invalid`).
+  In the web, `listenInScope(scope, def, handler)` (`lib/node-scope-slots.ts`)
+  does the same on any scope, including the app's command scope, whose window
+  `listen` suites mock. A name (`listenRaw`, or `listenInScope` with a string)
+  is only for an event with no definition: the transport's own
+  `native-event-stream-connected` and the desktop shell's events (browser
+  previews, connections, SSH prompts, `local-backend-unavailable`).
 
 Payload schemas pin the fields receivers route on and describe model-shaped
 parts as `Schema.ObjectKeyword` until the models converge on protocol schemas.

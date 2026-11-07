@@ -1,5 +1,6 @@
+import { changeProjectionChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { AnyEventDef } from "@orkestrator/protocol/contract/event";
 import {
-  CHANGE_PROJECTION_CHANGED_EVENT,
   isChangeProjection,
   isChangeProjectionEvent,
 } from "@orkestrator/protocol/change-resources";
@@ -51,18 +52,27 @@ interface ChangeSubscriptions {
   reset(): void;
 }
 
-/** `listenAuthoritative` on `scope`'s node: the mocked `listen` on the app's command scope. */
-function listenAuthoritativeInScope<T>(
+/**
+ * `listenAuthoritative` on `scope`'s node: the mocked `listen` on the app's
+ * command scope. On another scope `def` is heard through the client's typed
+ * `listen` (plan item 7011); the reconnect notice, which has no definition,
+ * by name.
+ */
+function listenAuthoritativeInScope<E extends AnyEventDef>(
   scope: NodeScope,
-  event: string,
-  handler: (event: NativeEvent<T>) => unknown,
+  def: E,
+  handler: (event: NativeEvent<unknown>) => unknown,
   options: AuthoritativeListenOptions,
 ): Promise<UnlistenFn> {
-  if (isAppCommandScope(scope)) return listenAuthoritative(event, handler, options);
+  if (isAppCommandScope(scope)) return listenAuthoritative(def.name, handler, options);
   return listenAuthoritativeWith(
     <P>(name: string, listener: (message: NativeEvent<P>) => unknown) =>
-      Promise.resolve(scope.client.listenRaw<P>(name, (payload) => listener({ payload }))),
-    event,
+      Promise.resolve(
+        name === def.name
+          ? scope.client.listen(def, (payload) => listener({ payload: payload as P }))
+          : scope.client.listenRaw<P>(name, (payload) => listener({ payload })),
+      ),
+    def.name,
     handler,
     options,
   );
@@ -144,9 +154,9 @@ function createChangeSubscriptions(nodeScope: NodeScope): ChangeSubscriptions {
 
   function ensureListening(): Promise<void> {
     if (disposed) return Promise.resolve();
-    listening ??= listenAuthoritativeInScope<unknown>(
+    listening ??= listenAuthoritativeInScope(
       nodeScope,
-      CHANGE_PROJECTION_CHANGED_EVENT,
+      changeProjectionChangedEvent,
       (event) => {
         const payload = event.payload;
         if (disposed || !isChangeProjectionEvent(payload)) return;

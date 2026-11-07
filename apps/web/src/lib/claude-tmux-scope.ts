@@ -11,8 +11,8 @@
 
 import { scopeBackendClient } from "@/lib/backend/client";
 import * as commandTmux from "@/lib/claude-tmux-client";
+import { claudeTmuxEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  CLAUDE_TMUX_EVENT,
   createClaudeTmuxClient,
   type ClaudeTmuxClient,
   type TmuxEvent,
@@ -23,7 +23,9 @@ import { defineScopedSlot, isAppCommandScope, listenInScope } from "@/lib/node-s
 
 const scopeTmux = defineScopedSlot("claude-tmux-client", (scope): ClaudeTmuxClient =>
   createClaudeTmuxClient(scopeBackendClient(scope), (onEvent) =>
-    listenInScope<TmuxEvent>(scope, CLAUDE_TMUX_EVENT, onEvent),
+    // The definition pins each kind's routing fields; `TmuxEvent` is the
+    // client's model of the same payload, delivered as sent.
+    listenInScope(scope, claudeTmuxEvent, (payload) => onEvent(payload as TmuxEvent)),
   ),
 );
 

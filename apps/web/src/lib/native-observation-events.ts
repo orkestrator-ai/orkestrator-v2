@@ -4,15 +4,11 @@ import {
   parseNativeAgentActivityAnnouncement,
 } from "@orkestrator/protocol/native-agent-observation";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
-import { listen as nativeListen, type NativeEvent, type UnlistenFn } from "@/lib/native/events";
+import { nativeAgentSessionActivityEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { NativeEvent, UnlistenFn } from "@/lib/native/events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import {
-  appCommandScope,
-  defineScopedSlot,
-  isAppCommandScope,
-  listenInScope,
-} from "@/lib/node-scope-slots";
+import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 
 const log = createLogger("web.resource-sync");
 
@@ -140,11 +136,14 @@ const sharedEvents = defineScopedSlot<{ events: NativeObservationEvents | null }
 
 function eventsFor(scope: NodeScope): NativeObservationEvents {
   const slot = sharedEvents(scope);
+  // The one event it listens to, by its definition (plan item 7011), on the
+  // app's command scope (`@/lib/native/events`, what suites emit) or the
+  // scope's own client.
   slot.events ??= createNativeObservationEvents(
-    isAppCommandScope(scope)
-      ? nativeListen
-      : <T>(event: string, handler: (event: NativeEvent<T>) => unknown) =>
-          listenInScope<T>(scope, event, (payload) => handler({ payload })),
+    <T>(_event: string, handler: (event: NativeEvent<T>) => unknown) =>
+      listenInScope(scope, nativeAgentSessionActivityEvent, (payload) =>
+        handler({ payload: payload as T }),
+      ),
   );
   return slot.events;
 }

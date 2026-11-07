@@ -7,7 +7,7 @@
  *
  * ```ts
  * export const resourceSync = defineScopedService("resource-sync", (scope, signal) => {
- *   const stopListening = scope.client.listenRaw("resource-changed", onChanged);
+ *   const stopListening = scope.client.listen(resourceChangedEvent, onChanged);
  *   const done = refreshLoop(scope, signal); // a promise that settles when the loop ends
  *   return { stop: stopListening, done };
  * });

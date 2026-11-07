@@ -18,14 +18,41 @@ const log = createLogger("contract");
 
 type RawListen = (event: string, handler: (payload: unknown) => void) => Unlisten;
 
+function onInvalid(def: AnyEventDef): () => void {
+  return () =>
+    log.warn("listen.payload-invalid", {
+      event: def.family ? `${def.family.prefix}*` : def.name,
+    });
+}
+
 /** `listen` for a client whose untyped subscription is `listenRaw`. */
 export function typedListen(listenRaw: RawListen): NodeClient["listen"] {
   const source = { listenRaw };
   return <E extends AnyEventDef>(def: E, handler: (payload: PayloadOf<E>) => void): Unlisten =>
-    listenEvent(source, def, handler, {
-      onInvalid: () =>
-        log.warn("listen.payload-invalid", {
-          event: def.family ? `${def.family.prefix}*` : def.name,
-        }),
-    });
+    listenEvent(source, def, handler, { onInvalid: onInvalid(def) });
+}
+
+/**
+ * `typedListen`'s delivery as a raw handler, for a subscription that is not a
+ * client's `listenRaw` (the app command scope's `@/lib/native/events` `listen`,
+ * which suites mock): `def`'s payloads that decode reach `handler` as sent,
+ * any other is dropped and logged by name.
+ */
+export function typedHandler<E extends AnyEventDef>(
+  def: E,
+  handler: (payload: PayloadOf<E>) => void,
+): (raw: unknown) => void {
+  let deliver: (raw: unknown) => void = () => {};
+  listenEvent(
+    {
+      listenRaw: (_event, raw) => {
+        deliver = raw;
+        return () => {};
+      },
+    },
+    def,
+    handler,
+    { onInvalid: onInvalid(def) },
+  );
+  return deliver;
 }

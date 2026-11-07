@@ -5,7 +5,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/events";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { createWindowOrkestratorClient } from "./command-client";
-import { typedListen } from "./typed-listen";
+import { typedHandler, typedListen } from "./typed-listen";
 
 type Handler = (payload: unknown) => void;
 type OrkestratorApi = NonNullable<Window["orkestrator"]>;
@@ -66,5 +66,17 @@ describe("NodeClient.listen on the command-scope client", () => {
     expect(revisions).toEqual([7]);
     client.dispose();
     expect(source.count()).toBe(0);
+  });
+});
+
+describe("typedHandler", () => {
+  test("hands decodable payloads on as sent and drops the rest", () => {
+    const received: unknown[] = [];
+    const deliver = typedHandler(designCanvasChangedEvent, (payload) => received.push(payload));
+    const valid = { canvasId: "c1", revision: 2, generation: "g", newer: true };
+    deliver({ canvasId: 1, revision: 2 });
+    deliver(undefined);
+    deliver(valid);
+    expect(received).toEqual([valid]);
   });
 });

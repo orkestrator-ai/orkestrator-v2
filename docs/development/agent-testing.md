@@ -1548,6 +1548,35 @@ Measurements land in `evidence-multi-client-*.json` beside the run, judged
 against the latency budgets in
 [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
 
+### Live second node scope (two profiles)
+
+`e2e/agent-testing/playwright.scope-proof.config.ts` proves that one renderer
+holds its command scope and a leaf scope at once (plan item 2013): project
+`browser` (`scope-proof.spec.ts`, direct and relay) drives the command
+profile's gateway page; project `electron` (`scope-proof-electron.spec.ts`)
+launches its own Electron and connects its window to the command profile as a
+remote command node. Both drive `window.orkestratorScopeProof`, a harness the
+renderer installs only in a Vite dev renderer of an agent-test profile (the
+launcher passes `VITE_ORKESTRATOR_PROFILE_FLAVOR=agent-test`; a production
+build has no harness). Each run reads, listens to `resource-changed` and opens a
+terminal on each scope, then records routes, `nextHopProtocol` and long-lived
+requests per origin under `output/agent-testing/<run>/scope-proof/`. The relay
+is forced by blocking the leaf's origin (browser) or refusing it in main
+(desktop). The spec attaches the leaf with its token (read in-process, never
+printed). A third profile in `ORKESTRATOR_AGENT_TEST_SECOND_LEAF_PROFILE` adds a
+two-leaf case.
+
+```bash
+mise run dev:test --profile scope-cmd --fixture --no-agent-credentials
+mise run dev:test --profile scope-leaf --fixture --no-agent-credentials
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=scope-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=scope-leaf \
+  mise run test:logged -- --name scope-proof -- \
+  bunx playwright test --config e2e/agent-testing/playwright.scope-proof.config.ts
+mise run dev:stop --profile scope-cmd && mise run dev:reset --profile scope-cmd
+mise run dev:stop --profile scope-leaf && mise run dev:reset --profile scope-leaf
+```
+
 ### Live requests of a running agent tab
 
 `e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible

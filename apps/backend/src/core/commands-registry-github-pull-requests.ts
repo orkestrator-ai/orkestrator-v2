@@ -8,6 +8,27 @@ import {
   type GitHubPullRequestRef,
   type GitHubPullRequestReviewEvent,
 } from "@orkestrator/protocol/github-pull-requests";
+import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import {
+  addGitHubPullRequestCommentCommand,
+  addGitHubPullRequestReviewCommentCommand,
+  changeGitHubPullRequestLabelCommand,
+  getGitHubPullRequestCommand,
+  getGitHubPullRequestFilesCommand,
+  getGitHubPullRequestTimelineCommand,
+  listGitHubPullRequestsCommand,
+  listGitHubRepositoryAssignableUsersCommand,
+  listGitHubRepositoryLabelsCommand,
+  mergeGitHubPullRequestCommand,
+  replyGitHubPullRequestReviewThreadCommand,
+  setGitHubPullRequestFileViewedCommand,
+  setGitHubPullRequestLabelsCommand,
+  setGitHubPullRequestReviewersCommand,
+  setGitHubPullRequestThreadResolvedCommand,
+  submitGitHubPullRequestReviewCommand,
+  updateGitHubPullRequestCommentCommand,
+  updateGitHubPullRequestStateCommand,
+} from "@orkestrator/protocol/contract/domains/pull-requests";
 import type { CommandContext } from "./commands-context.js";
 import {
   asNumber,
@@ -18,7 +39,12 @@ import {
   requireGitHubProject,
   requireGitHubToken,
 } from "./commands-helpers.js";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import type {
+  CommandRegistrar,
+  DefinedCommandHandler,
+  RegistryDependencies,
+} from "./commands-registry-types.js";
 import { sanitizeGitHubError } from "./github.js";
 import {
   addGitHubPullRequestComment,
@@ -41,9 +67,8 @@ import { getGitHubPullRequestFiles } from "./github-pull-request-files.js";
 import { getGitHubPullRequestTimeline } from "./github-pull-request-timeline.js";
 import { getGitHubPullRequest, listGitHubPullRequests } from "./github-pull-requests.js";
 
-type Args = Record<string, unknown>;
+type Args = Readonly<Record<string, unknown>>;
 
-const REF_KEYS = ["owner", "repo", "number"] as const;
 const LIST_FILTERS: readonly GitHubPullRequestListFilter[] = [
   "open",
   "mine",
@@ -64,8 +89,12 @@ const REVIEW_EVENTS: readonly GitHubPullRequestReviewEvent[] = [
 ];
 const MAX_SEARCH_QUERY_LENGTH = 256;
 
-function refArgs(args: Args, extraKeys: readonly string[] = []): GitHubPullRequestRef {
-  assertOnlyKeys(args, [...REF_KEYS, ...extraKeys], "arguments");
+/**
+ * The pull request the arguments name. The commands were strict (unknown
+ * argument keys refused); with their definitions they drop unknown keys
+ * (plan item 7006), so only the reference itself is checked here.
+ */
+function refArgs(args: Args): GitHubPullRequestRef {
   const ref = { owner: args.owner, repo: args.repo, number: args.number };
   if (!isGitHubPullRequestRef(ref)) {
     throw new Error("Expected owner, repo and number to identify a GitHub pull request");
@@ -74,7 +103,6 @@ function refArgs(args: Args, extraKeys: readonly string[] = []): GitHubPullReque
 }
 
 function repositoryArgs(args: Args): { owner: string; repo: string } {
-  assertOnlyKeys(args, ["owner", "repo"], "arguments");
   const candidate = { owner: args.owner, repo: args.repo, number: 1 };
   if (!isGitHubPullRequestRef(candidate)) {
     throw new Error("Expected owner and repo to identify a GitHub repository");
@@ -158,12 +186,18 @@ export function refreshMonitoredPullRequest(
   })().catch(() => undefined);
 }
 
+/**
+ * The GitHub pull request viewer's commands, registered with their
+ * `pull-requests` definitions (plan item 7006). The handlers are `async`, so
+ * a refused argument is still a rejection.
+ */
 export function registerGitHubPullRequestCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   _dependencies: RegistryDependencies,
 ): void {
-  register("list_github_pull_requests", async (args, context) => {
-    assertOnlyKeys(args, ["projectId", "filter", "query"], "arguments");
+  const register = <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>) =>
+    registerCommand(def, handler, ASYNC_HANDLER);
+  register(listGitHubPullRequestsCommand, async (args, context) => {
     const projectId = asString(args.projectId, "projectId");
     const filter = oneOf(args.filter, LIST_FILTERS, "filter");
     const query = optionalString(args.query, "query")?.trim();
@@ -183,23 +217,23 @@ export function registerGitHubPullRequestCommands(
     }
   });
 
-  register("get_github_pull_request", async (args, context) => {
+  register(getGitHubPullRequestCommand, async (args, context) => {
     const ref = refArgs(args);
     return withGitHubToken(context, (token) => getGitHubPullRequest(token, ref));
   });
 
-  register("get_github_pull_request_timeline", async (args, context) => {
+  register(getGitHubPullRequestTimelineCommand, async (args, context) => {
     const ref = refArgs(args);
     return withGitHubToken(context, (token) => getGitHubPullRequestTimeline(token, ref));
   });
 
-  register("get_github_pull_request_files", async (args, context) => {
+  register(getGitHubPullRequestFilesCommand, async (args, context) => {
     const ref = refArgs(args);
     return withGitHubToken(context, (token) => getGitHubPullRequestFiles(token, ref));
   });
 
-  register("merge_github_pull_request", async (args, context) => {
-    const ref = refArgs(args, ["method", "deleteBranch", "expectedHeadSha"]);
+  register(mergeGitHubPullRequestCommand, async (args, context) => {
+    const ref = refArgs(args);
     const input = {
       method: oneOf(args.method, MERGE_METHODS, "method"),
       deleteBranch: asRequiredBoolean(args.deleteBranch, "deleteBranch"),
@@ -212,8 +246,8 @@ export function registerGitHubPullRequestCommands(
     return result;
   });
 
-  register("update_github_pull_request_state", async (args, context) => {
-    const ref = refArgs(args, ["action"]);
+  register(updateGitHubPullRequestStateCommand, async (args, context) => {
+    const ref = refArgs(args);
     const action = oneOf(args.action, STATE_ACTIONS, "action");
     const detail = await withGitHubToken(context, (token) =>
       updateGitHubPullRequestState(token, ref, action),
@@ -222,14 +256,14 @@ export function registerGitHubPullRequestCommands(
     return detail;
   });
 
-  register("add_github_pull_request_comment", async (args, context) => {
-    const ref = refArgs(args, ["body"]);
+  register(addGitHubPullRequestCommentCommand, async (args, context) => {
+    const ref = refArgs(args);
     const body = asString(args.body, "body");
     return withGitHubToken(context, (token) => addGitHubPullRequestComment(token, ref, body));
   });
 
-  register("update_github_pull_request_comment", async (args, context) => {
-    const ref = refArgs(args, ["commentId", "body"]);
+  register(updateGitHubPullRequestCommentCommand, async (args, context) => {
+    const ref = refArgs(args);
     const commentId = asNumber(args.commentId, "commentId");
     const body = asString(args.body, "body");
     return withGitHubToken(context, (token) =>
@@ -237,8 +271,8 @@ export function registerGitHubPullRequestCommands(
     );
   });
 
-  register("submit_github_pull_request_review", async (args, context) => {
-    const ref = refArgs(args, ["event", "body", "commitId", "comments"]);
+  register(submitGitHubPullRequestReviewCommand, async (args, context) => {
+    const ref = refArgs(args);
     const review = {
       event: oneOf(args.event, REVIEW_EVENTS, "event"),
       body: asString(args.body, "body"),
@@ -248,8 +282,8 @@ export function registerGitHubPullRequestCommands(
     return withGitHubToken(context, (token) => submitGitHubPullRequestReview(token, ref, review));
   });
 
-  register("add_github_pull_request_review_comment", async (args, context) => {
-    const ref = refArgs(args, ["commitId", "comment"]);
+  register(addGitHubPullRequestReviewCommentCommand, async (args, context) => {
+    const ref = refArgs(args);
     const commitId = asString(args.commitId, "commitId");
     const comment = inlineComment(args.comment, "comment");
     return withGitHubToken(context, (token) =>
@@ -257,8 +291,8 @@ export function registerGitHubPullRequestCommands(
     );
   });
 
-  register("reply_github_pull_request_review_thread", async (args, context) => {
-    const ref = refArgs(args, ["threadId", "body"]);
+  register(replyGitHubPullRequestReviewThreadCommand, async (args, context) => {
+    const ref = refArgs(args);
     const threadId = asString(args.threadId, "threadId");
     const body = asString(args.body, "body");
     return withGitHubToken(context, (token) =>
@@ -266,8 +300,8 @@ export function registerGitHubPullRequestCommands(
     );
   });
 
-  register("set_github_pull_request_thread_resolved", async (args, context) => {
-    const ref = refArgs(args, ["threadId", "resolved"]);
+  register(setGitHubPullRequestThreadResolvedCommand, async (args, context) => {
+    const ref = refArgs(args);
     const threadId = asString(args.threadId, "threadId");
     const resolved = asRequiredBoolean(args.resolved, "resolved");
     return withGitHubToken(context, (token) =>
@@ -275,8 +309,8 @@ export function registerGitHubPullRequestCommands(
     );
   });
 
-  register("set_github_pull_request_file_viewed", async (args, context) => {
-    const ref = refArgs(args, ["path", "viewed"]);
+  register(setGitHubPullRequestFileViewedCommand, async (args, context) => {
+    const ref = refArgs(args);
     const path = asString(args.path, "path");
     const viewed = asRequiredBoolean(args.viewed, "viewed");
     return withGitHubToken(context, (token) =>
@@ -284,14 +318,14 @@ export function registerGitHubPullRequestCommands(
     );
   });
 
-  register("set_github_pull_request_reviewers", async (args, context) => {
-    const ref = refArgs(args, ["add", "remove"]);
+  register(setGitHubPullRequestReviewersCommand, async (args, context) => {
+    const ref = refArgs(args);
     const changes = { add: stringList(args.add, "add"), remove: stringList(args.remove, "remove") };
     return withGitHubToken(context, (token) => setGitHubPullRequestReviewers(token, ref, changes));
   });
 
-  register("change_github_pull_request_label", async (args, context) => {
-    const ref = refArgs(args, ["name", "present"]);
+  register(changeGitHubPullRequestLabelCommand, async (args, context) => {
+    const ref = refArgs(args);
     const name = asString(args.name, "name");
     const present = asRequiredBoolean(args.present, "present");
     return withGitHubToken(context, (token) =>
@@ -299,20 +333,20 @@ export function registerGitHubPullRequestCommands(
     );
   });
 
-  register("set_github_pull_request_labels", async (args, context) => {
-    const ref = refArgs(args, ["labels"]);
+  register(setGitHubPullRequestLabelsCommand, async (args, context) => {
+    const ref = refArgs(args);
     const labels = stringList(args.labels, "labels");
     return withGitHubToken(context, (token) => setGitHubPullRequestLabels(token, ref, labels));
   });
 
-  register("list_github_repository_assignable_users", async (args, context) => {
+  register(listGitHubRepositoryAssignableUsersCommand, async (args, context) => {
     const repository = repositoryArgs(args);
     return withGitHubToken(context, (token) =>
       listGitHubRepositoryAssignableUsers(token, repository),
     );
   });
 
-  register("list_github_repository_labels", async (args, context) => {
+  register(listGitHubRepositoryLabelsCommand, async (args, context) => {
     const repository = repositoryArgs(args);
     return withGitHubToken(context, (token) => listGitHubRepositoryLabels(token, repository));
   });

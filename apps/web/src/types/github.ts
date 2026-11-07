@@ -6,61 +6,18 @@ export const GITHUB_STATUS_LABELS = {
 
 export type GitHubIssueStatus = "backlog" | keyof typeof GITHUB_STATUS_LABELS;
 
-export interface GitHubUser {
-  login: string;
-  avatarUrl?: string;
-  htmlUrl?: string;
-}
-
-export interface GitHubLabel {
-  name: string;
-  color: string;
-  description?: string;
-}
-
-export interface GitHubIssue {
-  id: number;
-  number: number;
-  title: string;
-  body: string;
-  htmlUrl: string;
-  state: "open" | "closed";
-  locked: boolean;
-  author: GitHubUser | null;
-  assignees: GitHubUser[];
-  labels: GitHubLabel[];
-  commentsCount: number;
-  createdAt: string;
-  updatedAt: string;
-  status: GitHubIssueStatus;
-}
-
-export interface GitHubIssueComment {
-  id: number;
-  body: string;
-  htmlUrl: string;
-  author: GitHubUser | null;
-  createdAt: string;
-  updatedAt: string;
-  isEdited: boolean;
-  canEdit: boolean;
-}
-
-export interface GitHubRepository {
-  owner: string;
-  name: string;
-  fullName: string;
-  htmlUrl: string;
-}
-
-export type GitHubViewer = GitHubUser;
-
-export interface GitHubIssuesSnapshot {
-  repository: GitHubRepository;
-  viewer: GitHubViewer;
-  issues: GitHubIssue[];
-}
-
-export interface GitHubIssueDetail extends GitHubIssue {
-  comments: GitHubIssueComment[];
-}
+/**
+ * The GitHub issue model is the `pull-requests` domain's (plan item 7006):
+ * the types are inferred from its schemas, which the backend's `github.ts`
+ * uses too, so the two cannot drift.
+ */
+export type {
+  GitHubIssue,
+  GitHubIssueComment,
+  GitHubIssueDetail,
+  GitHubIssuesSnapshot,
+  GitHubLabel,
+  GitHubRepository,
+  GitHubUser,
+  GitHubUser as GitHubViewer,
+} from "@orkestrator/protocol/contract/domains/pull-requests";

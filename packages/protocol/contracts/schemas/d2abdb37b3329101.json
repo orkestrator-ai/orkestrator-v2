@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d2abdb37b3329101a0318660e9d507e747540b12fa325a4c80228f75c6f95e21",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentType": {},
+        "environmentType": {},
+        "featureId": {}
+      },
+      "type": "object"
+    }
+  }
+}

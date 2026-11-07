@@ -80,11 +80,15 @@ describe("GitHub pull request commands", () => {
     expect(fake.requests[0]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
   });
 
-  test("rejects unexpected arguments and invalid refs before contacting GitHub", async () => {
+  test("drops unknown argument keys (pull-requests definitions, plan item 7006)", async () => {
     const { fake, run } = setup();
-    await expect(run("get_github_pull_request", { ...ref, extra: true })).rejects.toThrow(
-      "Unexpected arguments field: extra",
-    );
+    routePullRequestDetail(fake);
+    const detail = await run("get_github_pull_request", { ...ref, extra: true });
+    expect(detail).toMatchObject({ ref, title: "Add widgets" });
+  });
+
+  test("rejects invalid refs and values before contacting GitHub", async () => {
+    const { fake, run } = setup();
     for (const bad of [
       { owner: "..", repo: "repo", number: 7 },
       { owner: "acme", repo: "re/po", number: 7 },
@@ -110,9 +114,6 @@ describe("GitHub pull request commands", () => {
         comments: [{ path: "a", line: 1, side: "RIGHT", body: "x", position: 3 }],
       }),
     ).rejects.toThrow("Unexpected comments[0] field: position");
-    await expect(
-      run("list_github_repository_labels", { owner: "acme", repo: "repo", number: 1 }),
-    ).rejects.toThrow("Unexpected arguments field: number");
     await expect(
       run("list_github_pull_requests", { projectId: "project-1", filter: "all" }),
     ).rejects.toThrow("Expected filter to be one of");

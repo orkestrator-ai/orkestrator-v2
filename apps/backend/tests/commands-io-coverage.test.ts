@@ -1,4 +1,6 @@
 import { eventSink } from "../src/core/backend-emit.js";
+import { decodeCommandArgs } from "@orkestrator/protocol/contract/command";
+import { getEnvironmentUncommittedPathsCommand } from "@orkestrator/protocol/contract/domains/git";
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -1686,7 +1688,7 @@ exit ${exitCode}
     }
   });
 
-  test("rejects an unknown argument to the uncommitted-path probe", async () => {
+  test("drops an unknown argument to the uncommitted-path probe, refuses a bad fingerprint", async () => {
     const root = await createTempDir("ork-commands-io-probe-args-");
     await runCommand("git", ["init", "--initial-branch=main"], { cwd: root, timeoutMs: 30_000 });
     const context = createContext({
@@ -1695,12 +1697,14 @@ exit ${exitCode}
       worktreePath: root,
     });
     const commands = createCommandRegistry();
-    await expect(
-      commands.get("get_environment_uncommitted_paths")?.(
-        { environmentId: "env-1", contents: true },
-        context,
-      ),
-    ).rejects.toThrow("Unexpected get_environment_uncommitted_paths field: contents");
+    // Defined in the `git` domain (plan item 7006): an unknown key is dropped
+    // before the handler runs instead of refused.
+    const decoded = decodeCommandArgs(getEnvironmentUncommittedPathsCommand, {
+      environmentId: "env-1",
+      contents: true,
+    });
+    expect(decoded._tag).toBe("Success");
+    if (decoded._tag === "Success") expect(decoded.success).not.toHaveProperty("contents");
     await expect(
       commands.get("get_environment_uncommitted_paths")?.(
         { environmentId: "env-1", fingerprint: "yes" },

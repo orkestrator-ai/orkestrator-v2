@@ -32,12 +32,14 @@ import { agentServersClient } from "./domains/agent-servers/client.js";
 import { coordinatorClient } from "./domains/coordinator/client.js";
 import { designClient } from "./domains/design/client.js";
 import { filesClient } from "./domains/files/client.js";
+import { gitClient } from "./domains/git/client.js";
 import { graphsClient } from "./domains/graphs/client.js";
 import { nativeSessionsClient } from "./domains/native-sessions/client.js";
 import { nodeFilesClient } from "./domains/node-files/client.js";
 import { nodesClient } from "./domains/nodes/client.js";
 import { nodeMailClient } from "./domains/node-mail/client.js";
 import { previewsClient } from "./domains/previews/client.js";
+import { pullRequestsClient } from "./domains/pull-requests/client.js";
 import { projectsClient } from "./domains/projects/client.js";
 import { terminalsClient } from "./domains/terminals/client.js";
 import { systemClient } from "./domains/system/client.js";
@@ -58,12 +60,14 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   coordinatorClient,
   designClient,
   filesClient,
+  gitClient,
   graphsClient,
   nativeSessionsClient,
   nodeFilesClient,
   nodesClient,
   nodeMailClient,
   previewsClient,
+  pullRequestsClient,
   projectsClient,
   terminalsClient,
   systemClient,

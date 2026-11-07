@@ -61,6 +61,14 @@ import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
+import {
+  getEnvironmentCommitAncestryCommand,
+  getEnvironmentDiffStatsCommand,
+  getEnvironmentUncommittedPathsCommand,
+  getGitStatusCommand,
+  getLocalGitStatusCommand,
+  refreshEnvironmentDiffStatsCommand,
+} from "@orkestrator/protocol/contract/domains/git";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -128,7 +136,6 @@ import {
   containerTerminalUserArgs,
   asString,
   asRecord,
-  assertOnlyKeys,
   asOptionalString,
   asBoolean,
   asRequiredBoolean,
@@ -925,8 +932,10 @@ export function registerTerminalCommands(
     runtime.terminals.explicitlyCloseSession(sessionId);
   });
 
+  // The git status, diff-stat and worktree-probe commands are registered with
+  // their `git` definitions (plan item 7006).
   register(
-    "get_local_git_status",
+    getLocalGitStatusCommand,
     async ({ worktreePath, targetBranch, includeUncommitted, knownDigest, refresh }, context) => {
       // The sidebar badge, every client's Files panel and the background scan
       // look at the same worktree; they share one read owner and one scan.
@@ -944,6 +953,7 @@ export function registerTerminalCommands(
         read.view,
       );
     },
+    ASYNC_HANDLER,
   );
   /**
    * Authoritative diff-stat snapshot.
@@ -953,26 +963,34 @@ export function registerTerminalCommands(
    * also arms tracking, so the first client to ask starts the work even if no
    * lifecycle command has run since the backend started.
    */
-  register("get_environment_diff_stats", async (args, context) => {
-    await context.runtime.diffStats.sync(context);
-    // Legacy `{ entries }` shape (additively stamped) without known-revision
-    // arguments; the compact conditional outcome from `view-sync.ts` with them.
-    const request = parseViewSnapshotRequest(args);
-    if (request.kind === "absent") {
-      return context.runtime.diffStats.service.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
-    }
-    return resolveViewSnapshotOutcome(
-      request,
-      context.runtime.diffStats.service.currentRevision(),
-      () => ({
-        entries: context.runtime.diffStats.service.snapshot(),
-      }),
-    ) satisfies EnvironmentDiffStatsSnapshotOutcome;
-  });
-  register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
-    await context.runtime.diffStats.sync(context);
-    context.runtime.diffStats.refreshExplicitly(asString(environmentId, "environmentId"));
-  });
+  register(
+    getEnvironmentDiffStatsCommand,
+    async (args, context) => {
+      await context.runtime.diffStats.sync(context);
+      // Legacy `{ entries }` shape (additively stamped) without known-revision
+      // arguments; the compact conditional outcome from `view-sync.ts` with them.
+      const request = parseViewSnapshotRequest(args);
+      if (request.kind === "absent") {
+        return context.runtime.diffStats.service.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
+      }
+      return resolveViewSnapshotOutcome(
+        request,
+        context.runtime.diffStats.service.currentRevision(),
+        () => ({
+          entries: context.runtime.diffStats.service.snapshot(),
+        }),
+      ) satisfies EnvironmentDiffStatsSnapshotOutcome;
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    refreshEnvironmentDiffStatsCommand,
+    async ({ environmentId }, context) => {
+      await context.runtime.diffStats.sync(context);
+      context.runtime.diffStats.refreshExplicitly(asString(environmentId, "environmentId"));
+    },
+    ASYNC_HANDLER,
+  );
   /**
    * File-list and tree revisions of every tracked environment
    * (`@orkestrator/protocol/worktree-snapshots`). Like the diff-stat snapshot,
@@ -1176,7 +1194,7 @@ export function registerTerminalCommands(
   );
 
   register(
-    "get_git_status",
+    getGitStatusCommand,
     async ({ containerId, targetBranch, includeUncommitted, knownDigest, refresh }, context) => {
       const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
       const id = asString(containerId, "containerId");
@@ -1207,6 +1225,7 @@ export function registerTerminalCommands(
         read.view,
       );
     },
+    ASYNC_HANDLER,
   );
   /**
    * Authoritative uncommitted-path list for one environment, for callers that
@@ -1228,49 +1247,48 @@ export function registerTerminalCommands(
    * outside the worktree are invisible here, so no caller may describe this as
    * proof that the workspace was untouched.
    */
-  register("get_environment_uncommitted_paths", async (args, context) => {
-    assertOnlyKeys(
-      asRecord(args, "args"),
-      ["environmentId", "fingerprint"],
-      "get_environment_uncommitted_paths",
-    );
-    const { environmentId, fingerprint } = args;
-    const environment = await context.storage.getEnvironment(
-      asString(environmentId, "environmentId"),
-    );
-    if (!environment) throw new Error("Environment not found");
-    const wantFingerprint =
-      fingerprint === undefined ? false : asRequiredBoolean(fingerprint, "fingerprint");
-    const runner = createEnvironmentCommandRunner(
-      environment,
-      context.runtime.environments.fence,
-      context.storage,
-      context.runtime.gitHubCli,
-    );
-    // The container image ships Node; a local worktree runs on the user's own
-    // machine, where the backend's inherited PATH is whatever the OS handed
-    // Electron and need not contain any Node at all. Use the same managed Bun
-    // the rest of the local command surface relies on.
-    const local = environment.environmentType === "local";
-    const timeoutMs = wantFingerprint
-      ? REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS
-      : REVIEW_WORKTREE_PROBE_TIMEOUT_MS;
-    const captured = parseReviewWorktreeFingerprint(
-      await worktreeProbes.run(`${environment.id}\0${wantFingerprint}`, () =>
-        runner(
-          local ? resolveBunBinary(context) : "node",
-          reviewWorktreeProbeArgs(wantFingerprint, timeoutMs),
-          timeoutMs,
-          local ? envWithManagedBinaries(context) : undefined,
+  register(
+    getEnvironmentUncommittedPathsCommand,
+    async (args, context) => {
+      const { environmentId, fingerprint } = args;
+      const environment = await context.storage.getEnvironment(
+        asString(environmentId, "environmentId"),
+      );
+      if (!environment) throw new Error("Environment not found");
+      const wantFingerprint =
+        fingerprint === undefined ? false : asRequiredBoolean(fingerprint, "fingerprint");
+      const runner = createEnvironmentCommandRunner(
+        environment,
+        context.runtime.environments.fence,
+        context.storage,
+        context.runtime.gitHubCli,
+      );
+      // The container image ships Node; a local worktree runs on the user's own
+      // machine, where the backend's inherited PATH is whatever the OS handed
+      // Electron and need not contain any Node at all. Use the same managed Bun
+      // the rest of the local command surface relies on.
+      const local = environment.environmentType === "local";
+      const timeoutMs = wantFingerprint
+        ? REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS
+        : REVIEW_WORKTREE_PROBE_TIMEOUT_MS;
+      const captured = parseReviewWorktreeFingerprint(
+        await worktreeProbes.run(`${environment.id}\0${wantFingerprint}`, () =>
+          runner(
+            local ? resolveBunBinary(context) : "node",
+            reviewWorktreeProbeArgs(wantFingerprint, timeoutMs),
+            timeoutMs,
+            local ? envWithManagedBinaries(context) : undefined,
+          ),
         ),
-      ),
-    );
-    return {
-      head: captured.head,
-      paths: parseGitPorcelainPaths(captured.status),
-      ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
-    };
-  });
+      );
+      return {
+        head: captured.head,
+        paths: parseGitPorcelainPaths(captured.status),
+        ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
+      };
+    },
+    ASYNC_HANDLER,
+  );
   /**
    * Whether commit `ancestor` is `descendant` or one of its ancestors in an
    * environment's repository. The build pipeline asks before Verify whether
@@ -1280,39 +1298,38 @@ export function registerTerminalCommands(
    * histories). The answer comes from `git merge-base` rather than
    * `--is-ancestor`, whose nonzero exit means both "no" and "failed".
    */
-  register("get_environment_commit_ancestry", async (args, context) => {
-    assertOnlyKeys(
-      asRecord(args, "args"),
-      ["environmentId", "ancestor", "descendant"],
-      "get_environment_commit_ancestry",
-    );
-    const commit = (value: unknown, name: string) => {
-      const id = asString(value, name).toLowerCase();
-      if (!/^[0-9a-f]{40,64}$/.test(id)) throw new Error(`${name} must be a full commit id`);
-      return id;
-    };
-    const ancestor = commit(args.ancestor, "ancestor");
-    const descendant = commit(args.descendant, "descendant");
-    const environment = await context.storage.getEnvironment(
-      asString(args.environmentId, "environmentId"),
-    );
-    if (!environment) throw new Error("Environment not found");
-    const runner = createEnvironmentCommandRunner(
-      environment,
-      context.runtime.environments.fence,
-      context.storage,
-      context.runtime.gitHubCli,
-    );
-    let mergeBase: string;
-    try {
-      mergeBase = (await runner("git", ["merge-base", ancestor, descendant], 30_000))
-        .trim()
-        .toLowerCase();
-    } catch {
-      return { isAncestor: null };
-    }
-    return { isAncestor: /^[0-9a-f]{40,64}$/.test(mergeBase) ? mergeBase === ancestor : null };
-  });
+  register(
+    getEnvironmentCommitAncestryCommand,
+    async (args, context) => {
+      const commit = (value: unknown, name: string) => {
+        const id = asString(value, name).toLowerCase();
+        if (!/^[0-9a-f]{40,64}$/.test(id)) throw new Error(`${name} must be a full commit id`);
+        return id;
+      };
+      const ancestor = commit(args.ancestor, "ancestor");
+      const descendant = commit(args.descendant, "descendant");
+      const environment = await context.storage.getEnvironment(
+        asString(args.environmentId, "environmentId"),
+      );
+      if (!environment) throw new Error("Environment not found");
+      const runner = createEnvironmentCommandRunner(
+        environment,
+        context.runtime.environments.fence,
+        context.storage,
+        context.runtime.gitHubCli,
+      );
+      let mergeBase: string;
+      try {
+        mergeBase = (await runner("git", ["merge-base", ancestor, descendant], 30_000))
+          .trim()
+          .toLowerCase();
+      } catch {
+        return { isAncestor: null };
+      }
+      return { isAncestor: /^[0-9a-f]{40,64}$/.test(mergeBase) ? mergeBase === ancestor : null };
+    },
+    ASYNC_HANDLER,
+  );
   register(
     getFileTreeCommand,
     async ({ containerId, knownDigest, refresh }, context) => {

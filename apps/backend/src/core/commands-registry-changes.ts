@@ -21,8 +21,26 @@ import {
   type ChangesResolveLiveDetailResult,
   type ChangeViewResult,
 } from "@orkestrator/protocol/change-resources";
+import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import {
+  changesApplyRestoreCommand,
+  changesGetCapabilitiesCommand,
+  changesGetDiagnosticsCommand,
+  changesGetDiffCommand,
+  changesGetFilesCommand,
+  changesGetHandoffCommand,
+  changesGetHistoryCommand,
+  changesGetThreadCommand,
+  changesGetToolPresentationsCommand,
+  changesGetViewCommand,
+  changesMeasureLegacyPayloadCommand,
+  changesPrepareRestoreCommand,
+  changesRefreshCommand,
+  changesResolveLiveDetailCommand,
+} from "@orkestrator/protocol/contract/domains/git";
 import type { CommandContext } from "./commands-context.js";
-import type { CommandRegistrar } from "./commands-registry-types.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import type { CommandRegistrar, DefinedCommandHandler } from "./commands-registry-types.js";
 import { measureLegacyPayload, type ChangeTrackingService } from "./change-tracking/index.js";
 
 const MAX_ID = 512;
@@ -61,8 +79,15 @@ function tracking(context: CommandContext): ChangeTrackingService {
   return service;
 }
 
-export function registerChangeCommands(register: CommandRegistrar): void {
-  register("changes_get_view", async (args, context): Promise<ChangeViewResult> => {
+/**
+ * Registers each `git` changes command with its definition (plan item 7006).
+ * Every handler is `async`, so an argument the definition refuses is still a
+ * rejection (`ASYNC_HANDLER`). The handlers keep their own bounds and text.
+ */
+export function registerChangeCommands(registerCommand: CommandRegistrar): void {
+  const register = <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>) =>
+    registerCommand(def, handler, ASYNC_HANDLER);
+  register(changesGetViewCommand, async (args, context): Promise<ChangeViewResult> => {
     const resourceKey = text(args.resourceKey, "resourceKey", 1_024);
     const parts = parseChangeResourceKey(resourceKey);
     if (
@@ -83,7 +108,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("changes_get_files", async (args, context): Promise<ChangesGetFilesResult> => {
+  register(changesGetFilesCommand, async (args, context): Promise<ChangesGetFilesResult> => {
     return tracking(context).projections.files(
       text(args.resourceKey, "resourceKey", 1_024),
       text(args.snapshotToken, "snapshotToken", 1_024),
@@ -92,7 +117,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("changes_get_tool_presentations", async (args, context) => {
+  register(changesGetToolPresentationsCommand, async (args, context) => {
     return tracking(context).getToolPresentations({
       environmentId: text(args.environmentId, "environmentId"),
       provider: text(args.provider, "provider", 64),
@@ -101,7 +126,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("changes_get_history", async (args, context): Promise<ChangesGetHistoryResult> => {
+  register(changesGetHistoryCommand, async (args, context): Promise<ChangesGetHistoryResult> => {
     return tracking(context).getHistory({
       newestFirst: true,
       environmentId: text(args.environmentId, "environmentId"),
@@ -111,7 +136,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("changes_get_thread", async (args, context) => {
+  register(changesGetThreadCommand, async (args, context) => {
     return tracking(context).threadResource(
       text(args.environmentId, "environmentId"),
       text(args.logicalSessionKey, "logicalSessionKey"),
@@ -119,7 +144,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
   });
 
   register(
-    "changes_resolve_live_detail",
+    changesResolveLiveDetailCommand,
     async (args, context): Promise<ChangesResolveLiveDetailResult> => {
       return tracking(context).diffBodies.resolveLiveDetail({
         resourceKey: text(args.resourceKey, "resourceKey", 1_024),
@@ -131,7 +156,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     },
   );
 
-  register("changes_get_diff", async (args, context): Promise<ChangesGetDiffResult> => {
+  register(changesGetDiffCommand, async (args, context): Promise<ChangesGetDiffResult> => {
     const display =
       args.display && typeof args.display === "object"
         ? (args.display as Record<string, unknown>)
@@ -149,7 +174,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("changes_refresh", async (args, context): Promise<ChangesRefreshResult> => {
+  register(changesRefreshCommand, async (args, context): Promise<ChangesRefreshResult> => {
     const resourceKey = text(args.resourceKey, "resourceKey", 1_024);
     if (parseChangeResourceKey(resourceKey)?.scope === "environment-net") {
       await context.runtime.diffStats.sync(context);
@@ -157,7 +182,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     return tracking(context).refresh({ resourceKey });
   });
 
-  register("changes_get_handoff", async (args, context): Promise<ChangesGetHandoffResult> => {
+  register(changesGetHandoffCommand, async (args, context): Promise<ChangesGetHandoffResult> => {
     const result = tracking(context).handoff.serialize(
       stringList(args.measurementIds, "measurementIds", 200),
       optionalInteger(args.maxCharacters, "maxCharacters", 200_000) ?? 8_000,
@@ -166,7 +191,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
   });
 
   register(
-    "changes_prepare_restore",
+    changesPrepareRestoreCommand,
     async (args, context): Promise<ChangesPrepareRestoreResult> => {
       return tracking(context).restore.prepare({
         measurementId: text(args.measurementId, "measurementId"),
@@ -177,17 +202,20 @@ export function registerChangeCommands(register: CommandRegistrar): void {
     },
   );
 
-  register("changes_apply_restore", async (args, context): Promise<ChangesApplyRestoreResult> => {
-    return tracking(context).restore.apply({
-      actionToken: text(args.actionToken, "actionToken"),
-      idempotencyKey: text(args.idempotencyKey, "idempotencyKey", 128),
-    });
-  });
+  register(
+    changesApplyRestoreCommand,
+    async (args, context): Promise<ChangesApplyRestoreResult> => {
+      return tracking(context).restore.apply({
+        actionToken: text(args.actionToken, "actionToken"),
+        idempotencyKey: text(args.idempotencyKey, "idempotencyKey", 128),
+      });
+    },
+  );
 
-  register("changes_get_diagnostics", async (_args, context) => tracking(context).diagnostics());
+  register(changesGetDiagnosticsCommand, async (_args, context) => tracking(context).diagnostics());
 
   register(
-    "changes_get_capabilities",
+    changesGetCapabilitiesCommand,
     async (_args, context): Promise<ChangeTrackingCapabilities> => {
       const policy = tracking(context).policies.policy;
       return {
@@ -204,7 +232,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
 
   // Compatibility: measure a legacy transcript tool payload on the backend so
   // clients never count lines themselves. Not persisted.
-  register("changes_measure_legacy_payload", async (args) => {
+  register(changesMeasureLegacyPayloadCommand, async (args) => {
     // Sides may legitimately be empty strings (an empty file).
     const side = (value: unknown, field: string): string | undefined => {
       if (value === undefined || value === null) return undefined;

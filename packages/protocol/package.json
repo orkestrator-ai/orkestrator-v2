@@ -63,6 +63,8 @@
     "./contract/domains/agent-mail": "./src/contract/domains/agent-mail/index.ts",
     "./contract/domains/accounts": "./src/contract/domains/accounts/index.ts",
     "./contract/domains/mcp": "./src/contract/domains/mcp/index.ts",
+    "./contract/domains/git": "./src/contract/domains/git/index.ts",
+    "./contract/domains/pull-requests": "./src/contract/domains/pull-requests/index.ts",
     "./contract/domains/events": "./src/contract/domains/events.ts",
     "./contract/envelope": "./src/contract/envelope.ts",
     "./contract/errors": "./src/contract/errors.ts",

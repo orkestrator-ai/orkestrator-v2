@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:0cf60f1d07e47cad9f45fac7ce453fac6d0bde07eb165ba28474efd89b03676f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "pipelineId": {
+          "type": "string"
+        },
+        "refreshUsage": {
+          "type": "boolean"
+        },
+        "sessionKey": {
+          "type": "string"
+        }
+      },
+      "required": ["pipelineId", "sessionKey"],
+      "type": "object"
+    }
+  }
+}

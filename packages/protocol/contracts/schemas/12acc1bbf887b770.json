@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:12acc1bbf887b77004f215c7b89d2b484ee7ebc3c1bc6be7dc21092ae5bfc43e",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "knownRevision": {},
+        "knownSessions": {},
+        "pipelineId": {
+          "type": "string"
+        },
+        "prioritySessionKey": {}
+      },
+      "required": ["pipelineId"],
+      "type": "object"
+    }
+  }
+}

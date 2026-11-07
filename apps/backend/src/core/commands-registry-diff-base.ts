@@ -4,11 +4,18 @@
  * the user's choice (`diffBaseOverride`).
  */
 
+import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import {
+  listEnvironmentDiffBaseBranchesCommand,
+  listEnvironmentDiffBaseCommitsCommand,
+  setEnvironmentDiffBaseCommand,
+} from "@orkestrator/protocol/contract/domains/git";
 import type { DiffBaseBranch, DiffBaseCommit } from "@orkestrator/protocol/diff-stats";
 import type { CommandContext } from "./commands-context.js";
-import type { CommandRegistrar } from "./commands-registry-types.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import type { CommandRegistrar, DefinedCommandHandler } from "./commands-registry-types.js";
 import { toClientEnvironment } from "./commands-terminal.js";
-import { asString, assertOnlyKeys } from "./commands-validation.js";
+import { asString } from "./commands-validation.js";
 import {
   DEFAULT_DIFF_BASE_COMMITS,
   diffBaseGitForEnvironment,
@@ -31,20 +38,25 @@ async function requireEnvironment(context: CommandContext, id: unknown): Promise
   return environment;
 }
 
+/**
+ * Registered with their `git` definitions (plan item 7006). The three
+ * commands were strict (`assertOnlyKeys`) and now drop unknown keys; the
+ * handlers are `async`, so a refused argument is still a rejection.
+ */
 export function registerDiffBaseCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   options: DiffBaseCommandOptions = {},
 ): void {
+  const register = <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>) =>
+    registerCommand(def, handler, ASYNC_HANDLER);
   const gitFor = options.gitFor ?? diffBaseGitForEnvironment;
 
-  register("list_environment_diff_base_branches", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  register(listEnvironmentDiffBaseBranchesCommand, async (args, context) => {
     const environment = await requireEnvironment(context, args.environmentId);
     return (await listDiffBaseBranches(gitFor(environment))) satisfies DiffBaseBranch[];
   });
 
-  register("list_environment_diff_base_commits", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "ref", "limit"], "arguments");
+  register(listEnvironmentDiffBaseCommitsCommand, async (args, context) => {
     const environment = await requireEnvironment(context, args.environmentId);
     const limit =
       typeof args.limit === "number" && Number.isSafeInteger(args.limit) && args.limit > 0
@@ -58,8 +70,7 @@ export function registerDiffBaseCommands(
   });
 
   /** `{ ref, commit }` sets the base; `ref` and `commit` both null clears it. */
-  register("set_environment_diff_base", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "ref", "commit"], "arguments");
+  register(setEnvironmentDiffBaseCommand, async (args, context) => {
     const environment = await requireEnvironment(context, args.environmentId);
     const clear = args.ref == null && args.commit == null;
     const diffBaseOverride = clear

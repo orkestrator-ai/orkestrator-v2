@@ -15,6 +15,7 @@ import {
   type DiffBaseGit,
 } from "./diff-base-override.js";
 import type { Environment } from "./models.js";
+import { createEnvironment } from "./storage-shared-core.js";
 
 const TIP = "a".repeat(40);
 const OLDER = "b".repeat(40);
@@ -158,7 +159,9 @@ function commandHarness(environment: Environment) {
 }
 
 test("set_environment_diff_base saves, retargets scans and clears", async () => {
-  const harness = commandHarness({ id: "env-1" } as Environment);
+  // A whole environment record: the command answers `ClientEnvironment`,
+  // which tests validate against its schema (plan item 7006).
+  const harness = commandHarness({ ...createEnvironment("project-1"), id: "env-1" });
   const saved = (await harness.run("set_environment_diff_base", {
     environmentId: "env-1",
     ref: "refs/remotes/origin/main",

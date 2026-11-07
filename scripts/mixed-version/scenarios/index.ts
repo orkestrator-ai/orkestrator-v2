@@ -8,11 +8,13 @@ import design from "./design.ts";
 import docker from "./docker.ts";
 import environments from "./environments.ts";
 import files from "./files.ts";
+import git from "./git.ts";
 import graphs from "./graphs.ts";
 import nativeSessions from "./native-sessions.ts";
 import nodeFiles from "./node-files.ts";
 import nodeMail from "./node-mail.ts";
 import previews from "./previews.ts";
+import pullRequests from "./pull-requests.ts";
 import terminals from "./terminals.ts";
 import ticketSync from "./ticket-sync.ts";
 import transcriptArtifacts from "./transcript-artifacts.ts";
@@ -33,4 +35,6 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   environments,
   docker,
   graphs,
+  git,
+  pullRequests,
 ];

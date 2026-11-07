@@ -14,19 +14,24 @@ import type {
   DiffDisplayOptions,
 } from "@orkestrator/protocol/change-resources";
 import type { LineCount } from "@orkestrator/protocol/change-measurements";
+import { git } from "@/lib/node-scope/domains/git";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
-import {
-  clientInvoke,
-  commandBackendClient,
-  scopeBackendClient,
-  type BackendClient,
-} from "./client";
+import { commandBackendClient, scopeBackendClient, type BackendClient } from "./client";
 
 /**
  * Backend change-tracking commands (docs/architecture/change-tracking.md).
  * Every answer is a server-prepared DTO; nothing here interprets counts.
+ *
+ * The commands are the `git` domain's (plan item 7006): each call goes
+ * through the domain client (`@/lib/node-scope/domains/git`), which picks
+ * the node's adapter. Version 1 decodes results with the protocol schemas,
+ * whose types are the `change-resources` types used here; version 0 is
+ * today's call, answered as sent.
  */
+
+/** A call that sends no arguments object, as today's `invoke(command)`. */
+const NO_ARGUMENTS = undefined as unknown as Record<string, never>;
 
 export interface ToolChangePresentations {
   presentations: Record<string, CanonicalToolPresentation | null>;
@@ -50,12 +55,14 @@ export function getChangeTrackingCapabilities(
 ): Promise<ChangeTrackingCapabilities | null> {
   const slot = changeTrackingCapabilities(target);
   if (slot.request) return slot.request;
-  const request = clientInvoke(scopeBackendClient(target))<ChangeTrackingCapabilities>(
-    "changes_get_capabilities",
-  ).catch(() => {
-    if (slot.request === request) slot.request = null;
-    return null;
-  });
+  // Inside the promise, so a node with no overlapping `git` range (a thrown
+  // `unsupported-version`) reads as "no change tracking" like any failure.
+  const request = Promise.resolve()
+    .then(() => git(scopeBackendClient(target)).changes_get_capabilities(NO_ARGUMENTS))
+    .catch(() => {
+      if (slot.request === request) slot.request = null;
+      return null;
+    });
   slot.request = request;
   return request;
 }
@@ -82,27 +89,27 @@ export interface LegacyPayloadSummary {
  * over the window's command scope.
  */
 export function createChangesApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const api = () => git(client);
 
-  function getChangeView(
+  async function getChangeView(
     resourceKey: string,
     known?: { generation: string; revision: number },
     pageSize?: number,
   ): Promise<ChangeViewResult> {
-    return invoke<ChangeViewResult>("changes_get_view", {
+    return api().changes_get_view({
       resourceKey,
       ...(known ? { knownGeneration: known.generation, knownRevision: known.revision } : {}),
       ...(pageSize !== undefined ? { pageSize } : {}),
     });
   }
 
-  function getChangeFiles(
+  async function getChangeFiles(
     resourceKey: string,
     snapshotToken: string,
     cursor: string | null,
     pageSize = 200,
   ): Promise<ChangesGetFilesResult> {
-    return invoke<ChangesGetFilesResult>("changes_get_files", {
+    return api().changes_get_files({
       resourceKey,
       snapshotToken,
       cursor,
@@ -110,81 +117,81 @@ export function createChangesApi(client: BackendClient) {
     });
   }
 
-  function getToolChangePresentations(input: {
+  async function getToolChangePresentations(input: {
     environmentId: string;
     provider: string;
     conversationId: string;
     callIds: readonly string[];
   }): Promise<ToolChangePresentations> {
-    return invoke<ToolChangePresentations>("changes_get_tool_presentations", {
+    return api().changes_get_tool_presentations({
       ...input,
       callIds: Array.from(input?.callIds ?? []),
     });
   }
 
-  function getChangeHistory(input: {
+  async function getChangeHistory(input: {
     environmentId: string;
     logicalSessionKey: string;
     cursor?: string | null;
     pageSize?: number;
   }): Promise<ChangesGetHistoryResult> {
-    return invoke<ChangesGetHistoryResult>("changes_get_history", input);
+    return api().changes_get_history(input);
   }
 
-  function getChangeThread(
+  async function getChangeThread(
     environmentId: string,
     logicalSessionKey: string,
   ): Promise<{ segmentId: string; resourceKey: string } | null> {
-    return invoke("changes_get_thread", { environmentId, logicalSessionKey });
+    return api().changes_get_thread({ environmentId, logicalSessionKey });
   }
 
-  function resolveLiveChangeDetail(input: {
+  async function resolveLiveChangeDetail(input: {
     resourceKey: string;
     revision?: number;
     rowId?: string;
     pathId?: string;
     path?: string;
   }): Promise<ChangesResolveLiveDetailResult> {
-    return invoke<ChangesResolveLiveDetailResult>("changes_resolve_live_detail", input);
+    return api().changes_resolve_live_detail(input);
   }
 
-  function getChangeDiff(
+  async function getChangeDiff(
     diffIdentityId: string,
     cursor?: string | null,
     display?: DiffDisplayOptions,
   ): Promise<ChangesGetDiffResult> {
-    return invoke<ChangesGetDiffResult>("changes_get_diff", {
+    return api().changes_get_diff({
       diffIdentityId,
       ...(cursor ? { cursor } : {}),
       ...(display ? { display } : {}),
     });
   }
 
-  function refreshChanges(resourceKey: string): Promise<ChangesRefreshResult> {
-    return invoke<ChangesRefreshResult>("changes_refresh", { resourceKey });
+  async function refreshChanges(resourceKey: string): Promise<ChangesRefreshResult> {
+    return api().changes_refresh({ resourceKey });
   }
 
-  function prepareChangeRestore(
+  async function prepareChangeRestore(
     measurementId: string,
     pathIds?: readonly string[],
   ): Promise<ChangesPrepareRestoreResult> {
-    return invoke<ChangesPrepareRestoreResult>("changes_prepare_restore", {
+    return api().changes_prepare_restore({
       measurementId,
       ...(pathIds ? { pathIds: [...pathIds] } : {}),
     });
   }
 
-  function applyChangeRestore(
+  async function applyChangeRestore(
     actionToken: string,
     idempotencyKey: string,
   ): Promise<ChangesApplyRestoreResult> {
-    return invoke<ChangesApplyRestoreResult>("changes_apply_restore", {
+    return api().changes_apply_restore({
       actionToken,
       idempotencyKey,
     });
   }
 
-  function measureLegacyToolPayload(input: {
+  async function measureLegacyToolPayload(input: {
     toolName?: string;
     filePath?: string;
     before?: string;
@@ -193,7 +200,7 @@ export function createChangesApi(client: BackendClient) {
     additions?: number;
     deletions?: number;
   }): Promise<LegacyPayloadSummary | null> {
-    return invoke<LegacyPayloadSummary | null>("changes_measure_legacy_payload", input);
+    return api().changes_measure_legacy_payload(input);
   }
 
   return {

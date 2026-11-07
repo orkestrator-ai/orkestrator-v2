@@ -3,16 +3,14 @@
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
     "commands": 999,
-    "defined": 893,
-    "untyped": 106,
+    "defined": 958,
+    "untyped": 41,
     "events": 44
   },
   "untypedByDomain": {
     "agent-mail": 23,
     "mcp": 13,
-    "multi-review": 30,
     "node-mail": 3,
-    "pipelines": 35,
     "public-api": 1,
     "ticket-sync": 1
   },
@@ -65,6 +63,10 @@
       "version": 1,
       "min": 1
     },
+    "multi-review": {
+      "version": 1,
+      "min": 1
+    },
     "native-sessions": {
       "version": 1,
       "min": 1
@@ -78,6 +80,10 @@
       "min": 1
     },
     "nodes": {
+      "version": 1,
+      "min": 1
+    },
+    "pipelines": {
       "version": 1,
       "min": 1
     },
@@ -257,8 +263,12 @@
     },
     "address_multi_review": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "adopt_coordinator_workflow": {
       "domain": "coordinator",
@@ -609,8 +619,12 @@
     },
     "cancel_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "cancel_container_operation": {
       "domain": "environments",
@@ -664,8 +678,12 @@
     },
     "cancel_multi_review": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "cancel_native_agent_sign_in": {
       "domain": "native-sessions",
@@ -687,8 +705,12 @@
     },
     "cancel_review_validation": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0c8ad47c915d2cdac3596d9ebfa547be747aeed71cd3510fbc89f39c5d27578",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
     },
     "cancel_user_command": {
       "domain": "terminals",
@@ -1268,8 +1290,12 @@
     },
     "clear_task_build_status": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:45f27a7d41751decdc3b3369d1de47f632e9e0ecd1d202b69af48ee3b556ce67",
+      "resultDigest": "sha256:d2f42a849217c5642861dc0e984ccc06701ba91bcf9bc84768c5b8e9bb1e4ba7"
     },
     "close_container_logs": {
       "domain": "docker",
@@ -1499,8 +1525,12 @@
     },
     "create_feature_build": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["deliveryPolicy", "requestId"],
+      "argsDigest": "sha256:2ed23586a05d7a4d69685ab707f43a25ddd6079b82002b8891ef76548ae8b89c",
+      "resultDigest": "sha256:ff99bf56dc348c5fb8c5f11186f5c8af0ae0ac8aa3a43c608460acea698201fd"
     },
     "create_feature_plan": {
       "domain": "kanban",
@@ -1666,8 +1696,12 @@
     },
     "delete_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "delete_compose_draft": {
       "domain": "native-sessions",
@@ -1752,8 +1786,12 @@
     },
     "delete_multi_review_workflow": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "delete_pane_layout": {
       "domain": "native-sessions",
@@ -2698,18 +2736,30 @@
     },
     "get_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:12acc1bbf887b77004f215c7b89d2b484ee7ebc3c1bc6be7dc21092ae5bfc43e",
+      "resultDigest": "sha256:d22684328204132039aace51dec6a7af711913ece393a56688110943eb871970"
     },
     "get_build_pipeline_session_projection": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0cf60f1d07e47cad9f45fac7ce453fac6d0bde07eb165ba28474efd89b03676f",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "get_build_pipeline_worker_transcript": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:67a7508d0f94643b4b28c2021da625b36461e509d7d3a887cdc09977afda241f",
+      "resultDigest": "sha256:eb6f957593f316ad6b7a341f760e69b2358fda182b01e75d8e17299517b51e45"
     },
     "get_claude_model_catalog": {
       "domain": "agent-servers",
@@ -3570,38 +3620,66 @@
     },
     "get_multi_review_reviewer_history_page": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0c80031f80d92d6b61bcc6ec9c25c1298099c6daae77ab85a5fafd277831f6bc",
+      "resultDigest": "sha256:66f8aa2f3713085734bb362adbd435b72d7ed876d8a9a31822197e795051b237"
     },
     "get_multi_review_reviewer_projection": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:342bade8795c18351d1c721ba4c62a0fb3be6d8cfcf7255038da2d9fd8f5a78b",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
     },
     "get_multi_review_reviewer_tool_details": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b0b9419eb69481226316e751de3bf3a9769b701aeffc150003be7082f4682332",
+      "resultDigest": "sha256:9df81e33f17bb4f7502c16bfcf016b5f08b32e15accce5605ef8f551bda5cb17"
     },
     "get_multi_review_reviewer_transcript": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4895efe3e4f53863fa2d5c163c526047f5d9abae2f1885620af2ff40e30befdd",
+      "resultDigest": "sha256:827985967376e47741d7423ca848971bdda9f86632efb8e3c666bf2b3c330974"
     },
     "get_multi_review_step_tool_details": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c8c2ad3cd08893cd54b520fa172dcc778924f92a9d411bb63e9362ec495f3817",
+      "resultDigest": "sha256:9df81e33f17bb4f7502c16bfcf016b5f08b32e15accce5605ef8f551bda5cb17"
     },
     "get_multi_review_step_transcript": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d84353b2c6cca791037d19630bca501b1daf6c5d87ffefdadf77ae2a2d58c9df",
+      "resultDigest": "sha256:279605412726595b8d4a6b8ebddc8b35cd4d357e41425d2fd87ba5dfb1bb8311"
     },
     "get_multi_review_workflow": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c6edb98fee93fb66f00cfa601bb7857c3d658d750bacf635a378f8d7b0f389ab",
+      "resultDigest": "sha256:879a0e6d93283917262eba7e2e837097120522a374bd7970ccb90e1cd975da87"
     },
     "get_native_agent_auth_status": {
       "domain": "native-sessions",
@@ -4073,8 +4151,12 @@
     },
     "get_review_validation_output": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:bb4bce4a5de584ff209685eb24a01701c7738f36258933092085e9c10f8b3ee6",
+      "resultDigest": "sha256:81a44d971148a9d1defdb20f8d2085d4408d998ea69bb0a4c3e0ada5cc09638b"
     },
     "get_scheduled_job": {
       "domain": "system",
@@ -4213,13 +4295,21 @@
     },
     "get_workflow_result_metrics": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:91408917f6d37b2ac1b7602d60af3ccee604a867a0081c4ac28c69717f3e383c"
     },
     "get_workflow_result_tools_rollout": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:380cceab024fd5ad6459a0c112b1b04fdb6dd87ba4aa5ee5b9d2be65eb217a4b"
     },
     "get_worktree_locations": {
       "domain": "system",
@@ -4646,8 +4736,12 @@
     },
     "import_legacy_build_pipelines": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:295f5adba30de67e2fbf67160ebf82ec1d7d0c6855d919423f4c1ed0f73aa059",
+      "resultDigest": "sha256:54a023fa9504815e230bb0eab099d0b58c81eb1d03dc76ab887f06a74f2d153a"
     },
     "invoke_on_node": {
       "domain": "nodes",
@@ -4660,8 +4754,12 @@
     },
     "launch_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["deliveryPolicy", "existingEnvironmentId"],
+      "argsDigest": "sha256:9193d6302500b38bb0910187f1d14aa4ec694a6de7a9e7a7556ce1ab38e7e1ce",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "launch_control_job": {
       "domain": "coordinator",
@@ -4828,8 +4926,12 @@
     },
     "list_build_pipelines": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0f056c475222c3f13c5e51dc41dd1f21f294bd87353135702db38ff421a98783",
+      "resultDigest": "sha256:321f59c868c16a186733b1239fc0a44056b2c52587f77f22241db9f67790555e"
     },
     "list_compose_drafts": {
       "domain": "native-sessions",
@@ -5036,8 +5138,12 @@
     },
     "list_multi_review_workflows": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
+      "resultDigest": "sha256:90611f0df5b38f748408eeaaff2d290c36653ba37d267ed0b62baec222803f53"
     },
     "list_native_agent_resumable_sessions": {
       "domain": "native-sessions",
@@ -5508,8 +5614,12 @@
     },
     "pause_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "pause_coordinator_worker_goal": {
       "domain": "coordinator",
@@ -5522,8 +5632,12 @@
     },
     "pause_multi_review_step": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9a7506543495adcdac276440091705192c98ef66df439471dd4cf983495af840",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "pause_project_coordinator": {
       "domain": "coordinator",
@@ -5690,8 +5804,12 @@
     },
     "preview_build_pipeline_code_rewind": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:5f8e300defc6523fcc2f6c6585d6e080fe4c944d3aba9d9b8ca8a6a0f5f3a938",
+      "resultDigest": "sha256:b379a741db54b69e069c438a790017593c9b309a391c900ca09a0b0f3b746a36"
     },
     "preview_command_handover": {
       "domain": "nodes",
@@ -5709,8 +5827,12 @@
     },
     "preview_multi_review_code_rewind": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:591582f7ec8873110ef84048e53e5d5862218460c45eedc95ffa45f2e56586e2",
+      "resultDigest": "sha256:b379a741db54b69e069c438a790017593c9b309a391c900ca09a0b0f3b746a36"
     },
     "probe_node_host_key": {
       "domain": "nodes",
@@ -6043,8 +6165,12 @@
     },
     "recover_multi_review_fix_session": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:977f49d975b5b17a57ce1e0c6421664e14358ca1ca3c9e3c77d7535bfea63c8f",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "recreate_environment": {
       "domain": "environments",
@@ -6179,8 +6305,12 @@
     },
     "remove_queued_build_pipeline_message": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:07d957800a7d7c901ff488db3976576e3a9c37dbc5d71308c6f7b8374fc1db8d",
+      "resultDigest": "sha256:30a0760ad9e8bc76bc651165f750881629d219def03ac2734392d67bd7d9bd0f"
     },
     "rename_agent_account": {
       "domain": "accounts",
@@ -6405,18 +6535,30 @@
     },
     "restart_build_pipeline_current_step": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "restart_build_pipeline_reviewer": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:716db247480b1ba2b93be8db5c8bdf13ca1f6e6c60db1ddcaf0ec8014a1b270a",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "restart_build_pipeline_step": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["selection"],
+      "argsDigest": "sha256:73874a68cb31f0de5f58b8096d465e1d695abe566d49015a4629c0402e5f21bc",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "restart_controller_build_pipeline_step": {
       "domain": "coordinator",
@@ -6438,13 +6580,21 @@
     },
     "restart_multi_review_reviewer": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["model"],
+      "argsDigest": "sha256:79d41484112827ce8e672be4b97c21e63d4bc8293f455e1c0864bd5c8b0ccdcf",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "restart_multi_review_step": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["model"],
+      "argsDigest": "sha256:eef4095f01fc4b28600f79d1a49e6ac1dbe4b7322b02db259c829deeb18226fc",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "restore_provider_credentials": {
       "domain": "environments",
@@ -6475,13 +6625,21 @@
     },
     "resume_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "resume_multi_review_step": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9a7506543495adcdac276440091705192c98ef66df439471dd4cf983495af840",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "resume_native_agent_session": {
       "domain": "native-sessions",
@@ -6517,28 +6675,48 @@
     },
     "retry_build_pipeline_completion_comment": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "retry_build_pipeline_interaction_failure": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "retry_build_pipeline_review": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "retry_build_pipeline_reviewer": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:716db247480b1ba2b93be8db5c8bdf13ca1f6e6c60db1ddcaf0ec8014a1b270a",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "retry_build_pipeline_stage": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:43035e8d91dcc425f328ad8310068475d2ae68af7b47a07e0a4fef6dafd8fd27",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "retry_coordinator_conversation": {
       "domain": "coordinator",
@@ -6560,8 +6738,12 @@
     },
     "retry_multi_review": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "retry_native_agent_dispatch": {
       "domain": "native-sessions",
@@ -6655,13 +6837,21 @@
     },
     "rewind_build_pipeline_code": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8f6bfe382b12418d7adbe6f3471195f88c495514863669ffccba6faafa59d10f",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "rewind_multi_review_code": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a14f6addf3170a3a2b744782f9b10c936584033fbc59585c860cac787d6b4c9f",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "rotate_control_mcp_credential": {
       "domain": "coordinator",
@@ -6764,8 +6954,12 @@
     },
     "save_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "save_compose_draft": {
       "domain": "native-sessions",
@@ -6864,8 +7058,12 @@
     },
     "send_build_pipeline_message": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c674ab028467ab6be140431614a41975bbeabbd1438f6722c76c73a3640d78b4",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "send_coordinator_agent_mail": {
       "domain": "coordinator",
@@ -7037,8 +7235,12 @@
     },
     "set_environment_unread": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedLastActivityAt"],
+      "argsDigest": "sha256:f6d708bac3a30a28a10704ad06510d0e1f42aa06e936c865a9f3b68bd97cd466",
+      "resultDigest": "sha256:b11e470ddc088770ec4095b31979b3490089d4459a540cb19ca77ea4f1a106ac"
     },
     "set_fleet_update_policy": {
       "domain": "system",
@@ -7164,8 +7366,12 @@
     },
     "set_workflow_result_tools_rollout": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:84f144656938f27b14fccb2d88dec0bea28d32dc99a7afff97351d79a2365518",
+      "resultDigest": "sha256:380cceab024fd5ad6459a0c112b1b04fdb6dd87ba4aa5ee5b9d2be65eb217a4b"
     },
     "sign_out_native_agent": {
       "domain": "native-sessions",
@@ -7178,13 +7384,21 @@
     },
     "skip_build_pipeline_step": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5f8e300defc6523fcc2f6c6585d6e080fe4c944d3aba9d9b8ca8a6a0f5f3a938",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "skip_multi_review_step": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:591582f7ec8873110ef84048e53e5d5862218460c45eedc95ffa45f2e56586e2",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "start_agent_account_login": {
       "domain": "accounts",
@@ -7197,8 +7411,12 @@
     },
     "start_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["deliveryPolicy", "existingEnvironmentId"],
+      "argsDigest": "sha256:9193d6302500b38bb0910187f1d14aa4ec694a6de7a9e7a7556ce1ab38e7e1ce",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "start_claude_server": {
       "domain": "agent-servers",
@@ -7310,8 +7528,12 @@
     },
     "start_feature_plan_build": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d2abdb37b3329101a0318660e9d507e747540b12fa325a4c80228f75c6f95e21",
+      "resultDigest": "sha256:a1a1a2b61ab8e73f3d255fbb6d381c64fe906aa999ba48e4f649b37ac0cd9d1e"
     },
     "start_feature_planning": {
       "domain": "kanban",
@@ -7423,13 +7645,21 @@
     },
     "start_multi_review": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8be8f219587b6294af0e3796193bb07a41f385d52feb365e035ed7b9b3fb5893",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "start_multi_review_custom_fix": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4268a4de29e6bc5b20a3dbcbc19bd0509252bc4a0e5196662637db8bff8f9123",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "start_opencode_provider_login": {
       "domain": "accounts",
@@ -7469,8 +7699,12 @@
     },
     "start_review_validation": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0c8ad47c915d2cdac3596d9ebfa547be747aeed71cd3510fbc89f39c5d27578",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
     },
     "start_terminal_session": {
       "domain": "terminals",
@@ -7492,13 +7726,21 @@
     },
     "status_review_validation": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0c8ad47c915d2cdac3596d9ebfa547be747aeed71cd3510fbc89f39c5d27578",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
     },
     "steer_build_pipeline": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c674ab028467ab6be140431614a41975bbeabbd1438f6722c76c73a3640d78b4",
+      "resultDigest": "sha256:0dd2bdeeaec0a01e77db6129de986c003a88d89a6d1af3a10a5e92667baa5989"
     },
     "steer_native_agent_queued_prompt": {
       "domain": "native-sessions",
@@ -7511,13 +7753,21 @@
     },
     "steer_queued_build_pipeline_message": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:07d957800a7d7c901ff488db3976576e3a9c37dbc5d71308c6f7b8374fc1db8d",
+      "resultDigest": "sha256:eb0735889dbefe0d545e6847d00bdcc067cc4e244b594baae6b595818c3c762e"
     },
     "stop_build_pipeline_reviewer": {
       "domain": "pipelines",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:716db247480b1ba2b93be8db5c8bdf13ca1f6e6c60db1ddcaf0ec8014a1b270a",
+      "resultDigest": "sha256:7501ef21e8949a9384143ca4a2f6c06c8c60d8dd4c811eb2f3ae3bcc338a498a"
     },
     "stop_claude_server": {
       "domain": "agent-servers",
@@ -7638,13 +7888,21 @@
     },
     "stop_multi_review_reviewer": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9d265308c858033d15dcac14a2bce1a176cf3de518cffcf00622df6a116e51ca",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "stop_multi_review_validation": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "stop_native_agent_background_task": {
       "domain": "native-sessions",
@@ -7693,8 +7951,12 @@
     },
     "stop_review_validation_command": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bfeb4105781994cb4c1072d8ec3b4fbf5e750dfb31f1743250bb48ab3aaa8451",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
     },
     "stream_container_logs": {
       "domain": "docker",
@@ -8022,8 +8284,12 @@
     },
     "unstick_multi_review_reviewer": {
       "domain": "multi-review",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9d265308c858033d15dcac14a2bce1a176cf3de518cffcf00622df6a116e51ca",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
     "unwatch_node_events": {
       "domain": "nodes",

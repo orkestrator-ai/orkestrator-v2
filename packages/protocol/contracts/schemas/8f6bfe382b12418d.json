@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8f6bfe382b12418d7adbe6f3471195f88c495514863669ffccba6faafa59d10f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "expectedHead": {
+          "type": "string"
+        },
+        "pipelineId": {
+          "type": "string"
+        },
+        "stageId": {
+          "type": "string"
+        }
+      },
+      "required": ["expectedHead", "pipelineId", "stageId"],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c6edb98fee93fb66f00cfa601bb7857c3d658d750bacf635a378f8d7b0f389ab",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "knownRevision": {},
+        "workflowId": {
+          "type": "string"
+        }
+      },
+      "required": ["workflowId"],
+      "type": "object"
+    }
+  }
+}

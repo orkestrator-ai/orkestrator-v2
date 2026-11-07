@@ -3,6 +3,7 @@ import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { fileDirtyStore, fileSaveBaseline } from "@/stores/fileDirtyStore";
@@ -529,9 +530,12 @@ export function FileViewerTab({
           // Load text file - use appropriate command based on environment type
           let fileContent: backend.FileContent;
           if (isLocalEnvironment && worktreePath) {
-            fileContent = await backend.readLocalFile(worktreePath, filePath);
+            fileContent = await backendForScope(draftScope).readLocalFile(worktreePath, filePath);
           } else if (containerId) {
-            fileContent = await backend.readContainerFile(containerId, filePath);
+            fileContent = await backendForScope(draftScope).readContainerFile(
+              containerId,
+              filePath,
+            );
           } else {
             throw new Error("No container ID or worktree path available");
           }

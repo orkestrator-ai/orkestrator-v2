@@ -40,6 +40,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { previewNodeFor } from "@/lib/native/browser-preview";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { displayUrlFromNativePreview, resolveBrowserAddress } from "@/lib/browser-address";
 import { isWkWebViewClient } from "@/lib/client-platform";
 import {
@@ -182,6 +185,12 @@ function ServicePreview({
   refreshRequestId = 0,
   serviceRef,
 }: ServiceBrowserTabProps & { serviceRef: PreviewServiceRef }) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
+  // Another node's tab in the window's tree is shown by that node's preview
+  // runtime in main (its partition and service transport); the window's own
+  // node, or a realm's, names none (plan items 2009, 4001).
+  const previewNode = previewNodeFor(backendScope);
   const { capabilities, status, services, snapshotLoaded, refreshEnvironment } =
     useEnvironmentServices(serviceRef.environmentId, isActive);
   // Preview frames load through this node's preview address.
@@ -456,6 +465,7 @@ function ServicePreview({
                 ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
                 bounds,
                 visible,
+                ...previewNode,
               })
             : attachBrowserPreview({
                 tabId,
@@ -464,6 +474,7 @@ function ServicePreview({
                 ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
                 bounds,
                 visible,
+                ...previewNode,
               });
         void attach
           .then((state) => {
@@ -567,7 +578,7 @@ function ServicePreview({
         return;
       }
       try {
-        const resolution = await backend.resolvePreviewTarget({
+        const resolution = await backendForScope(backendScope).resolvePreviewTarget({
           intent: {
             url: parsed.url,
             source: "address-bar",
@@ -593,6 +604,7 @@ function ServicePreview({
       }
     },
     [
+      backendScope,
       address,
       applyNativeState,
       nativeBrowserPreview,
@@ -610,14 +622,16 @@ function ServicePreview({
     setBusy(true);
     try {
       if (service)
-        await backend.probePreviewService(service.definition.serviceId).catch(() => undefined);
+        await backendForScope(backendScope)
+          .probePreviewService(service.definition.serviceId)
+          .catch(() => undefined);
       await refreshEnvironment(serviceRef.environmentId, { force: true });
       setTransport(null);
       setAttachNonce((value) => value + 1);
     } finally {
       setBusy(false);
     }
-  }, [refreshEnvironment, service, serviceRef.environmentId]);
+  }, [backendScope, refreshEnvironment, service, serviceRef.environmentId]);
 
   const openExternally = useCallback(() => {
     // Pre-open synchronously inside the click so popup blockers allow it.
@@ -1067,7 +1081,7 @@ function ServicePreview({
             onOpenChange={(open) => !open && setDialog(null)}
             environment={environment}
             onUpdate={(updated) => updateEnvironment(updated.id, updated)}
-            onRestart={backend.recreateEnvironment}
+            onRestart={backendForScope(backendScope).recreateEnvironment}
           />
         </LazyLoadBoundary>
       )}
@@ -1087,6 +1101,8 @@ function PreviewIntentChooser({
   isActive,
   target,
 }: ServiceBrowserTabProps & { target: Extract<PreviewTabTarget, { kind: "intent" }> }) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const retarget = useRetarget(tabId, environmentId);
   const { capabilities, status, services, refreshEnvironment } = useEnvironmentServices(
     target.environmentId,
@@ -1113,7 +1129,7 @@ function PreviewIntentChooser({
           if (previews.getState().status === "unsupported") retarget(target.url);
           return;
         }
-        return backend
+        return backendForScope(backendScope)
           .resolvePreviewTarget({
             intent: { url: target.url, source: target.source, environmentId: target.environmentId },
           })
@@ -1142,7 +1158,7 @@ function PreviewIntentChooser({
     return () => {
       cancelled = true;
     };
-  }, [previews, retarget, target.environmentId, target.source, target.url]);
+  }, [backendScope, previews, retarget, target.environmentId, target.source, target.url]);
 
   const bind = (serviceId: string, path: string) =>
     retarget(

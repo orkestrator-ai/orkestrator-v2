@@ -7,7 +7,7 @@ import {
 } from "@/components/sidebar/HierarchicalSidebar";
 import { useEnvironments } from "@/hooks";
 import { useProjects } from "@/hooks/useProjects";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import {
   NodeScopeProvider,
   useNodeScope,
@@ -92,6 +92,8 @@ function EnvironmentSettingsHost({
   section?: "container";
   sectionRequest: number;
 }) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const close = useAppDialogStore((state) => state.close);
   const environment = useEnvironmentStore(
     (state) => state.environments.find((candidate) => candidate.id === environmentId) ?? null,
@@ -121,7 +123,7 @@ function EnvironmentSettingsHost({
         initialSection={section}
         sectionRequest={sectionRequest}
         onUpdate={(updated) => updateEnvironment(updated.id, updated)}
-        onRestart={backend.recreateEnvironment}
+        onRestart={backendForScope(backendScope).recreateEnvironment}
       />
     </LazyLoadBoundary>
   );
@@ -189,7 +191,7 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
           // A failed owner read must retain the project and allow a retry.
           await deleteProjectAndEnvironments(
             projectId,
-            await backend.getEnvironmentSnapshots(projectId),
+            await backendForScope(scope).getEnvironmentSnapshots(projectId),
             deleteEnvironment,
             removeProject,
             scope,

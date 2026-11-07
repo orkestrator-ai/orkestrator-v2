@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
@@ -62,7 +62,7 @@ export function saveDiffBase(
   const previous = pendingSaves.get(key);
   const save = async (): Promise<boolean> => {
     try {
-      const updated = await backend.setEnvironmentDiffBase(environmentId, base);
+      const updated = await backendForScope(scope).setEnvironmentDiffBase(environmentId, base);
       // Requests and response updates run in order, across every entry point.
       // Apply successful earlier saves even if a later queued save might fail.
       environments.getState().updateEnvironment(environmentId, {
@@ -150,14 +150,17 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
   const [branches, setBranches] = useState<Loaded<DiffBaseBranch[]> | null>(null);
   useEffect(() => {
     let live = true;
-    backend.listEnvironmentDiffBaseBranches(environment.id).then(
-      (value) => live && setBranches({ key: environment.id, value }),
-      (error: unknown) => live && setBranches({ key: environment.id, error: errorMessage(error) }),
-    );
+    backendForScope(scope)
+      .listEnvironmentDiffBaseBranches(environment.id)
+      .then(
+        (value) => live && setBranches({ key: environment.id, value }),
+        (error: unknown) =>
+          live && setBranches({ key: environment.id, error: errorMessage(error) }),
+      );
     return () => {
       live = false;
     };
-  }, [environment.id]);
+  }, [scope, environment.id]);
   const branchLoad = branches?.key === environment.id ? branches : null;
   const branchList = branchLoad?.value ?? [];
 
@@ -168,15 +171,18 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
   useEffect(() => {
     if (!selectedRef) return;
     let live = true;
-    backend.listEnvironmentDiffBaseCommits(environment.id, selectedRef).then(
-      (value) => live && setCommits({ key: `${environment.id}:${selectedRef}`, value }),
-      (error: unknown) =>
-        live && setCommits({ key: `${environment.id}:${selectedRef}`, error: errorMessage(error) }),
-    );
+    backendForScope(scope)
+      .listEnvironmentDiffBaseCommits(environment.id, selectedRef)
+      .then(
+        (value) => live && setCommits({ key: `${environment.id}:${selectedRef}`, value }),
+        (error: unknown) =>
+          live &&
+          setCommits({ key: `${environment.id}:${selectedRef}`, error: errorMessage(error) }),
+      );
     return () => {
       live = false;
     };
-  }, [environment.id, selectedRef]);
+  }, [scope, environment.id, selectedRef]);
   // An answer for a different branch is still loading as far as this one goes.
   const commitLoad = commits && commits.key === `${environment.id}:${selectedRef}` ? commits : null;
   const fetchedCommits = commitLoad?.value ?? [];

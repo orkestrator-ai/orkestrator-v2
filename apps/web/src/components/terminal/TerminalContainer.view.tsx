@@ -61,6 +61,7 @@ import {
 } from "@/lib/graph-run-navigation";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { agentSettingsTiers } from "@/lib/agent-settings";
@@ -377,15 +378,16 @@ export function TerminalContainer({
         return { buffer: local.serializedBuffer, persistentSessionId: local.persistentSessionId };
       }
 
-      const persistentSessions = await backend.getSessionsByEnvironment(environmentId);
+      const persistentSessions =
+        await backendForScope(terminalScope).getSessionsByEnvironment(environmentId);
       const persistentSession = persistentSessions.find((session) => session.tabId === tabId);
       if (!persistentSession) return null;
 
-      const buffer = await backend.loadSessionBuffer(persistentSession.id);
+      const buffer = await backendForScope(terminalScope).loadSessionBuffer(persistentSession.id);
       if (!buffer) return null;
       return { buffer, persistentSessionId: persistentSession.id };
     },
-    [environmentId, setupSessionKeyForTab, terminalSessions],
+    [terminalScope, environmentId, setupSessionKeyForTab, terminalSessions],
   );
 
   /**
@@ -448,7 +450,8 @@ export function TerminalContainer({
           tabId,
           sessionKey: setupSessionKeyForTab(tabId),
         }));
-        const setupSession = await backend.awaitEnvironmentSetupSession(environmentId);
+        const setupSession =
+          await backendForScope(terminalScope).awaitEnvironmentSetupSession(environmentId);
         if (setupSessionBindLifecycleGenerationRef.current !== lifecycleGeneration) {
           return false;
         }
@@ -526,7 +529,9 @@ export function TerminalContainer({
         if (!setupSession.running && !setupSession.terminalRunning) {
           let replayableTranscript = await loadReplayableSetupTranscript(tabId);
           if (!replayableTranscript && setupSession.hasOutput === true) {
-            const snapshot = await backend.getTerminalOutputSnapshot(setupSession.sessionId);
+            const snapshot = await backendForScope(terminalScope).getTerminalOutputSnapshot(
+              setupSession.sessionId,
+            );
             if (snapshot.output) {
               replayableTranscript = { buffer: snapshot.output, persistentSessionId: undefined };
             }
@@ -657,6 +662,7 @@ export function TerminalContainer({
       }
     },
     [
+      terminalScope,
       environmentId,
       hasBoundSetupSession,
       loadReplayableSetupTranscript,
@@ -1868,7 +1874,9 @@ export function TerminalContainer({
         const phase = multiReviews.getState().workflows.get(reviewData.workflowId)?.phase;
         if (phase && isMultiReviewTerminalPhase(phase)) {
           try {
-            await backend.deleteMultiReviewWorkflow(reviewData.workflowId);
+            await backendForScope(multiReviewScope).deleteMultiReviewWorkflow(
+              reviewData.workflowId,
+            );
             multiReviews.getState().removeWorkflow(reviewData.workflowId);
           } catch (error) {
             toast.error("Could not close Multi Review", {

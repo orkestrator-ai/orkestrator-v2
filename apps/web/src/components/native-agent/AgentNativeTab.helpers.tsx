@@ -48,7 +48,7 @@ import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
 import { useFocusComposerShortcut } from "@/hooks/useFocusComposerShortcut";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
-import { getNativeAgentModelCatalog } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
 import { MODEL_CATALOG_REFRESHED_EVENT } from "@/components/settings/agent/refresh-model-catalog";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
@@ -635,7 +635,10 @@ export function UnassignedNativeAgentComposer({
     const requestKey = `${environmentId}:${ensureAgent}`;
     if (models.some((model) => model.platform === ensureAgent)) return;
     if (modelCatalogRequestsRef.current.has(requestKey)) return;
-    const request = getNativeAgentModelCatalog(environmentId, ensureAgent);
+    const request = backendForScope(modelCatalogScope).getNativeAgentModelCatalog(
+      environmentId,
+      ensureAgent,
+    );
     modelCatalogRequestsRef.current.set(requestKey, request);
     modelCatalogInFlightRef.current.add(requestKey);
     void request

@@ -6,11 +6,8 @@ import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-setting
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { Button } from "@/components/ui/button";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
-import {
-  dispatchNativeAgentIntent,
-  writeCoordinatorAttachment,
-  writeBugReportAttachment,
-} from "@/lib/backend";
+import { dispatchNativeAgentIntent } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import {
   awaitComposeDraftWrites,
@@ -155,7 +152,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             submissionError: undefined,
           });
           try {
-            const outcome = await dispatchNativeAgentIntent(submission);
+            const outcome = await backendForScope(scope).dispatchNativeAgentIntent(submission);
             const store = composeDrafts.getState();
             const ownsDraft = store.drafts.get(sessionKey)?.requestId === submission.requestId;
             if (outcome.outcome === "accepted") {
@@ -383,9 +380,13 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   const writeSpecialImage = useCallback(
     (filename: string, base64Data: string) =>
       reportId
-        ? writeBugReportAttachment(reportId, filename, base64Data)
-        : writeCoordinatorAttachment(props.data.environmentId, filename, base64Data),
-    [props.data.environmentId, reportId],
+        ? backendForScope(scope).writeBugReportAttachment(reportId, filename, base64Data)
+        : backendForScope(scope).writeCoordinatorAttachment(
+            props.data.environmentId,
+            filename,
+            base64Data,
+          ),
+    [scope, props.data.environmentId, reportId],
   );
 
   // A tab whose platform has no adapter is a data problem, not a crash. Render

@@ -15,7 +15,7 @@ import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { errorText } from "@/components/settings/machines/machine-ui";
 import type { CreateFileTabOptions } from "@/contexts";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { revealInFileManager } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import { hydrationFreshnessNotice, remoteFreshnessNotice } from "@/lib/view-freshness";
 import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
@@ -123,13 +123,15 @@ export function FilesPanel() {
   const revealFile = useCallback(
     (filePath: string) => {
       if (!isLocalEnvironment || !worktreePath) return;
-      void revealInFileManager(resolveLocalFilePath(worktreePath, filePath)).catch((error) => {
-        toast.error("Failed to reveal file", {
-          description: error instanceof Error ? error.message : String(error),
+      void backendForScope(scope)
+        .revealInFileManager(resolveLocalFilePath(worktreePath, filePath))
+        .catch((error) => {
+          toast.error("Failed to reveal file", {
+            description: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
     },
-    [isLocalEnvironment, worktreePath],
+    [scope, isLocalEnvironment, worktreePath],
   );
 
   const confirmFileAction = async () => {

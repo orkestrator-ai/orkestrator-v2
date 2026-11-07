@@ -37,6 +37,7 @@ import {
 } from "@/lib/preview-service-entry";
 import {
   attachBrowserPreview,
+  previewNodeFor,
   goBackBrowserPreview,
   goForwardBrowserPreview,
   hasNativeBrowserPreview,
@@ -619,6 +620,8 @@ function ManualBrowserTab({
           ...(urlBasis === undefined ? {} : { navigationBasis: urlBasis }),
           bounds,
           visible: isActive && !hasBlockingOverlay && !annotations.previewHidden,
+          // Another node's tab in the window's tree: that node's preview runtime.
+          ...previewNodeFor(previewScope),
         })
           .then((state) => {
             if (disposed) return;
@@ -648,6 +651,7 @@ function ManualBrowserTab({
       hideNativePreview(false);
     };
   }, [
+    previewScope,
     annotations.previewHidden,
     applyNativeState,
     browserPreviewSupported,

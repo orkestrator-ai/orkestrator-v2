@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronUp, Loader2, X } from "lucide-react";
-import { getTerminalHistoryPage, type TerminalHistoryPage } from "@/lib/backend";
+import { type TerminalHistoryPage } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const MAX_CACHED_PAGES = 16;
 const MAX_CACHED_BYTES = 4 * 1024 * 1024;
@@ -12,6 +14,8 @@ export function TerminalHistoryPanel({
   sessionId: string;
   onClose: () => void;
 }) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const [pages, setPages] = useState<TerminalHistoryPage[]>([]);
   const [cursor, setCursor] = useState<string | null | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -35,7 +39,10 @@ export function TerminalHistoryPanel({
       setLoading(true);
       setError(null);
       try {
-        const page = await getTerminalHistoryPage(sessionId, requestedCursor);
+        const page = await backendForScope(backendScope).getTerminalHistoryPage(
+          sessionId,
+          requestedCursor,
+        );
         if (request !== requestRef.current) return;
         if (!page) {
           setError("Terminal history is no longer available.");
@@ -73,7 +80,7 @@ export function TerminalHistoryPanel({
         }
       }
     },
-    [sessionId],
+    [backendScope, sessionId],
   );
   const loadRef = useRef(load);
   useLayoutEffect(() => {

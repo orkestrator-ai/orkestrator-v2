@@ -47,6 +47,7 @@ import {
 import { createOrkestratorScriptPrompt } from "@orkestrator/protocol/orkestrator-script-prompt";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
@@ -647,9 +648,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     try {
       const editor = config.global.preferredEditor || "vscode";
       if (isLocalEnvironment && worktreePath) {
-        await backend.openLocalInEditor(worktreePath, editor);
+        await backendForScope(actionBarScope).openLocalInEditor(worktreePath, editor);
       } else if (containerId) {
-        await backend.openInEditor(containerId, editor);
+        await backendForScope(actionBarScope).openInEditor(containerId, editor);
       }
     } catch (err) {
       log.error("editor.open-failed", { error: formatLogError(err) });
@@ -659,6 +660,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setIsOpeningEditor(false);
     }
   }, [
+    actionBarScope,
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
     editorOnAnotherDevice,
@@ -1079,9 +1081,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
     const readConfigPromise =
       isLocalEnvironment && worktreePath
-        ? backend.readLocalFile(worktreePath, "orkestrator-ai.json")
+        ? backendForScope(actionBarScope).readLocalFile(worktreePath, "orkestrator-ai.json")
         : containerId
-          ? backend.readContainerFile(containerId, "orkestrator-ai.json")
+          ? backendForScope(actionBarScope).readContainerFile(containerId, "orkestrator-ai.json")
           : null;
 
     if (!readConfigPromise) {
@@ -1125,6 +1127,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       cancelled = true;
     };
   }, [
+    actionBarScope,
     selectedEnvironmentId,
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
@@ -1165,7 +1168,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const tabId = `terminal-job-${createUuid()}`;
     const launch = beginLaunchedTab(environmentId, tabId, "Run Commands", "terminal");
     try {
-      const result = await backend.launchTerminalJob({
+      const result = await backendForScope(actionBarScope).launchTerminalJob({
         requestId: `run-commands-${createUuid()}`,
         environmentId,
         tabId,
@@ -1613,7 +1616,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             : undefined;
         const tabId = `agent-job-${createUuid()}`;
         launch = beginLaunchedTab(operationEnvironmentId, tabId, "PR");
-        const result = await backend.launchNativeAgentJob({
+        const result = await backendForScope(actionBarScope).launchNativeAgentJob({
           requestId: `create-pr-${createUuid()}`,
           environmentId: operationEnvironmentId,
           tabId,
@@ -1651,6 +1654,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       bindCreatePrLaunchTab,
@@ -1731,13 +1735,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const request = ++prBranchRequestRef.current;
     setPrBranchSuggestions([targetBranch]);
     void Promise.resolve()
-      .then(() => backend.getProjectGitStatus(projectId))
+      .then(() => backendForScope(actionBarScope).getProjectGitStatus(projectId))
       .then((status) => {
         if (prBranchRequestRef.current !== request) return;
         setPrBranchSuggestions(prTargetBranchSuggestions(status.branches, targetBranch));
       })
       .catch(() => undefined);
-  }, [canConfigurePR, config.repositories, selectedEnvironmentId, selectedProjectId]);
+  }, [
+    actionBarScope,
+    canConfigurePR,
+    config.repositories,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   const prLongPress = useLongPressAction(openPrDialog, canConfigurePR);
 
@@ -1812,7 +1822,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const tabId = `agent-job-${createUuid()}`;
       const launch = beginLaunchedTab(environmentId, tabId, PUSH_CHANGES_TAB_TITLE);
       try {
-        const result = await backend.launchNativeAgentJob({
+        const result = await backendForScope(actionBarScope).launchNativeAgentJob({
           requestId: `push-changes-${createUuid()}`,
           environmentId,
           tabId,
@@ -1931,7 +1941,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           tabId ?? `resolve-focus-${createUuid()}`,
           "Resolve",
         );
-        const result = await backend.launchNativeAgentJob({
+        const result = await backendForScope(actionBarScope).launchNativeAgentJob({
           requestId: `resolve-${createUuid()}`,
           environmentId: operationEnvironmentId,
           ...(tabId ? { tabId } : {}),
@@ -1981,6 +1991,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       canLaunchResolve,
@@ -2212,7 +2223,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
       try {
         log.info("merge.started", { environmentId: operationEnvironmentId });
-        const mergeResult = await backend.mergeEnvironmentPr(
+        const mergeResult = await backendForScope(actionBarScope).mergeEnvironmentPr(
           operationEnvironmentId,
           "squash",
           true,
@@ -2262,6 +2273,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       activateProjectForCleanup,
       selectedEnvironment?.branch,
       selectedEnvironment?.name,

@@ -1,12 +1,7 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
-import {
-  getNativeAgentGoal,
-  runNativeAgentGoalCommand,
-  runUserCommand,
-  stopNativeAgentSuborks,
-} from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
 import { GoalDetailLoaderContext } from "@/components/chat/goal-detail-context";
 import { GoalPanel } from "@/components/chat/GoalPanel";
@@ -128,16 +123,7 @@ import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTran
 import { useRestorePlaceAfterHistoryDrop } from "@/hooks/useRestorePlaceAfterHistoryDrop";
 import { useAutoLoadEarlier } from "./useAutoLoadEarlier";
 import { readTranscriptTail } from "./transcript-tail";
-import {
-  adoptNativeAgentSession,
-  beginNativeAgentSignIn,
-  cancelNativeAgentSignIn,
-  getNativeAgentAuthStatus,
-  openInBrowser,
-  recoverMultiReviewAddressFindingsSession,
-  writeCoordinatorAttachment,
-  writeBugReportAttachment,
-} from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import { STARTUP_AGENT_TAB_ID } from "@/lib/startup-agent-handoff";
@@ -525,12 +511,14 @@ export function SharedNativeAgentController({
         });
       }
       if (!tabId.startsWith("multi-review-fix:")) return;
-      const workflow = await recoverMultiReviewAddressFindingsSession({
-        environmentId: data.environmentId,
-        tabId,
-        expectedProviderSessionId: replacement.requestedProviderSessionId,
-        replacementProviderSessionId: replacement.replacementProviderSessionId,
-      });
+      const workflow = await backendForScope(composeScope).recoverMultiReviewAddressFindingsSession(
+        {
+          environmentId: data.environmentId,
+          tabId,
+          expectedProviderSessionId: replacement.requestedProviderSessionId,
+          replacementProviderSessionId: replacement.replacementProviderSessionId,
+        },
+      );
       paneLayouts
         .getState()
         .updateTabNativeSessionId(
@@ -540,7 +528,7 @@ export function SharedNativeAgentController({
         );
       multiReviews.getState().replaceWorkflow(workflow);
     },
-    [data.environmentId, multiReviews, tabId, composeDrafts, paneLayouts],
+    [composeScope, data.environmentId, multiReviews, tabId, composeDrafts, paneLayouts],
   );
   const draft = useNativeComposeStore((state) =>
     nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),
@@ -1350,7 +1338,7 @@ export function SharedNativeAgentController({
     let failures = 0;
     const read = async () => {
       try {
-        const status = await getNativeAgentAuthStatus({
+        const status = await backendForScope(composeScope).getNativeAgentAuthStatus({
           environmentId: data.environmentId,
           agent: platform,
           logicalSessionKey: sessionKey,
@@ -1387,6 +1375,7 @@ export function SharedNativeAgentController({
       clearTimeout(timer);
     };
   }, [
+    composeScope,
     signInReadNeeded,
     authReadKey,
     authReadAttempt,
@@ -1450,14 +1439,15 @@ export function SharedNativeAgentController({
   const startSignIn = useCallback(() => {
     setSignInPending(true);
     setSignInDetails(null);
-    void beginNativeAgentSignIn({
-      environmentId: data.environmentId,
-      agent: platform,
-      logicalSessionKey: sessionKey,
-      // A browser on another machine cannot reach a loopback callback on the
-      // backend's, so a remote connection signs in with a device code.
-      ...(isRemoteGatewayConnection(signInScope) ? { deviceCode: true } : {}),
-    })
+    void backendForScope(composeScope)
+      .beginNativeAgentSignIn({
+        environmentId: data.environmentId,
+        agent: platform,
+        logicalSessionKey: sessionKey,
+        // A browser on another machine cannot reach a loopback callback on the
+        // backend's, so a remote connection signs in with a device code.
+        ...(isRemoteGatewayConnection(signInScope) ? { deviceCode: true } : {}),
+      })
       .then((result) => {
         // Keep cancellation available even when the provider returns a bad URL.
         setSignInDetails(
@@ -1472,11 +1462,13 @@ export function SharedNativeAgentController({
             if (url.protocol !== "https:" && url.protocol !== "http:")
               throw new Error("Invalid scheme");
           } catch {
-            void cancelNativeAgentSignIn({
-              environmentId: data.environmentId,
-              agent: platform,
-              logicalSessionKey: sessionKey,
-            }).catch(() => undefined);
+            void backendForScope(composeScope)
+              .cancelNativeAgentSignIn({
+                environmentId: data.environmentId,
+                agent: platform,
+                logicalSessionKey: sessionKey,
+              })
+              .catch(() => undefined);
             throw new Error("The sign-in URL is invalid");
           }
           setSignInDetails((previous) => ({ ...previous, url: url.href }));
@@ -1493,6 +1485,7 @@ export function SharedNativeAgentController({
       })
       .finally(() => setSignInPending(false));
   }, [
+    composeScope,
     data.environmentId,
     label,
     openSignInUrl,
@@ -1506,18 +1499,19 @@ export function SharedNativeAgentController({
   // the bridge by itself, so only an explicit abandon needs this.
   const cancelSignIn = useCallback(() => {
     setSignInDetails(null);
-    void cancelNativeAgentSignIn({
-      environmentId: data.environmentId,
-      agent: platform,
-      logicalSessionKey: sessionKey,
-    })
+    void backendForScope(composeScope)
+      .cancelNativeAgentSignIn({
+        environmentId: data.environmentId,
+        agent: platform,
+        logicalSessionKey: sessionKey,
+      })
       .catch((error: unknown) => {
         toast.error(
           `Could not cancel ${label} sign-in: ${error instanceof Error ? error.message : String(error)}`,
         );
       })
       .finally(() => setAuthReadAttempt((attempt) => attempt + 1));
-  }, [data.environmentId, label, platform, sessionKey, setAuthReadAttempt]);
+  }, [composeScope, data.environmentId, label, platform, sessionKey, setAuthReadAttempt]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -1954,14 +1948,14 @@ export function SharedNativeAgentController({
   const selectedModelId = composer?.selectedModelId;
   const runGoalCommand = useCallback(
     (text: string) =>
-      runNativeAgentGoalCommand({
+      backendForScope(composeScope).runNativeAgentGoalCommand({
         environmentId: data.environmentId,
         agent: platform,
         logicalSessionKey: sessionKey,
         text,
         ...(selectedModelId ? { model: selectedModelId } : {}),
       }),
-    [data.environmentId, platform, selectedModelId, sessionKey],
+    [composeScope, data.environmentId, platform, selectedModelId, sessionKey],
   );
   const pendingHandoff = Boolean(handoff.pendingHistory);
   const runGoalCommandFromPanel = useCallback(
@@ -1977,14 +1971,14 @@ export function SharedNativeAgentController({
     () => ({
       openTranscript: (batchId, suborkId) => setOpenSubork({ batchId, suborkId }),
       stop: (batchId) =>
-        stopNativeAgentSuborks({
+        backendForScope(composeScope).stopNativeAgentSuborks({
           environmentId: data.environmentId,
           agent: platform,
           logicalSessionKey: sessionKey,
           batchId,
         }),
     }),
-    [data.environmentId, platform, sessionKey],
+    [composeScope, data.environmentId, platform, sessionKey],
   );
   const openSuborkBatch = openSubork
     ? projection?.suborks?.find((batch) => batch.id === openSubork.batchId)
@@ -1994,12 +1988,12 @@ export function SharedNativeAgentController({
   );
   const loadGoalDetail = useCallback(
     () =>
-      getNativeAgentGoal({
+      backendForScope(composeScope).getNativeAgentGoal({
         environmentId: data.environmentId,
         agent: platform,
         logicalSessionKey: sessionKey,
       }),
-    [data.environmentId, platform, sessionKey],
+    [composeScope, data.environmentId, platform, sessionKey],
   );
 
   const submit = useCallback(
@@ -2057,7 +2051,7 @@ export function SharedNativeAgentController({
         submitInFlightRef.current = true;
         setIsSubmitting(true);
         try {
-          await runUserCommand({
+          await backendForScope(composeScope).runUserCommand({
             environmentId: data.environmentId,
             tabId,
             command: userCommand,
@@ -2559,6 +2553,7 @@ export function SharedNativeAgentController({
       return false;
     },
     [
+      composeScope,
       composeDrafts,
       adapter.capabilities.attachments,
       autoSteerEnabled,
@@ -2800,9 +2795,13 @@ export function SharedNativeAgentController({
   const writeSpecialImage = useCallback(
     (filename: string, base64Data: string) =>
       reportId
-        ? writeBugReportAttachment(reportId, filename, base64Data)
-        : writeCoordinatorAttachment(data.environmentId, filename, base64Data),
-    [data.environmentId, reportId],
+        ? backendForScope(composeScope).writeBugReportAttachment(reportId, filename, base64Data)
+        : backendForScope(composeScope).writeCoordinatorAttachment(
+            data.environmentId,
+            filename,
+            base64Data,
+          ),
+    [composeScope, data.environmentId, reportId],
   );
   useNativeComposeBarPaste({
     inputContainerRef,
@@ -2866,7 +2865,7 @@ export function SharedNativeAgentController({
         const forkTabId = crypto.randomUUID();
         const forkSessionKey = createSessionKey(data.environmentId, forkTabId);
         if (outcome) {
-          await adoptNativeAgentSession({
+          await backendForScope(composeScope).adoptNativeAgentSession({
             environmentId: data.environmentId,
             agent: platform,
             logicalSessionKey: forkSessionKey,
@@ -2907,7 +2906,17 @@ export function SharedNativeAgentController({
         setForkInFlight(false);
       }
     },
-    [data, fork, forkSourceSessionId, forkSourceTitle, label, platform, updateDraft, paneLayouts],
+    [
+      composeScope,
+      data,
+      fork,
+      forkSourceSessionId,
+      forkSourceTitle,
+      label,
+      platform,
+      updateDraft,
+      paneLayouts,
+    ],
   );
   const handleForkAction = useCallback(
     (messageId: string, kind: MessageForkKind) => {

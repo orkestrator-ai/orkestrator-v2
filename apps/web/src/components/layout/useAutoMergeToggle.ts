@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
@@ -19,6 +20,8 @@ export function useAutoMergeToggle(
   environment: Pick<Environment, "id" | "autoMerge" | "autoMergeCleanup"> | null,
 ) {
   const environmentId = environment?.id ?? null;
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const enabled = environment?.autoMerge === true;
   const cleanup = enabled && environment?.autoMergeCleanup === true;
   const [savingEnvironmentId, setSavingEnvironmentId] = useState<string | null>(null);
@@ -31,7 +34,7 @@ export function useAutoMergeToggle(
       if (!environmentId || savingEnvironmentId === environmentId) return null;
       setSavingEnvironmentId(environmentId);
       try {
-        const updated = await backend.setEnvironmentAutoMerge(
+        const updated = await backendForScope(backendScope).setEnvironmentAutoMerge(
           environmentId,
           next,
           cleanupAfterMerge,
@@ -61,7 +64,7 @@ export function useAutoMergeToggle(
         setSavingEnvironmentId((current) => (current === environmentId ? null : current));
       }
     },
-    [environmentId, savingEnvironmentId, updateEnvironment],
+    [backendScope, environmentId, savingEnvironmentId, updateEnvironment],
   );
 
   const toggle = useCallback(() => set(!enabled), [enabled, set]);

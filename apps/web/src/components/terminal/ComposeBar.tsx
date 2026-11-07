@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
-import { writeContainerFile, writeLocalFile } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   encodeCanvasAsPngWithinSize,
   MAX_IMAGE_DIMENSION,
@@ -75,6 +76,8 @@ export function ComposeBar({
   onAddressAll,
   className,
 }: ComposeBarProps) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   // This node's terminal drafts (plan item 3010).
   const terminalSessions = useScopedStoreApi(terminalSessionStore);
   const text = useTerminalSessionStore((state) => state.composeDraftText.get(sessionKey) ?? "");
@@ -440,10 +443,18 @@ export function ComposeBar({
             const filePath = `.orkestrator/clipboard/${filename}`;
             let fullPath: string;
             if (containerId) {
-              await writeContainerFile(containerId, filePath, img.base64Data);
+              await backendForScope(backendScope).writeContainerFile(
+                containerId,
+                filePath,
+                img.base64Data,
+              );
               fullPath = `/workspace/${filePath}`;
             } else {
-              fullPath = await writeLocalFile(worktreePath!, filePath, img.base64Data);
+              fullPath = await backendForScope(backendScope).writeLocalFile(
+                worktreePath!,
+                filePath,
+                img.base64Data,
+              );
             }
             savedImages.push({ ...img, id: fullPath });
           } catch (imgError) {

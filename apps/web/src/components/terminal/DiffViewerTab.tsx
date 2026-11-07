@@ -22,7 +22,8 @@ import type {
   DiffIdentity,
 } from "@orkestrator/protocol/change-resources";
 import { cn } from "@/lib/utils";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { changeLabel, changeReason, formatFileCount, formatLineCount } from "@/lib/changes/labels";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
 import { useMediaQuery } from "@/hooks";
@@ -188,6 +189,8 @@ export function DiffViewerTab({
   isActive,
   onSwitchToFileView,
 }: DiffViewerTabProps) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ||
     DEFAULT_TERMINAL_APPEARANCE;
@@ -285,7 +288,7 @@ export function DiffViewerTab({
 
     void (async () => {
       try {
-        let result = await backend.resolveLiveChangeDetail(pinned);
+        let result = await backendForScope(backendScope).resolveLiveChangeDetail(pinned);
         if (
           result.kind === "error" &&
           result.error.code === "stale-revision" &&
@@ -295,7 +298,7 @@ export function DiffViewerTab({
           // The row's revision moved on; follow the file instead of the row.
           pinnedRef.current = false;
           if (seq !== resolveSeqRef.current) return;
-          result = await backend.resolveLiveChangeDetail(unpinned);
+          result = await backendForScope(backendScope).resolveLiveChangeDetail(unpinned);
         }
         if (seq !== resolveSeqRef.current) return;
         if (result.kind === "identity") {
@@ -317,6 +320,7 @@ export function DiffViewerTab({
       }
     })();
   }, [
+    backendScope,
     contentGeneration,
     ownerGeneration,
     transportRevision,
@@ -351,32 +355,34 @@ export function DiffViewerTab({
   useEffect(() => {
     if (!identityId || !bodyKey) return;
     const seq = ++bodySeqRef.current;
-    void backend.getChangeDiff(identityId, null, display).then(
-      (result) => {
-        if (seq !== bodySeqRef.current) return;
-        if (result.kind === "body") {
-          setBody({
-            key: bodyKey,
-            kind: "body",
-            identityId,
-            identity: result.identity,
-            measurement: result.measurement,
-            provenanceLabelKey: result.provenanceLabelKey ?? null,
-            files: result.files,
-            nextCursor: result.nextCursor,
-            loadingMore: false,
-            moreError: null,
-          });
-        } else {
-          setBody({ key: bodyKey, kind: "unavailable", error: result.error });
-        }
-      },
-      (error: unknown) => {
-        if (seq !== bodySeqRef.current) return;
-        setBody({ key: bodyKey, kind: "failed", message: errorMessage(error) });
-      },
-    );
-  }, [bodyKey, display, identityId]);
+    void backendForScope(backendScope)
+      .getChangeDiff(identityId, null, display)
+      .then(
+        (result) => {
+          if (seq !== bodySeqRef.current) return;
+          if (result.kind === "body") {
+            setBody({
+              key: bodyKey,
+              kind: "body",
+              identityId,
+              identity: result.identity,
+              measurement: result.measurement,
+              provenanceLabelKey: result.provenanceLabelKey ?? null,
+              files: result.files,
+              nextCursor: result.nextCursor,
+              loadingMore: false,
+              moreError: null,
+            });
+          } else {
+            setBody({ key: bodyKey, kind: "unavailable", error: result.error });
+          }
+        },
+        (error: unknown) => {
+          if (seq !== bodySeqRef.current) return;
+          setBody({ key: bodyKey, kind: "failed", message: errorMessage(error) });
+        },
+      );
+  }, [backendScope, bodyKey, display, identityId]);
 
   const loadMore = useCallback(() => {
     if (body?.kind !== "body" || !body.nextCursor || body.loadingMore) return;
@@ -389,28 +395,30 @@ export function DiffViewerTab({
         current?.kind === "body" && current.key === key ? update(current) : current,
       );
     };
-    void backend.getChangeDiff(pageIdentityId, nextCursor, display).then(
-      (result) => {
-        settle((current) =>
-          result.kind === "body"
-            ? {
-                ...current,
-                files: [...current.files, ...result.files],
-                nextCursor: result.nextCursor,
-                loadingMore: false,
-              }
-            : {
-                ...current,
-                loadingMore: false,
-                moreError: unavailableCopy(result.error, false).title,
-              },
-        );
-      },
-      (error: unknown) => {
-        settle((current) => ({ ...current, loadingMore: false, moreError: errorMessage(error) }));
-      },
-    );
-  }, [body, display]);
+    void backendForScope(backendScope)
+      .getChangeDiff(pageIdentityId, nextCursor, display)
+      .then(
+        (result) => {
+          settle((current) =>
+            result.kind === "body"
+              ? {
+                  ...current,
+                  files: [...current.files, ...result.files],
+                  nextCursor: result.nextCursor,
+                  loadingMore: false,
+                }
+              : {
+                  ...current,
+                  loadingMore: false,
+                  moreError: unavailableCopy(result.error, false).title,
+                },
+          );
+        },
+        (error: unknown) => {
+          settle((current) => ({ ...current, loadingMore: false, moreError: errorMessage(error) }));
+        },
+      );
+  }, [backendScope, body, display]);
 
   const reload = useCallback(() => setReloadCount((count) => count + 1), []);
 

@@ -17,7 +17,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 export interface PreviewServiceDialogProps {
   open: boolean;
@@ -79,6 +80,8 @@ export function PreviewServiceDialog({
   suggestion,
   onSaved,
 }: PreviewServiceDialogProps) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const defaultTarget: PreviewTargetKind =
     existing?.targetKind ??
     suggestion?.targetKind ??
@@ -132,8 +135,12 @@ export function PreviewServiceDialog({
     };
     try {
       const result = existing
-        ? await backend.updatePreviewService(existing.serviceId, existing.definitionRevision, input)
-        : await backend.registerPreviewService(input);
+        ? await backendForScope(backendScope).updatePreviewService(
+            existing.serviceId,
+            existing.definitionRevision,
+            input,
+          )
+        : await backendForScope(backendScope).registerPreviewService(input);
       if (result.kind === "definition") {
         onSaved(result.definition);
         onOpenChange(false);

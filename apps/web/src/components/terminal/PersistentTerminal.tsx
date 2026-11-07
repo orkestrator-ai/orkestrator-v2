@@ -26,7 +26,8 @@ import {
   type PersistentTerminalData,
 } from "@/stores/terminalPortalStore";
 import { cn } from "@/lib/utils";
-import { bootstrapTerminalSession } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import type { TabType } from "@/contexts";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -204,6 +205,8 @@ export function PersistentTerminal({
   onSetupComplete,
   onWrite,
 }: PersistentTerminalProps) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const isMobile = useMediaQuery("(max-width: 767px)");
   // Mirrored into a ref so the focus effect below can read the current
   // viewport without listing isMobile as a dependency: crossing the
@@ -1899,7 +1902,8 @@ export function PersistentTerminal({
         if (disposed) return;
         dispatched = true;
 
-        void bootstrapTerminalSession(targetSessionId, launchData)
+        void backendForScope(backendScope)
+          .bootstrapTerminalSession(targetSessionId, launchData)
           .then((result) => {
             if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
             if (result.bootstrapped) {
@@ -1950,6 +1954,7 @@ export function PersistentTerminal({
       }
     };
   }, [
+    backendScope,
     acknowledgeInitialLaunchOptions,
     bootstrapped,
     isEnvironmentReady,

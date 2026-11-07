@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { cn, createSessionKey } from "@/lib/utils";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import {
   nativeAgentProjectionStore,
@@ -45,22 +46,8 @@ import {
   forgetAgentHandoff,
   type AgentProvider,
 } from "@/lib/agent-handoff";
-import {
-  adoptNativeAgentSession,
-  beginNativeAgentSignIn,
-  cancelNativeAgentSignIn,
-  forkNativeAgentSession,
-  getBuildPipelineSessionProjection,
-  getMultiReviewReviewerProjection,
-  getNativeAgentAuthStatus,
-  getNativeAgentProjection,
-  openInBrowser,
-  performNativeAgentSessionAction,
-  performNativeAgentMcpAction,
-  signOutNativeAgent,
-  stopNativeAgentBackgroundTask,
-  updateNativeAgentControls,
-} from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { useSystemUsage } from "@/hooks/useSystemUsage";
 import { ClaudeAccountSignInAction } from "@/components/claude/ClaudeAccountSignInAction";
 import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
@@ -123,16 +110,21 @@ function deviceCodeToastId(environmentId: string, agent: string): string {
 }
 
 /** The device-code toast's cancel: abandons the login on the provider's side too. */
-function cancelDeviceCodeSignIn(input: {
-  environmentId: string;
-  agent: AgentPlatform;
-  logicalSessionKey: string;
-}): { label: string; onClick: () => void } {
+function cancelDeviceCodeSignIn(
+  input: {
+    environmentId: string;
+    agent: AgentPlatform;
+    logicalSessionKey: string;
+  },
+  nodeScope: NodeScope,
+): { label: string; onClick: () => void } {
   return {
     label: "Cancel sign-in",
     onClick: () => {
       toast.dismiss(deviceCodeToastId(input.environmentId, input.agent));
-      void cancelNativeAgentSignIn(input).catch(() => toast.error("Could not cancel the sign-in"));
+      void backendForScope(nodeScope)
+        .cancelNativeAgentSignIn(input)
+        .catch(() => toast.error("Could not cancel the sign-in"));
     },
   };
 }
@@ -439,7 +431,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       setControlUpdateState(pending);
       const startingProjection = projections.getState().projections.get(session.sessionKey);
       try {
-        const next = await updateNativeAgentControls({
+        const next = await backendForScope(nodeScope).updateNativeAgentControls({
           environmentId: session.environmentId,
           agent: session.provider,
           logicalSessionKey: session.sessionKey,
@@ -475,7 +467,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
         );
       }
     },
-    [activeSession, projections],
+    [nodeScope, activeSession, projections],
   );
   // Only the rewind and undo handlers need the normalised transcript, so it is
   // built when one of them runs rather than on every projection update.
@@ -564,17 +556,17 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     let cancelled = false;
     const requestedSessionId = currentSessionId;
     const projection = activeSession.buildPipelineId
-      ? getBuildPipelineSessionProjection({
+      ? backendForScope(nodeScope).getBuildPipelineSessionProjection({
           pipelineId: activeSession.buildPipelineId,
           sessionKey: activeSession.sessionKey,
           refreshUsage: true,
         })
       : activeSession.multiReviewReviewer
-        ? getMultiReviewReviewerProjection({
+        ? backendForScope(nodeScope).getMultiReviewReviewerProjection({
             ...activeSession.multiReviewReviewer,
             refreshUsage: true,
           })
-        : getNativeAgentProjection({
+        : backendForScope(nodeScope).getNativeAgentProjection({
             environmentId: activeSession.environmentId,
             agent: activeSession.provider,
             logicalSessionKey: activeSession.sessionKey,
@@ -589,7 +581,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     return () => {
       cancelled = true;
     };
-  }, [activeSession, currentSessionId, open, projections]);
+  }, [nodeScope, activeSession, currentSessionId, open, projections]);
 
   // Read when the panel opens rather than carried by the projection: an
   // account read is not free, and only this panel shows the account.
@@ -630,7 +622,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       clearTimeout(timer);
       const request = ++sequence;
       try {
-        const status = await getNativeAgentAuthStatus({
+        const status = await backendForScope(nodeScope).getNativeAgentAuthStatus({
           environmentId: accountEnvironmentId,
           agent: accountAgent,
           logicalSessionKey: accountSessionKey,
@@ -651,11 +643,14 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 id: deviceCodeToastId(accountEnvironmentId, accountAgent),
                 duration: pending.expiresAt - Date.now(),
                 closeButton: true,
-                cancel: cancelDeviceCodeSignIn({
-                  environmentId: accountEnvironmentId,
-                  agent: accountAgent,
-                  logicalSessionKey: accountSessionKey,
-                }),
+                cancel: cancelDeviceCodeSignIn(
+                  {
+                    environmentId: accountEnvironmentId,
+                    agent: accountAgent,
+                    logicalSessionKey: accountSessionKey,
+                  },
+                  nodeScope,
+                ),
                 action: {
                   label: "Open sign-in link",
                   onClick: () => {
@@ -707,7 +702,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       // A failure belongs to this read cycle; the next open or identity starts clean.
       setAccountReadFailed(false);
     };
-  }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
+  }, [nodeScope, open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
   const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
   // An account read only labels the live projection it was requested for.
   // A stopped bridge reports its next-start account, while an unreachable
@@ -771,7 +766,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   ) => {
     if (!activeTab || !activeSession) return;
     const id = createUuid();
-    await adoptNativeAgentSession({
+    await backendForScope(nodeScope).adoptNativeAgentSession({
       environmentId: activeSession.environmentId,
       agent: activeSession.provider,
       logicalSessionKey: createSessionKey(activeSession.environmentId, id),
@@ -859,7 +854,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const forkCurrent = () =>
     runAction("fork", async ({ isCurrent }) => {
       if (!activeSession || !currentSessionId) return;
-      const fork = await forkNativeAgentSession({
+      const fork = await backendForScope(nodeScope).forkNativeAgentSession({
         environmentId: activeSession.environmentId,
         agent: activeSession.provider,
         logicalSessionKey: activeSession.sessionKey,
@@ -906,7 +901,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const compactCurrent = () =>
     runAction("compact", async () => {
       if (!activeSession || !currentSessionId) return;
-      await performNativeAgentSessionAction({
+      await backendForScope(nodeScope).performNativeAgentSessionAction({
         environmentId: activeSession.environmentId,
         agent: activeSession.provider,
         logicalSessionKey: activeSession.sessionKey,
@@ -1229,7 +1224,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                           void runAction("rewind", async () => {
                             const target = latestUserMessage();
                             if (!target?.id) throw new Error("No file checkpoint is available");
-                            const { preview } = await performNativeAgentSessionAction({
+                            const { preview } = await backendForScope(
+                              nodeScope,
+                            ).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
@@ -1267,7 +1264,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                               )
                             )
                               return;
-                            await performNativeAgentSessionAction({
+                            await backendForScope(nodeScope).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
@@ -1298,7 +1295,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                         onClick={() =>
                           void runAction("undo", async () => {
                             const messageId = latestUserMessage()?.id;
-                            await performNativeAgentSessionAction({
+                            await backendForScope(nodeScope).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
@@ -1329,7 +1326,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                                 )
                               )
                                 return;
-                              const { shareUrl: url } = await performNativeAgentSessionAction({
+                              const { shareUrl: url } = await backendForScope(
+                                nodeScope,
+                              ).performNativeAgentSessionAction({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
@@ -1388,7 +1387,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("redo", async () => {
-                            await performNativeAgentSessionAction({
+                            await backendForScope(nodeScope).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
@@ -1416,7 +1415,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                           void runAction(
                             "unshare",
                             async ({ isCurrent, sessionIdentity: actionIdentity }) => {
-                              await performNativeAgentSessionAction({
+                              await backendForScope(nodeScope).performNativeAgentSessionAction({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
@@ -1448,7 +1447,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("review", async () => {
-                            await performNativeAgentSessionAction({
+                            await backendForScope(nodeScope).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
@@ -1496,7 +1495,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                           "steer",
                           async ({ isCurrent, sessionIdentity: actionIdentity }) => {
                             const text = steerText.trim();
-                            const outcome = await performNativeAgentSessionAction({
+                            const outcome = await backendForScope(
+                              nodeScope,
+                            ).performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,
                               logicalSessionKey: activeSession.sessionKey,
@@ -1569,7 +1570,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                           className="h-7 shrink-0 gap-1.5"
                           onClick={() =>
                             void runAction(`stop-${task.id}`, async () => {
-                              await stopNativeAgentBackgroundTask({
+                              await backendForScope(nodeScope).stopNativeAgentBackgroundTask({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
@@ -1638,7 +1639,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                             void runAction("auth-sign-out", async () => {
                               const reader = accountReaderRef.current;
                               reader?.invalidate();
-                              await signOutNativeAgent({
+                              await backendForScope(nodeScope).signOutNativeAgent({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
@@ -1659,7 +1660,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                             void runAction("auth-sign-in", async () => {
                               const reader = accountReaderRef.current;
                               reader?.invalidate();
-                              const result = await beginNativeAgentSignIn({
+                              const result = await backendForScope(
+                                nodeScope,
+                              ).beginNativeAgentSignIn({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
@@ -1677,11 +1680,14 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                                   ),
                                   duration: NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
                                   closeButton: true,
-                                  cancel: cancelDeviceCodeSignIn({
-                                    environmentId: activeSession.environmentId,
-                                    agent: activeSession.provider,
-                                    logicalSessionKey: activeSession.sessionKey,
-                                  }),
+                                  cancel: cancelDeviceCodeSignIn(
+                                    {
+                                      environmentId: activeSession.environmentId,
+                                      agent: activeSession.provider,
+                                      logicalSessionKey: activeSession.sessionKey,
+                                    },
+                                    nodeScope,
+                                  ),
                                   ...(result.url
                                     ? {
                                         action: {
@@ -1733,7 +1739,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   busyAction={busyAction}
                   onAction={(server, action) =>
                     void runAction(`mcp-${server.id}-${action}`, async () => {
-                      const result = await performNativeAgentMcpAction({
+                      const result = await backendForScope(nodeScope).performNativeAgentMcpAction({
                         environmentId: activeSession.environmentId,
                         agent: activeSession.provider,
                         logicalSessionKey: activeSession.sessionKey,

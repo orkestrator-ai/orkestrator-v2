@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
-import { getContainerLogs } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Loader2, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -38,6 +39,8 @@ function ContainerInitializationLogs({
   className,
   pollIntervalMs = 1_000,
 }: InitializationLogsProps) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const [logs, setLogs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +66,7 @@ function ContainerInitializationLogs({
   useCoordinatedRead<string>({
     key: { resource: "container-init-logs", target: containerId, options: `tail=${MAX_LOG_LINES}` },
     demand: { intervalMs: pollIntervalMs, priority: "standard" },
-    read: () => getContainerLogs(containerId, String(MAX_LOG_LINES)),
+    read: () => backendForScope(backendScope).getContainerLogs(containerId, String(MAX_LOG_LINES)),
     onState: (state) => {
       if (state.status === "current") {
         const snapshot = state.value ?? "";

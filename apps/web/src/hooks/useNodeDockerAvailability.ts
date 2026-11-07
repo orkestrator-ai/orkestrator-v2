@@ -25,9 +25,16 @@ export function useNodeDockerAvailability(scope: NodeScope, active = true): bool
       backendApiForScope(scope, createDockerSkillsApi, backend)
         .checkDocker()
         .then(
-          (result: DockerAvailability | boolean) => {
+          (result: DockerAvailability | boolean | null) => {
             if (!current) return;
-            setAvailable(typeof result === "boolean" ? result : result.available);
+            // A malformed answer says nothing about Docker.
+            setAvailable(
+              typeof result === "boolean"
+                ? result
+                : typeof result?.available === "boolean"
+                  ? result.available
+                  : null,
+            );
           },
           (error: unknown) => {
             if (current)

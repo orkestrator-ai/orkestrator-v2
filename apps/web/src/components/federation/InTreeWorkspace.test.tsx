@@ -1,0 +1,230 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { NodeInvokeOptions } from "@orkestrator/protocol/node-client";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  installDesktopFake,
+  connectionList,
+  remoteConnection,
+  sharedIdDataset,
+  uninstallDesktopFake,
+} from "@/test/federation-desktop-fake";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import {
+  closeInTreeScopes,
+  configureInTreeScopes,
+  inTreeScopeHolds,
+} from "@/lib/federation/in-tree-scopes";
+import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import { WindowScopeProvider } from "@/lib/node-scope/providers";
+import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
+import { useMachineViewStore } from "@/stores/machineViewStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { uiStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { FederationProvider } from "./FederationProvider";
+import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
+
+const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
+const INITIAL_MACHINE = useMachineViewStore.getState();
+const LEAF = "bk_a" as BackendId;
+const project = { id: "project-1", name: "Checkout", localPath: null, order: 0 };
+
+/** A leaf node that answers its workspace's reads; anything else answers nothing. */
+class LeafClient extends FakeNodeClient {
+  override async invokeRaw<T = unknown>(
+    command: string,
+    args: Readonly<Record<string, unknown>> = {},
+    options?: NodeInvokeOptions,
+  ): Promise<T> {
+    try {
+      return await super.invokeRaw<T>(command, args, options);
+    } catch (error) {
+      if (this.disposed) throw error;
+      return null as T;
+    }
+  }
+}
+
+let leafClients: LeafClient[];
+let restoreScopes: () => void;
+
+function install(nodes = ["a", "b"]) {
+  const fake = installDesktopFake({
+    list: connectionList(
+      nodes.map((id) => remoteConnection(id, `Machine ${id.toUpperCase()}`, "teal")),
+    ),
+    datasets: Object.fromEntries(nodes.map((id) => [id, sharedIdDataset("working")])),
+  });
+  // A browser or iOS client: no desktop realms.
+  delete (window.orkestrator as { workspaceViews?: unknown }).workspaceViews;
+  return fake;
+}
+
+function anchorElement(): HTMLDivElement {
+  const anchor = document.createElement("div");
+  anchor.getBoundingClientRect = () =>
+    ({ left: 300, top: 40, width: 900, height: 700, right: 1200, bottom: 740 }) as DOMRect;
+  document.body.appendChild(anchor);
+  return anchor;
+}
+
+function renderRegion() {
+  return render(
+    <WindowScopeProvider>
+      <FederationProvider>
+        <RemoteWorkspaceRegion anchor={anchorElement()} />
+      </FederationProvider>
+    </WindowScopeProvider>,
+  );
+}
+
+/** Commands that would stop or discard work on a node. */
+function workStoppingCalls(commands: string[]): string[] {
+  return commands.filter((command) =>
+    /^(stop|cancel|kill|delete|interrupt|close_terminal)_/.test(command),
+  );
+}
+
+beforeEach(() => {
+  useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
+  useUIChromeStore.setState({ environmentSortMode: "project" });
+  useMachineViewStore.setState({ grouping: "machine" });
+  useInTreeNodesStore.setState({ nodes: [LEAF] });
+  sessionStorage.clear();
+  leafClients = [];
+  restoreScopes = configureInTreeScopes({
+    host: {
+      kind: "browser",
+      async openLeafScope(windowScope, nodeId) {
+        const client = new LeafClient({
+          nodeId,
+          invoke: {
+            get_projects: [project],
+            get_environments: [],
+            get_environment_snapshots: [],
+          },
+        });
+        leafClients.push(client);
+        return windowScope.open({ role: "leaf", client });
+      },
+    },
+    // The warm services are 3014's; this suite checks the seam around them.
+    startServices: () => () => undefined,
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  closeInTreeScopes();
+  restoreScopes();
+  uninstallDesktopFake();
+  useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
+  useMachineViewStore.setState(INITIAL_MACHINE, true);
+  useInTreeNodesStore.setState({ nodes: [] });
+  setFilesPanelTestState({ isOpen: false });
+  resetWindowScopeForTests();
+  document.body.innerHTML = "";
+});
+
+test("a flagged node renders in the window's tree in its own scope; another node keeps its realm", async () => {
+  install();
+  renderRegion();
+  act(() => useRemoteWorkspaceStore.getState().open("bk_b", { projectId: "project-1" }));
+  act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
+
+  const inTree = await screen.findByTestId("in-tree-workspace");
+  expect(inTree.getAttribute("data-node")).toBe(LEAF);
+  // bk_b is a frame realm, hidden behind the shown in-tree node.
+  expect(screen.getByTestId("frame-workspace-realm")).toBeTruthy();
+  expect(screen.getAllByTestId("in-tree-workspace")).toHaveLength(1);
+
+  // The in-tree node's scope is a leaf scope of the window, held by the view.
+  const scope = getWindowScope().get(LEAF);
+  expect(scope?.role).toBe("leaf");
+  expect(inTreeScopeHolds(LEAF)).toBe(1);
+
+  // The window's request reached the in-tree realm host over the loopback:
+  // it selected the project on the leaf's own uiStore, and the window's
+  // node-qualified selection moved with it.
+  await waitFor(() => expect(scope!.store(uiStore).getState().selectedProjectId).toBe(project.id));
+  expect(getWindowScope().selection.get()).toMatchObject({ nodeId: LEAF, projectId: project.id });
+  expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(LEAF);
+  // Nothing crashed into the node's error boundary.
+  expect(screen.queryByTestId("node-workspace-error")).toBeNull();
+  // The leaf answered its own workspace's reads.
+  expect(leafClients[0]!.calls("get_projects").length).toBeGreaterThan(0);
+});
+
+test("switching a node between in-tree and realm only changes this window's view: no work stops", async () => {
+  const fake = install();
+  renderRegion();
+  act(() => useRemoteWorkspaceStore.getState().open("bk_b", { projectId: "project-1" }));
+  act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
+  await screen.findByTestId("in-tree-workspace");
+  const scope = getWindowScope().get(LEAF)!;
+
+  // In-tree → realm: the node gets a frame; its scope stays for the grace period.
+  act(() => useInTreeNodesStore.getState().setInTree(LEAF, false));
+  await waitFor(() => expect(screen.getAllByTestId("frame-workspace-realm")).toHaveLength(2));
+  expect(screen.queryByTestId("in-tree-workspace")).toBeNull();
+  expect(scope.disposed).toBe(false);
+  expect(inTreeScopeHolds(LEAF)).toBe(0);
+
+  // Realm → in-tree: the frame's grant is closed (only this view of it) and
+  // the held scope comes back without a reopen.
+  act(() => useInTreeNodesStore.getState().setInTree(LEAF, true));
+  await screen.findByTestId("in-tree-workspace");
+  expect(getWindowScope().get(LEAF)).toBe(scope);
+  expect(leafClients).toHaveLength(1);
+  await waitFor(() =>
+    expect(fake.invoke.mock.calls.some(([command]) => command === "close_node_workspace")).toBe(
+      true,
+    ),
+  );
+
+  // Neither node was asked to stop, cancel or delete anything.
+  expect(workStoppingCalls(fake.calls.map((call) => call.command))).toEqual([]);
+  expect(workStoppingCalls(leafClients[0]!.invocations.map((call) => call.command))).toEqual([]);
+});
+
+test("closing an in-tree node's view releases its scope after the grace period, never cancelling work", async () => {
+  install();
+  renderRegion();
+  act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
+  await screen.findByTestId("in-tree-workspace");
+  act(() => useRemoteWorkspaceStore.getState().closeRealm(LEAF));
+  await waitFor(() => expect(screen.queryByTestId("in-tree-workspace")).toBeNull());
+  // Released, kept for the grace period, then disposed by `closeInTreeScopes`
+  // in afterEach (the grace timer itself is covered by in-tree-scopes.test.ts).
+  expect(inTreeScopeHolds(LEAF)).toBe(0);
+  expect(getWindowScope().get(LEAF)?.disposed).toBe(false);
+  expect(workStoppingCalls(leafClients[0]!.invocations.map((call) => call.command))).toEqual([]);
+});
+
+test("a node whose scope cannot open shows its failure with Try again, and the other node is unaffected", async () => {
+  install();
+  restoreScopes();
+  let attempts = 0;
+  restoreScopes = configureInTreeScopes({
+    host: {
+      kind: "browser",
+      async openLeafScope(windowScope, nodeId) {
+        attempts += 1;
+        if (attempts === 1) throw new Error("The machine did not answer.");
+        const client = new LeafClient({ nodeId, invoke: { get_projects: [project] } });
+        leafClients.push(client);
+        return windowScope.open({ role: "leaf", client });
+      },
+    },
+    startServices: () => () => undefined,
+  });
+  renderRegion();
+  act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
+  expect(await screen.findByText("The machine did not answer.")).toBeTruthy();
+  act(() => screen.getByText("Try again").click());
+  await waitFor(() => expect(getWindowScope().get(LEAF)?.role).toBe("leaf"));
+  await waitFor(() => expect(screen.queryByText("The machine did not answer.")).toBeNull());
+  expect(attempts).toBe(2);
+});

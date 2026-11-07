@@ -67,6 +67,22 @@ interface Entry {
 
 const entries = new WeakMap<WindowScope, Map<string, Entry>>();
 
+/** Defaults every hold uses unless it passes its own; tests replace them. */
+let defaults: Omit<InTreeScopeOptions, "windowScope"> = {};
+
+/**
+ * Replaces the defaults of `holdInTreeScope` (the host, the services it
+ * starts, the grace period) until the returned restore runs. For tests that
+ * render `InTreeWorkspace` on a fake node.
+ */
+export function configureInTreeScopes(next: Omit<InTreeScopeOptions, "windowScope">): () => void {
+  const previous = defaults;
+  defaults = { ...previous, ...next };
+  return () => {
+    defaults = previous;
+  };
+}
+
 let browserRegistry: NodeClientRegistry | null = null;
 
 type DesktopHost = NonNullable<Window["orkestrator"]>;
@@ -141,7 +157,11 @@ function close(map: Map<string, Entry>, nodeId: string, entry: Entry): void {
 }
 
 /** Holds `nodeId`'s scope in the window's tree; see the module comment. */
-export function holdInTreeScope(nodeId: string, options: InTreeScopeOptions = {}): InTreeScopeHold {
+export function holdInTreeScope(
+  nodeId: string,
+  explicit: InTreeScopeOptions = {},
+): InTreeScopeHold {
+  const options = { ...defaults, ...explicit };
   const windowScope = options.windowScope ?? getWindowScope();
   const map = windowEntries(windowScope);
   let entry = map.get(nodeId);

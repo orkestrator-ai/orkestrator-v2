@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "description": "Untyped (string-registered) backend commands per contract domain. Shrink-only: see docs/architecture/version-compatibility.md#domain-contracts.",
-  "total": 996,
+  "total": 972,
   "untypedByDomain": {
     "accounts": 33,
     "agent-mail": 23,
@@ -19,8 +19,7 @@
     "mcp": 13,
     "multi-review": 30,
     "native-sessions": 87,
-    "node-files": 8,
-    "node-mail": 13,
+    "node-mail": 3,
     "nodes": 51,
     "pipelines": 35,
     "previews": 17,
@@ -29,7 +28,7 @@
     "pull-requests": 42,
     "system": 47,
     "terminals": 26,
-    "ticket-sync": 7,
+    "ticket-sync": 1,
     "transcripts": 16,
     "web-annotations": 37
   }

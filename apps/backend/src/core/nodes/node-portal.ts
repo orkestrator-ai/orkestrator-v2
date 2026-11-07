@@ -11,7 +11,7 @@ import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
 import { FleetUpdatePolicyRunner, type FleetUpdatePolicyStore } from "./fleet-update-policy.js";
 import { NodeEventRelay } from "./node-event-relay.js";
-import { NodeUnavailableError } from "./node-link.js";
+import { NodeUnavailableError, type ContractEnvelope } from "./node-link.js";
 import {
   NodeReadModel,
   type ReadModelLocal,
@@ -162,7 +162,15 @@ export class NodePortal {
     });
   }
 
-  async invokeOnNode(args: Record<string, unknown>): Promise<RoutedResult<unknown>> {
+  /**
+   * Route one command to a node. `options.envelope` is for this backend's own
+   * domain clients (plan item 1010): the contract envelope they picked for that
+   * node, sent with the command. A client's `invoke_on_node` never sets it.
+   */
+  async invokeOnNode(
+    args: Record<string, unknown>,
+    options: { envelope?: ContractEnvelope } = {},
+  ): Promise<RoutedResult<unknown>> {
     const nodeId = args.nodeId;
     if (!isBackendId(nodeId)) throw new Error("Expected nodeId to be a node identity.");
     if (typeof args.command !== "string" || !args.command) throw new Error("Expected command.");
@@ -176,6 +184,7 @@ export class NodePortal {
       command: args.command,
       args: commandArgs,
       ...(typeof args.requestKey === "string" ? { requestKey: args.requestKey.slice(0, 128) } : {}),
+      ...(options.envelope ? { envelope: options.envelope } : {}),
       outcomes: this.outcomes,
     });
     if (result.outcome === "ok") {

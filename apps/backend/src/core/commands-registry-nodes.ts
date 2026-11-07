@@ -4,6 +4,28 @@ import { parseNodeImportEntries } from "@orkestrator/protocol/command-nodes";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { SYNC_CONTROLLER_SETTINGS_COMMAND } from "@orkestrator/protocol/controller-settings";
 import { parsePortalLayoutUpdate } from "@orkestrator/protocol/portal-layout";
+import {
+  abortNodeFileWriteCommand,
+  appendNodeFileWriteCommand,
+  beginNodeFileWriteCommand,
+  commitNodeFileWriteCommand,
+  listNodeTransfersCommand,
+  readNodeFileCommand,
+  statNodeFileCommand,
+  transferNodeFilesCommand,
+} from "@orkestrator/protocol/contract/domains/node-files";
+import {
+  ackNodeOutboxCommand,
+  collectNodeOutboxCommand,
+  createNodeActionRequestCommand,
+  deliverNodeMailCommand,
+  getNodeProjectCoordinatorCommand,
+  getWorkerRequestStateCommand,
+  listNodeActionRequestsCommand,
+  recordNodeEnvironmentOriginCommand,
+  resolveNodeActionRequestCommand,
+  returnNodeOutboxMailCommand,
+} from "@orkestrator/protocol/contract/domains/node-mail";
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -235,30 +257,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return portal(context).revokeClientGrant(args);
   });
 
-  // Leaf mail (leaf side, called by an attached command node).
-  register("deliver_node_mail", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      [
-        "controllerId",
-        "coordinatorEnvironmentId",
-        "coordinatorTabId",
-        "requestId",
-        "toEnvironmentId",
-        "toTabId",
-        "subject",
-        "body",
-        "steer",
-        // The coordinator's turn was not started by the user (`node-mail-turn-origin`).
-        "turnOrigin",
-        "nodeParent",
-        // The leaf's project, for mail to its coordinator ("coordinator").
-        "projectId",
-        // Images already in this node's spool (`node-mail-attachments`).
-        "attachments",
-      ],
-      "arguments",
-    );
+  // Leaf mail (leaf side, called by an attached command node). The node-mail
+  // and node-files commands are defined (`@orkestrator/protocol/contract/domains`,
+  // plan item 1010): their arguments decode tolerantly, so an unknown key is
+  // dropped rather than refused, and a sender marks `steer` critical.
+  register(deliverNodeMailCommand, async (args, context) => {
     const delivered = await coordination(context).deliverIncoming(args);
     if (args.steer !== true) return delivered;
     // Bounces live in the idempotency receipt, outside the recipient mailbox.
@@ -288,16 +291,14 @@ export function registerNodeCommands(register: CommandRegistrar): void {
 
   // Whether a project here has a coordinator a command node's coordinator can
   // mail (`deliver_node_mail` to "coordinator").
-  register("get_node_project_coordinator", async (args, context) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(getNodeProjectCoordinatorCommand, async (args, context) => {
     if (typeof args.projectId !== "string") throw new Error("Expected projectId.");
     return coordination(context).projectCoordinator(args.projectId);
   });
 
   // Whether coordinator mail to a worker tab has reached a turn yet; a
   // command node asks before treating that tab's turn end as its answer.
-  register("get_worker_request_state", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "tabId"], "arguments");
+  register(getWorkerRequestStateCommand, async (args, context) => {
     if (typeof args.environmentId !== "string" || typeof args.tabId !== "string") {
       throw new Error("Expected environmentId and tabId.");
     }
@@ -315,21 +316,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     };
   });
 
-  register("record_node_environment_origin", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["environmentId", "controllerId", "coordinatorEnvironmentId", "coordinatorTabId"],
-      "arguments",
-    );
+  register(recordNodeEnvironmentOriginCommand, async (args, context) => {
     return coordination(context).recordOrigin(args);
   });
 
-  register("collect_node_outbox", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["controllerId", "after", "coordinatorMail", "coordinatorNotices", "attachmentMail"],
-      "arguments",
-    );
+  register(collectNodeOutboxCommand, async (args, context) => {
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     const after =
       typeof args.after === "number" && Number.isSafeInteger(args.after) ? args.after : 0;
@@ -351,19 +342,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("ack_node_outbox", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      [
-        "controllerId",
-        "upTo",
-        "sequences",
-        "coordinatorMail",
-        "coordinatorNotices",
-        "attachmentMail",
-      ],
-      "arguments",
-    );
+  register(ackNodeOutboxCommand, async (args, context) => {
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     if (typeof args.upTo !== "number" || !Number.isSafeInteger(args.upTo)) {
       throw new Error("Expected upTo.");
@@ -390,33 +369,17 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("return_node_outbox_mail", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "seq"], "arguments");
+  register(returnNodeOutboxMailCommand, async (args, context) => {
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     if (typeof args.seq !== "number" || !Number.isSafeInteger(args.seq) || args.seq <= 0) {
       throw new Error("Expected seq.");
     }
     await coordination(context).returnOutboxMail(args.controllerId, args.seq);
-    return { returned: true };
+    return { returned: true as const };
   });
 
   // Action requests (command node): coordinators ask, the user decides.
-  register("create_node_action_request", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      [
-        "requestId",
-        "kind",
-        "targets",
-        "requestedBy",
-        "reason",
-        "agentsMd",
-        "workerQuestion",
-        "projectHomeMessage",
-        "askedBecause",
-      ],
-      "arguments",
-    );
+  register(createNodeActionRequestCommand, async (args, context) => {
     return coordination(context).createActionRequest(args);
   });
 
@@ -483,13 +446,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("list_node_action_requests", async (args, context) => {
-    assertOnlyKeys(args, ["pendingOnly"], "arguments");
+  register(listNodeActionRequestsCommand, async (args, context) => {
     return coordination(context).actions.list({ pendingOnly: args.pendingOnly === true });
   });
 
-  register("resolve_node_action_request", async (args, context) => {
-    assertOnlyKeys(args, ["requestId", "decision", "approval"], "arguments");
+  register(resolveNodeActionRequestCommand, async (args, context) => {
     if (typeof args.requestId !== "string") throw new Error("Expected requestId.");
     if (args.decision !== "approve" && args.decision !== "reject") {
       throw new Error("Expected decision approve or reject.");
@@ -509,13 +470,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   // Node files (any node; a command node calls them on itself and its nodes).
-  register("stat_node_file", async (args, context) => {
-    assertOnlyKeys(args, ["scope", "path"], "arguments");
+  register(statNodeFileCommand, async (args, context) => {
     return coordination(context).files.stat(parseNodeFileScope(args.scope), String(args.path));
   });
 
-  register("read_node_file", async (args, context) => {
-    assertOnlyKeys(args, ["scope", "path", "offset", "length"], "arguments");
+  register(readNodeFileCommand, async (args, context) => {
     return coordination(context).files.read(
       parseNodeFileScope(args.scope),
       String(args.path),
@@ -524,8 +483,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("begin_node_file_write", async (args, context) => {
-    assertOnlyKeys(args, ["scope", "path", "size", "sha256", "overwrite"], "arguments");
+  register(beginNodeFileWriteCommand, async (args, context) => {
     return coordination(context).files.beginWrite({
       scope: parseNodeFileScope(args.scope),
       path: String(args.path),
@@ -535,21 +493,18 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("append_node_file_write", async (args, context) => {
-    assertOnlyKeys(args, ["uploadId", "contentBase64"], "arguments");
+  register(appendNodeFileWriteCommand, async (args, context) => {
     return coordination(context).files.appendWrite(
       String(args.uploadId),
       String(args.contentBase64),
     );
   });
 
-  register("commit_node_file_write", async (args, context) => {
-    assertOnlyKeys(args, ["uploadId"], "arguments");
+  register(commitNodeFileWriteCommand, async (args, context) => {
     return coordination(context).files.commitWrite(String(args.uploadId));
   });
 
-  register("abort_node_file_write", async (args, context) => {
-    assertOnlyKeys(args, ["uploadId"], "arguments");
+  register(abortNodeFileWriteCommand, async (args, context) => {
     return coordination(context).files.abortWrite(String(args.uploadId));
   });
 
@@ -610,8 +565,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   // Command node: transfers and comparisons across its nodes.
-  register("transfer_node_files", async (args, context) => {
-    assertOnlyKeys(args, ["from", "to", "files", "toDirectory", "overwrite", "actor"], "arguments");
+  register(transferNodeFilesCommand, async (args, context) => {
     const endpoint = (value: unknown, label: string) => {
       const record = value as Record<string, unknown> | null;
       if (!record || typeof record.nodeId !== "string")
@@ -629,8 +583,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("list_node_transfers", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  register(listNodeTransfersCommand, async (_args, context) => {
     return coordination(context).projectFiles.transfer.list();
   });
 

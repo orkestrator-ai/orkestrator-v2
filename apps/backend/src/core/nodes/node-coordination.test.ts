@@ -667,9 +667,15 @@ describe("a command node's deliverNow on this leaf", () => {
     expect(world.steered(recipient)).toEqual([]);
   });
 
-  test("other unknown fields are still refused", async () => {
-    const { deliver } = await leaf();
-    await expect(deliver("hi", { deliverNow: true })).rejects.toThrow("deliverNow");
+  // Strict until plan item 1010: `deliver_node_mail` is now a defined command,
+  // whose arguments decode tolerantly (§11.4). An unknown key is dropped; a
+  // must-understand one would be named in the envelope's `critical` list.
+  test("other unknown fields are dropped, not refused, and do not steer", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true });
+    const result = await deliver("hi", { deliverNow: true });
+    expect(result).toMatchObject({ placement: "pending-inject" });
+    expect(result).not.toHaveProperty("deliverNow");
+    expect(world.steered(recipient)).toEqual([]);
   });
 });
 

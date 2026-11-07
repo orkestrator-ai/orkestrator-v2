@@ -234,11 +234,16 @@ export class NodeLink {
     void this.start();
   }
 
-  /** Run one command on the node over the active route. */
+  /**
+   * Run one command on the node over the active route. `envelope` is the
+   * contract envelope a domain client picked for this peer (plan item 1010),
+   * sent next to `command` and `args`; without it the body is today's
+   * `{ command, args }`.
+   */
   async invoke<T>(
     command: string,
     args: Record<string, unknown> = {},
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; envelope?: ContractEnvelope } = {},
   ): Promise<T> {
     const active = this.active;
     const token = this.record.credential?.token;
@@ -252,26 +257,30 @@ export class NodeLink {
    * Run one defined command on the node over the active route. The invoke
    * carries the contract envelope (`domain`, `version`, `critical`) when the
    * node's hello advertises the command's domain ({@link contractEnvelopeFor});
-   * otherwise it is today's `{ command, args }`. The result is the node's wire
-   * value, not decoded here: the domain adapters (plan item 1009) do that.
+   * otherwise it is today's `{ command, args }`. A domain client passes the
+   * envelope it picked instead (`options.envelope`, `undefined` for its
+   * legacy adapter), so the version sent is the negotiated one. The result is
+   * the node's wire value, not decoded here: the domain adapters (plan item
+   * 1009) do that.
    */
   async invokeCommand<C extends AnyCommandDef>(
     def: C,
     args: EncodedArgsOf<C>,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; envelope?: ContractEnvelope } = {},
   ): Promise<EncodedResultOf<C>> {
     const active = this.active;
     const token = this.record.credential?.token;
     if (!active || !token || this.state !== "connected") {
       throw new NodeUnavailableError(`${this.label()} is not connected.`);
     }
-    const envelope = contractEnvelopeFor(active.hello, def, args);
+    const { envelope: picked, ...rest } = options;
+    const envelope = "envelope" in options ? picked : contractEnvelopeFor(active.hello, def, args);
     return this.request<EncodedResultOf<C>>(
       active.opened.baseUrl,
       token,
       def.name,
       args as Record<string, unknown>,
-      envelope ? { ...options, envelope } : options,
+      envelope ? { ...rest, envelope } : rest,
     );
   }
 

@@ -7,6 +7,7 @@ import {
   type AgentMailAttachment,
 } from "@orkestrator/protocol/agent-mail";
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
+import type { NodeMailApi } from "@orkestrator/protocol/contract/domains/node-mail";
 import {
   COORDINATOR_MAIL_ADDRESS,
   coordinatorConversationIdFromRuntimeId,
@@ -419,12 +420,13 @@ export interface MailAttachmentNode {
   nodeId: string;
   nodeName: string;
   call<T>(command: string, args?: JsonRecord, requestKey?: string): Promise<T>;
-  supports(capability: string): boolean;
+  /** That node's `node-mail` domain client: version 1 takes images, a pre-contract node by capability. */
+  nodeMail(): Pick<NodeMailApi, "supports">;
 }
 
 /** Refuse a node that would drop or reject the images, and say what to do. */
 export function assertNodeTakesMailAttachments(node: MailAttachmentNode): void {
-  if (node.supports(BACKEND_CAPABILITIES.nodeMailAttachments)) return;
+  if (node.nodeMail().supports(BACKEND_CAPABILITIES.nodeMailAttachments)) return;
   compatibilityPathUsage.record("node-mail-attachments.older-node");
   throw new Error(
     `${node.nodeName} runs an older Orkestrator that cannot receive images by mail; update that machine, then retry. Nothing was sent.`,

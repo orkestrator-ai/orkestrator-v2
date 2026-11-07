@@ -3,8 +3,8 @@
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
     "commands": 999,
-    "defined": 3,
-    "untyped": 996,
+    "defined": 27,
+    "untyped": 972,
     "events": 44
   },
   "untypedByDomain": {
@@ -24,8 +24,7 @@
     "mcp": 13,
     "multi-review": 30,
     "native-sessions": 87,
-    "node-files": 8,
-    "node-mail": 13,
+    "node-mail": 3,
     "nodes": 51,
     "pipelines": 35,
     "previews": 17,
@@ -34,12 +33,24 @@
     "pull-requests": 42,
     "system": 47,
     "terminals": 26,
-    "ticket-sync": 7,
+    "ticket-sync": 1,
     "transcripts": 16,
     "web-annotations": 37
   },
   "domains": {
+    "node-files": {
+      "version": 1,
+      "min": 1
+    },
+    "node-mail": {
+      "version": 1,
+      "min": 1
+    },
     "system": {
+      "version": 1,
+      "min": 1
+    },
+    "ticket-sync": {
       "version": 1,
       "min": 1
     }
@@ -47,8 +58,12 @@
   "commands": {
     "abort_node_file_write": {
       "domain": "node-files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e64a47314eb18ea4bfcb9dd2867a4643a21b4d165e552c97e639faf1f0fd9a27",
+      "resultDigest": "sha256:6bde15139496a6921f7e2747992bbbe48bd0e7566f9d046370609533116f0196"
     },
     "accept_command_handover": {
       "domain": "nodes",
@@ -62,13 +77,21 @@
     },
     "ack_node_outbox": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c52b127a7fd63ea05e0f62976bf39601f84e0d9590f19050b02fc8f6260c2961",
+      "resultDigest": "sha256:6a3ef05aa407237fd680e097e8035b004f08af83af86a298f1185dc400666c7f"
     },
     "ack_ticket_sync_outbox": {
       "domain": "ticket-sync",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:70b5065abe4a2361b551c88a52219926b38766c8bc9ba8088b40e04b2269966f",
+      "resultDigest": "sha256:6a3ef05aa407237fd680e097e8035b004f08af83af86a298f1185dc400666c7f"
     },
     "acknowledge_startup_agent_session": {
       "domain": "environments",
@@ -172,8 +195,12 @@
     },
     "append_node_file_write": {
       "domain": "node-files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:899d146880f566105249ca59935fe14fcfde85cff3e65d884f3a1ea11d9d868e",
+      "resultDigest": "sha256:db8a58a4030483aa11cfdcc207769190e65cf9c022828bdf7c032de6caea5748"
     },
     "apply_env_keys": {
       "domain": "nodes",
@@ -202,8 +229,12 @@
     },
     "apply_ticket_sync": {
       "domain": "ticket-sync",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["liveIds", "reset"],
+      "argsDigest": "sha256:20b586a7940fc8a1ff56fe55e6c4e7527357a26eb6815b57bae44771705056de",
+      "resultDigest": "sha256:8a62babc0519cc8dc63a8493a1025d0e86913952348111019aab4e16dc0748da"
     },
     "approve_environment_setup": {
       "domain": "environments",
@@ -302,8 +333,12 @@
     },
     "begin_node_file_write": {
       "domain": "node-files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["sha256"],
+      "argsDigest": "sha256:11835cd316f3ea624625e53d1b8175d96971145338cc745cdb4bd4770a6e45b0",
+      "resultDigest": "sha256:4f21483d94b47a91068f71175ad9a31dcff9364db25fbc8f533b5a35fe80ebbc"
     },
     "bootstrap_terminal_session": {
       "domain": "terminals",
@@ -732,18 +767,30 @@
     },
     "collect_node_outbox": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:3abc33044de8f3d2b68f8dc7920928edaddb1372213db50ebb5538ab375b3fc3",
+      "resultDigest": "sha256:72a502e0700129e7d8f6c1d0b43e23b54f6b60c87ff633f2910efb8165e04479"
     },
     "collect_ticket_sync_outbox": {
       "domain": "ticket-sync",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fb947d220e7c3b7f03a29f233c2166c8831ea7c8a89afb2fb4b80c76d6b15186",
+      "resultDigest": "sha256:5fbc85c5b15ade60178130b302a22ac05bff0c3c3654ac996b3abfdc02e6777c"
     },
     "commit_node_file_write": {
       "domain": "node-files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e64a47314eb18ea4bfcb9dd2867a4643a21b4d165e552c97e639faf1f0fd9a27",
+      "resultDigest": "sha256:0b2ec8d0b1ea53167abe6b6d0c8f42c80629eae6eb42a8cc12ce775d16f12920"
     },
     "compare_project_files": {
       "domain": "nodes",
@@ -857,8 +904,12 @@
     },
     "create_node_action_request": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:00ffb6d9dfad52244b483f2603d97187c3c0b21447971bfe4da32b6092417a46",
+      "resultDigest": "sha256:4abbefebe07e38011ecae0b4d673ca612a212c5cf1d903999d5bf54b2349b6f5"
     },
     "create_preview_attachment": {
       "domain": "previews",
@@ -1012,8 +1063,12 @@
     },
     "deliver_node_mail": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["attachments", "nodeParent", "requestId", "steer"],
+      "argsDigest": "sha256:c3ad5ac27dcc0ba4ac93fb95f89281091f6507a7a2b4327e6d118df7588d2d76",
+      "resultDigest": "sha256:2b1bba7cde567582dc3ffe7d919c852c0be772720013ca51c15e7217352b5e10"
     },
     "design_action": {
       "domain": "design",
@@ -2131,8 +2186,12 @@
     },
     "get_node_project_coordinator": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:be6502d330ffcbcf92a6ee3f986945e36d68b9bc1e6f1c08be18a965a8d1713c"
     },
     "get_node_status": {
       "domain": "nodes",
@@ -2376,13 +2435,21 @@
     },
     "get_ticket_sync_cursor": {
       "domain": "ticket-sync",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:eed485fb1202008a5928b06d200efdbe447d75ba13fa6c3571b2304310db4868",
+      "resultDigest": "sha256:1112b3b3289793c369b899a78855583de75e0d052116ffadf2b03162a82d4ee9"
     },
     "get_ticket_sync_status": {
       "domain": "ticket-sync",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:8b3c01e4df3f8057515b4e0c8c931bd9e7a0bfc56e89b20a2ca2aa57adda4487"
     },
     "get_usage_history": {
       "domain": "accounts",
@@ -2391,8 +2458,12 @@
     },
     "get_worker_request_state": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a0d6eec5c947629e71bf200b1665dc49c0cfd7eafc115c639076208931c66e3d",
+      "resultDigest": "sha256:e7a869579fd19c59e02fd5cae5bb67b4c6669281f134f08cc37a74351c10bdd8"
     },
     "get_workflow_result_metrics": {
       "domain": "pipelines",
@@ -2881,8 +2952,12 @@
     },
     "list_node_action_requests": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b2dd3f3fbb95127ee40d71e425988aa2441e32c1f800fa8a609f042922dd8c5a",
+      "resultDigest": "sha256:7f4d4d49d99a297e5cf6192fec4ddb318314ac063835a5b3ffc8f3906fc6f67d"
     },
     "list_node_outcomes": {
       "domain": "nodes",
@@ -2896,8 +2971,12 @@
     },
     "list_node_transfers": {
       "domain": "node-files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:c930faf07833814e6d0e4317f92ad76f0c8865a9b251ace8e09e34173541f59a"
     },
     "list_nodes": {
       "domain": "nodes",
@@ -3376,8 +3455,12 @@
     },
     "read_node_file": {
       "domain": "node-files",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7a830950de30938a5a0ec3b74acc6e055cee019ef30b4ee2f5abfa0aeb0cf350",
+      "resultDigest": "sha256:30eff7dc27f9f59171474f6a00bf65f00c0b169a7adeb5b43588ff57943a0e79"
     },
     "read_project_agents_md_section": {
       "domain": "projects",
@@ -3445,8 +3528,12 @@
     },
     "record_node_environment_origin": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f8631faf351e7ed8f42e9b5f8bbb56799981b6c52d9e8f4098c9fe133bfa301f",
+      "resultDigest": "sha256:cf517a96e2a51faf07e22a7853c352873a2cfc38ca37234d39c07a4db15aa3c4"
     },
     "record_preview_client_metrics": {
       "domain": "previews",
@@ -3660,8 +3747,12 @@
     },
     "resolve_node_action_request": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e005d2bd16f3b3e69d62a147c70032bc72f697f666c170a9427c56870e21b6c5",
+      "resultDigest": "sha256:4abbefebe07e38011ecae0b4d673ca612a212c5cf1d903999d5bf54b2349b6f5"
     },
     "resolve_preview_target": {
       "domain": "previews",
@@ -3800,8 +3891,12 @@
     },
     "return_node_outbox_mail": {
       "domain": "node-mail",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:89b91b3f8f5d375c018a171edd3808b8d2ff6935d681b032244504ad8ac9b116",
+      "resultDigest": "sha256:5957557ad5a85e429d0c66dadefaf2b79056520e28a1013ca8d7e11e620da36c"
     },
     "reveal_in_file_manager": {
       "domain": "native-sessions",
@@ -4344,8 +4439,12 @@
     },
     "stat_node_file": {
       "domain": "node-files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:20af5c19da3bf7a3679a9edab599b05ad1b0cb84bb7a6c486f90657d4c4ade11",
+      "resultDigest": "sha256:f476acd0cfc9f6a2ae9d0d0e5b39172ec07961914c381c2e93bd79b02572d860"
     },
     "status_review_validation": {
       "domain": "multi-review",
@@ -4519,8 +4618,12 @@
     },
     "sync_node_tickets": {
       "domain": "ticket-sync",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a2705767c2f751f084f53c07e3e1db9ecfc15b7b59936221d92beb6fd3cd38e3",
+      "resultDigest": "sha256:9a0482ace141f84f24637318e6b5f05bd3381e2e972d60685b85e5dd7fefcad7"
     },
     "sync_project_git": {
       "domain": "coordinator",
@@ -4649,8 +4752,12 @@
     },
     "transfer_node_files": {
       "domain": "node-files",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d03569ea5a7111d215409a59972af631ea94f4714d84c4c79302dd6828676d5b",
+      "resultDigest": "sha256:f230d8b038f27d544c27c3e15502708f84d3793c57668fecdc4e156972141b79"
     },
     "trust_node_host_key": {
       "domain": "nodes",

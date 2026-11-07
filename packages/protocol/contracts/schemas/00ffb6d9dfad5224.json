@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:00ffb6d9dfad52244b483f2603d97187c3c0b21447971bfe4da32b6092417a46",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentsMd": {},
+        "askedBecause": {},
+        "kind": {},
+        "projectHomeMessage": {},
+        "reason": {},
+        "requestId": {},
+        "requestedBy": {},
+        "targets": {},
+        "workerQuestion": {}
+      },
+      "type": "object"
+    }
+  }
+}

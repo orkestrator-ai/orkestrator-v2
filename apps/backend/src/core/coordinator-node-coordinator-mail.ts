@@ -42,7 +42,11 @@ function nonBlank(value: unknown, name: string): string {
   return value;
 }
 
-/** Counted: the leaf predates `node-coordinator-mail` (version-compatibility.md, Register). */
+/**
+ * Counted: a pre-contract leaf that predates `node-coordinator-mail`
+ * (version-compatibility.md, Register). A leaf with the `node-mail` domain
+ * always takes the address (the node-mail client's version 1).
+ */
 function olderNodeRefusal(nodeName: string): string {
   compatibilityPathUsage.record("node-coordinator-mail.older-node");
   return `${nodeName} runs an older Orkestrator whose coordinator cannot take mail from this one; update that machine, then retry. Its workers can still be messaged by environment id.`;
@@ -60,37 +64,26 @@ export async function sendToNodeCoordinator(
     nodeParent?: { id: string; threadId: string; hopCount: number };
     /** Already in that node's spool, for its `deliver_node_mail` to place. */
     attachments?: MailAttachmentBatch;
-    /** Sent only to a leaf that advertises `node-mail-turn-origin`. */
+    /** Left out by the node-mail client for a pre-contract leaf without `node-mail-turn-origin`. */
     turnOrigin?: "mail";
   },
 ): Promise<JsonRecord> {
-  if (!target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
+  const mail = target.nodeMail(`mail:${input.coordinatorId}:${input.requestId}`);
+  if (!mail.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
     throw new Error(olderNodeRefusal(target.nodeName));
   }
-  const delivered = await target.call<{
-    messageId?: string;
-    toEnvironmentId?: string;
-    toTabId?: string;
-    toTabName?: string;
-    placement?: string;
-    placementReason?: string;
-    attachments?: AgentMailAttachment[];
-  }>(
-    "deliver_node_mail",
-    {
-      controllerId: target.selfId,
-      ...input.mailbox,
-      requestId: input.requestId,
-      toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
-      projectId: target.projectId,
-      ...(input.subject ? { subject: input.subject } : {}),
-      ...(input.turnOrigin ? { turnOrigin: input.turnOrigin } : {}),
-      body: input.body,
-      ...(input.nodeParent ? { nodeParent: input.nodeParent } : {}),
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-    },
-    `mail:${input.coordinatorId}:${input.requestId}`,
-  );
+  const delivered = await mail.deliver({
+    controllerId: target.selfId,
+    ...input.mailbox,
+    requestId: input.requestId,
+    toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
+    projectId: target.projectId,
+    ...(input.subject ? { subject: input.subject } : {}),
+    ...(input.turnOrigin ? { turnOrigin: input.turnOrigin } : {}),
+    body: input.body,
+    ...(input.nodeParent ? { nodeParent: input.nodeParent } : {}),
+    ...(input.attachments ? { attachments: input.attachments } : {}),
+  });
   const scheduled =
     delivered?.placement === "pending-inject" || delivered?.placement === "injected";
   return {
@@ -103,7 +96,9 @@ export async function sendToNodeCoordinator(
     ...(delivered?.toTabName ? { toTabName: delivered.toTabName } : {}),
     ...(delivered?.placement ? { placement: delivered.placement } : {}),
     ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
-    ...(delivered?.attachments?.length ? { attachments: delivered.attachments } : {}),
+    ...(delivered?.attachments?.length
+      ? { attachments: delivered.attachments as AgentMailAttachment[] }
+      : {}),
     // Not a worker: nothing to wait on but its answer.
     coordinatorDelegationOpened: false,
     ...(scheduled
@@ -122,17 +117,15 @@ export async function sendToNodeCoordinator(
 export async function nodeCoordinatorMailbox(target: CoordinatorNodeTarget): Promise<JsonRecord> {
   const node = { nodeId: target.nodeId, node: target.nodeName, projectId: target.projectId };
   const workers = `Workers on ${target.nodeName} are reached by environment id from list_environments with nodeId "${target.nodeId}".`;
-  if (!target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
+  const mail = target.nodeMail();
+  if (!mail.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
     return {
       ...node,
       coordinator: { reachable: false, reason: olderNodeRefusal(target.nodeName) },
       workers,
     };
   }
-  const answer = await target.call<{
-    hasCoordinator?: boolean;
-    main?: { title?: string; agent?: string | null } | null;
-  }>("get_node_project_coordinator", { projectId: target.projectId });
+  const answer = await mail.projectCoordinator({ projectId: target.projectId });
   if (!answer?.hasCoordinator) {
     return {
       ...node,

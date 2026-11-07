@@ -3,11 +3,11 @@ id: 1010
 title: "Pilot domains: node mail, node files and ticket sync"
 phase: 1
 plan: "§12 Phase 1.5"
-status: not-started
+status: in-progress
 depends_on: [1003, 1004, 1005, 1009]
 blocked_by: ""
-owner: ""
-branch: ""
+owner: claude-worker
+branch: unified-federation-b4c9ee65814d
 pr: ""
 updated: 2026-11-07
 ---
@@ -57,22 +57,62 @@ These are mostly **backend to backend** calls, so the pilot's adapters live in t
 
 ## Work
 
-- [ ] Define the domains `node-mail` (mail, outbox, action requests, attachments), `node-files` and `ticket-sync` in `packages/protocol/src/contract/domains/`. Each starts at version 1, with min 1.
-- [ ] `defineCommand` for each command above. Args schemas match today's `assertOnlyKeys` sets.
+- [x] Define the domains `node-mail` (mail, outbox, action requests, attachments), `node-files` and `ticket-sync` in `packages/protocol/src/contract/domains/`. Each starts at version 1, with min 1.
+- [x] `defineCommand` for each command above. Args schemas match today's `assertOnlyKeys` sets.
   - `critical`: `steer` on `deliver_node_mail`, plus any idempotency or safety key the handler relies on. Record the reasoning per field in Notes.
-- [ ] Convert the handlers to `register(def, handler)`. Strict handlers become tolerant with critical fields (§11.4).
-- [ ] Sender side (`node-link`, coordinator node mail, ticket sync and file transfer callers):
+- [x] Convert the handlers to `register(def, handler)`. Strict handlers become tolerant with critical fields (§11.4).
+- [x] Sender side (`node-link`, coordinator node mail, ticket sync and file transfer callers):
   - use `createDomainClient` with the peer's negotiated `domains`;
   - add a version-0 adapter that keeps today's capability checks for pre-contract peers;
   - delete a capability check only where the version-1 path replaces it.
-- [ ] Retire or mark mechanical the register rows for these domains (§11.5 counts 9). Update `version-compatibility.md` per row, keeping each row's counter until its retirement condition is met.
-- [ ] Regenerate the manifest ([1006](1006-contract-manifest-generator.md)) and adapters list ([1009](1009-domain-clients-and-adapters.md)).
+- [x] Retire or mark mechanical the register rows for these domains (§11.5 counts 9). Update `version-compatibility.md` per row, keeping each row's counter until its retirement condition is met. (7 rows are in these domains: 6 made mechanical, 1 already detected by shape; none can retire yet. See Notes.)
+- [x] Regenerate the manifest ([1006](1006-contract-manifest-generator.md)) and adapters list ([1009](1009-domain-clients-and-adapters.md)).
 
 ## Tests
 
-- [ ] Current↔current, current↔pre-contract fixture peer (capability-gated paths), and a peer that refuses a critical field (typed error surfaced to the coordinator).
-- [ ] Existing node mail, outbox, ticket sync and file transfer suites pass unchanged.
+- [x] Current↔current, current↔pre-contract fixture peer (capability-gated paths), and a peer that refuses a critical field (typed error surfaced to the coordinator).
+- [x] Existing node mail, outbox, ticket sync and file transfer suites pass unchanged. (Pass; the only edits are the one test that pinned the strict refusal this item removes, two raw test registrars wrapped in `registrarFrom`, and two 1009 tests that assumed no client was listed. See Notes.)
 
 ## Done when
 
-- [ ] The pilot domains are negotiated, adapted and CI-checked. A live two-profile node mail and ticket sync run passes, or is listed as needing live evidence.
+- [x] The pilot domains are negotiated, adapted and CI-checked.
+- [ ] A live two-profile node mail and ticket sync run passes, or is listed as needing live evidence. Live check deferred to the live qualification pass (2013/1012).
+
+## Notes
+
+### Where Effect is used (2026-11-07)
+
+- **Effect Schema** for every definition: the 24 commands' `args` and `result` (`contract/domains/{node-mail,node-files,ticket-sync}/commands.ts`) and the shared `NodeActionRequestSchema`/`NodeTransferReceiptSchema`, following 1001's rules (`Schema.Int`/`Schema.Finite`, `optionalKey`, no transformations).
+- **`effect/Result`** only through 1002's `decodeCommandArgs`/`decodeCommandResult`, which the registry (1003) and `createDomainClient` (1009) already read.
+- **Deliberately not Effect:** the three domain clients and the backend glue (`nodes/node-domain-clients.ts`) are promise-based adapters over 1009's `createDomainClient`, for the reason 1009 gives (synchronous selection; callers are promise-based; no services, scopes or fibers). The incompatibility refusals are 1002's `Data.TaggedError`s (`unsupportedField`, `unknownCommand`).
+
+### Decisions (2026-11-07)
+
+- **Commands defined: the 24 strict ones**, exactly the "belong to the pilot" list. The lenient neighbours (`prepare_node_mail_attachments`, `place_node_mail_attachments`, `send_coordinator_command_node_mail`, `coordinator_node_ticket`) stay string-registered in their domains (`contract-domain-map.ts`): they parse leniently (coercions, defaults), and a schema would refuse some value they accept today, which §11.4 forbids. They move with Phase 7 (7008). Converting a strict handler only drops `assertOnlyKeys`; its own checks stay.
+- **Argument schemas** declare exactly the former `assertOnlyKeys` keys (pinned by `pilot-domains.test.ts`). A value the handler or its service already checks with its own message (`parseNodeFileScope`, the non-negative integer checks, `parseTicketSyncItem`, `isBackendId`) is `optionalKey(Unknown)`, so the error text is unchanged; plain values the handler passed through as strings or booleans are typed `optionalKey(String/Boolean)`. All are optional, because the handlers decide what a missing key means. One quirk: an empty `Schema.Struct({})` (`list_node_transfers`) passes its input through instead of stripping it; that handler reads nothing.
+- **Result schemas have optional fields** for everything that crosses the node link: a pre-contract leaf answers less (older leaves do not report `placement`), fakes in tests answer `{}`, and `decodeCommandResult` drops undeclared keys, so each field a caller reads is declared. Nested data the caller parses itself (`items` of both outboxes, `attachments`, ticket node states) is `Array(Unknown)`. Command-node-local results (action requests, transfer receipts) declare only the fields every record has; converging the full records with the renderer's models is 7010.
+- **Critical fields**, per field:
+  - `deliver_node_mail.steer`: ignoring it silently does not steer the worker (§11.2).
+  - `deliver_node_mail.requestId`: the leaf's idempotency key (`node:<controller>:<requestId>` receipt); a receiver ignoring it would deliver a retry twice.
+  - `deliver_node_mail.nodeParent`: carries the hop count that stops two coordinators waking each other.
+  - `deliver_node_mail.attachments`: ignoring it delivers the mail without its images.
+  - `begin_node_file_write.sha256`: the destination verifies the file against it before it appears. (`overwrite` is not critical: ignoring it falls back to refusing to replace, which is safe.)
+  - `apply_ticket_sync.reset`/`liveIds`: a full resync drops replicas the source no longer has; ignoring them would keep deleted tickets.
+  - `create_node_action_request.requestId`: a retried request must replay the first, not ask twice.
+  - Not critical: `turnOrigin` (the register row: an older leaf frames mail as before, nothing weakens), the outbox flags (`coordinatorMail`, `coordinatorNotices`, `attachmentMail`: a receiver ignoring one keeps that mail queued, which is safe), `ack_node_outbox.sequences` (older leaves already take only `upTo`).
+- **`access`**: leaf-side commands called over the link are `internal`; the command node's own user commands (`list`/`resolve_node_action_request`, `transfer_node_files`, `list_node_transfers`, `get_ticket_sync_status`, `sync_node_tickets`) are `admin`, since every pilot command is workspace-excluded (`isWorkspaceExcludedCommand`). **`read`** equals `isNodeReadCommand(name)` (so `stat_node_file` stays `false`), pinned by the test, so routing and the manifest agree.
+- **Domain clients** (`contract/domains/<domain>/client.ts`, listed in `DOMAIN_CLIENTS`, `adapters.json` regenerated): `nodeMailClient` (`supports(feature)`, `deliver`, `projectCoordinator`, `collectOutbox`, `ackOutbox`, `returnOutboxMail`), `ticketSyncClient` (`syncs`, `collectOutbox`, `ackOutbox`, `cursor`, `apply`), `nodeFilesClient` (`stat`, `read`, `beginWrite`, `appendWrite`, `commitWrite`, `abortWrite`). Each has adapters 1 and 0. **Version 1 includes every capability that gated these commands** (`NODE_MAIL_FEATURES`: `node-mail-steer`, `node-mail-turn-origin`, `node-coordinator-mail`, `coordinator-notices`, `node-mail-attachments`, `node-mail-return`; and `ticket-sync`), since every build that advertises the domain has them, so `supports()`/`syncs` answer `true` and the capability checks are gone for those peers. **Version 0** reads the hello `capabilities` as before; it leaves out the keys a pre-contract leaf would refuse (`turnOrigin`, the three outbox flags), and refuses (rather than drops) `steer`/`attachments` without their capability with the typed `unsupported-field`, and `return_node_outbox_mail`/ticket-sync calls with `unknown-command`, which is what a node would answer. The senders still check `supports()` first with their own messages and counters; the refusals are a safety net.
+- **Backend glue** (`nodes/node-domain-clients.ts`): `peerDomainClient` binds a client to a peer's hello (`domains`, and `capabilities` as a set memoised per hello object so the per-generation cache holds) with `backendDomainAdapterUsage`; `linkDomainApi(link, def)` keeps one client per link and domain (the mail collector, ticket sync, the notice bridge); `routedDomainApi(def, hello, route)` builds one per routed call, because `invoke_on_node`'s routing carries a request key per call (the coordinator tools, file transfers). Selection is an identity check, so per-call building costs nothing.
+- **Envelope transport.** 1009's note: `contractEnvelopeFor` sends the definition's own version. The domain clients now pass the envelope they picked: `NodeLink.invoke(command, args, { envelope })`, `NodeLink.invokeCommand(def, args, { envelope })` (an explicit `envelope: undefined`, the legacy adapter, sends today's body; without the option it still falls back to `contractEnvelopeFor`), `RoutableLink.invoke`'s third parameter, `routeToNode({ envelope })` and `NodePortal.invokeOnNode(args, { envelope })` (a second parameter, so a client's `invoke_on_node` can never set it).
+- **Senders converted:** `NodeMailCollector` (collect/ack flags, notices, hand-back), `NodeTicketSync` (sync and status), `coordinator-node-tickets.ts` (`syncs`, `prepareRemoteBuildTicket` through the target's new `syncsTickets()`), `send_coordinator_node_mail` (worker mail with `steer`/`turnOrigin`, coordinator mail and its images), `sendToNodeCoordinator`/`nodeCoordinatorMailbox`, `assertNodeTakesMailAttachments`, the auto-switch notice bridge (`index.ts`, through the same `leafTakesCoordinatorNotices` the collector uses, so a notice goes one way only), and `NodeFileTransfer` (new `filesFor` option; `NodeProjectFiles.filesFor` routes another node through `nodeFilesClient` and runs this node's own commands locally). `CoordinatorNodeTarget` gained `nodeMail(requestKey?)` and `syncsTickets()`.
+- **Left as string invokes:** `record_node_environment_origin` (`recordOrigin`) and `get_worker_request_state` (`NodeCoordinatorRemote`'s routed read helper), which had no capability gating and whose test fakes answer nothing; the defined handlers accept both forms, so they can move to the client later without a version change. The action-request commands are called in-process only. The `node-attachment` checks (`node-link.ts`, `node-service.ts`) gate `attach_controller` in the `nodes` domain, and `node-coordinator-build-origin` gates pipeline admission (`pipelines`/`coordinator`), so neither is a pilot path.
+- **Register rows (§11.5's 9 was an estimate).** Seven rows are in these domains. Six are now mechanical, each keeping its counter and adding `domain-adapter.backend.<domain>.v0`: `node-mail-turn-origin`, `node-coordinator-mail`, `node-mail-attachments` (command node side), `node-mail-return`, `ticket-sync`, and leaves without `coordinator-notices`. The seventh, command nodes without `coordinator-notices`, is the leaf reading the command node's request shape; nothing in it changed, and a current command node always sends the key. None retires yet: every release in the window is a pre-contract peer that still takes these paths; each row now also names the adapter's retirement (the floor passing the first Stable release that advertises the domain).
+- **Test edits** (outside "unchanged"): `node-coordination.test.ts` "other unknown fields are still refused" pinned the strict `deliver_node_mail`; it now asserts the key is dropped and does not steer (§11.4). `coordinator-node-tickets.test.ts` and `coordinator-node-coordinator-mail.test.ts` had raw `(name, handler) => map.set(...)` registrars, which store a definition under the object; wrapped in `registrarFrom` as 1003 did elsewhere. `domain-adapter-usage.test.ts` (1009) assumed no client was listed; it now counts `node-mail@0` and drops `node-mail@1` and unlisted pairs.
+- **Docs:** `version-compatibility.md` register rows, the renderer–backend skew paragraph, the transports paragraph, a "Pilot domains" bullet under Client adapters, and "How to add a command" step 2 (the `domains/<domain>/` layout).
+- **Shared files** (`node-ticket-sync.ts`, `node-portal.ts`, `node-routing.ts`, `index.ts`, `package.json`, the manifest) were committed through a temporary index built from HEAD with only this item's hunks (Brief rule). 7011 had swept part of this item's `node-ticket-sync.ts` into its commit and restored it in 9e265dfe1; this item's commit carries it.
+- Pre-existing, not this item: `commands-registry-nodes.test.ts` "successful portal layout mutation publishes the authoritative stored revision" expects the string event name, while 7011's typed emit passes the definition.
+- Aggregate suite left to review preparation.
+
+## Work log
+
+- 2026-11-07 (claude-worker): protocol: `contract/domains/node-files/domain.ts`; `commands.ts`, `client.ts` and `index.ts` for `node-mail`, `node-files` and `ticket-sync` (7011's `domain.ts` reused unchanged), the three clients in `DOMAIN_CLIENTS`, three `package.json` exports, `pilot-domains.test.ts`. Backend: the 24 handlers on `register(def, handler)`, their domain-map entries removed, `nodes/node-domain-clients.ts`, envelope option on `NodeLink.invoke`/`invokeCommand`, `RoutableLink`, `routeToNode` and `NodePortal.invokeOnNode`, the senders listed in Notes, `leafSyncsTickets`/`leafTakesCoordinatorNotices`/`routedDomainApi` in the nodes barrel. Manifest (999 commands, 27 defined), baseline 996 to 972, 21 stored argument schemas, `adapters.json` (three domains, adapters 1 and 0). `mise run contract:check`, `contract:adapters:check` and `contract:ci` pass. Tests: protocol `src` (pass, incl. `pilot-domains.test.ts`); backend focused set of 101 test files (`src/core/nodes`, `public-api`, the coordinator node, mail, ticket, attachment and file suites, `domain-adapter-usage`, `commands-registry-contracts`, `contract-manifest`, gateway hello/envelope/command-node and node SSH tests: 1982 pass, 1 failure from 7011's typed emit, above); root `contract-ci`, `contract-untyped-ratchet`, `domain-import-boundaries`, `unknown-command-text-guard` (pass). Protocol and backend typecheck (both tsconfigs), oxlint and `bun fmt` clean. Live two-profile check deferred to the live qualification pass (2013/1012).

@@ -44,6 +44,7 @@ import {
   coordinatorNodeContext,
   createNodeSshFactory,
   errorCode,
+  leafTakesCoordinatorNotices,
   NodeCoordination,
   NodeCoordinatorRemote,
   NodePortal,
@@ -181,7 +182,7 @@ import {
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
-import { BACKEND_CAPABILITIES, type BackendProfile } from "@orkestrator/protocol/backend-profile";
+import { type BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -918,10 +919,11 @@ export class OrkestratorBackend {
       nodeName: async (nodeId) =>
         (await this.nodePortal.summaries([nodeId])).nodes[0]?.view.displayName ?? nodeId,
       mail: (event, machineName) => mailAutoSwitchNotice(storage, event, machineName),
-      sendsThroughOutbox: (nodeId) =>
-        isBackendId(nodeId) &&
-        this.nodes.link(nodeId)?.hello?.capabilities?.[BACKEND_CAPABILITIES.coordinatorNotices] ===
-          1,
+      // The same answer the mail collector acts on (the node-mail client, plan item 1010).
+      sendsThroughOutbox: (nodeId) => {
+        const link = isBackendId(nodeId) ? this.nodes.link(nodeId) : null;
+        return link ? leafTakesCoordinatorNotices(link) : false;
+      },
     });
     bridgeRemoteCoordinatorEvents({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),

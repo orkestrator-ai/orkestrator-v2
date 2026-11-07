@@ -59,12 +59,20 @@ describe("recordRendererDomainAdapterUsage", () => {
     }
   });
 
-  test("drops every pair while no domain client is listed", () => {
+  // The pilot domains (plan item 1010) are the first listed clients.
+  test("counts the listed legacy adapters and drops the current version and unlisted pairs", () => {
     const usage = new CompatibilityPathUsage(at);
     expect(
-      recordRendererDomainAdapterUsage([{ domain: "node-mail", version: 0, count: 1 }], { usage }),
-    ).toEqual({ accepted: 0, dropped: 1 });
-    expect(usage.snapshot().paths).toEqual({});
+      recordRendererDomainAdapterUsage(
+        [
+          { domain: "node-mail", version: 0, count: 1 },
+          { domain: "node-mail", version: 1, count: 1 },
+          { domain: "git", version: 0, count: 1 },
+        ],
+        { usage },
+      ),
+    ).toEqual({ accepted: 1, dropped: 2 });
+    expect(Object.keys(usage.snapshot().paths)).toEqual(["domain-adapter.renderer.node-mail.v0"]);
   });
 });
 
@@ -119,7 +127,7 @@ describe("the record_domain_adapter_usage command", () => {
     const handler = command();
     expect(
       await handler(
-        { entries: [{ domain: "node-mail", version: 0, count: 2 }] },
+        { entries: [{ domain: "node-mail", version: 1, count: 2 }] },
         {} as CommandContext,
       ),
     ).toEqual({ accepted: 0, dropped: 1 });

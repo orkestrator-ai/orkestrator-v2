@@ -3,7 +3,11 @@ import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 
 import type { BackendId } from "@orkestrator/protocol/federation";
 
-import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
+import {
+  NodeOutcomeUnknownError,
+  NodeUnavailableError,
+  type ContractEnvelope,
+} from "./node-link.js";
 import { WORKSPACE_ADMINISTRATION_COMMANDS } from "./workspace-grant-scope.js";
 
 /**
@@ -287,7 +291,11 @@ export class NodeOutcomeLedger {
 
 export interface RoutableLink {
   readonly connected: boolean;
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  invoke<T>(
+    command: string,
+    args?: Record<string, unknown>,
+    options?: { envelope?: ContractEnvelope },
+  ): Promise<T>;
 }
 
 export type RoutedResult<T> =
@@ -307,6 +315,8 @@ export async function routeToNode<T>(input: {
   outcomes: NodeOutcomeLedger;
   /** Overrides the command-name classification (a routed `public_action` read). */
   read?: boolean;
+  /** The contract envelope a domain client picked for this peer (plan item 1010). */
+  envelope?: ContractEnvelope;
 }): Promise<RoutedResult<T>> {
   if (isNodeExcludedCommand(input.command)) {
     throw new Error(`${input.command} cannot be run on another node from here.`);
@@ -320,7 +330,10 @@ export async function routeToNode<T>(input: {
     );
   }
   try {
-    return { outcome: "ok", result: await input.link.invoke<T>(input.command, input.args) };
+    const result = input.envelope
+      ? await input.link.invoke<T>(input.command, input.args, { envelope: input.envelope })
+      : await input.link.invoke<T>(input.command, input.args);
+    return { outcome: "ok", result };
   } catch (error) {
     if (error instanceof NodeOutcomeUnknownError && !read) {
       const requestKey = input.requestKey ?? randomUUID();

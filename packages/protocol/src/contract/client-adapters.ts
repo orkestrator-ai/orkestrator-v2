@@ -24,12 +24,19 @@
  */
 import type { DomainClientDef } from "./client.js";
 import { MAX_DOMAIN_VERSION, isDomainName, type DomainName } from "./domain.js";
+import { nodeFilesClient } from "./domains/node-files/client.js";
+import { nodeMailClient } from "./domains/node-mail/client.js";
+import { ticketSyncClient } from "./domains/ticket-sync/client.js";
 
 /**
- * Every domain client definition. Empty until the first domain converts
- * (plan item 1010's pilot domains).
+ * Every domain client definition. The pilot domains (plan item 1010) were the
+ * first; each later domain adds its client here.
  */
-export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([]);
+export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
+  nodeFilesClient,
+  nodeMailClient,
+  ticketSyncClient,
+] as readonly DomainClientDef[]);
 
 /** The committed list, relative to the repository root. */
 export const ADAPTER_LIST_PATH = "packages/protocol/contracts/adapters.json";

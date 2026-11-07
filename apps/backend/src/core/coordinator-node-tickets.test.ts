@@ -53,7 +53,7 @@ async function setup(
   const leafProject = await leaf.addProject(createProject(REPO));
   const started: Array<Record<string, unknown>> = [];
   const leafCommands = new Map<string, CommandHandler>();
-  const registerLeaf = (name: string, handler: CommandHandler) => leafCommands.set(name, handler);
+  const registerLeaf = registrarFrom((name, handler) => leafCommands.set(name, handler));
   registerTicketSyncCommands(registerLeaf);
   registerKanbanCommands(registerLeaf, {
     conditionalManifestSnapshot: async (

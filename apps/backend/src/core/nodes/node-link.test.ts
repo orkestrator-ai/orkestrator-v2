@@ -10,7 +10,9 @@ import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-comm
 import { defineCommand } from "@orkestrator/protocol/contract/command";
 import { defineDomain } from "@orkestrator/protocol/contract/domain";
 import * as Schema from "effect/Schema";
+import { nodeMailClient } from "@orkestrator/protocol/contract/domains/node-mail";
 import { contractEnvelopeFor, NodeLink } from "./node-link.js";
+import { linkDomainApi } from "./node-domain-clients.js";
 import { NodeOutcomeLedger, routeToNode } from "./node-routing.js";
 import { TestNodeNetwork, settle } from "./node-network-test-support.js";
 
@@ -165,7 +167,7 @@ for (const malformed of [false, true])
     link.stop();
   });
 
-// A throwaway definition: no node command is converted yet (plan item 1010).
+// A throwaway definition in a domain no node command is in.
 const probeSystem = defineDomain({ name: "system", version: 2, min: 1 });
 const probeMutate = defineCommand({
   domain: probeSystem,
@@ -209,6 +211,44 @@ for (const [label, domains, expected] of [
     expect(bodies[1]).toEqual({ command: "mutate", args: { value: "y" } });
     link.stop();
   });
+
+test("a domain client's picked envelope is the one sent, and none is today's body (plan item 1010)", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const { leaf, link } = await setup(async (_input, init) => {
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+    if (body && typeof body.command === "string" && body.command !== "attach_controller") {
+      bodies.push(body);
+    }
+    return null;
+  });
+  leaf.helloOverrides = {
+    domains: { system: { min: 1, max: 2 }, "node-mail": { min: 1, max: 1 } },
+  };
+  leaf.commands.set("mutate", async () => ({}));
+  leaf.commands.set("return_node_outbox_mail", async () => ({ returned: true }));
+  await link.start();
+  // The negotiated version, not the definition's own (2).
+  await link.invokeCommand(
+    probeMutate,
+    { value: "x" },
+    { envelope: { domain: "system", version: 1 } },
+  );
+  // The legacy adapter passes none: a pre-contract body.
+  await link.invokeCommand(probeMutate, { value: "y" }, { envelope: undefined });
+  // Through the node-mail client over this link: version 1, picked from the hello.
+  await linkDomainApi(link, nodeMailClient).returnOutboxMail({ controllerId: "bk_cmd", seq: 1 });
+  expect(bodies).toEqual([
+    { command: "mutate", args: { value: "x" }, domain: "system", version: 1 },
+    { command: "mutate", args: { value: "y" } },
+    {
+      command: "return_node_outbox_mail",
+      args: { controllerId: "bk_cmd", seq: 1 },
+      domain: "node-mail",
+      version: 1,
+    },
+  ]);
+  link.stop();
+});
 
 test("a typed incompatibility keeps its code and details through the link (plan item 1005)", async () => {
   const body = toWire(

@@ -337,3 +337,69 @@ test("deferred notice retries retain exponential backoff", async () => {
     collector.dispose();
   }
 });
+
+describe("node-mail domain client (plan item 1010)", () => {
+  async function collectFrom(hello: Record<string, unknown>) {
+    const calls: Array<{ command: string; args: Record<string, unknown>; envelope?: unknown }> = [];
+    let pending = [item(1)];
+    const collector = new NodeMailCollector({
+      selfId: async () => "bk_cmd" as never,
+      nodeName: async () => "Leaf",
+      link: () => ({
+        connected: true,
+        hello,
+        invoke: async <T>(
+          command: string,
+          args: Record<string, unknown> = {},
+          options?: { envelope?: unknown },
+        ) => {
+          calls.push({
+            command,
+            args,
+            ...(options?.envelope ? { envelope: options.envelope } : {}),
+          });
+          if (command === "collect_node_outbox") return { items: pending, more: false } as T;
+          pending = [];
+          return {} as T;
+        },
+      }),
+      deliver: async () => {},
+      notices: {
+        repositoryHints: async () => ["github.com/acme/site"],
+        deliver: async () => "delivered",
+      },
+    });
+    try {
+      expect(await collector.collect("bk_leaf" as never)).toBe(true);
+    } finally {
+      collector.dispose();
+    }
+    return calls;
+  }
+
+  test("a leaf with the domain is sent every outbox flag, with the envelope, without capabilities", async () => {
+    const calls = await collectFrom({
+      capabilities: {},
+      domains: { "node-mail": { min: 1, max: 1 } },
+    });
+    expect(calls.map((call) => call.command)).toEqual(["collect_node_outbox", "ack_node_outbox"]);
+    expect(calls[0]).toMatchObject({
+      args: {
+        coordinatorMail: true,
+        attachmentMail: true,
+        coordinatorNotices: { repositoryHints: ["github.com/acme/site"] },
+      },
+      envelope: { domain: "node-mail", version: 1 },
+    });
+    expect(calls[1]).toMatchObject({
+      args: { upTo: 1, sequences: [1], coordinatorMail: true, attachmentMail: true },
+      envelope: { domain: "node-mail", version: 1 },
+    });
+  });
+
+  test("a pre-contract leaf is sent only the flags its capabilities name, as before", async () => {
+    const calls = await collectFrom({ capabilities: { "node-coordinator-mail": 1 } });
+    expect(calls[0]!.args).toEqual({ controllerId: "bk_cmd", after: 0, coordinatorMail: true });
+    expect(calls[0]).not.toHaveProperty("envelope");
+  });
+});

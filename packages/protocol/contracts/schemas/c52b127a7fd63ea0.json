@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c52b127a7fd63ea05e0f62976bf39601f84e0d9590f19050b02fc8f6260c2961",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "attachmentMail": {
+          "type": "boolean"
+        },
+        "controllerId": {},
+        "coordinatorMail": {
+          "type": "boolean"
+        },
+        "coordinatorNotices": {},
+        "sequences": {},
+        "upTo": {}
+      },
+      "type": "object"
+    }
+  }
+}

@@ -1,4 +1,3 @@
-import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import {
   normalizeTicketLabels,
@@ -18,6 +17,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 import { requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { KanbanTask } from "./storage-shared.js";
+import { leafSyncsTickets } from "./nodes/index.js";
 
 /**
  * A command node coordinator's ticket tools with a `nodeId`
@@ -79,7 +79,9 @@ async function ticketNode(
   }
   const link = isBackendId(nodeId) ? context.nodes.link(nodeId) : null;
   const online = node.available && Boolean(link?.connected);
-  const syncs = online ? hasBackendCapability(link?.hello, BACKEND_CAPABILITIES.ticketSync) : true; // Capability is unknown while offline: keep edits on the authoritative board.
+  // The ticket-sync domain client: version 1 syncs, a pre-contract leaf by its
+  // capability. Unknown while offline: keep edits on the authoritative board.
+  const syncs = online && link ? leafSyncsTickets(link) : true;
   const call = async <T>(command: string, args: JsonRecord, requestKey?: string): Promise<T> => {
     if (!online) throw new Error(`${name} is not connected; changes to it are disabled.`);
     const routed = await portal
@@ -336,13 +338,13 @@ export function registerCoordinatorNodeTicketCommands(register: CommandRegistrar
 export async function prepareRemoteBuildTicket(
   context: CommandContext,
   projectId: string,
-  node: { nodeId: string; nodeName: string; supports(capability: string): boolean },
+  node: { nodeId: string; nodeName: string; syncsTickets(): boolean },
   taskId: unknown,
 ): Promise<boolean> {
   const ticketId = typeof taskId === "string" ? taskId.trim() : "";
   const own = ticketId ? await context.storage.kanban.getKanbanTask(ticketId) : null;
   if (!belongs(own, projectId)) return false;
-  if (!node.supports(BACKEND_CAPABILITIES.ticketSync)) {
+  if (!node.syncsTickets()) {
     compatibilityPathUsage.record("ticket-sync.older-node");
     throw Object.assign(
       new Error(

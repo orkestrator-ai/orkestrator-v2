@@ -1015,7 +1015,11 @@ describe("workflows on a node", () => {
     const { run, scope, world, associations } = await setup({
       answers: {
         get_multi_review_workflow: { snapshot: review("w1", "preparing"), revision: 1 },
-        controller_multi_review_surface: { outcome: "pending" },
+        // The node answers a MultiReviewActionResult, which always names its workflow.
+        controller_multi_review_surface: {
+          outcome: "pending",
+          workflow: review("w1", "preparing"),
+        },
       },
     });
     await run("coordinator_node_multi_review_surface", {

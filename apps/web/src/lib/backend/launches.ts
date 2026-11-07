@@ -1,3 +1,4 @@
+import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 /**
  * One-request launches: the renderer states what the user chose and the
  * backend fills the saved defaults, owns every step and compensates failures.
@@ -47,10 +48,10 @@ export function createLaunchesApi(client: BackendClient) {
   async function launchMultiReview(
     input: LaunchMultiReviewActionInput,
   ): Promise<MultiReviewActionResult> {
-    return invoke<MultiReviewActionResult>("launch_multi_review", {
+    return coordinatorApi(client).launch_multi_review({
       input: { ...input },
       reservedId: input.requestId,
-    });
+    }) as Promise<MultiReviewActionResult>;
   }
 
   return { launchBuildPipeline, startFeaturePlanBuild, launchMultiReview };

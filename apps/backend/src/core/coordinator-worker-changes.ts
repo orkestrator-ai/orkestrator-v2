@@ -1,4 +1,8 @@
 import {
+  getControllerWorkerChangesCommand,
+  getCoordinatorWorkerChangesCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
+import {
   changeResourceKey,
   environmentChangeResourceKey,
   type ChangeDiffFileBody,
@@ -707,7 +711,7 @@ export function registerCoordinatorWorkerChanges(
       return handler(args, context);
     };
 
-  register("get_coordinator_worker_changes", async (args, context) => {
+  register(getCoordinatorWorkerChangesCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = surfaceRecord(args.input, "the changes input");
     const environmentId = asNonBlankString(input.environmentId, "environmentId");
@@ -747,7 +751,7 @@ export function registerCoordinatorWorkerChanges(
   });
 
   /** The same read on the node owning the worker, for a command node's coordinator. */
-  register("get_controller_worker_changes", async (args, context) => {
+  register(getControllerWorkerChangesCommand, async (args, context) => {
     const environment = await requireProjectWorker(
       context,
       asNonBlankString(args.projectId, "projectId"),

@@ -1,4 +1,17 @@
 import {
+  controllerMultiReviewSurfaceCommand,
+  createControllerEnvironmentCommand,
+  createControllerPrCommand,
+  editControllerWorkerTabCommand,
+  launchControllerMultiReviewCommand,
+  launchControllerTerminalCommand,
+  launchMultiReviewCommand,
+  openControllerBrowserCommand,
+  resolveControllerConflictsCommand,
+  startControllerBuildPipelineCommand,
+  startControllerMultiReviewCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
+import {
   isStartBuildPipelineInput,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
@@ -18,6 +31,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import { COORDINATOR_DELEGATION_PRESENTATION } from "@orkestrator/protocol/review-evidence-frames";
 
+import type { ResultOf } from "@orkestrator/protocol/contract/command";
 import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
 import { asNonBlankString, stripWorkflowSnapshotSecrets } from "./commands-helpers.js";
@@ -134,7 +148,7 @@ export function registerControllerWorkflowCommands(
    * receipt and passes the key it derived from it, so a retry after a lost
    * answer reattaches to the same job or tab here.
    */
-  register("launch_controller_terminal", async (args, context) => {
+  register(launchControllerTerminalCommand, async (args, context) => {
     const environment = await worker(args, context);
     const launch = parseTerminalLaunch(surfaceRecord(args.input, "the terminal input"));
     return launchWorkerTerminal(
@@ -146,18 +160,18 @@ export function registerControllerWorkflowCommands(
     );
   });
 
-  register("open_controller_browser", async (args, context) => {
+  register(openControllerBrowserCommand, async (args, context) => {
     const environment = await worker(args, context);
     const open = parseBrowserOpen(args, environment.id);
     return openWorkerBrowser(context, environment.id, open, surfaceKey(args.key));
   });
 
-  register("edit_controller_worker_tab", async (args, context) => {
+  register(editControllerWorkerTabCommand, async (args, context) => {
     const environment = await worker(args, context);
     return editWorkerTabWithTeardown(context, run, environment.id, parseTabEdit(args));
   });
 
-  register("create_controller_pr", async (args, context) => {
+  register(createControllerPrCommand, async (args, context) => {
     const targetBranch = args.targetBranch;
     if (
       targetBranch !== undefined &&
@@ -174,7 +188,7 @@ export function registerControllerWorkflowCommands(
 
   // The Resolve Conflicts button for a command node's coordinator: this
   // node's PR reading, repository defaults and Resolve action default decide.
-  register("resolve_controller_conflicts", async (args, context) => {
+  register(resolveControllerConflictsCommand, async (args, context) => {
     const targetBranch = args.targetBranch;
     if (
       targetBranch !== undefined &&
@@ -190,7 +204,7 @@ export function registerControllerWorkflowCommands(
   });
 
   /** A worker environment whose first prompt is shown as the coordinator's delegation. */
-  register("create_controller_environment", async (args, context) => {
+  register(createControllerEnvironmentCommand, async (args, context) => {
     if (!record(args.input)) throw new Error("Expected input.");
     const controlRequestId = asNonBlankString(args.controlRequestId, "controlRequestId");
     const input = args.input;
@@ -226,10 +240,10 @@ export function registerControllerWorkflowCommands(
         },
       });
     }
-    return created;
+    return created as ResultOf<typeof createControllerEnvironmentCommand>;
   });
 
-  register("start_controller_build_pipeline", async (args, context) => {
+  register(startControllerBuildPipelineCommand, async (args, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     if (!record(args.input) || typeof args.input.projectId !== "string") {
       throw new Error("Invalid build pipeline request");
@@ -343,7 +357,7 @@ export function registerControllerWorkflowCommands(
       }
     });
   };
-  register("launch_controller_multi_review", launchMultiReviewButton);
+  register(launchControllerMultiReviewCommand, launchMultiReviewButton);
   /**
    * The same button for a renderer on this node: `{ input, reservedId }`, with
    * `reservedId` minted once per click. Omitted rows, target branch and review
@@ -351,13 +365,13 @@ export function registerControllerWorkflowCommands(
    * and the root tab is written into the environment's pane layout here, so
    * a renderer that disappears mid-launch cannot leave a review without a tab.
    */
-  register("launch_multi_review", launchMultiReviewButton);
+  register(launchMultiReviewCommand, launchMultiReviewButton);
 
   /**
    * Open a saved review's root, Fix or reviewer tab, address its findings, or
    * start a custom fix.
    */
-  register("controller_multi_review_surface", async (args, context) => {
+  register(controllerMultiReviewSurfaceCommand, async (args, context) => {
     const surface = args.surface;
     if (!(MULTI_REVIEW_SURFACES as readonly unknown[]).includes(surface)) {
       throw new Error(`Expected surface ${MULTI_REVIEW_SURFACES.join(", ")}.`);
@@ -414,7 +428,7 @@ export function registerControllerWorkflowCommands(
   });
 
   /** The low-level start after a successful build, under a reserved ID. */
-  register("start_controller_multi_review", async (args, context) => {
+  register(startControllerMultiReviewCommand, async (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     const reservedId = asNonBlankString(args.reservedId, "reservedId");
     const buildPipelineId = asNonBlankString(args.buildPipelineId, "buildPipelineId");
@@ -422,7 +436,7 @@ export function registerControllerWorkflowCommands(
       throw new Error("Invalid multi-review request");
     }
     const existing = await context.storage.getMultiReviewWorkflow(reservedId);
-    if (existing) return existing.snapshot;
+    if (existing) return existing.snapshot as ResultOf<typeof startControllerMultiReviewCommand>;
     const environment = await environmentOf(context, args.input.environmentId);
     const build = (await context.storage.getBuildPipeline(buildPipelineId))?.snapshot;
     if (
@@ -455,6 +469,8 @@ export function registerControllerWorkflowCommands(
         ),
     );
     if (!isStartMultiReviewInput(input)) throw new Error("Invalid multi-review request");
-    return context.multiReviews.start(input as StartMultiReviewInput, reservedId);
+    return context.multiReviews.start(input as StartMultiReviewInput, reservedId) as Promise<
+      ResultOf<typeof startControllerMultiReviewCommand>
+    >;
   });
 }

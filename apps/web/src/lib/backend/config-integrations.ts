@@ -1,3 +1,4 @@
+import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import type {
   DatabaseStats,
@@ -323,6 +324,8 @@ export interface MergeEnvironmentPrResult extends MergePrResult {
  */
 export function createConfigIntegrationsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  // The Control MCP settings and credentials (`coordinator` domain, plan item 7009).
+  const coordinator = () => coordinatorApi(client);
   // The `environments` domain's commands here (plan item 7003).
   const environments = backendDomainApi(client, environmentsClient);
   // The machine-aware functions sent through `machineInvoke`, which always
@@ -497,25 +500,33 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getControlMcpSettings(): Promise<ControlMcpSettings> {
-    return invoke<ControlMcpSettings>("get_control_mcp_settings");
+    return coordinator().get_control_mcp_settings(
+      undefined as never,
+    ) as Promise<ControlMcpSettings>;
   }
 
   async function rotateControlMcpToken(): Promise<ControlMcpSettings> {
-    return invoke<ControlMcpSettings>("rotate_control_mcp_token");
+    return coordinator().rotate_control_mcp_token(
+      undefined as never,
+    ) as Promise<ControlMcpSettings>;
   }
 
   async function createControlMcpCredential(
     input: CreateControlMcpCredentialInput,
   ): Promise<ControlMcpSettings> {
-    return invoke<ControlMcpSettings>("create_control_mcp_credential", { ...input });
+    return coordinator().create_control_mcp_credential({ ...input }) as Promise<ControlMcpSettings>;
   }
 
   async function rotateControlMcpCredential(credentialId: string): Promise<ControlMcpSettings> {
-    return invoke<ControlMcpSettings>("rotate_control_mcp_credential", { credentialId });
+    return coordinator().rotate_control_mcp_credential({
+      credentialId,
+    }) as Promise<ControlMcpSettings>;
   }
 
   async function revokeControlMcpCredential(credentialId: string): Promise<ControlMcpSettings> {
-    return invoke<ControlMcpSettings>("revoke_control_mcp_credential", { credentialId });
+    return coordinator().revoke_control_mcp_credential({
+      credentialId,
+    }) as Promise<ControlMcpSettings>;
   }
 
   async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {

@@ -1,3 +1,4 @@
+import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import { terminals } from "@/lib/node-scope/domains/terminals";
 import { hydrationRequests } from "@/lib/hydration-request-limiter";
@@ -272,7 +273,9 @@ export function createWorkflowsApi(client: BackendClient) {
     tabReuse?: "any-agent" | "same-agent";
     activateTab?: boolean;
   }): Promise<NativeAgentJobLaunchResult> {
-    return invoke<NativeAgentJobLaunchResult>("launch_native_agent_job", input);
+    return coordinatorApi(client).launch_native_agent_job(
+      input,
+    ) as Promise<NativeAgentJobLaunchResult>;
   }
 
   async function startMultiReview(

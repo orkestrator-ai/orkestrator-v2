@@ -1,3 +1,17 @@
+import {
+  assertCoordinatorEnvironmentScopeCommand,
+  assertCoordinatorNodeDelegationAvailableCommand,
+  coordinatorNodeMultiReviewSurfaceCommand,
+  getCoordinatorNodeLaunchEnvironmentCommand,
+  getCoordinatorNodeMailboxCommand,
+  launchCoordinatorNodeEnvironmentCommand,
+  launchCoordinatorNodeMultiReviewCommand,
+  openCoordinatorNodeDelegationCommand,
+  sendCoordinatorNodeMailCommand,
+  startCoordinatorNodeBuildPipelineCommand,
+  startCoordinatorNodeMultiReviewCommand,
+  transferCoordinatorAttachmentsCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { createLogger } from "@orkestrator/protocol/logger";
 import {
   coordinatorDelegationNotOpenedNote,
@@ -378,7 +392,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   };
 
   register(
-    "get_coordinator_node_launch_environment",
+    getCoordinatorNodeLaunchEnvironmentCommand,
     async ({ scope, requestId, nodeId }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
@@ -403,7 +417,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     },
   );
   register(
-    "launch_coordinator_node_environment",
+    launchCoordinatorNodeEnvironmentCommand,
     async ({ scope, requestId, nodeId, input, agentDefaulted }, context) => {
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
@@ -537,7 +551,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   );
 
   register(
-    "assert_coordinator_node_delegation_available",
+    assertCoordinatorNodeDelegationAvailableCommand,
     async ({ scope, nodeId, environmentId, tabId, requestId }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
@@ -559,7 +573,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   );
 
   register(
-    "open_coordinator_node_delegation",
+    openCoordinatorNodeDelegationCommand,
     async ({ scope, nodeId, environmentId, tabId, requestId, request }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
@@ -600,7 +614,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * ends, and its report is held until then.
    */
   // The origin check for a coordinator tool; see `coordinator-environment-scope.ts`.
-  register("assert_coordinator_environment_scope", async (args, context) => {
+  register(assertCoordinatorEnvironmentScopeCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const named = record(args.target) ? args.target : {};
     let environmentId = typeof named.environmentId === "string" ? named.environmentId : undefined;
@@ -666,7 +680,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     await assertCoordinatorMayActOnEnvironment(context, caller, environmentId, target ?? undefined);
     return { allowed: true };
   });
-  register("send_coordinator_node_mail", async (args, context) => {
+  register(sendCoordinatorNodeMailCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
       caller.coordinatorId,
@@ -902,7 +916,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * Nothing is delivered, and the destination is always the Git-excluded place,
    * so a copied image can reach a commit only if an agent moves it there.
    */
-  register("transfer_coordinator_attachments", async (args, context) => {
+  register(transferCoordinatorAttachmentsCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const coordination = context.nodeCoordination;
     if (!coordination || !context.nodes) {
@@ -967,18 +981,20 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   });
 
   /** Whether that node's copy of this project has a coordinator to mail. */
-  register("get_coordinator_node_mailbox", async (args, context) => {
+  register(getCoordinatorNodeMailboxCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const target = await coordinatorNodeTarget(
       context,
       caller.projectId,
       asNonBlankString(args.nodeId, "nodeId"),
     );
-    return nodeCoordinatorMailbox(target);
+    return nodeCoordinatorMailbox(target) as Promise<
+      ResultOf<typeof getCoordinatorNodeMailboxCommand>
+    >;
   });
 
   register(
-    "start_coordinator_node_build_pipeline",
+    startCoordinatorNodeBuildPipelineCommand,
     async ({ scope, requestId, nodeId, input }, context) => {
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
@@ -1036,8 +1052,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           });
           if (!record(existing)) throw new Error("Associated build pipeline was not found");
           return record(existing.snapshot)
-            ? { ...existing.snapshot, replayed: true }
-            : existing.snapshot;
+            ? ({ ...existing.snapshot, replayed: true } as ResultOf<
+                typeof startCoordinatorNodeBuildPipelineCommand
+              >)
+            : (existing.snapshot as ResultOf<typeof startCoordinatorNodeBuildPipelineCommand>);
         }
         if (!receipt.claimed) {
           throw new Error("Build pipeline creation is already in progress; retry this requestId");
@@ -1109,12 +1127,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                 "The build started, but its work location could not be saved on the ticket.";
             });
         }
-        return workflow;
+        return workflow as ResultOf<typeof startCoordinatorNodeBuildPipelineCommand>;
       });
     },
   );
 
-  register("launch_coordinator_node_multi_review", async ({ scope, nodeId, input }, context) => {
+  register(launchCoordinatorNodeMultiReviewCommand, async ({ scope, nodeId, input }, context) => {
     const caller = await identity(scope, context);
     if (!isLaunchMultiReviewActionInput(input)) {
       throw new Error("Invalid Multi Review button action");
@@ -1255,7 +1273,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     );
   });
 
-  register("coordinator_node_multi_review_surface", async (args, context) => {
+  register(coordinatorNodeMultiReviewSurfaceCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const surface = args.surface;
     if (
@@ -1398,7 +1416,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   });
 
   register(
-    "start_coordinator_node_multi_review",
+    startCoordinatorNodeMultiReviewCommand,
     async ({ scope, requestId, nodeId, buildPipelineId, input }, context) => {
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
@@ -1446,7 +1464,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             workflow.id,
           );
         }
-        return workflow;
+        return workflow as ResultOf<typeof startCoordinatorNodeMultiReviewCommand>;
       });
     },
   );

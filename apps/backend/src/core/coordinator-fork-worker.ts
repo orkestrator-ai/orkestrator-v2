@@ -1,3 +1,7 @@
+import {
+  forkControllerEnvironmentCommand,
+  forkCoordinatorWorkerCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { createHash, randomUUID } from "node:crypto";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -217,7 +221,7 @@ export function registerCoordinatorForkWorker(
     return (await handler(args, context)) as T;
   };
 
-  register("fork_coordinator_worker", async (args, context) => {
+  register(forkCoordinatorWorkerCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = surfaceRecord(args.input, "the fork input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -371,7 +375,7 @@ export function registerCoordinatorForkWorker(
   });
 
   /** The fork on the node owning the worker, for a command node's coordinator. */
-  register("fork_controller_environment", async (args, context) => {
+  register(forkControllerEnvironmentCommand, async (args, context) => {
     const projectId = asNonBlankString(args.projectId, "projectId");
     const controlRequestId = asNonBlankString(args.controlRequestId, "controlRequestId");
     if (!/^coordinator-fork:[0-9a-f]{24}$/.test(controlRequestId))

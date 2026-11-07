@@ -171,6 +171,27 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/promptDraftStore",
     hook: "usePromptDraftStore",
   },
+  // Plan item 3010: sessions, terminal sessions, Claude tmux and agent mail.
+  {
+    store: "session",
+    module: "apps/web/src/stores/sessionStore",
+    hook: "useSessionStore",
+  },
+  {
+    store: "terminal-session",
+    module: "apps/web/src/stores/terminalSessionStore",
+    hook: "useTerminalSessionStore",
+  },
+  {
+    store: "claude-tmux",
+    module: "apps/web/src/stores/claudeTmuxStore",
+    hook: "useClaudeTmuxStore",
+  },
+  {
+    store: "agent-mail",
+    module: "apps/web/src/stores/agentMailStore",
+    hook: "useAgentMailStore",
+  },
   // Plan item 3012: the workflow stores (batch B).
   {
     store: "design",

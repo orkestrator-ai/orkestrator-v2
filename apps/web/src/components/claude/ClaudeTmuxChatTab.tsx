@@ -53,6 +53,7 @@ import {
   payloadToQuestion,
   compactConsecutiveAssistantMessages,
   createClaudeTmuxStateKey,
+  claudeTmuxStore,
   migrateLegacyClaudeTmuxState,
   useClaudeTmuxStore,
   visibleTmuxMessages,
@@ -73,12 +74,12 @@ import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel } from "@/lib/claude-types";
 import { agentModelCatalogStore, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { tmuxQuestionDraftKey } from "@/stores/promptDraftStore";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore, useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
 import { getClaudeModelCatalog } from "@/lib/backend";
 import { submitClaudeTmuxAddressAll } from "@/lib/claude-tmux-address-all";
@@ -204,6 +205,10 @@ export function ClaudeTmuxChatTab({
   const [interactiveMode, setInteractiveMode] = useState(false);
   const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
   const environments = useScopedStoreApi(environmentStore);
+  // This node's tmux tabs and config (plan item 3010).
+  const tmuxScope = useShimNodeScope(claudeTmuxStore.name);
+  const tmuxTabs = tmuxScope.store(claudeTmuxStore);
+  const configs = useScopedStoreApi(configStore);
   const sdkModels = useAgentModelCatalogStore(
     (s) => s.claudeModelCatalogs.get(environmentId)?.models ?? s.claudeModels,
   );
@@ -231,7 +236,7 @@ export function ClaudeTmuxChatTab({
     ),
   );
   const [selectedModel, setSelectedModel] = useState<string>(() => {
-    const snapshot = useConfigStore.getState().config;
+    const snapshot = configs.getState().config;
     const env = environments.getState().getEnvironmentById(environmentId);
     return resolveTmuxModelPreference(
       initialLaunchModel ?? resolvedPlatformSettings(snapshot, env?.projectId, env, "claude").model,
@@ -348,8 +353,8 @@ export function ClaudeTmuxChatTab({
   }, []);
 
   useLayoutEffect(() => {
-    migrateLegacyClaudeTmuxState(tabId, stateKey, environmentId);
-  }, [environmentId, stateKey, tabId]);
+    migrateLegacyClaudeTmuxState(tabId, stateKey, environmentId, tmuxScope);
+  }, [environmentId, stateKey, tabId, tmuxScope]);
 
   useEffect(() => {
     if (!initialLaunchReasoningEffort) return;
@@ -413,7 +418,7 @@ export function ClaudeTmuxChatTab({
         for (let attempt = 0; attempt < 3; attempt += 1) {
           const permissionModeVersion = permissionModeEventVersionRef.current;
           const fastModeMutationVersion = fastModeMutationVersionRef.current;
-          const tabStateBeforeAttempt = useClaudeTmuxStore.getState().tabs.get(storeKey);
+          const tabStateBeforeAttempt = tmuxTabs.getState().tabs.get(storeKey);
           const status = await getStatus(tabId, environmentId);
           if (cancelled) return;
 
@@ -428,7 +433,7 @@ export function ClaudeTmuxChatTab({
           }
 
           const liveStateChanged =
-            useClaudeTmuxStore.getState().tabs.get(storeKey) !== tabStateBeforeAttempt ||
+            tmuxTabs.getState().tabs.get(storeKey) !== tabStateBeforeAttempt ||
             permissionModeEventVersionRef.current !== permissionModeVersion ||
             fastModeMutationVersionRef.current !== fastModeMutationVersion;
           if (liveStateChanged) {
@@ -527,6 +532,7 @@ export function ClaudeTmuxChatTab({
     tabId,
     environmentId,
     storeKey,
+    tmuxTabs,
     setRunning,
     setTabBusy,
     setObservation,
@@ -538,7 +544,7 @@ export function ClaudeTmuxChatTab({
   ]);
 
   const loadEarlierPage = useCallback(async () => {
-    const before = useClaudeTmuxStore.getState().tabs.get(storeKey)?.earlierCursor;
+    const before = tmuxTabs.getState().tabs.get(storeKey)?.earlierCursor;
     if (typeof before !== "string") return;
     const page = await getTranscriptPage(tabId, environmentId, before);
     if (page.expired) {
@@ -558,7 +564,7 @@ export function ClaudeTmuxChatTab({
       return;
     }
     prependTranscriptPage(storeKey, before, page);
-  }, [applyTailPage, environmentId, prependTranscriptPage, storeKey, tabId]);
+  }, [applyTailPage, environmentId, prependTranscriptPage, storeKey, tabId, tmuxTabs]);
   const loadEarlierPlace = useHeldTranscriptPlace(storeKey);
   useRestoreHeldPlace(loadEarlierPlace, displayMessages, scrollToIndex, loadingEarlier);
   const loadEarlierAutomatically = useCallback(
@@ -864,7 +870,7 @@ export function ClaudeTmuxChatTab({
       const prompt = buildTmuxPromptWithAttachments(text, attachments, containerId);
       await submitToTmux(tabId, prompt, environmentId);
       if (clearDraftOnSuccess) {
-        useClaudeTmuxStore.getState().setDraftText(storeKey, "");
+        tmuxTabs.getState().setDraftText(storeKey, "");
       }
       return true;
     } catch (e) {
@@ -913,7 +919,7 @@ export function ClaudeTmuxChatTab({
    * this tab renders the queue and its `dispatchError` from the snapshot.
    */
   const promoteNextQueuedPromptToDraft = useCallback(async () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = tmuxTabs.getState();
     const hasCurrentDraft =
       store.getDraftText(storeKey).trim().length > 0 || store.getAttachments(storeKey).length > 0;
     if (hasCurrentDraft) return;
@@ -933,7 +939,7 @@ export function ClaudeTmuxChatTab({
     for (const attachment of nextMessage.attachments) {
       store.addAttachment(storeKey, attachment);
     }
-  }, [storeKey]);
+  }, [storeKey, tmuxTabs]);
 
   const handleAddressAll = async () => {
     setError(null);
@@ -1159,12 +1165,12 @@ export function ClaudeTmuxChatTab({
   const clampEffortToModel = useCallback(
     (modelId: string) => {
       const levels = supportedEffortLevels(getTmuxModel(modelId, availableModels));
-      const current = useClaudeTmuxStore.getState().effortLevels.get(storeKey) ?? DEFAULT_EFFORT;
+      const current = tmuxTabs.getState().effortLevels.get(storeKey) ?? DEFAULT_EFFORT;
       if (levels.length > 0 && !levels.includes(current)) {
         setEffortLevel(storeKey, fallbackEffort(levels));
       }
     },
-    [availableModels, storeKey, setEffortLevel],
+    [availableModels, storeKey, setEffortLevel, tmuxTabs],
   );
 
   const handleSelectModel = async (modelId: string) => {

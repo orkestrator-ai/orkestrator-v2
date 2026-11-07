@@ -6,9 +6,11 @@ import {
   type QueuedItem,
 } from "@/lib/prompt-queue-persistence";
 import * as backend from "@/lib/backend";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
+  claudeTmuxStore,
   getEnvironmentIdFromClaudeTmuxStateKey,
-  useClaudeTmuxStore,
+  type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 
 /**
@@ -57,7 +59,15 @@ function getSharedSources(): PromptQueueSource[] {
   sharedSources = [
     createSource(
       "claude-tmux",
-      useClaudeTmuxStore as unknown as AnyQueueStore,
+      // The queues are the command node's until prompt queues are scoped:
+      // named here, resolved per call (plan item 3010).
+      {
+        getState: () => appCommandScope().store(claudeTmuxStore).getState(),
+        setState: (partial) =>
+          appCommandScope()
+            .store(claudeTmuxStore)
+            .setState(partial as { messageQueue: Map<string, TmuxQueuedMessage[]> }),
+      },
       getEnvironmentIdFromClaudeTmuxStateKey,
     ),
   ];

@@ -17,7 +17,7 @@
  */
 
 import { invoke } from "@/lib/native/backend";
-import { listen, type UnlistenFn } from "@/lib/native/events";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { invokeInScope } from "@/lib/node-scope/scope-transport";
@@ -68,4 +68,24 @@ export function listenInScope<T>(
 ): Promise<UnlistenFn> {
   if (isAppCommandScope(scope)) return listen<T>(event, (message) => handler(message.payload));
   return Promise.resolve(scope.client.listenRaw<T>(event, handler));
+}
+
+/**
+ * Runs `handler` each time `scope`'s node connection comes back after a gap,
+ * so a reader re-reads what it may have missed. The app's command scope keeps
+ * the `native-event-stream-connected` event (what suites emit); any other
+ * scope follows its client's `connection` signal into `live` (plan items
+ * 3003, 3010). The state at subscription time is not a reconnect.
+ */
+export function onReconnectInScope(scope: NodeScope, handler: () => void): Promise<UnlistenFn> {
+  if (isAppCommandScope(scope)) return listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => handler());
+  const connection = scope.client.connection;
+  let live = connection.get() === "live";
+  return Promise.resolve(
+    connection.subscribe((state) => {
+      const wasLive = live;
+      live = state === "live";
+      if (live && !wasLive) handler();
+    }),
+  );
 }

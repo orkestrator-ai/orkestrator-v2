@@ -39,7 +39,7 @@ import {
   usePaneLayoutStore,
   useEnvironmentStore,
   useConfigStore,
-  useTerminalSessionStore,
+  terminalSessionStore,
   useFilesPanelStore,
   getAllLeaves,
 } from "@/stores";
@@ -77,10 +77,12 @@ import {
   readStoredPaneSelection,
 } from "@/lib/pane-selection-storage";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { listen } from "@/lib/native/events";
+import { onReconnectInScope } from "@/lib/node-scope-slots";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
@@ -144,6 +146,10 @@ export function TerminalContainer({
   const environments = useScopedStoreApi(environmentStore);
   // This node's build pipelines (plan item 3011).
   const buildPipelines = useScopedStoreApi(buildPipelineStore);
+  // This node's terminal sessions (plan item 3010).
+  const terminalScope = useShimNodeScope(terminalSessionStore.name);
+  const terminalSessions = terminalScope.store(terminalSessionStore);
+  const nativeComposeScope = useShimNodeScope(nativeComposeStore.name);
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
   const onRevealRef = useRef(onReveal);
@@ -347,8 +353,8 @@ export function TerminalContainer({
 
   const hasBoundSetupSession = useCallback(
     (tabId: string) =>
-      !!useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tabId))?.sessionId,
-    [setupSessionKeyForTab],
+      !!terminalSessions.getState().sessions.get(setupSessionKeyForTab(tabId))?.sessionId,
+    [setupSessionKeyForTab, terminalSessions],
   );
 
   /**
@@ -360,7 +366,7 @@ export function TerminalContainer({
   const loadReplayableSetupTranscript = useCallback(
     async (tabId: string) => {
       const key = setupSessionKeyForTab(tabId);
-      const local = useTerminalSessionStore.getState().sessions.get(key);
+      const local = terminalSessions.getState().sessions.get(key);
       if (local?.serializedBuffer) {
         return { buffer: local.serializedBuffer, persistentSessionId: local.persistentSessionId };
       }
@@ -373,7 +379,7 @@ export function TerminalContainer({
       if (!buffer) return null;
       return { buffer, persistentSessionId: persistentSession.id };
     },
-    [environmentId, setupSessionKeyForTab],
+    [environmentId, setupSessionKeyForTab, terminalSessions],
   );
 
   /**
@@ -388,7 +394,7 @@ export function TerminalContainer({
   const retireDeadSetupTab = useCallback(
     (tabId: string) => {
       const key = setupSessionKeyForTab(tabId);
-      const terminalStore = useTerminalSessionStore.getState();
+      const terminalStore = terminalSessions.getState();
       const existing = terminalStore.sessions.get(key);
       if (existing?.sessionId === `${environmentId}:setup`) {
         const { sessionId: _deadSetupSession, ...preserved } = existing;
@@ -397,7 +403,7 @@ export function TerminalContainer({
       if (!retireSetupTabMarker(tabId, environmentId)) return;
       setupLog.info("tab.marker-retired", { environmentId, tabId });
     },
-    [environmentId, retireSetupTabMarker, setupSessionKeyForTab],
+    [environmentId, retireSetupTabMarker, setupSessionKeyForTab, terminalSessions],
   );
 
   const bindBackendSetupSession = useCallback(
@@ -456,7 +462,7 @@ export function TerminalContainer({
           const hasReplayableTranscript = replayableTranscript !== null;
           if (replayableTranscript) {
             const key = setupSessionKeyForTab(tabId);
-            const terminalStore = useTerminalSessionStore.getState();
+            const terminalStore = terminalSessions.getState();
             const existing = terminalStore.sessions.get(key);
             terminalStore.setSession(key, {
               ...existing,
@@ -484,7 +490,7 @@ export function TerminalContainer({
           return false;
         }
         const key = setupSessionKeyForTab(tabId);
-        const terminalStore = useTerminalSessionStore.getState();
+        const terminalStore = terminalSessions.getState();
         const existing = terminalStore.sessions.get(key);
         setupLog.info("session.bind-started", {
           environmentId,
@@ -601,7 +607,7 @@ export function TerminalContainer({
           if (!setupSessionLookupSucceeded) {
             lookupSettled = true;
             if (
-              !useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tabId))
+              !terminalSessions.getState().sessions.get(setupSessionKeyForTab(tabId))
                 ?.serializedBuffer
             ) {
               setupSessionUnavailableTabsRef.current.add(tabId);
@@ -650,6 +656,7 @@ export function TerminalContainer({
       loadReplayableSetupTranscript,
       retireDeadSetupTab,
       setupSessionKeyForTab,
+      terminalSessions,
     ],
   );
 
@@ -716,7 +723,8 @@ export function TerminalContainer({
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+    // This node's stream coming back (plan item 3010).
+    void onReconnectInScope(terminalScope, () => {
       if (disposed) return;
       setupSessionReconnectGenerationRef.current += 1;
       setSetupSessionReconnectNonce((value) => value + 1);
@@ -736,7 +744,7 @@ export function TerminalContainer({
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [terminalScope]);
 
   useEffect(() => {
     if (!currentEnvState || pendingAgentLaunch || backendSetupRunning) {
@@ -1509,7 +1517,7 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           hasInitialPrompt: !!options?.initialPrompt,
         }));
-        seedDeferredNativePlatform(newTab, "opencode");
+        seedDeferredNativePlatform(newTab, "opencode", nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1550,7 +1558,7 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           hasInitialPrompt: !!options?.initialPrompt,
         }));
-        seedDeferredNativePlatform(newTab, "claude");
+        seedDeferredNativePlatform(newTab, "claude", nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1580,7 +1588,7 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           hasInitialPrompt: !!options?.initialPrompt,
         }));
-        seedDeferredNativePlatform(newTab, "codex");
+        seedDeferredNativePlatform(newTab, "codex", nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1604,7 +1612,7 @@ export function TerminalContainer({
           initialConversationMode: options?.initialConversationMode,
           initialFastMode: options?.initialFastMode,
         });
-        seedDeferredNativePlatform(newTab, provider);
+        seedDeferredNativePlatform(newTab, provider, nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1652,6 +1660,7 @@ export function TerminalContainer({
       isLocalEnvironmentReady,
       isLocalEnvironment,
       tabLaunchScope,
+      nativeComposeScope,
       createBrowserTab,
     ],
   );

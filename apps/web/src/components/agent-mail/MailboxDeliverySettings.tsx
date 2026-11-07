@@ -2,13 +2,14 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { MailboxDescriptor } from "@orkestrator/protocol/agent-mail";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useAgentMailScope } from "./agent-mail-ui";
 
 /** How one tab takes mail: wake it when idle or leave mail for it to pull, and mutes. */
 export function MailboxDeliverySettings({ mailbox }: { mailbox: MailboxDescriptor }) {
   const refreshMailbox = useAgentMailStore((state) => state.refreshMailbox);
   const [error, setError] = useState<string>();
+  const { api: backend } = useAgentMailScope();
 
   const update = async (updates: {
     inject?: "inherit" | "off" | "idle";

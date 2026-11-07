@@ -15,7 +15,8 @@ import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { appCommandScope, isAppCommandScope, listenInScope } from "@/lib/node-scope-slots";
 import type { ResourceKind } from "@orkestrator/protocol/resource-events";
-import { scopeBackendClient } from "@/lib/backend/client";
+import { createAgentMailApi } from "@/lib/backend/agent-mail";
+import { backendApiForScope, scopeBackendClient } from "@/lib/backend/client";
 import {
   configTargetsFor,
   runConfigCommand,
@@ -43,8 +44,8 @@ import {
   kanbanResourceHandlers,
   workflowResourceHandlers,
 } from "@/lib/workflow-resource-handlers";
-import { useSessionStore } from "@/stores/sessionStore";
-import { refreshObservedAgentMailMailboxes, useAgentMailStore } from "@/stores/agentMailStore";
+import { sessionStore } from "@/stores/sessionStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { AppConfig } from "@/types";
@@ -202,8 +203,8 @@ interface DeferredPaneLayoutRefresh {
  * leaf) the store lays the parent's preferences over it itself, and the
  * parent's own sync keeps that layer current. Under a parent with no scope
  * here (a realm document's portal) the read is the effective one, and the
- * parent's config changes are followed too. Agent mail is still a
- * command-scope store, so only a command scope clears it.
+ * parent's config changes are followed too. Turning messaging off clears
+ * this node's agent mail (plan item 3010).
  */
 const configHandlers = defineStoreResourceHandlers("config", "every-scope", (context) => {
   const store = context.scope.store(configStore);
@@ -228,8 +229,8 @@ const configHandlers = defineStoreResourceHandlers("config", "every-scope", (con
         store.getState().setConfig(config);
         const messagingEnabled = (config as { global?: { agentMessaging?: { enabled?: boolean } } })
           ?.global?.agentMessaging?.enabled;
-        if (messagingEnabled === false && context.scope.role === "command") {
-          useAgentMailStore.getState().clear();
+        if (messagingEnabled === false) {
+          context.scope.store(agentMailStore).getState().clear();
         }
       }
     } catch (error) {
@@ -258,20 +259,28 @@ const configHandlers = defineStoreResourceHandlers("config", "every-scope", (con
   }
 });
 
-const agentMailHandlers = defineStoreResourceHandlers("agent-mail", "command-scope", (context) => {
+/** Each node's agent mail follows that node's feed (plan item 3010). */
+const agentMailHandlers = defineStoreResourceHandlers("agent-mail", "every-scope", (context) => {
+  const mail = context.scope.store(agentMailStore);
+  // The app's command scope keeps the `@/lib/backend` read, which suites mock.
+  const readSummary = () =>
+    context.options.getAgentMailSummary
+      ? context.options.getAgentMailSummary()
+      : backendApiForScope(context.scope, createAgentMailApi, {
+          getAgentMailSummary,
+        }).getAgentMailSummary();
   const refreshAgentMailSummary = async (): Promise<void> => {
     const enabled = context.scope.store(configStore).getState().config?.global
       ?.agentMessaging?.enabled;
     if (enabled === false) {
-      useAgentMailStore.getState().clear();
+      mail.getState().clear();
       return;
     }
     if (enabled !== true) return;
-    const snapshot = await (context.options.getAgentMailSummary ?? getAgentMailSummary)();
+    const snapshot = await readSummary();
     if (!context.disposed()) {
-      const store = useAgentMailStore.getState();
-      store.setSummary(snapshot);
-      await refreshObservedAgentMailMailboxes();
+      mail.getState().setSummary(snapshot);
+      await mail.getState().refreshObservedMailboxes();
     }
   };
 
@@ -287,9 +296,9 @@ const agentMailHandlers = defineStoreResourceHandlers("agent-mail", "command-sco
   });
 
   context.onResourceChanged("agent-mail", ({ id: mailboxId }) => {
-    const existing = useAgentMailStore.getState().mailboxes.get(mailboxId);
+    const existing = mail.getState().mailboxes.get(mailboxId);
     if (!existing) return;
-    return useAgentMailStore
+    return mail
       .getState()
       .refreshMailbox(existing.descriptor.environmentId, existing.descriptor.tabId)
       .catch((error) => {
@@ -333,19 +342,21 @@ const promptQueueHandlers = defineStoreResourceHandlers(
   },
 );
 
-const sessionHandlers = defineStoreResourceHandlers("sessions", "command-scope", (context) => {
+/** Each node's sessions follow that node's feed (plan item 3010). */
+const sessionHandlers = defineStoreResourceHandlers("sessions", "every-scope", (context) => {
+  const sessions = context.scope.store(sessionStore);
   context.onResync("dependents", (pass) =>
     pass.includes("session")
       ? context.scope
           .store(environmentStore)
           .getState()
-          .environments.map(({ id }) => useSessionStore.getState().loadSessionsForEnvironment(id))
+          .environments.map(({ id }) => sessions.getState().loadSessionsForEnvironment(id))
       : undefined,
   );
   context.onResourceChanged("session", ({ id: environmentId }) => {
     // Sessions are only meaningful for environments this client has loaded.
     if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId)) return;
-    return useSessionStore.getState().loadSessionsForEnvironment(environmentId);
+    return sessions.getState().loadSessionsForEnvironment(environmentId);
   });
 });
 

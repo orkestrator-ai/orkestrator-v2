@@ -12,7 +12,12 @@ import {
   agentMailSenderLabel,
 } from "@/lib/chat/client-only-messages";
 import type { PeerMailAddress, PeerMailPresentation } from "@/lib/chat/native-message-types";
-import { requestAgentMailMailbox, useAgentMailStore } from "@/stores/agentMailStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  agentMailStore,
+  requestAgentMailMailbox,
+  useAgentMailStore,
+} from "@/stores/agentMailStore";
 import { MailTile } from "./MailTile";
 
 /**
@@ -39,10 +44,12 @@ export function MailToolPart({
   const remoteNode = call.to?.node;
   const recipientEnvironmentId = recipient?.environmentId;
   const recipientTabId = recipient?.tabId;
+  // The mailbox is asked of the node whose store the tile reads (plan item 3010).
+  const mailScope = useShimNodeScope(agentMailStore.name);
   useEffect(() => {
     if (sent && !remoteNode && recipientEnvironmentId && recipientTabId)
-      requestAgentMailMailbox(recipientEnvironmentId, recipientTabId);
-  }, [sent, remoteNode, recipientEnvironmentId, recipientTabId]);
+      requestAgentMailMailbox(recipientEnvironmentId, recipientTabId, mailScope);
+  }, [sent, remoteNode, recipientEnvironmentId, recipientTabId, mailScope]);
 
   const mailbox = useAgentMailStore((state) =>
     sent && recipientId ? state.mailboxes.get(recipientId) : undefined,

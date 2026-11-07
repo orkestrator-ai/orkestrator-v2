@@ -4,6 +4,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode, useCallback, useState } from "react";
 import * as realSessionStore from "@/stores/sessionStore";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { invoke } from "@/lib/native/backend";
@@ -192,7 +193,14 @@ const useSessionStoreMock = Object.assign(
     selector ? selector(persistentSessionStore) : persistentSessionStore,
   { getState: () => persistentSessionStore },
 );
+// The component's imperative reads go through its scope's instance of the
+// def (plan item 3010), so the def's state is the same mock object.
+const sessionStoreMock = defineScopedStore<typeof persistentSessionStore>(
+  "session-test-mock",
+  () => () => persistentSessionStore,
+);
 mock.module("@/stores/sessionStore", () => ({
+  sessionStore: sessionStoreMock,
   useSessionStore: useSessionStoreMock,
 }));
 

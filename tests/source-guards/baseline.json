@@ -475,7 +475,7 @@
   },
   "scoped-store-shim": {
     "[build-pipeline] apps/web/src/lib/pane-layout-authoritative.ts": 2,
-    "[config] apps/web/src/components/claude/ClaudeTmuxChatTab.tsx": 1,
+    "[claude-tmux] apps/web/src/stores/paneLayoutStore.ts": 2,
     "[config] apps/web/src/hooks/useNotificationSoundService.ts": 1,
     "[config] apps/web/src/lib/notification-sounds.ts": 1,
     "[config] apps/web/src/lib/terminal-links.ts": 1,
@@ -486,15 +486,13 @@
     "[files-panel] apps/web/src/lib/pull-request-opener.tsx": 1,
     "[multi-review] apps/web/src/lib/pane-layout-authoritative.ts": 2,
     "[native-compose] apps/web/src/components/projects/CoordinatorPanel.tsx": 1,
-    "[native-compose] apps/web/src/components/terminal/TerminalContainer.helpers.ts": 2,
     "[native-compose] apps/web/src/lib/tab-initial-prompt.ts": 1,
     "[native-compose] apps/web/src/stores/paneLayoutStore.ts": 2,
     "[project] apps/web/src/lib/question-desktop-notification.ts": 1,
-    "[prompt-draft] apps/web/src/stores/claudeTmuxStore.ts": 5,
+    "[terminal-session] apps/web/src/stores/paneLayoutStore.ts": 1,
     "[ui] apps/web/src/components/federation/WorkspaceRealmHost.tsx": 2
   },
   "lib-backend-command-default": {
-    "[agent-mail] apps/web/src/lib/store-resource-sync.ts": 1,
     "[files-sessions] apps/web/src/lib/pane-layout-persistence.ts": 6,
     "[files-sessions] apps/web/src/lib/store-resource-sync.ts": 1,
     "[projects-environments] apps/web/src/lib/scope-services.ts": 3

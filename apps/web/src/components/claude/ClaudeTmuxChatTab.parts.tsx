@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
@@ -51,6 +52,7 @@ import {
   payloadToPermission,
   payloadToPlan,
   payloadToQuestion,
+  claudeTmuxStore,
   useClaudeTmuxStore,
   type TmuxPendingApproval,
   type TmuxPendingElicitation,
@@ -884,6 +886,8 @@ export function TmuxComposeBar({
   const [queueSubmitting, setQueueSubmitting] = useState(false);
   const queueSubmittingRef = useRef(false);
   const composerLocked = disabled || settingsSwitching || submitting || queueSubmitting;
+  // This node's tmux tabs (plan item 3010).
+  const tmuxTabs = useScopedStoreApi(claudeTmuxStore);
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
     useCallback(
@@ -1027,7 +1031,7 @@ export function TmuxComposeBar({
     pendingCursorPositionRef.current = atStart + insertedText.length;
     setValue(sessionKey, nextValue);
     const nextMentions = (() => {
-      const current = useClaudeTmuxStore.getState().getDraftMentions(sessionKey);
+      const current = tmuxTabs.getState().getDraftMentions(sessionKey);
       if (current.some((mention) => mention.relativePath === file.relativePath)) {
         return current;
       }
@@ -1240,7 +1244,7 @@ export function TmuxComposeBar({
             if (composerLocked || queueSubmittingRef.current) return;
             const nextValue = e.target.value;
             setValue(sessionKey, nextValue);
-            const currentMentions = useClaudeTmuxStore.getState().getDraftMentions(sessionKey);
+            const currentMentions = tmuxTabs.getState().getDraftMentions(sessionKey);
             setFileMentions(
               sessionKey,
               currentMentions.filter((mention) => nextValue.includes(`@${mention.relativePath}`)),

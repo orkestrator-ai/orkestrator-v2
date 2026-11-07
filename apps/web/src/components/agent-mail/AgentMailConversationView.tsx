@@ -22,15 +22,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
-import { EMPTY_AGENT_MAIL_DRAFT, useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore, EMPTY_AGENT_MAIL_DRAFT, useAgentMailStore } from "@/stores/agentMailStore";
 import {
   AGENT_MAIL_STATUS_TONE_CLASS,
   agentMailParticipantLabel,
   agentMailStatus,
   deliverNowNotice,
   formatAgentMailTime,
+  useAgentMailScope,
 } from "./agent-mail-ui";
 
 // The mail panel is mounted at startup; the Markdown renderer is not needed until mail is read.
@@ -87,6 +87,9 @@ export function AgentMailConversationView({
   const revision = useAgentMailStore((state) => state.revision);
   const openPanel = useAgentMailStore((state) => state.openPanel);
   const trackSent = useAgentMailStore((state) => state.trackSent);
+  // This node's mail and its commands (plan item 3010).
+  const { scope, api: backend } = useAgentMailScope();
+  const mail = scope.store(agentMailStore);
   const [limit, setLimit] = useState(AGENT_MAIL_DEFAULT_CONVERSATION_LIMIT);
   const [reload, setReload] = useState(0);
   const [conversation, setConversation] = useState<AgentMailConversation | null>(null);
@@ -119,7 +122,7 @@ export function AgentMailConversationView({
     return () => {
       cancelled = true;
     };
-  }, [a, b, limit, revision, reload]);
+  }, [a, b, backend, limit, revision, reload]);
 
   // Reading the thread is seeing it. One write per displayed window and revision,
   // so earlier history is covered without retrying a failed mark in a loop.
@@ -138,7 +141,7 @@ export function AgentMailConversationView({
         conversation.messages.map(({ id }) => id),
       )
       .catch(() => undefined);
-  }, [a, b, conversation]);
+  }, [a, b, backend, conversation]);
 
   // Follow the newest message; loading earlier history keeps the reader's place.
   useLayoutEffect(() => {
@@ -185,7 +188,7 @@ export function AgentMailConversationView({
       !recipient?.environmentId ||
       !recipient.tabId ||
       !body.trim() ||
-      useAgentMailStore.getState().drafts.get(draftKey)?.sending
+      mail.getState().drafts.get(draftKey)?.sending
     )
       return;
     const payload = {
@@ -204,7 +207,7 @@ export function AgentMailConversationView({
         requestId,
         ...payload,
       });
-      const current = useAgentMailStore.getState().drafts.get(draftKey);
+      const current = mail.getState().drafts.get(draftKey);
       if (current?.attempts[fingerprint] !== requestId) return;
       const remaining = { ...current.attempts };
       delete remaining[fingerprint];
@@ -221,8 +224,7 @@ export function AgentMailConversationView({
     } catch (cause) {
       toast.error("Message was not sent", { description: errorMessage(cause) });
     } finally {
-      if (useAgentMailStore.getState().drafts.has(draftKey))
-        updateDraft(draftKey, { sending: false });
+      if (mail.getState().drafts.has(draftKey)) updateDraft(draftKey, { sending: false });
     }
   };
 

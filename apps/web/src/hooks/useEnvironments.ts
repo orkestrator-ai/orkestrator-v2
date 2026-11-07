@@ -13,7 +13,7 @@ import {
   useEnvironmentStore,
   formatErrorContext,
   useErrorDialogStore,
-  useTerminalSessionStore,
+  terminalSessionStore,
   usePaneLayoutStore,
   getAllLeaves,
 } from "@/stores";
@@ -250,9 +250,13 @@ function finishEnvironmentCreation(node: EnvironmentNode, projectId: string): vo
   });
 }
 
-function bindSetupTerminalSession(environment: Environment, sessionId: string): void {
+function bindSetupTerminalSession(
+  environment: Environment,
+  sessionId: string,
+  scope: NodeScope,
+): void {
   const key = createSessionKey(environment.containerId ?? null, "default", environment.id);
-  const store = useTerminalSessionStore.getState();
+  const store = scope.store(terminalSessionStore).getState();
   const existing = store.sessions.get(key);
   setupLog.info("session.bind-from-environment", {
     environmentId: environment.id,
@@ -658,7 +662,7 @@ export function useEnvironmentLifecycleService(): void {
               .getState()
               .updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
             reconcileNodeLifecycleErrors(node);
-            bindSetupTerminalSession(environment, session_id);
+            bindSetupTerminalSession(environment, session_id, scope);
           }
         },
       );
@@ -1154,7 +1158,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
           }
           updateEnvironmentInStore(environmentId, updatedEnv);
           if (result.setupSessionId) {
-            bindSetupTerminalSession(updatedEnv, result.setupSessionId);
+            bindSetupTerminalSession(updatedEnv, result.setupSessionId, scope);
           }
         }
 

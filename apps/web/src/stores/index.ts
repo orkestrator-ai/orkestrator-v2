@@ -18,7 +18,13 @@ export { useFilesPanelChromeStore } from "./filesPanelChromeStore";
 export type { FilesPanelTab } from "./filesPanelStore";
 export { projectPullRequestsStore, useProjectPullRequestsStore } from "./projectPullRequestsStore";
 export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
-export { useTerminalSessionStore, createSessionKey } from "./terminalSessionStore";
+export {
+  createSessionKey,
+  terminalSessionStore,
+  useTerminalSessionStore,
+} from "./terminalSessionStore";
+export { sessionStore, useSessionStore } from "./sessionStore";
+export { claudeTmuxStore, useClaudeTmuxStore } from "./claudeTmuxStore";
 export { formatErrorContext, useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorContext, ErrorDetails } from "./errorDialogStore";
 export { fileDirtyStore, useFileDirtyStore } from "./fileDirtyStore";
@@ -64,7 +70,7 @@ export type {
 } from "./buildPipelineStore";
 export type { PrMonitorEnvironmentState } from "./prMonitorStore";
 export { environmentDiffStore, useEnvironmentDiffStore } from "./environmentDiffStore";
-export { useAgentMailStore } from "./agentMailStore";
+export { agentMailStore, useAgentMailStore } from "./agentMailStore";
 export type { EnvironmentDiffStats } from "./environmentDiffStore";
 export { tabLaunchStore, useTabLaunchStore } from "./tabLaunchStore";
 export type { TabLaunch, TabLaunchSurface } from "./tabLaunchStore";

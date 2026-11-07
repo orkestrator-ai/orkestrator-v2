@@ -1032,7 +1032,12 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                     variant="outline"
                     onClick={() => {
                       close();
-                      openAgentMailForTab(activeSession.environmentId, activeTab.id);
+                      openAgentMailForTab(
+                        activeSession.environmentId,
+                        activeTab.id,
+                        "inbox",
+                        nodeScope,
+                      );
                     }}
                   >
                     Messages…

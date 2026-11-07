@@ -113,3 +113,11 @@ have their own, stricter handlers.
 - **No allowlist on `orkestrator:invoke`.** The renderer is the application's main
   client and legitimately uses most of the registry, terminals included, so a
   second list per command would remove little of what injected script could do.
+- **A leaf scope's commands are allow-listed by the leaf.** What a window sends
+  to another machine through a workspace grant, or through the relay, runs only
+  if its definition declares `access: "workspace"`; everything else is refused
+  server-side, failing closed (plan item 7012,
+  [command-nodes.md](command-nodes.md#security)). This bounds injected script in
+  a leaf's realm or node scope to that leaf's workspace: never its settings,
+  credentials, host updates, node registry or link plumbing. The window's own
+  backend still answers its renderer's full command set.

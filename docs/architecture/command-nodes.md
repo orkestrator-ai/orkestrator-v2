@@ -922,10 +922,23 @@ selected files across every node that has the project:
   renderers use the workspace commands, while public actions can also retry
   operations and dispatch to other nodes under operator authority. Grants do
   run the workspace: agent chat, terminals, previews, files, repository settings and
-  the project boards. The relay refuses the same commands
-  (`isWorkspaceExcludedCommand`, `nodes/workspace-grant-scope.ts`), which is
-  a deny-list: a new administration command has to be added there. Settings
-  reaches another machine's settings through `invoke_on_node` instead. The
+  the project boards. Grants and the relay run an **allow-list**: exactly
+  the commands whose definition declares `access: "workspace"`
+  (`admitsWorkspaceCommand`, `nodes/workspace-grant-scope.ts`; plan item
+  7012). `admin` and `internal` commands, a command without a definition and
+  an unknown name are refused (403), and a backend that cannot report a
+  command's access refuses every command, so the list fails closed: a new
+  command is refused through a grant until its definition says otherwise
+  ([version-compatibility.md](version-compatibility.md#domain-contracts)).
+  The relay applies the command node's own list, so a command a newer leaf
+  added is refused through the relay (not through a direct grant, which the
+  leaf checks) until the command node knows it. A refusal is not logged;
+  with `nodes` at `debug`, a verdict the old deny-lists would have given
+  differently logs `nodes grant.scope-disagreement` (no command name unless
+  it is one of the fixed list in `workspace-grant-legacy-check.ts`), for one
+  release. Settings reaches another machine's settings through
+  `invoke_on_node` instead, which routes everything but
+  `NODE_ROUTING_EXCLUDED_COMMANDS` (`nodes/node-routing.ts`). The
   first version is a workspace grant: one leaf, one controller and one client
   session. Narrowing to one environment and one stream (one terminal
   session, one preview, one download) is a later hardening.

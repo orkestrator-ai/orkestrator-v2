@@ -57,7 +57,7 @@ matrix with evidence for every row are in
   - writes are refused while the node is unavailable;
   - a lost answer becomes an outcome-unknown record (`list_node_outcomes`)
     and is never resent;
-  - administrative commands never cross nodes (`NODE_EXCLUDED_COMMANDS`).
+  - administrative commands never cross nodes (`NODE_ROUTING_EXCLUDED_COMMANDS`).
 - **Leaf workspaces.** `open_node_workspace` returns a 15-minute,
   hash-only client grant issued by the leaf, along with the leaf's direct
   origins, a loopback origin and the relay base.

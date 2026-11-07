@@ -383,6 +383,15 @@ that `args` does not declare (at most 16). `encoded: true` marks a handler that
 returns pre-encoded JSON (the transcript splice); its result is not validated.
 `ArgsOf`, `ResultOf`, `EncodedArgsOf` and `EncodedResultOf` give the types.
 
+`access` is enforced (plan item 7012): a client grant and the relay run only
+`workspace` commands, failing closed ([command-nodes.md](command-nodes.md#security)).
+A new command is refused through a grant until its definition says
+`workspace`, so pick it from what reaches the command: `workspace` for
+anything a window sends to a node it is not running on (a leaf's
+environment, terminal, agent tab, board); `admin` for the machine's own
+settings, credentials, diagnostics and updates, which Settings reaches with
+`invoke_on_node`; `internal` for node-link and in-process plumbing.
+
 #### Events
 
 Every backend event is defined in its domain's
@@ -817,7 +826,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   open (`openRecord`): a client decodes them keeping every key, so a
   whole-object save (`save_config`, `update_global_config`) never deletes a
   setting a newer node added. `access` is `admin` for exactly the settings
-  writes in `WORKSPACE_ADMINISTRATION_COMMANDS`, `internal` for
+  writes the old grant deny-list refused, `internal` for
   `request_coordinator_agents_md_update`. Critical keys: `cloneOnly` on
   `add_project`, `requestKey` on `start_project_clone` and
   `open_project_agents_md_pr`, `preserveInheritedSettings` on
@@ -935,7 +944,8 @@ export const nodeMailClient = domainClient(nodeMail, {
   writes; `expectedLastActivityAt` on `set_environment_unread`; the
   "Restart in…" `selection`/`model`; `digest` on `graph_template_duplicate`;
   an edited `value` on `graph_run_answer`. `access` is `workspace` apart from
-  the workflow result rollout (`admin`) and the review validation lifecycle
+  the workflow result rollout and `graph_capability_ceiling_set` (`admin`;
+  the ceiling write since 7012, which a grant was always refused) and the review validation lifecycle
   the supervisors drive in-process (`internal`). No command was
   capability-gated, so nothing is folded into a version; each client is one
   function per command (`commandApi`), version 0 today's call by name. The

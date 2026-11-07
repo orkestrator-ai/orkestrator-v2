@@ -1652,7 +1652,7 @@ Summaries carry no prompts because every client receives them and the command
 node keeps them as last-known state; this read does neither, since the answer
 lives only in the banner's React state and `invoke_on_node` logs no arguments or
 results. It widens nothing: `list_human_prompts` is not in
-`NODE_EXCLUDED_COMMANDS` or `isWorkspaceExcludedCommand`, a window opened on that
+`NODE_ROUTING_EXCLUDED_COMMANDS` and is a `workspace` command, a window opened on that
 node already shows the same banner, and `get_native_agent_projection` crosses the
 same link with the tool output the prompt was detected in. A remote answer is
 still untrusted, so `normalizeRemoteHumanPromptEntry` bounds every field, drops

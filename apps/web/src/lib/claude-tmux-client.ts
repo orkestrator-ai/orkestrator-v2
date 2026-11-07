@@ -2,8 +2,9 @@
 // Commands are scoped by `(environmentId, tabId)` so first tabs named
 // "default" in different environments never share a Claude session.
 
-import { invoke } from "@/lib/native/backend";
+import { commandBackendClient } from "@/lib/backend/client";
 import { listen, type UnlistenFn } from "@/lib/native/events";
+import { claudeTmux } from "@/lib/node-scope/domains/claude-tmux";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { TmuxAgentObservation } from "@orkestrator/protocol/tmux-observation";
@@ -230,6 +231,13 @@ export interface PreviousSession {
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
+//
+// Every command goes through the `claude-tmux` domain client on the window's
+// command scope (plan item 7002): results decoded with the protocol schemas,
+// and the envelope for a node that advertises the domain. The interfaces
+// above are this module's views of the same shapes (event kinds narrowed).
+
+const tmux = () => claudeTmux(commandBackendClient);
 
 export async function startSession(
   tabId: string,
@@ -243,7 +251,7 @@ export async function startSession(
     replaceExisting?: boolean;
   },
 ): Promise<TmuxStatus> {
-  return invoke<TmuxStatus>("claude_tmux_start", {
+  return (await tmux().claude_tmux_start({
     tabId,
     environmentId,
     initialPrompt: options?.initialPrompt,
@@ -252,19 +260,19 @@ export async function startSession(
     fastMode: options?.fastMode,
     resumeSessionId: options?.resumeSessionId,
     replaceExisting: options?.replaceExisting,
-  });
+  })) as TmuxStatus;
 }
 
 export async function stopSession(tabId: string, environmentId: string): Promise<void> {
-  await invoke("claude_tmux_stop", { tabId, environmentId });
+  await tmux().claude_tmux_stop({ tabId, environmentId });
 }
 
 export async function interruptSession(tabId: string, environmentId: string): Promise<void> {
-  await invoke("claude_tmux_interrupt", { tabId, environmentId });
+  await tmux().claude_tmux_interrupt({ tabId, environmentId });
 }
 
 export async function getStatus(tabId: string, environmentId: string): Promise<TmuxStatus | null> {
-  return invoke<TmuxStatus | null>("claude_tmux_status", { tabId, environmentId });
+  return (await tmux().claude_tmux_status({ tabId, environmentId })) as TmuxStatus | null;
 }
 
 /**
@@ -278,11 +286,11 @@ export async function getTranscriptPage(
   before?: string,
   sessionId?: string,
 ): Promise<TranscriptPage> {
-  const result = await invoke<TranscriptLine[] | TranscriptPage>("claude_tmux_transcript", {
+  const result = (await tmux().claude_tmux_transcript({
     tabId,
     environmentId,
     page: { ...(before === undefined ? {} : { before }), ...(sessionId ? { sessionId } : {}) },
-  });
+  })) as TranscriptLine[] | TranscriptPage;
   return Array.isArray(result) ? { lines: result, earlierCursor: null } : result;
 }
 
@@ -292,18 +300,18 @@ export async function getTranscriptPage(
  * while tasks changed.
  */
 export async function getTaskList(tabId: string, environmentId: string): Promise<TaskListSnapshot> {
-  return invoke<TaskListSnapshot>("claude_tmux_tasks", { tabId, environmentId });
+  return (await tmux().claude_tmux_tasks({ tabId, environmentId })) as TaskListSnapshot;
 }
 
 export async function getPendingHooks(
   tabId: string,
   environmentId: string,
 ): Promise<TmuxPendingHook[]> {
-  return invoke<TmuxPendingHook[]>("claude_tmux_pending_hooks", { tabId, environmentId });
+  return (await tmux().claude_tmux_pending_hooks({ tabId, environmentId })) as TmuxPendingHook[];
 }
 
 export async function submit(tabId: string, text: string, environmentId: string): Promise<void> {
-  await invoke("claude_tmux_submit", { tabId, environmentId, text });
+  await tmux().claude_tmux_submit({ tabId, environmentId, text });
 }
 
 export async function switchModel(
@@ -311,7 +319,7 @@ export async function switchModel(
   model: string,
   environmentId: string,
 ): Promise<void> {
-  await invoke("claude_tmux_switch_model", { tabId, environmentId, model });
+  await tmux().claude_tmux_switch_model({ tabId, environmentId, model });
 }
 
 export async function switchEffort(
@@ -319,7 +327,7 @@ export async function switchEffort(
   effort: string,
   environmentId: string,
 ): Promise<void> {
-  await invoke("claude_tmux_switch_effort", { tabId, environmentId, effort });
+  await tmux().claude_tmux_switch_effort({ tabId, environmentId, effort });
 }
 
 export async function switchFastMode(
@@ -327,7 +335,7 @@ export async function switchFastMode(
   fastMode: boolean,
   environmentId: string,
 ): Promise<void> {
-  await invoke("claude_tmux_switch_fast_mode", { tabId, environmentId, fastMode });
+  await tmux().claude_tmux_switch_fast_mode({ tabId, environmentId, fastMode });
 }
 
 export async function switchPlanMode(
@@ -335,15 +343,11 @@ export async function switchPlanMode(
   planMode: boolean,
   environmentId: string,
 ): Promise<string> {
-  return invoke<string>("claude_tmux_switch_plan_mode", {
-    tabId,
-    environmentId,
-    planMode,
-  });
+  return tmux().claude_tmux_switch_plan_mode({ tabId, environmentId, planMode });
 }
 
 export async function sendText(tabId: string, text: string, environmentId: string): Promise<void> {
-  await invoke("claude_tmux_send_text", { tabId, environmentId, text });
+  await tmux().claude_tmux_send_text({ tabId, environmentId, text });
 }
 
 export async function sendKeys(
@@ -351,7 +355,7 @@ export async function sendKeys(
   keys: string[],
   environmentId: string,
 ): Promise<void> {
-  await invoke("claude_tmux_send_keys", { tabId, environmentId, keys });
+  await tmux().claude_tmux_send_keys({ tabId, environmentId, keys });
 }
 
 export async function answerSelectionPrompt(
@@ -364,11 +368,7 @@ export async function answerSelectionPrompt(
     optionIndex: number;
   },
 ): Promise<void> {
-  await invoke("claude_tmux_answer_selection_prompt", {
-    tabId,
-    environmentId,
-    ...input,
-  });
+  await tmux().claude_tmux_answer_selection_prompt({ tabId, environmentId, ...input });
 }
 
 export async function resize(
@@ -377,7 +377,7 @@ export async function resize(
   rows: number,
   environmentId: string,
 ): Promise<void> {
-  await invoke("claude_tmux_resize", { tabId, environmentId, cols, rows });
+  await tmux().claude_tmux_resize({ tabId, environmentId, cols, rows });
 }
 
 export async function createInteractiveTerminal(
@@ -386,26 +386,18 @@ export async function createInteractiveTerminal(
   rows: number,
   environmentId: string,
 ): Promise<string> {
-  return invoke<string>("claude_tmux_create_interactive_terminal", {
-    tabId,
-    environmentId,
-    cols,
-    rows,
-  });
+  return tmux().claude_tmux_create_interactive_terminal({ tabId, environmentId, cols, rows });
 }
 
 export async function startInteractiveTerminal(terminalSessionId: string): Promise<void> {
-  await invoke("claude_tmux_start_interactive_terminal", { terminalSessionId });
+  await tmux().claude_tmux_start_interactive_terminal({ terminalSessionId });
 }
 
 export async function writeInteractiveTerminal(
   terminalSessionId: string,
   data: string,
 ): Promise<void> {
-  await invoke("claude_tmux_write_interactive_terminal", {
-    terminalSessionId,
-    data,
-  });
+  await tmux().claude_tmux_write_interactive_terminal({ terminalSessionId, data });
 }
 
 export async function resizeInteractiveTerminal(
@@ -413,15 +405,11 @@ export async function resizeInteractiveTerminal(
   cols: number,
   rows: number,
 ): Promise<void> {
-  await invoke("claude_tmux_resize_interactive_terminal", {
-    terminalSessionId,
-    cols,
-    rows,
-  });
+  await tmux().claude_tmux_resize_interactive_terminal({ terminalSessionId, cols, rows });
 }
 
 export async function detachInteractiveTerminal(terminalSessionId: string): Promise<void> {
-  await invoke("claude_tmux_detach_interactive_terminal", { terminalSessionId });
+  await tmux().claude_tmux_detach_interactive_terminal({ terminalSessionId });
 }
 
 /**
@@ -436,9 +424,10 @@ export async function answerPreToolUse(
   reason?: string,
   environmentId?: string,
 ): Promise<void> {
-  await invoke("claude_tmux_answer_pre_tool_use", {
+  await tmux().claude_tmux_answer_pre_tool_use({
     tabId,
-    environmentId,
+    // Required by every handler; an older caller that omitted it was refused.
+    environmentId: environmentId as string,
     eventId,
     decision,
     reason,
@@ -453,13 +442,13 @@ export async function holdHook(
   held: boolean,
   environmentId?: string,
 ): Promise<TmuxHookHoldOutcome> {
-  return invoke<TmuxHookHoldOutcome>("claude_tmux_hold_hook", {
+  return (await tmux().claude_tmux_hold_hook({
     tabId,
-    environmentId,
+    environmentId: environmentId as string,
     eventKind,
     eventId,
     held,
-  });
+  })) as TmuxHookHoldOutcome;
 }
 
 /** Raw escape hatch for replying to any hook with arbitrary JSON. */
@@ -470,9 +459,9 @@ export async function replyHook(
   response: unknown,
   environmentId?: string,
 ): Promise<void> {
-  await invoke("claude_tmux_reply_hook", {
+  await tmux().claude_tmux_reply_hook({
     tabId,
-    environmentId,
+    environmentId: environmentId as string,
     eventKind,
     eventId,
     response,
@@ -485,9 +474,9 @@ export async function replyHook(
  * the user has sent any prompt.
  */
 export async function listPreviousSessions(environmentId: string): Promise<PreviousSession[]> {
-  return invoke<PreviousSession[]>("claude_tmux_list_previous_sessions", {
+  return (await tmux().claude_tmux_list_previous_sessions({
     environmentId,
-  });
+  })) as PreviousSession[];
 }
 
 // ── Event subscription ───────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import type {
   TicketSectionsPatch,
 } from "@orkestrator/protocol/ticket-sections";
 import type { TicketSyncMeta, TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
+import { files } from "@/lib/node-scope/domains/files";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -128,10 +129,12 @@ export interface FeaturePlan {
  */
 export function createKanbanApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  // The two file reads are in the `files` domain (plan item 7002).
+  const filesDomain = () => files(client);
 
   /** Read a binary file from the local filesystem as base64 */
   async function readFileBase64(path: string): Promise<string> {
-    return invoke<string>("read_file_base64", { filePath: path });
+    return filesDomain().read_file_base64({ filePath: path });
   }
 
   /** Read a binary file from the local filesystem (deprecated: use readFileBase64 instead) */
@@ -357,7 +360,7 @@ export function createKanbanApi(client: BackendClient) {
     environmentId: string,
     filePath: string,
   ): Promise<string> {
-    return invoke<string>("read_environment_file_base64", { environmentId, filePath });
+    return filesDomain().read_environment_file_base64({ environmentId, filePath });
   }
 
   return {

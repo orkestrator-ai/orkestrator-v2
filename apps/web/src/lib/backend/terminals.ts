@@ -18,6 +18,7 @@ import {
   type TerminalSessionCreateResult,
 } from "./shared";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { terminals } from "@/lib/node-scope/domains/terminals";
 export type { TerminalSessionCreateResult } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -74,6 +75,9 @@ export type {
  */
 export function createTerminalsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  // The `terminals` domain client (plan item 7002): typed results, and the
+  // envelope for a node that advertises the domain.
+  const domain = () => terminals(client);
 
   /**
    * The persisted Claude tmux state for a container, or null when none has been
@@ -92,7 +96,7 @@ export function createTerminalsApi(client: BackendClient) {
   }
 
   async function attachTerminal(containerId: string, cols: number, rows: number): Promise<string> {
-    return invoke<string>("attach_terminal", { containerId, cols, rows });
+    return domain().attach_terminal({ containerId, cols, rows });
   }
 
   async function createTerminalSession(
@@ -104,7 +108,7 @@ export function createTerminalsApi(client: BackendClient) {
     environmentId?: string,
     terminalKey?: string,
   ): Promise<TerminalSessionCreateResult> {
-    const result = await invoke<unknown>("create_terminal_session", {
+    const result = await domain().create_terminal_session({
       containerId,
       cols,
       rows,
@@ -117,7 +121,7 @@ export function createTerminalsApi(client: BackendClient) {
   }
 
   async function startTerminalSession(sessionId: string): Promise<void> {
-    return invoke("start_terminal_session", { sessionId });
+    await domain().start_terminal_session({ sessionId });
   }
 
   async function launchTerminalJob(input: {
@@ -133,31 +137,30 @@ export function createTerminalsApi(client: BackendClient) {
     fastMode?: boolean;
     activateTab?: boolean;
   }): Promise<TerminalJobLaunchResult> {
-    return invoke<TerminalJobLaunchResult>("launch_terminal_job", input);
+    const result = await domain().launch_terminal_job(input);
+    return result as TerminalJobLaunchResult;
   }
 
   async function bootstrapTerminalSession(
     sessionId: string,
     data: string,
   ): Promise<BootstrapTerminalResult> {
-    return invoke<BootstrapTerminalResult>("bootstrap_terminal_session", {
-      sessionId,
-      data,
-    });
+    return domain().bootstrap_terminal_session({ sessionId, data });
   }
 
   async function getTerminalSession(sessionId: string): Promise<TerminalSessionStatus> {
-    return invoke<TerminalSessionStatus>("get_terminal_session", { sessionId });
+    return domain().get_terminal_session({ sessionId });
   }
 
   async function getTerminalOutputBuffer(sessionId: string): Promise<string> {
-    return invoke<string>("get_terminal_output_buffer", { sessionId });
+    return domain().get_terminal_output_buffer({ sessionId });
   }
 
   async function getTerminalStateSnapshot(
     sessionId: string,
   ): Promise<TerminalStateSnapshot | null> {
-    const value = await invoke<unknown>("get_terminal_state_snapshot", { sessionId });
+    // The schema gives the shape; the guard keeps its byte and range bounds.
+    const value: unknown = await domain().get_terminal_state_snapshot({ sessionId });
     if (value === null || isTerminalStateSnapshot(value)) return value;
     throw new Error("Backend returned an invalid terminal state snapshot");
   }
@@ -166,7 +169,7 @@ export function createTerminalsApi(client: BackendClient) {
     sessionId: string,
     cursor?: string,
   ): Promise<TerminalHistoryPage | null> {
-    const value = await invoke<unknown>("get_terminal_history_page", {
+    const value: unknown = await domain().get_terminal_history_page({
       sessionId,
       ...(cursor ? { cursor } : {}),
     });
@@ -178,18 +181,19 @@ export function createTerminalsApi(client: BackendClient) {
     sessionId: string,
     snapshot: { generation: number; revision: number },
   ): Promise<void> {
-    await invoke("terminal_snapshot_applied", { sessionId, ...snapshot });
+    await domain().terminal_snapshot_applied({ sessionId, ...snapshot });
   }
 
   async function rejectTerminalSnapshot(sessionId: string): Promise<void> {
-    await invoke("terminal_snapshot_failed", { sessionId });
+    await domain().terminal_snapshot_failed({ sessionId });
   }
 
   async function getTerminalOutputSnapshot(
     sessionId: string,
     cursor?: { revision: number; generation: number },
   ): Promise<TerminalOutputSnapshot> {
-    const value = await invoke<unknown>("get_terminal_output_snapshot", {
+    // Not decoded in production (hot path), so the checks below stay.
+    const value: unknown = await domain().get_terminal_output_snapshot({
       sessionId,
       ...(cursor ? { sinceRevision: cursor.revision, sinceGeneration: cursor.generation } : {}),
     });
@@ -228,7 +232,7 @@ export function createTerminalsApi(client: BackendClient) {
   }
 
   async function detachTerminal(sessionId: string): Promise<void> {
-    return invoke("detach_terminal", { sessionId });
+    await domain().detach_terminal({ sessionId });
   }
 
   async function teardownTab(input: TabTeardownInput): Promise<{ completed: boolean }> {
@@ -236,7 +240,7 @@ export function createTerminalsApi(client: BackendClient) {
   }
 
   async function writeTerminal(sessionId: string, data: string): Promise<boolean> {
-    return terminalWriteWasDelivered(await invoke("terminal_write", { sessionId, data }));
+    return terminalWriteWasDelivered(await domain().terminal_write({ sessionId, data }));
   }
 
   /**
@@ -259,7 +263,7 @@ export function createTerminalsApi(client: BackendClient) {
   }
 
   async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
-    return invoke("terminal_resize", { sessionId, cols, rows });
+    await domain().terminal_resize({ sessionId, cols, rows });
   }
 
   return {

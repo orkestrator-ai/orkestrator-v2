@@ -3019,10 +3019,13 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     ).toThrow();
     expect(() =>
       commands.get("peek_container_agent_bridge")?.(
+    // A defined command (plan item 7009) drops an unknown key; one the sender
+    // marks critical is refused.
         { containerId: "container-1", agent: "claude", extra: 1 },
         context,
       ),
-    ).toThrow();
+    ).toThrow("extra");
+        { critical: ["extra"] },
   });
 
   test("restarts a healthy local Claude bridge whose auth token this process no longer holds", async () => {

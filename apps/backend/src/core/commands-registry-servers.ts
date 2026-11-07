@@ -1,4 +1,34 @@
 import { claudeModelCatalogUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
+import {
+  cacheOpencodeModelCatalogCommand,
+  getClaudeModelCatalogCommand,
+  getClaudeServerLogCommand,
+  getClaudeServerStatusCommand,
+  getCodexServerLogCommand,
+  getCodexServerStatusCommand,
+  getCursorServerLogCommand,
+  getCursorServerStatusCommand,
+  getGrokServerLogCommand,
+  getGrokServerStatusCommand,
+  getOpencodeModelCatalogCacheCommand,
+  getOpencodeModelPreferencesCommand,
+  getOpencodeServerLogCommand,
+  getOpencodeServerStatusCommand,
+  getPiServerLogCommand,
+  getPiServerStatusCommand,
+  startClaudeServerCommand,
+  startCodexServerCommand,
+  startCursorServerCommand,
+  startGrokServerCommand,
+  startOpencodeServerCommand,
+  startPiServerCommand,
+  stopClaudeServerCommand,
+  stopCodexServerCommand,
+  stopCursorServerCommand,
+  stopGrokServerCommand,
+  stopOpencodeServerCommand,
+  stopPiServerCommand,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { containerBridgeOperationId } from "./container-bridge-operations.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
@@ -48,7 +78,6 @@ import {
   CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE,
   CONTAINER_CURSOR_CREDENTIAL_DIR,
   asString,
-  assertOnlyKeys,
   resolveCursorApiKey,
   cursorApiKeyFingerprint,
   asNonBlankString,
@@ -156,13 +185,29 @@ export function containerBridgeStartRegistrar(register: CommandRegistrar) {
   };
 }
 
+/** The Cursor and Grok bridge commands, registered by one loop. */
+const ACP_SERVER_COMMANDS = {
+  cursor: {
+    start: startCursorServerCommand,
+    stop: stopCursorServerCommand,
+    status: getCursorServerStatusCommand,
+    log: getCursorServerLogCommand,
+  },
+  grok: {
+    start: startGrokServerCommand,
+    stop: stopGrokServerCommand,
+    status: getGrokServerStatusCommand,
+    log: getGrokServerLogCommand,
+  },
+} as const;
+
 export function registerServerCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
   const registerBridgeStart = containerBridgeStartRegistrar(register);
   const { claudeModelCatalogRefreshes, validatedClaudeModelCatalogs, commands } = dependencies;
-  register("start_opencode_server", async ({ containerId }, context) => {
+  register(startOpencodeServerCommand, async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const operationId = await containerBridgeOperationId(context, id);
     return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
@@ -183,7 +228,7 @@ export function registerServerCommands(
       return started;
     });
   });
-  register("stop_opencode_server", async ({ containerId }, context) => {
+  register(stopOpencodeServerCommand, async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const operationId = await containerBridgeOperationId(context, id);
     return enqueueContainerBridgeOperation(context, "opencode", operationId, () => {
@@ -195,7 +240,7 @@ export function registerServerCommands(
       ).then(() => forgetContainerBridgeCredential(id, "opencode"));
     });
   });
-  register("get_opencode_server_status", async ({ containerId }, context) => {
+  register(getOpencodeServerStatusCommand, async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, OPENCODE_SERVER_PORT);
     const authToken = hostPort ? await readContainerBridgeToken(id, "opencode") : null;
@@ -224,8 +269,8 @@ export function registerServerCommands(
         : {}),
     };
   });
-  register("get_opencode_server_log", serverLogCommand("/tmp/opencode-serve.log"));
-  register("get_opencode_model_preferences", async (_args, context) => {
+  register(getOpencodeServerLogCommand, serverLogCommand("/tmp/opencode-serve.log"));
+  register(getOpencodeModelPreferencesCommand, async (_args, context) => {
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("opencode")) {
       return { recent: [], favorite: [], variant: {} };
     }
@@ -237,8 +282,7 @@ export function registerServerCommands(
     if (!(await pathExists(modelPath))) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
-  register("get_opencode_model_catalog_cache", async (args, { storage }) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(getOpencodeModelCatalogCacheCommand, async (args, { storage }) => {
     const snapshot = await storage.getOpenCodeModelCatalog(
       asNonBlankString(args.projectId, "projectId"),
     );
@@ -261,14 +305,13 @@ export function registerServerCommands(
         ),
     };
   });
-  register("cache_opencode_model_catalog", (args, { storage }) => {
-    assertOnlyKeys(args, ["projectId", "models"], "arguments");
+  register(cacheOpencodeModelCatalogCommand, (args, { storage }) => {
     return storage.cacheOpenCodeModelCatalog(
       asNonBlankString(args.projectId, "projectId"),
       asOpenCodeModelCatalog(args.models),
     );
   });
-  registerBridgeStart("start_claude_server", "claude", async ({ containerId }, context) => {
+  registerBridgeStart(startClaudeServerCommand, "claude", async ({ containerId }, context) => {
     const id = await containerBridgeOperationId(context, asString(containerId, "containerId"));
     return enqueueContainerBridgeOperation(context, "claude", id, async () => {
       await reconcileContainerAgentAccount(
@@ -290,7 +333,7 @@ export function registerServerCommands(
       );
     });
   });
-  register("stop_claude_server", ({ containerId }, context) => {
+  register(stopClaudeServerCommand, ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation(context, "claude", id, () =>
       // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
@@ -301,7 +344,7 @@ export function registerServerCommands(
       ).then(() => forgetContainerBridgeCredential(id, "claude")),
     );
   });
-  register("get_claude_server_status", async ({ containerId }, context) => {
+  register(getClaudeServerStatusCommand, async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, CLAUDE_BRIDGE_PORT);
     const running = hostPort ? await checkHttpHealth(hostPort) : false;
@@ -334,13 +377,14 @@ export function registerServerCommands(
       ...(authToken ? { authToken } : {}),
     };
   });
-  register("get_claude_server_log", serverLogCommand("/tmp/claude-bridge.log"));
-  register("get_claude_model_catalog", async ({ environmentId, forceRefresh }, context) => {
+  register(getClaudeServerLogCommand, serverLogCommand("/tmp/claude-bridge.log"));
+  register(getClaudeModelCatalogCommand, async ({ environmentId, forceRefresh }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     const cached = environment.claudeModelCatalog;
     if (
+      cached &&
       forceRefresh !== true &&
       validatedClaudeModelCatalogs.has(id) &&
       isFreshClaudeModelCatalog(cached)
@@ -379,7 +423,7 @@ export function registerServerCommands(
     claudeModelCatalogRefreshes.set(id, refresh);
     return refresh;
   });
-  registerBridgeStart("start_codex_server", "codex", ({ containerId }, context) => {
+  registerBridgeStart(startCodexServerCommand, "codex", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation(context, "codex", id, async () => {
       await reconcileContainerAgentAccount(
@@ -487,7 +531,7 @@ export function registerServerCommands(
       return startWithFreshToken();
     });
   });
-  register("stop_codex_server", ({ containerId }, context) => {
+  register(stopCodexServerCommand, ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation(context, "codex", id, () =>
       // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
@@ -498,7 +542,7 @@ export function registerServerCommands(
       ).then(() => forgetContainerBridgeCredential(id, "codex")),
     );
   });
-  register("get_codex_server_status", async ({ containerId }, context) => {
+  register(getCodexServerStatusCommand, async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
     const running = hostPort ? await checkHttpHealth(hostPort) : false;
@@ -521,7 +565,7 @@ export function registerServerCommands(
       ...(authToken ? { authToken } : {}),
     };
   });
-  register("get_codex_server_log", serverLogCommand("/tmp/codex-bridge.log"));
+  register(getCodexServerLogCommand, serverLogCommand("/tmp/codex-bridge.log"));
 
   for (const provider of ["cursor", "grok"] as const) {
     const containerPort = provider === "cursor" ? CURSOR_BRIDGE_PORT : GROK_ACP_BRIDGE_PORT;
@@ -532,59 +576,63 @@ export function registerServerCommands(
       provider === "cursor"
         ? "[c]ursor-bridge/dist/index.js"
         : "[a]cp-bridge/dist/index.js --provider=grok";
-    registerBridgeStart(`start_${provider}_server`, provider, async ({ containerId }, context) => {
-      const id = asString(containerId, "containerId");
-      probeContainerAgentTools(context, id);
-      const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
-      return enqueueContainerBridgeOperation(context, provider, operationId, async () => {
-        const bridgeConfig = await context.storage.loadConfig();
-        const cursorApiKey =
-          provider === "cursor" ? resolveCursorApiKey(bridgeConfig.global).apiKey : undefined;
-        const useCursorSdk = provider === "cursor";
-        const expectedCredentialFingerprint =
-          provider === "cursor" ? `sdk:${cursorApiKeyFingerprint(cursorApiKey)}` : undefined;
-        if (provider === "cursor") {
-          await syncContainerCursorApiKey(id, cursorApiKey);
-          await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
-        }
-        if (provider === "grok") await syncContainerLoginUnlocked(context, "grok", id);
-        const hostPort = await getHostPort(id, containerPort);
-        if (hostPort && (await checkHttpHealth(hostPort))) {
-          const credentialFingerprint =
-            provider === "cursor"
-              ? (
-                  await dockerExec(
-                    id,
-                    `cat ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE} 2>/dev/null || true`,
-                  )
-                ).trim()
-              : undefined;
-          const existingToken = await readContainerBridgeToken(id, provider);
-          if (
-            existingToken &&
-            (provider !== "cursor" ||
-              credentialFingerprint === expectedCredentialFingerprint ||
-              // A changed key restarts the bridge, which would end a running
-              // turn. A busy bridge keeps the key it started with, as a busy
-              // Claude or Codex bridge keeps its account; the first start
-              // after it goes idle applies the new one.
-              (await containerAgentHasLiveWork(context, id, "cursor")))
-          ) {
-            return { hostPort, wasRunning: true, authToken: existingToken };
+    registerBridgeStart(
+      ACP_SERVER_COMMANDS[provider].start,
+      provider,
+      async ({ containerId }, context) => {
+        const id = asString(containerId, "containerId");
+        probeContainerAgentTools(context, id);
+        const operationId =
+          provider === "grok" ? await containerBridgeOperationId(context, id) : id;
+        return enqueueContainerBridgeOperation(context, provider, operationId, async () => {
+          const bridgeConfig = await context.storage.loadConfig();
+          const cursorApiKey =
+            provider === "cursor" ? resolveCursorApiKey(bridgeConfig.global).apiKey : undefined;
+          const useCursorSdk = provider === "cursor";
+          const expectedCredentialFingerprint =
+            provider === "cursor" ? `sdk:${cursorApiKeyFingerprint(cursorApiKey)}` : undefined;
+          if (provider === "cursor") {
+            await syncContainerCursorApiKey(id, cursorApiKey);
+            await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
           }
-          await dockerExec(id, `pkill -f '${bridgePattern}' || true`);
-          await waitForUnhealthy(hostPort);
-        }
-        const credential = containerBridgeLaunch(
-          provider,
-          await containerCredentialMode(context, id),
-        );
-        const token = credential.token;
-        const started = await startContainerServer(
-          id,
-          containerPort,
-          provider,
-          `
+          if (provider === "grok") await syncContainerLoginUnlocked(context, "grok", id);
+          const hostPort = await getHostPort(id, containerPort);
+          if (hostPort && (await checkHttpHealth(hostPort))) {
+            const credentialFingerprint =
+              provider === "cursor"
+                ? (
+                    await dockerExec(
+                      id,
+                      `cat ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE} 2>/dev/null || true`,
+                    )
+                  ).trim()
+                : undefined;
+            const existingToken = await readContainerBridgeToken(id, provider);
+            if (
+              existingToken &&
+              (provider !== "cursor" ||
+                credentialFingerprint === expectedCredentialFingerprint ||
+                // A changed key restarts the bridge, which would end a running
+                // turn. A busy bridge keeps the key it started with, as a busy
+                // Claude or Codex bridge keeps its account; the first start
+                // after it goes idle applies the new one.
+                (await containerAgentHasLiveWork(context, id, "cursor")))
+            ) {
+              return { hostPort, wasRunning: true, authToken: existingToken };
+            }
+            await dockerExec(id, `pkill -f '${bridgePattern}' || true`);
+            await waitForUnhealthy(hostPort);
+          }
+          const credential = containerBridgeLaunch(
+            provider,
+            await containerCredentialMode(context, id),
+          );
+          const token = credential.token;
+          const started = await startContainerServer(
+            id,
+            containerPort,
+            provider,
+            `
           cd /workspace
           ${keepPreviousLogCommand(logFile)}
           umask 077
@@ -619,12 +667,13 @@ export function registerServerCommands(
               : credential.start("/opt/acp-bridge/dist/index.js --provider=grok", logFile)
           }
         `,
-          credential.launch,
-        );
-        return { ...started, authToken: token };
-      });
-    });
-    register(`stop_${provider}_server`, async ({ containerId }, context) => {
+            credential.launch,
+          );
+          return { ...started, authToken: token };
+        });
+      },
+    );
+    register(ACP_SERVER_COMMANDS[provider].stop, async ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
       return enqueueContainerBridgeOperation(context, provider, operationId, () =>
@@ -638,7 +687,7 @@ export function registerServerCommands(
         ).then(() => forgetContainerBridgeCredential(id, provider)),
       );
     });
-    register(`get_${provider}_server_status`, async ({ containerId }) => {
+    register(ACP_SERVER_COMMANDS[provider].status, async ({ containerId }) => {
       const id = asString(containerId, "containerId");
       const hostPort = await getHostPort(id, containerPort);
       const authToken = hostPort ? await readContainerBridgeToken(id, provider) : null;
@@ -650,7 +699,7 @@ export function registerServerCommands(
         ...(running ? { authToken } : {}),
       };
     });
-    register(`get_${provider}_server_log`, serverLogCommand(logFile));
+    register(ACP_SERVER_COMMANDS[provider].log, serverLogCommand(logFile));
   }
 
   registerPiServerCommands(register);
@@ -661,7 +710,9 @@ export function registerServerCommands(
  * relaunch instead, under the same bounds and redaction, and is empty when there
  * has been no relaunch.
  */
-function serverLogCommand(logFile: string): CommandHandler {
+function serverLogCommand(
+  logFile: string,
+): (args: { readonly containerId: string; readonly previous?: unknown }) => Promise<string> {
   return ({ containerId, previous }) =>
     dockerExec(
       asString(containerId, "containerId"),
@@ -698,7 +749,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
   const logFile = "/tmp/pi-bridge.log";
   const processPattern = "[p]i-bridge/dist/index.js";
 
-  registerBridgeStart("start_pi_server", "pi", async ({ containerId }, context) => {
+  registerBridgeStart(startPiServerCommand, "pi", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     probeContainerAgentTools(context, id);
     const operationId = await containerBridgeOperationId(context, id);
@@ -743,7 +794,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("stop_pi_server", async ({ containerId }, context) => {
+  register(stopPiServerCommand, async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const operationId = await containerBridgeOperationId(context, id);
     return enqueueContainerBridgeOperation(context, "pi", operationId, () =>
@@ -753,7 +804,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("get_pi_server_status", async ({ containerId }) => {
+  register(getPiServerStatusCommand, async ({ containerId }) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, PI_BRIDGE_PORT);
     const authToken = hostPort ? await readContainerBridgeToken(id, "pi") : null;
@@ -762,5 +813,5 @@ function registerPiServerCommands(register: CommandRegistrar): void {
     return { running, hostPort, ...(running ? { authToken } : {}) };
   });
 
-  register("get_pi_server_log", serverLogCommand(logFile));
+  register(getPiServerLogCommand, serverLogCommand(logFile));
 }

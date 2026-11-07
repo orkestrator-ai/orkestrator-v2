@@ -1,6 +1,7 @@
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import { terminals } from "@/lib/node-scope/domains/terminals";
 import { hydrationRequests } from "@/lib/hydration-request-limiter";
+import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import {
   LIST_ENVIRONMENT_HYDRATION_COMMAND,
   isEnvironmentHydrationBatch,
@@ -1676,7 +1677,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: AgentBridgeKind,
     timeoutMs = 60_000,
   ): Promise<AwaitBridgeReadyResult> {
-    const result = await invoke<unknown>("await_bridge_ready", {
+    const result: unknown = await agentServersApi(client).await_bridge_ready({
       environmentId,
       agent,
       timeoutMs,

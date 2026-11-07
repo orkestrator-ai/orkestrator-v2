@@ -35,9 +35,14 @@ describe("agent skill commands", () => {
       await expect(
         commands.get("list_agent_plugins")?.({ provider: "invalid" }, context),
       ).rejects.toThrow();
+      // A defined command (plan item 7009) drops an unknown key, and refuses it
+      // only when the sender marks it critical, before discovery runs.
       await expect(
-        commands.get("list_agent_plugins")?.({ provider: "claude", extra: true }, context),
-      ).rejects.toThrow();
+        (async () =>
+          commands.get("list_agent_plugins")?.({ provider: "claude", extra: true }, context, {
+            critical: ["extra"],
+          }))(),
+      ).rejects.toMatchObject({ code: "unsupported-field" });
       expect(runner).toHaveBeenCalledTimes(1);
     } finally {
       factory.mockRestore();
@@ -75,20 +80,25 @@ describe("agent skill commands", () => {
     const { context } = createContext(createEnvironment());
 
     await expect(
-      commands.get("list_agent_skills")?.({ provider: "claude", unexpected: true }, context),
-    ).rejects.toThrow("Unexpected list_agent_skills argument field");
+      (async () =>
+        commands.get("list_agent_skills")?.({ provider: "claude", unexpected: true }, context, {
+          critical: ["unexpected"],
+        }))(),
+    ).rejects.toMatchObject({ code: "unsupported-field" });
     await expect(
       commands.get("list_agent_skills")?.({ provider: "other" }, context),
     ).rejects.toThrow("Expected provider to be claude, codex, cursor, grok or opencode");
     await expect(
-      commands.get("read_agent_skill")?.({ provider: "claude" }, context),
+      (async () => commands.get("read_agent_skill")?.({ provider: "claude" }, context))(),
     ).rejects.toThrow("Expected filePath to be a string");
     await expect(
-      commands.get("read_agent_skill")?.(
-        { provider: "claude", filePath: "/tmp/SKILL.md", unexpected: true },
-        context,
-      ),
-    ).rejects.toThrow("Unexpected read_agent_skill argument field");
+      (async () =>
+        commands.get("read_agent_skill")?.(
+          { provider: "claude", filePath: "/tmp/SKILL.md", unexpected: true },
+          context,
+          { critical: ["unexpected"] },
+        ))(),
+    ).rejects.toMatchObject({ code: "unsupported-field" });
     await expect(
       commands.get("read_agent_skill")?.(
         { provider: "claude", filePath: path.join(home, "outside", "SKILL.md") },
@@ -160,16 +170,19 @@ describe("agent skill commands", () => {
       ),
     ).rejects.toThrow("Expected provider to be claude, codex, cursor, grok or opencode");
     await expect(
-      commands.get("list_environment_agent_skills")?.(
-        { environmentId: environment.id, provider: "claude", unexpected: true },
-        context,
-      ),
-    ).rejects.toThrow("Unexpected list_environment_agent_skills argument field");
+      (async () =>
+        commands.get("list_environment_agent_skills")?.(
+          { environmentId: environment.id, provider: "claude", unexpected: true },
+          context,
+          { critical: ["unexpected"] },
+        ))(),
+    ).rejects.toMatchObject({ code: "unsupported-field" });
     await expect(
-      commands.get("read_environment_agent_skill")?.(
-        { environmentId: environment.id, provider: "claude" },
-        context,
-      ),
+      (async () =>
+        commands.get("read_environment_agent_skill")?.(
+          { environmentId: environment.id, provider: "claude" },
+          context,
+        ))(),
     ).rejects.toThrow("Expected filePath to be a string");
     await expect(
       commands.get("list_environment_agent_skills")?.(

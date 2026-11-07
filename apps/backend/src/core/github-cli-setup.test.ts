@@ -299,10 +299,15 @@ describe("GitHub CLI setup", () => {
 
   describe("GitHub CLI registry commands", () => {
     const registry = createCommandRegistry();
-    function invoke(name: string, args: Record<string, unknown> = {}, context = contextFor()) {
+    function invoke(
+      name: string,
+      args: Record<string, unknown> = {},
+      context = contextFor(),
+      invocation?: { readonly critical?: readonly string[] },
+    ) {
       const handler = registry.get(name);
       if (!handler) throw new Error(`${name} is not registered`);
-      return Promise.resolve().then(() => handler(args, context));
+      return Promise.resolve().then(() => handler(args, context, invocation));
     }
 
     test.each([
@@ -310,8 +315,12 @@ describe("GitHub CLI setup", () => {
       "start_github_cli_login",
       "get_github_cli_login",
       "cancel_github_cli_login",
-    ])("%s rejects unknown arguments before acting", async (name) => {
-      await expect(invoke(name, { unexpected: true })).rejects.toThrow("unexpected");
+    ])("%s refuses an unknown critical argument before acting", async (name) => {
+      // Defined commands (plan item 7009) drop unknown keys; one the sender
+      // marks critical is refused before the handler runs.
+      await expect(
+        invoke(name, { unexpected: true }, contextFor(), { critical: ["unexpected"] }),
+      ).rejects.toMatchObject({ code: "unsupported-field" });
       expect(gitHubCliLoginProgress(contextFor())).toEqual({ state: "idle" });
     });
 

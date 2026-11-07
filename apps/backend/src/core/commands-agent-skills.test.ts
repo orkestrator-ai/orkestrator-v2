@@ -26,9 +26,11 @@ describe("agent skill commands", () => {
       agent: "claude",
       plugins: [],
     });
-    await expect(command({ provider: "claude", unexpected: true }, context)).rejects.toThrow(
-      "Unexpected list_agent_plugins argument field",
-    );
+    // A defined command drops an unknown key (plan item 7009) instead of refusing it.
+    await expect(command({ provider: "claude", unexpected: true }, context)).resolves.toEqual({
+      agent: "claude",
+      plugins: [],
+    });
     await expect(command({ provider: "other" }, context)).rejects.toThrow();
   });
 });

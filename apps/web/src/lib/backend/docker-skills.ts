@@ -21,6 +21,7 @@ import type {
 import { type AccountMachine } from "./agent-accounts";
 import type { AgentExtensionCatalog } from "./files-sessions";
 import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
+import { agentServersClient } from "@orkestrator/protocol/contract/domains/agent-servers";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
 import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./domain-client";
@@ -307,6 +308,14 @@ export function createDockerSkillsApi(client: BackendClient) {
   // The `docker` domain (plan item 7003): typed, decoded results.
   const docker = backendDomainApi(client, dockerClient);
   // The machine-aware functions sent through `machineInvoke`, which always
+  // The `agent-servers` domain (plan item 7009): bridges, CLI checks,
+  // catalogues, skills and the GitHub CLI sign-in.
+  const agentServers = backendDomainApi(client, agentServersClient);
+  const ownMachineAgentServers = backendDomainApi(withArgumentsObject(client), agentServersClient);
+  const agentServersOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? ownMachineAgentServers()
+      : backendDomainApi(machineBackendClient(client, machine), agentServersClient)();
   // passes an arguments object; their calls keep that shape.
   const ownMachineDocker = backendDomainApi(withArgumentsObject(client), dockerClient);
   const dockerOn = (machine: AccountMachine) =>
@@ -454,10 +463,11 @@ export function createDockerSkillsApi(client: BackendClient) {
     containerId: string,
     options: { previous?: boolean } = {},
   ): Promise<string> {
-    return invoke<string>(`get_${provider}_server_log`, {
-      containerId,
-      ...(options.previous ? { previous: true } : {}),
-    });
+    const command = `get_${provider}_server_log` as const;
+    const args = { containerId, ...(options.previous ? { previous: true } : {}) };
+    // A provider this build has no definition for is asked by name, as before.
+    const read = agentServers()[command] as ((input: typeof args) => Promise<string>) | undefined;
+    return read ? read(args) : client.invokeRaw<string>(command, args);
   }
 
   /** Get the OpenCode server log from a container (for debugging) */
@@ -467,7 +477,7 @@ export function createDockerSkillsApi(client: BackendClient) {
 
   /** Get OpenCode model preferences from ~/.local/state/opencode/model.json */
   async function getOpencodeModelPreferences(): Promise<OpenCodeModelPreferences> {
-    return invoke<OpenCodeModelPreferences>("get_opencode_model_preferences");
+    return asWebModel<OpenCodeModelPreferences>(agentServers().get_opencode_model_preferences({}));
   }
 
   /** Load the durable project-scoped catalogue before an OpenCode server is ready. */
@@ -475,12 +485,8 @@ export function createDockerSkillsApi(client: BackendClient) {
     projectId: string,
     machine?: AccountMachine,
   ): Promise<OpenCodeModelCatalogSnapshot | null> {
-    return machineInvoke<OpenCodeModelCatalogSnapshot | null>(
-      machine,
-      "get_opencode_model_catalog_cache",
-      {
-        projectId,
-      },
+    return asWebModel<OpenCodeModelCatalogSnapshot | null>(
+      agentServersOn(machine).get_opencode_model_catalog_cache({ projectId }),
     );
   }
 
@@ -492,12 +498,14 @@ export function createDockerSkillsApi(client: BackendClient) {
     projectId: string,
     models: CachedOpenCodeModel[],
   ): Promise<OpenCodeModelCatalogSnapshot> {
-    return invoke<OpenCodeModelCatalogSnapshot>("cache_opencode_model_catalog", {
-      projectId,
-      // A non-array is a caller bug; forwarding it lets the command reject it
-      // with a named error instead of throwing a TypeError in the renderer.
-      models: (Array.isArray(models) ? models : []).map(toCachedOpenCodeModel),
-    });
+    return asWebModel<OpenCodeModelCatalogSnapshot>(
+      agentServers().cache_opencode_model_catalog({
+        projectId,
+        // A non-array is a caller bug; forwarding it lets the command reject it
+        // with a named error instead of throwing a TypeError in the renderer.
+        models: (Array.isArray(models) ? models : []).map(toCachedOpenCodeModel),
+      }),
+    );
   }
 
   /** Get the Claude bridge server log from a container (for debugging) */
@@ -510,10 +518,9 @@ export function createDockerSkillsApi(client: BackendClient) {
     environmentId: string,
     forceRefresh = false,
   ): Promise<ClaudeModelCatalogSnapshot> {
-    return invoke<ClaudeModelCatalogSnapshot>("get_claude_model_catalog", {
-      environmentId,
-      forceRefresh,
-    });
+    return asWebModel<ClaudeModelCatalogSnapshot>(
+      agentServers().get_claude_model_catalog({ environmentId, forceRefresh }),
+    );
   }
 
   /** Get the Codex bridge server log from a container (for debugging) */
@@ -522,26 +529,28 @@ export function createDockerSkillsApi(client: BackendClient) {
   }
 
   async function hasClaudeCredentials(): Promise<boolean> {
-    return invoke<boolean>("has_claude_credentials");
+    return agentServers().has_claude_credentials({});
   }
 
   async function getCredentialStatus(): Promise<CredentialStatus> {
-    return invoke<CredentialStatus>("get_credential_status");
+    return asWebModel<CredentialStatus>(agentServers().get_credential_status({}));
   }
 
   /** Report whether the credential source selected for container Git operations is usable. */
   async function getContainerGitHubCredentialStatus(): Promise<GitHubCredentialStatus> {
-    return invoke<GitHubCredentialStatus>("get_container_github_credential_status");
+    return asWebModel<GitHubCredentialStatus>(
+      agentServers().get_container_github_credential_status({}),
+    );
   }
 
   /** Check if the Claude CLI binary is installed and available */
   async function checkClaudeCli(): Promise<boolean> {
-    return invoke<boolean>("check_claude_cli");
+    return agentServers().check_claude_cli({});
   }
 
   /** Check if the Claude config file (~/.claude.json) exists (indicates user is logged in) */
   async function checkClaudeConfig(): Promise<boolean> {
-    return invoke<boolean>("check_claude_config");
+    return agentServers().check_claude_config({});
   }
 
   /** List every skill the given agent can load from its user-level skill roots */
@@ -549,7 +558,7 @@ export function createDockerSkillsApi(client: BackendClient) {
     provider: AgentSkillProvider,
     machine?: AccountMachine,
   ): Promise<AgentSkillScan> {
-    return machineInvoke<AgentSkillScan>(machine, "list_agent_skills", { provider });
+    return asWebModel<AgentSkillScan>(agentServersOn(machine).list_agent_skills({ provider }));
   }
 
   /** List the plugins the given agent's own CLI reports on this machine */
@@ -557,7 +566,7 @@ export function createDockerSkillsApi(client: BackendClient) {
     provider: AgentSkillProvider,
     machine?: AccountMachine,
   ): Promise<AgentPluginCatalog> {
-    return machineInvoke<AgentPluginCatalog>(machine, "list_agent_plugins", { provider });
+    return asWebModel<AgentPluginCatalog>(agentServersOn(machine).list_agent_plugins({ provider }));
   }
 
   /** Read one SKILL.md; the backend rejects paths outside the agent's skill roots */
@@ -566,7 +575,9 @@ export function createDockerSkillsApi(client: BackendClient) {
     filePath: string,
     machine?: AccountMachine,
   ): Promise<AgentSkillFile> {
-    return machineInvoke<AgentSkillFile>(machine, "read_agent_skill", { provider, filePath });
+    return asWebModel<AgentSkillFile>(
+      agentServersOn(machine).read_agent_skill({ provider, filePath }),
+    );
   }
 
   /** List the skills the selected agent can load inside one environment. */
@@ -574,10 +585,9 @@ export function createDockerSkillsApi(client: BackendClient) {
     environmentId: string,
     provider: AgentSkillProvider,
   ): Promise<AgentSkillScan> {
-    return invoke<AgentSkillScan>("list_environment_agent_skills", {
-      environmentId,
-      provider,
-    });
+    return asWebModel<AgentSkillScan>(
+      agentServers().list_environment_agent_skills({ environmentId, provider }),
+    );
   }
 
   /** Read a SKILL.md from the selected environment's validated skill roots. */
@@ -586,16 +596,14 @@ export function createDockerSkillsApi(client: BackendClient) {
     provider: AgentSkillProvider,
     filePath: string,
   ): Promise<AgentSkillFile> {
-    return invoke<AgentSkillFile>("read_environment_agent_skill", {
-      environmentId,
-      provider,
-      filePath,
-    });
+    return asWebModel<AgentSkillFile>(
+      agentServers().read_environment_agent_skill({ environmentId, provider, filePath }),
+    );
   }
 
   /** Check if the GitHub CLI (gh) binary is installed and available */
   async function checkGithubCli(): Promise<boolean> {
-    return invoke<boolean>("check_github_cli");
+    return agentServers().check_github_cli({});
   }
 
   /**
@@ -604,16 +612,16 @@ export function createDockerSkillsApi(client: BackendClient) {
    * node.
    */
   async function getGitHubCliStatus(machine?: AccountMachine): Promise<GitHubCliStatus> {
-    return machineInvoke<GitHubCliStatus>(machine, "get_github_cli_status");
+    return agentServersOn(machine).get_github_cli_status({});
   }
 
   /** Start `gh auth login` with GitHub's device flow; poll with `getGitHubCliLogin`. */
   async function startGitHubCliLogin(machine?: AccountMachine): Promise<GitHubCliLoginProgress> {
-    return machineInvoke<GitHubCliLoginProgress>(machine, "start_github_cli_login");
+    return asWebModel<GitHubCliLoginProgress>(agentServersOn(machine).start_github_cli_login({}));
   }
 
   async function getGitHubCliLogin(machine?: AccountMachine): Promise<GitHubCliLoginProgress> {
-    return machineInvoke<GitHubCliLoginProgress>(machine, "get_github_cli_login");
+    return asWebModel<GitHubCliLoginProgress>(agentServersOn(machine).get_github_cli_login({}));
   }
 
   /** Cancel a pending GitHub sign-in, or dismiss a finished one. */
@@ -621,21 +629,19 @@ export function createDockerSkillsApi(client: BackendClient) {
     operationId?: string,
     machine?: AccountMachine,
   ): Promise<GitHubCliLoginProgress> {
-    return machineInvoke<GitHubCliLoginProgress>(
-      machine,
-      "cancel_github_cli_login",
-      operationId ? { operationId } : {},
+    return asWebModel<GitHubCliLoginProgress>(
+      agentServersOn(machine).cancel_github_cli_login(operationId ? { operationId } : {}),
     );
   }
 
   /** Check if any AI CLI (Claude or OpenCode) is available for name generation */
   async function checkAnyAiCli(): Promise<boolean> {
-    return invoke<boolean>("check_any_ai_cli");
+    return agentServers().check_any_ai_cli({});
   }
 
   /** Get the name of the available AI CLI ("claude", "opencode", or null if none) */
   async function getAvailableAiCli(): Promise<string | null> {
-    return invoke<string | null>("get_available_ai_cli");
+    return agentServers().get_available_ai_cli({});
   }
 
   async function greet(name: string): Promise<string> {

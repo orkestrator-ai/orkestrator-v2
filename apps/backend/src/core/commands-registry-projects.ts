@@ -136,6 +136,13 @@ const log = createLogger("models");
  * Total extra time a first-use catalogue read may spend starting a bridge and
  * reading its live list before it answers from the durable cache instead.
  */
+import {
+  cacheAgentModelCatalogCommand,
+  ensureHostPiModelCatalogCommand,
+  getAgentModelCatalogCacheCommand,
+  getNativeAgentModelCatalogCommand,
+  refreshHostAgentModelCatalogCommand,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
 export const FIRST_USE_CATALOG_BUDGET_MS = 45_000;
 
 /** The share of that budget allowed for the bridge to become ready. */
@@ -599,16 +606,14 @@ export function registerProjectCommands(
       redactAppConfig(await storage.loadConfig()),
     ),
   );
-  register("ensure_host_pi_model_catalog", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  register(ensureHostPiModelCatalogCommand, async (_args, context) => {
     const cached = (await context.storage.getAgentModelCatalogCache()).pi?.models;
     if (cached?.length) return cached;
     const models = await discoverHostPiModelCatalog(context);
     if (models.length > 0) await context.storage.cacheAgentModelCatalog("pi", models);
     return models;
   });
-  register("refresh_host_agent_model_catalog", async (args, context) => {
-    assertOnlyKeys(args, ["agent", "projectId"], "arguments");
+  register(refreshHostAgentModelCatalogCommand, async (args, context) => {
     const agent = asNonBlankString(args.agent, "agent");
     if (!isAgentPlatform(agent)) throw new Error(`Unknown agent platform: ${agent}`);
     const projectId =
@@ -621,8 +626,7 @@ export function registerProjectCommands(
 
     return { agent: catalog.agent, modelCount: catalog.models.length };
   });
-  register("get_agent_model_catalog_cache", async (args, context) => {
-    assertOnlyKeys(args, ["seed"], "arguments");
+  register(getAgentModelCatalogCacheCommand, async (args, context) => {
     // `seed: true` is asked only by the application's own startup, in the
     // background after the first render, so a first launch downloads every
     // enabled platform's list. `seed: false` is startup's read before that
@@ -652,8 +656,7 @@ export function registerProjectCommands(
     }
     return cache;
   });
-  register("get_native_agent_model_catalog", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "ensureAgent"], "arguments");
+  register(getNativeAgentModelCatalogCommand, async (args, context) => {
     const { storage } = context;
     const id = asNonBlankString(args.environmentId, "environmentId");
     const ensureAgent = args.ensureAgent;
@@ -994,8 +997,7 @@ export function registerProjectCommands(
           : ("failed" as const),
     };
   });
-  register("cache_agent_model_catalog", (args, { storage }) => {
-    assertOnlyKeys(args, ["agent", "models"], "arguments");
+  register(cacheAgentModelCatalogCommand, (args, { storage }) => {
     const agent = asNonBlankString(args.agent, "agent");
     if (agent === "claude") {
       const catalog = parseClaudeBridgeModelCatalog({

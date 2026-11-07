@@ -44,6 +44,7 @@ import type {
 import type { CodexModel } from "@/lib/codex-models";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -336,20 +337,36 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   async function getAgentModelCatalogCache(
     machine?: AccountMachine,
     options: { seed?: boolean } = {},
+  // Plan usage and the Cursor SDK login are in the `accounts` domain (plan item 7008).
+  const accountsOn_ = accountsOn(client);
+
+  // The `agent-servers` domain's catalogue commands (plan item 7009), on this
+  // client's node or, through `machineInvoke`, on another one.
+  const agentServers = () => agentServersApi(client);
+  const agentServersOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? agentServers()
+      : agentServersApi({
+          invokeRaw: <T>(command: string, args?: Readonly<Record<string, unknown>>) =>
+            machineInvoke<T>(machine, command, args as Record<string, unknown> | undefined),
+        });
   ): Promise<AgentModelCatalogCache> {
     const args = options.seed === undefined ? undefined : { seed: options.seed };
-    return machine === undefined
-      ? args
-        ? invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache", args)
-        : invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache")
-      : machineInvoke<AgentModelCatalogCache>(machine, "get_agent_model_catalog_cache", args);
+    // Without `seed`, today's call sends no arguments object to this node.
+    return asWebModel<AgentModelCatalogCache>(
+      agentServersOn(machine).get_agent_model_catalog_cache(
+        (machine === undefined ? args : (args ?? {})) as { seed?: boolean },
+      ),
+    );
   }
 
   /** Discover Pi models without requiring an environment or persistent bridge. */
   async function ensureHostPiModelCatalog(): Promise<
     import("@orkestrator/protocol/native-agent").AgentModel[]
   > {
-    return invoke("ensure_host_pi_model_catalog");
+    return asWebModel<import("@orkestrator/protocol/native-agent").AgentModel[]>(
+      agentServers().ensure_host_pi_model_catalog(undefined as never),
+    );
   }
 
   function refreshHostAgentModelCatalog(
@@ -369,10 +386,12 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     projectId?: string,
     machine?: AccountMachine,
   ): Promise<HostModelCatalogRefreshResult> {
-    return machineInvoke(machine, "refresh_host_agent_model_catalog", {
-      agent,
-      ...(projectId ? { projectId } : {}),
-    });
+    return asWebModel<HostModelCatalogRefreshResult>(
+      agentServersOn(machine).refresh_host_agent_model_catalog({
+        agent,
+        ...(projectId ? { projectId } : {}),
+      }),
+    );
   }
 
   /** Backend-normalized model catalogue consumed by the provider-neutral composer. */
@@ -381,7 +400,9 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     ensureAgent?: AgentPlatform,
   ): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
     if (!ensureAgent) {
-      return invoke("get_native_agent_model_catalog", { environmentId });
+      return asWebModel<import("@orkestrator/protocol/native-agent").AgentModel[]>(
+        agentServers().get_native_agent_model_catalog({ environmentId }),
+      );
     }
     const result = await invoke<
       | import("@orkestrator/protocol/native-agent").AgentModel[]
@@ -389,10 +410,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
           models: import("@orkestrator/protocol/native-agent").AgentModel[];
           status: "ready" | "empty" | "failed";
         }
-    >("get_native_agent_model_catalog", {
-      environmentId,
-      ensureAgent,
-    });
+    >(agentServers().get_native_agent_model_catalog({ environmentId, ensureAgent }));
     // Older backends return an ensured catalogue directly.
     if (Array.isArray(result)) return result;
     if (!result || !Array.isArray(result.models)) {
@@ -411,10 +429,9 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     agent: "claude" | "codex",
     models: ClaudeModelCatalogSnapshot["models"] | CodexModel[],
   ): Promise<AgentModelCatalogCache> {
-    return invoke<AgentModelCatalogCache>("cache_agent_model_catalog", {
-      agent,
-      models,
-    });
+    return asWebModel<AgentModelCatalogCache>(
+      agentServers().cache_agent_model_catalog({ agent, models }),
+    );
   }
 
   async function saveConfig(config: AppConfig): Promise<void> {

@@ -82,9 +82,69 @@ export function registerPullRequestCommands(
         "packageId",
         "round",
         "targetBranch",
+import {
+  awaitBridgeReadyCommand,
+  cleanupStaleLocalServersCommand,
+  getLocalClaudeServerStatusCommand,
+  getLocalCodexServerStatusCommand,
+  getLocalCursorServerStatusCommand,
+  getLocalGrokServerStatusCommand,
+  getLocalOpencodeServerStatusCommand,
+  getLocalPiServerStatusCommand,
+  peekContainerAgentBridgeCommand,
+  peekLocalAgentBridgeCommand,
+  startLocalClaudeServerCommand,
+  startLocalCodexServerCommand,
+  startLocalCursorServerCommand,
+  startLocalGrokServerCommand,
+  startLocalOpencodeServerCommand,
+  startLocalPiServerCommand,
+  stopLocalClaudeServerCommand,
+  stopLocalCodexServerCommand,
+  stopLocalCursorServerCommand,
+  stopLocalGrokServerCommand,
+  stopLocalOpencodeServerCommand,
+  stopLocalPiServerCommand,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
         "preparation",
         "additionalLimitations",
         "expectedHead",
+/** The local bridge commands of each agent (`agent-servers`, plan item 7009). */
+const LOCAL_SERVER_COMMANDS = {
+  opencode: {
+    start: startLocalOpencodeServerCommand,
+    stop: stopLocalOpencodeServerCommand,
+    status: getLocalOpencodeServerStatusCommand,
+  },
+  claude: {
+    start: startLocalClaudeServerCommand,
+    stop: stopLocalClaudeServerCommand,
+    status: getLocalClaudeServerStatusCommand,
+  },
+  codex: {
+    start: startLocalCodexServerCommand,
+    stop: stopLocalCodexServerCommand,
+    status: getLocalCodexServerStatusCommand,
+  },
+  cursor: {
+    start: startLocalCursorServerCommand,
+    stop: stopLocalCursorServerCommand,
+    status: getLocalCursorServerStatusCommand,
+  },
+  grok: {
+    start: startLocalGrokServerCommand,
+    stop: stopLocalGrokServerCommand,
+    status: getLocalGrokServerStatusCommand,
+  },
+  pi: {
+    start: startLocalPiServerCommand,
+    stop: stopLocalPiServerCommand,
+    status: getLocalPiServerStatusCommand,
+  },
+} as const satisfies Record<LocalServerKind, unknown>;
+
         "validationPlan",
       ],
       "generate_review_package",
@@ -556,64 +616,27 @@ export function registerPullRequestCommands(
     );
   });
 
-  register("start_local_opencode_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "opencode"),
-  );
-  register("stop_local_opencode_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "opencode"),
-  );
-  register("get_local_opencode_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "opencode"),
-  );
-  register("start_local_claude_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "claude"),
-  );
-  register("stop_local_claude_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "claude"),
-  );
-  register("get_local_claude_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "claude"),
-  );
-  register("start_local_codex_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "codex"),
-  );
-  register("stop_local_codex_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "codex"),
-  );
-  register("get_local_codex_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"),
-  );
-  register("start_local_cursor_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "cursor"),
-  );
-  register("stop_local_cursor_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "cursor"),
-  );
-  register("get_local_cursor_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "cursor"),
-  );
-  register("start_local_grok_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "grok"),
-  );
-  register("stop_local_grok_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "grok"),
-  );
-  register("get_local_grok_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "grok"),
-  );
-  register("start_local_pi_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "pi"),
-  );
-  register("stop_local_pi_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "pi"),
-  );
-  register("get_local_pi_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "pi"),
-  );
-  register("cleanup_stale_local_servers_cmd", () => undefined);
+  for (const [kind, local] of Object.entries(LOCAL_SERVER_COMMANDS) as [
+    LocalServerKind,
+    (typeof LOCAL_SERVER_COMMANDS)[LocalServerKind],
+  ][]) {
+    register(local.start, ({ environmentId }, context) =>
+      startLocalServer(environmentId, context, kind),
+    );
+    register(local.stop, ({ environmentId }, context) =>
+      stopLocalServer(environmentId, context, kind),
+    );
+    register(local.status, ({ environmentId }, context) =>
+      getLocalServerStatus(environmentId, context, kind),
+    );
+  }
+  // Retired (plan item 7009): a no-op since the Electron migration, counted
+  // until it is removed.
+  register(cleanupStaleLocalServersCommand, () => {
+    compatibilityPathUsage.record("retired-command.cleanup-stale-local-servers");
+  });
 
-  register("await_bridge_ready", (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "agent", "timeoutMs"], "arguments");
+  register(awaitBridgeReadyCommand, (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     if (!isAgentBridgeKind(args.agent)) {
       throw new Error(`agent must be one of: ${LOCAL_SERVER_KINDS.join(", ")}`);
@@ -815,8 +838,7 @@ export function registerPullRequestCommands(
   // Backend-internal observation surface. Never starts a bridge, so a
   // background reconciler can read activity without spawning one process per
   // environment or keeping every bridge alive on a poll.
-  register("peek_local_agent_bridge", (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "agent"], "arguments");
+  register(peekLocalAgentBridgeCommand, (args, context) => {
     return peekLocalAgentBridgeState(
       asNonBlankString(args.environmentId, "environmentId"),
       context,
@@ -830,8 +852,7 @@ export function registerPullRequestCommands(
       return state.status === "running" ? { port: state.port, authToken: state.authToken } : null;
     });
   });
-  register("peek_container_agent_bridge", (args) => {
-    assertOnlyKeys(args, ["containerId", "agent"], "arguments");
+  register(peekContainerAgentBridgeCommand, (args) => {
     return peekContainerAgentBridge(
       asNonBlankString(args.containerId, "containerId"),
       asLocalServerKind(args.agent, "agent"),

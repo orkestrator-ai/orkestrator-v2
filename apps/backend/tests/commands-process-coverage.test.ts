@@ -1406,12 +1406,6 @@ describe("process and platform command behavior", () => {
     ["missing project id", "get_opencode_model_catalog_cache", {}, "projectId"],
     ["blank project id", "get_opencode_model_catalog_cache", { projectId: " " }, "non-blank"],
     [
-      "unexpected get argument",
-      "get_opencode_model_catalog_cache",
-      { projectId: "p", extra: true },
-      "Unexpected arguments field",
-    ],
-    [
       "models is not an array",
       "cache_opencode_model_catalog",
       { projectId: "p", models: {} },
@@ -1507,16 +1501,28 @@ describe("process and platform command behavior", () => {
       },
       "contextWindow to be a positive safe integer",
     ],
-    [
-      "unexpected cache argument",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p" }], extra: true },
-      "Unexpected arguments field",
-    ],
   ] as const)(
     "rejects malformed OpenCode catalogue command input: %s",
     async (_label, command, args, message) => {
       await expect(invoke(command, args)).rejects.toThrow(message);
+    },
+  );
+
+  test.each([
+    ["get_opencode_model_catalog_cache", { projectId: "p", extra: true }],
+    [
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p" }], extra: true },
+    ],
+  ] as const)(
+    "%s refuses an unknown argument only when the sender marks it critical",
+    async (command, args) => {
+      // Defined commands (plan item 7009) drop unknown keys; a critical one is
+      // refused before the handler reads storage.
+      const handler = registry.get(command)!;
+      await expect(
+        (async () => handler({ ...args }, fixture.context, { critical: ["extra"] }))(),
+      ).rejects.toMatchObject({ code: "unsupported-field" });
     },
   );
 

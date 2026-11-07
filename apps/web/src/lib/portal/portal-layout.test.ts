@@ -35,6 +35,8 @@ beforeEach(() => {
   handlers = new Map();
   portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
   invoke = mock(async () => layout(1));
+  // A realm document: the page names its workspace target and has a portal.
+  window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
   window.orkestratorPortal = {
     invoke,
     listen: (event: string, callback: (payload: unknown) => void) => {
@@ -47,6 +49,7 @@ afterEach(() => {
   stop?.();
   stop = undefined;
   delete window.orkestratorPortal;
+  delete window.orkestratorWorkspaceTarget;
 });
 async function start() {
   stop = startPortalLayout();

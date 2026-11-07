@@ -1,7 +1,7 @@
 /**
  * A `lib/backend` factory client over a bare command call (plan item 7009),
  * for callers that reach a node through something other than a negotiated
- * client: the portal channel, `invoke_on_node` routing to another machine, or
+ * client: the window's command scope (`commandScopeInvoke`), `invoke_on_node` routing to another machine, or
  * an injected machine call. The client carries no `domains`, so every domain
  * client over it takes version 0, which sends exactly today's
  * `invoke(command, args)` (or `invoke(command)` for {@link NO_ARGS}) and
@@ -9,7 +9,7 @@
  */
 import type { BackendClient } from "@/lib/backend/client";
 
-/** A command call in `portalInvoke`'s shape. */
+/** A command call in `commandScopeInvoke`'s shape. */
 export type CommandInvoke = <T = unknown>(
   command: string,
   args?: Record<string, unknown>,

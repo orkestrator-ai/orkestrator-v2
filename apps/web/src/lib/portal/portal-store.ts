@@ -1,7 +1,7 @@
 /**
  * The portal: what the command node this client is connected to knows about
- * its other nodes. Everything here goes over the portal channel, which stays
- * on the command node even while the window's workspace is on a leaf.
+ * its other nodes. Everything here is a call on the window's command scope
+ * (`./command-scope`, plan item 5004), whichever node the window shows.
  *
  * The command node keeps the registry, the links and a live read model of
  * every node's projects and environments; this client only reads that model
@@ -42,7 +42,8 @@ import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { backendClientOver } from "@/lib/node-scope/domains/invoke-over";
 import { NO_ARGS, nodesApiOver, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
+import { commandScopeInvoke, commandScopeListen } from "./command-scope";
+import { workspaceTarget } from "./page-portal";
 
 export interface PortalState {
   /** This (command) node's identity, once known. */
@@ -108,7 +109,7 @@ export class PortalStore {
         NODE_STATUS_CHANGED_EVENT,
         NATIVE_EVENT_STREAM_CONNECTED_EVENT,
       ]) {
-        void portalListen(event, () => this.scheduleRefresh()).then((stop) => {
+        void commandScopeListen(event, () => this.scheduleRefresh()).then((stop) => {
           if (this.started === 0) stop();
           else this.unlisteners.push(stop);
         });
@@ -205,7 +206,7 @@ export class PortalStore {
     // The command node's own resources (listed from its self summary while
     // the workspace is elsewhere) are its ordinary commands.
     if (nodeId === this.store.getState().selfId) {
-      const result = await portalInvoke<T>(command, args);
+      const result = await commandScopeInvoke<T>(command, args);
       if (!isNodeReadCommand(command)) this.scheduleRefresh();
       return result;
     }
@@ -275,7 +276,7 @@ export class NodeOutcomesStore {
 
   constructor(
     private readonly read: (nodeId: string) => Promise<NodeOutcomeRecord[]> = listNodeOutcomes,
-    private readonly listenTo: typeof portalListen = portalListen,
+    private readonly listenTo: typeof commandScopeListen = commandScopeListen,
   ) {}
 
   /** Calls `listener` with the node's records now (when held) and on every change. */
@@ -439,7 +440,7 @@ export interface NodeActionRequestView {
 
 /** Requests from coordinators that wait for this user's decision. */
 export async function listNodeActionRequests(): Promise<NodeActionRequestView[]> {
-  const value = await portalInvoke<NodeActionRequestView[]>("list_node_action_requests", {
+  const value = await commandScopeInvoke<NodeActionRequestView[]>("list_node_action_requests", {
     pendingOnly: true,
   });
   return Array.isArray(value) ? value : [];
@@ -460,7 +461,7 @@ export async function resolveNodeActionRequest(
     answers?: AgentInteractionQuestionAnswer[];
   },
 ): Promise<NodeActionRequestView> {
-  return portalInvoke<NodeActionRequestView>("resolve_node_action_request", {
+  return commandScopeInvoke<NodeActionRequestView>("resolve_node_action_request", {
     requestId,
     decision,
     ...(approval ? { approval } : {}),
@@ -489,7 +490,7 @@ export async function previewAgentsMdUpdate(requestId: string): Promise<AgentsMd
  */
 export async function listProjectRootChanges(projectId: string): Promise<RootChangesListing> {
   // The listing's own shape is the web's; the definition keeps its records open.
-  return coordinatorApi(backendClientOver(portalInvoke)).list_project_root_changes({
+  return coordinatorApi(backendClientOver(commandScopeInvoke)).list_project_root_changes({
     projectId,
   }) as Promise<RootChangesListing>;
 }
@@ -501,5 +502,5 @@ export interface RootChangesListing {
   headCommit: string | null;
 }
 
-/** One portal per window: it reads the command node over the portal channel. */
+/** One portal per window: it reads the window's command scope. */
 export const portalStore = new PortalStore();

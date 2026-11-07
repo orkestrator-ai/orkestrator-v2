@@ -371,12 +371,32 @@ bound to one other node. The command node's side is in
 
 ### The portal channel
 
-`lib/portal/portal-transport.ts` (`portalInvoke`, `portalListen`,
-`portalListenAuthoritative`) always reaches the window's command node. In the
-window itself it is the ordinary workspace transport. Inside a realm, whose
-`window.orkestrator` is bound to the leaf, it is `window.orkestratorPortal`,
-which stays on the window's command node. `workspaceTarget()` names the node
-the workspace is on, or is `null` while it is on the command node.
+The portal APIs (inherited settings, the node registry, grants, portal
+layout, project copy, outcomes, action requests and handover) are calls on
+the window's **command scope** (`lib/portal/command-scope.ts`:
+`commandScopeInvoke`, `commandScopeListen`, `commandScopeListenAuthoritative`,
+`commandScopeBackendClient`; plan item 5004). In an app window, and for every
+node shown in its own tree, that is the command scope's ordinary transport.
+Only a workspace realm document, whose `window.orkestrator` is bound to the
+leaf, reaches its command node over the page's portal channel,
+`window.orkestratorPortal`. `lib/portal/page-portal.ts` is the one module that
+reads that global, and only in a page that names a workspace target
+(`workspaceTarget()`: the node a realm document's workspace is on, `null` in
+any other page). The `window-orkestrator-portal` source guard keeps every
+other renderer file off it. `lib/portal/portal-transport.ts` keeps the old
+names (`portalInvoke`, `portalListen`, `portalListenAuthoritative`) as aliases
+until realms are deleted (plan item 6002).
+
+**One machine by node id.** `machineInvoke` (`lib/backend/client.ts`, used by
+agent accounts, MCP and the other machine-aware `lib/backend` functions) and
+Settings' machine calls (`machine-access.ts`) go through `invokeOnMachine`
+(`lib/portal/machine-scope.ts`): to the node's own scope when the window holds
+it warm or live (`NodeScope.tier`) and a workspace grant admits the command
+(`access: "workspace"`), otherwise through the command scope with
+`invoke_on_node`. Admin commands (host updates, profile writes, diagnostics)
+and commands this build has no definition for always take `invoke_on_node`,
+which runs with the command node's authority. A realm document keeps routing
+every node through its command node.
 
 ### Summaries
 

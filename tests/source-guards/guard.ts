@@ -9,6 +9,7 @@ export const GUARD_IDS = [
   "direct-transport-import",
   "scoped-store-shim",
   "lib-backend-command-default",
+  "window-orkestrator-portal",
   "workspace-command-bound-call",
 ] as const;
 

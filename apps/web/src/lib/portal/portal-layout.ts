@@ -19,7 +19,7 @@ import {
 } from "@orkestrator/protocol/portal-layout";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
-import { portalListen } from "./portal-transport";
+import { commandScopeListen } from "./command-scope";
 
 interface PortalLayoutState {
   layout: PortalLayout;
@@ -81,7 +81,7 @@ export function startPortalLayout(): () => void {
     const subscriptions = [];
     for (const event of [PORTAL_LAYOUT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
       subscriptions.push(
-        portalListen<unknown>(event, (payload) => {
+        commandScopeListen<unknown>(event, (payload) => {
           if (generation !== current) return;
           if (event === PORTAL_LAYOUT_CHANGED_EVENT) apply(parsePortalLayout(payload.payload));
           else void read();

@@ -33,10 +33,13 @@ const portal = mock(async (_command: string, _args?: Record<string, unknown>) =>
 }));
 beforeEach(() => {
   portal.mockClear();
+  // A realm document: the page names its workspace target and has a portal.
+  window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
   window.orkestratorPortal = { invoke: portal } as never;
 });
 afterEach(() => {
   delete window.orkestratorPortal;
+  delete window.orkestratorWorkspaceTarget;
 });
 
 describe("accounts domain client", () => {

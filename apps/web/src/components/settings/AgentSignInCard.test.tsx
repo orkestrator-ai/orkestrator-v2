@@ -11,9 +11,13 @@ import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let statuses: Partial<Record<AgentPlatform, NativeAgentAuthStatus>> = {};
 let failRead = false;
+/** The command node's answer to `invoke_on_node` (another machine), when a test sets one. */
+let routed: ((command: string, args: Record<string, unknown>) => Promise<unknown>) | null = null;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {
+    // The window's command scope routes another machine's commands; they are not local calls.
+    if (command === "invoke_on_node" && routed) return routed(command, args);
     calls.push({ command, args });
     switch (command) {
       case "get_agent_sign_in_status":
@@ -76,14 +80,14 @@ function fixture(platform: AgentPlatform, state: NativeAgentAuthState): NativeAg
 }
 
 beforeEach(() => {
-  delete window.orkestratorPortal;
+  routed = null;
   calls.length = 0;
   statuses = {};
   failRead = false;
 });
 
 afterEach(() => {
-  delete window.orkestratorPortal;
+  routed = null;
   cleanup();
   resetReadCoordinatorForTests();
 });
@@ -143,7 +147,7 @@ describe("AgentSignInCard", () => {
             : { state: "idle" };
       return { outcome: "ok", result };
     });
-    window.orkestratorPortal = { invoke: portal } as never;
+    routed = portal;
     render(
       <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
         <AgentSignInCard platform="claude" />

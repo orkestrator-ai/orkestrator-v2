@@ -12,7 +12,7 @@
 import { BACKEND_HELLO_PATH, parseBackendHello } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { nodesApiOver } from "@/lib/node-scope/domains/nodes";
-import { portalInvoke } from "./portal-transport";
+import { commandScopeInvoke } from "./command-scope";
 
 export interface OpenedNodeWorkspace {
   workspaceId: string;
@@ -49,7 +49,7 @@ export interface LeafWorkspace extends WorkspaceConnectionPath {
   relayBaseUrl?: string;
 }
 
-/** The command node's commands; production uses `portalInvoke`. */
+/** The command node's commands; production uses the window's command scope. */
 export type CommandNodeInvoke = <T = unknown>(
   command: string,
   args?: Record<string, unknown>,
@@ -91,7 +91,7 @@ export async function openLeafWorkspace(
     invoke?: CommandNodeInvoke;
   } = { commandNodeName: "" },
 ): Promise<LeafWorkspace> {
-  const invoke = options.invoke ?? portalInvoke;
+  const invoke = options.invoke ?? commandScopeInvoke;
   // The web's record names the node with its branded id (plan item 7010 converges them).
   const opened = (await nodesApiOver(invoke).open_node_workspace({
     nodeId,
@@ -142,7 +142,7 @@ export function keepWorkspaceAlive(
   onLapsed?: () => Promise<void> | void,
   options: KeepWorkspaceAliveOptions = {},
 ): () => void {
-  const invoke = options.invoke ?? portalInvoke;
+  const invoke = options.invoke ?? commandScopeInvoke;
   const renewIntervalMs = options.renewIntervalMs ?? WORKSPACE_RENEW_INTERVAL_MS;
   const events = options.events ?? window;
   let stopped = false;
@@ -191,7 +191,7 @@ export function keepWorkspaceAlive(
 /** Closing revokes the grant; nothing on the node stops. */
 export async function closeLeafWorkspace(
   workspaceId: string,
-  invoke: CommandNodeInvoke = portalInvoke,
+  invoke: CommandNodeInvoke = commandScopeInvoke,
 ): Promise<void> {
   await nodesApiOver(invoke)
     .close_node_workspace({ workspaceId })

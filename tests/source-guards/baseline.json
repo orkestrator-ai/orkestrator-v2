@@ -461,9 +461,9 @@
     "apps/web/src/lib/client-state-capabilities.ts": 1,
     "apps/web/src/lib/native-observation-events.ts": 1,
     "apps/web/src/lib/node-scope-slots.ts": 2,
+    "apps/web/src/lib/portal/command-scope.ts": 3,
     "apps/web/src/lib/portal/portal-layout.ts": 1,
     "apps/web/src/lib/portal/portal-store.ts": 2,
-    "apps/web/src/lib/portal/portal-transport.ts": 3,
     "apps/web/src/lib/resource-sync.ts": 1,
     "apps/web/src/lib/store-resource-sync.ts": 1,
     "apps/web/src/lib/web-annotations/sync.ts": 1,
@@ -473,6 +473,7 @@
   "lib-backend-command-default": {
     "[projects-environments] apps/web/src/lib/scope-services.ts": 3
   },
+  "window-orkestrator-portal": {},
   "workspace-command-bound-call": {
     "[agent-accounts] apps/web/src/components/layout/useAccountPlanUsage.ts": 1,
     "[agent-accounts] apps/web/src/components/settings/AgentAccountLoginPanel.tsx": 1,

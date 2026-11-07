@@ -38,8 +38,8 @@ interface Window {
    */
   /**
    * The command node this client is connected to, while the window's
-   * workspace (`orkestrator`) is on another node. Only the portal layer uses
-   * it; see `lib/portal/portal-transport.ts`.
+   * workspace (`orkestrator`) is on another node: a workspace realm document
+   * only. Read only by `lib/portal/page-portal.ts` (plan item 5004).
    */
   orkestratorPortal?: {
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;

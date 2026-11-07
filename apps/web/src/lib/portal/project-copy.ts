@@ -12,7 +12,7 @@ import {
 } from "@orkestrator/protocol/project-copy";
 import type { UnlistenFn } from "@/lib/native/events";
 import { portalNodesApi } from "@/lib/node-scope/domains/nodes";
-import { portalListen } from "./portal-transport";
+import { commandScopeListen } from "./command-scope";
 
 export function getProjectCopyOptions(
   nodeId: string,
@@ -38,5 +38,5 @@ export async function listProjectCopies(): Promise<ProjectCopyRecord[]> {
 
 /** Any copy changed stage or progress; re-read with `listProjectCopies`. */
 export function listenProjectCopies(onChange: () => void): Promise<UnlistenFn> {
-  return portalListen(PROJECT_COPY_CHANGED_EVENT, () => onChange());
+  return commandScopeListen(PROJECT_COPY_CHANGED_EVENT, () => onChange());
 }

@@ -4,7 +4,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import * as portalTransport from "@/lib/portal/portal-transport";
+import * as commandScopeModule from "@/lib/portal/command-scope";
 import type { Environment } from "@/types";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 
@@ -3590,8 +3590,9 @@ describe("command-node config events in leaf windows", () => {
     let ready!: () => void;
     const unlisten = mock(() => undefined);
     // A realm document: its command scope's settings parent is the page's portal channel.
+    window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
     window.orkestratorPortal = { invoke: mock(), listen: mock() } as never;
-    const portalListen = spyOn(portalTransport, "portalListen").mockImplementation(
+    const portalListen = spyOn(commandScopeModule, "commandScopeListen").mockImplementation(
       (_event, callback) => {
         handler = (payload) => callback({ payload } as never);
         return new Promise((resolve) => {
@@ -3621,6 +3622,7 @@ describe("command-node config events in leaf windows", () => {
     } finally {
       portalListen.mockRestore();
       delete window.orkestratorPortal;
+      delete window.orkestratorWorkspaceTarget;
     }
   });
 });

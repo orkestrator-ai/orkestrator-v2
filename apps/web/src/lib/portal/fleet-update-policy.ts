@@ -3,18 +3,17 @@ import {
   type FleetUpdatePolicy,
 } from "@orkestrator/protocol/fleet-currency";
 import type { HostUpdateChannel } from "@orkestrator/protocol/host-maintenance";
-import { backendClientOver } from "@/lib/node-scope/domains/invoke-over";
 import { systemApi } from "@/lib/node-scope/domains/system";
-import { portalInvoke } from "./portal-transport";
+import { commandScopeBackendClient } from "./command-scope";
 
 /**
  * The command node's opt-in "keep leaves on this node's version" policy
  * (plan item 5006). It belongs to the command node, so it goes over the
- * portal channel whichever machine the window works on.
+ * window's command scope whichever machine the window shows.
  */
 export async function getFleetUpdatePolicy(): Promise<FleetUpdatePolicy> {
   return parseFleetUpdatePolicy(
-    await systemApi(backendClientOver(portalInvoke)).get_fleet_update_policy({}),
+    await systemApi(commandScopeBackendClient).get_fleet_update_policy({}),
   );
 }
 
@@ -23,6 +22,6 @@ export async function setFleetUpdatePolicyChannel(
   enabled: boolean,
 ): Promise<FleetUpdatePolicy> {
   return parseFleetUpdatePolicy(
-    await systemApi(backendClientOver(portalInvoke)).set_fleet_update_policy({ channel, enabled }),
+    await systemApi(commandScopeBackendClient).set_fleet_update_policy({ channel, enabled }),
   );
 }

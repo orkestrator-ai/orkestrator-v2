@@ -45,6 +45,8 @@ function config(owner: string): AppConfig {
   };
 }
 
+const LEAF_TARGET = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" } as const;
+
 /** A workspace realm document: its command scope is the leaf, its portal the command node. */
 function installLeafWindow() {
   const portal = {
@@ -54,7 +56,9 @@ function installLeafWindow() {
     })),
     listen: mock(() => () => undefined),
   };
-  // Only the portal channel: layering must not read `orkestratorWorkspaceTarget`.
+  // Both page globals, as the preload and the gateway install them in a realm
+  // document; layering itself reads neither (only `page-portal.ts` does).
+  window.orkestratorWorkspaceTarget = LEAF_TARGET;
   window.orkestratorPortal = portal as never;
   invokeMock.mockImplementation(async (_command: string, args?: Record<string, unknown>) => ({
     ...config("leaf"),
@@ -89,6 +93,7 @@ function installCommandWindow() {
 afterEach(() => {
   portalStore.store.setState(initialPortal);
   delete window.orkestratorPortal;
+  delete window.orkestratorWorkspaceTarget;
   invokeMock.mockReset();
   resetWindowScopeForTests();
 });
@@ -579,9 +584,13 @@ describe("layering between two explicit scopes", () => {
     const appWindow = getWindowScope();
     const appLeaf = appWindow.open({ role: "leaf", client: fakeNode("bk_app_leaf", "leaf") });
     expect(settingsParent(appLeaf)?.scope).toBe(appWindow.commandScope());
-    // The app window's command scope has no parent without a portal channel.
+    // The app window's command scope has no parent without a portal channel,
+    // and a portal global in a page that is not a realm document is not read.
     expect(settingsParent(appWindow.commandScope())).toBeNull();
     window.orkestratorPortal = { invoke: mock(), listen: mock() } as never;
+    expect(settingsParent(appWindow.commandScope())).toBeNull();
+    window.orkestratorWorkspaceTarget = LEAF_TARGET;
     expect(settingsParent(appWindow.commandScope())?.scope).toBeNull();
+    expect(settingsParent(appWindow.commandScope())).not.toBeNull();
   });
 });

@@ -155,8 +155,9 @@ to everything it runs, on every machine it controls.
   lists them (`SettingsMachineStrip`): the command node first, then each
   machine it controls, defaulting to the machine on screen. The choice is
   the sections' `useAccountMachine()` context; every call they make names it
-  (`machineInvoke`, `invoke_on_node` for another machine, relayed node events
-  for live updates), and the general form reads and saves that machine's
+  (`machineInvoke`: another machine's own scope while the window holds it
+  warm or live and the command is a workspace one, otherwise `invoke_on_node`;
+  relayed node events for live updates), and the general form reads and saves that machine's
   config through the same split as a leaf window (`invokeGlobalConfigCommand`
   with a `machine`), held apart from the window's own config store
   (`settings-config.tsx`). Sections only the command node has — Machines,
@@ -521,8 +522,9 @@ command node.
   The realm shows no title bar or sidebar of its own.
 - **Two channels per realm.** The realm's *workspace* transport
   (`window.orkestrator`) is bound to its node. Its *portal* channel
-  (`window.orkestratorPortal`, used through `lib/portal/portal-transport.ts`)
-  stays on the window's command node, for what a workspace needs from it
+  (`window.orkestratorPortal`, read only by `lib/portal/page-portal.ts`; the
+  portal APIs call the command scope, `lib/portal/command-scope.ts`, plan item
+  5004) stays on the window's command node, for what a workspace needs from it
   (the command node's inherited settings, coordinator links). A lint
   boundary keeps multi-machine views off the workspace transport.
 - **Opening** asks the command node for a workspace grant. The desktop binds

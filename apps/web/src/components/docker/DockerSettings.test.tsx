@@ -10,6 +10,16 @@ import { DockerSettings } from "./DockerSettings";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
+/**
+ * The window's command scope (its `invoke`) answers `invoke_on_node` for the
+ * remote machine with `remote`; the window's own commands answer nothing.
+ */
+function routeRemote(remote: (command: string, args: Record<string, unknown>) => unknown) {
+  invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) =>
+    command === "invoke_on_node" ? remote(command, args) : undefined,
+  );
+}
+
 const unknownStats: DockerSystemStats = {
   memoryUsed: null,
   memoryTotal: null,
@@ -193,7 +203,7 @@ describe("Docker settings section", () => {
               : undefined;
       return { outcome: "ok", result };
     });
-    window.orkestratorPortal = { invoke: remote } as never;
+    routeRemote(remote);
     invokeMock.mockClear();
     try {
       const view = render(
@@ -216,12 +226,12 @@ describe("Docker settings section", () => {
       expect(calls.filter((command) => command === "get_docker_system_stats")).toHaveLength(
         statsReads,
       );
-      expect(invokeMock).not.toHaveBeenCalled();
+      // Only routed calls: nothing reads the window's own Docker.
+      expect(invokeMock.mock.calls.filter(([command]) => command !== "invoke_on_node")).toEqual([]);
       view.unmount();
       expect(callbacks.size).toBe(0);
     } finally {
       cleanup();
-      delete window.orkestratorPortal;
       mock.restore();
     }
   });
@@ -237,26 +247,23 @@ describe("Docker settings section", () => {
     });
     let probeState: "available" | "error" | "stopped" = "available";
     let statsReads = 0;
-    window.orkestratorPortal = {
-      invoke: async (_command: string, args: Record<string, unknown>) => {
-        const command = args.command;
-        if (command === "check_docker" && probeState === "error")
-          throw new Error("Link interrupted");
-        const result =
-          command === "check_docker"
-            ? probeState === "available"
-              ? { available: true, reason: null }
-              : { available: false, reason: "daemon-unavailable" }
-            : command === "get_docker_system_stats"
-              ? { ...unknownStats, containersRunning: ++statsReads }
-              : command === "get_orkestrator_containers"
-                ? [container({ isAssigned: false, cleanupExclusion: null })]
-                : command === "get_projects"
-                  ? []
-                  : undefined;
-        return { outcome: "ok", result };
-      },
-    } as never;
+    routeRemote(async (_command: string, args: Record<string, unknown>) => {
+      const command = args.command;
+      if (command === "check_docker" && probeState === "error") throw new Error("Link interrupted");
+      const result =
+        command === "check_docker"
+          ? probeState === "available"
+            ? { available: true, reason: null }
+            : { available: false, reason: "daemon-unavailable" }
+          : command === "get_docker_system_stats"
+            ? { ...unknownStats, containersRunning: ++statsReads }
+            : command === "get_orkestrator_containers"
+              ? [container({ isAssigned: false, cleanupExclusion: null })]
+              : command === "get_projects"
+                ? []
+                : undefined;
+      return { outcome: "ok", result };
+    });
     try {
       const view = render(
         <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
@@ -298,7 +305,6 @@ describe("Docker settings section", () => {
       expect(callbacks.size).toBe(0);
     } finally {
       cleanup();
-      delete window.orkestratorPortal;
       mock.restore();
     }
   });
@@ -315,24 +321,22 @@ describe("Docker settings section", () => {
     });
     let failing = true;
     const reads: string[] = [];
-    window.orkestratorPortal = {
-      invoke: async (_command: string, args: Record<string, unknown>) => {
-        const command = args.command as string;
-        reads.push(command);
-        if (command === "check_docker" && failing) throw new Error("Node unavailable");
-        return {
-          outcome: "ok",
-          result:
-            command === "check_docker"
-              ? { available: true, reason: null }
-              : command === "get_docker_system_stats"
-                ? unknownStats
-                : command === "get_projects" || command === "get_orkestrator_containers"
-                  ? []
-                  : undefined,
-        };
-      },
-    } as never;
+    routeRemote(async (_command: string, args: Record<string, unknown>) => {
+      const command = args.command as string;
+      reads.push(command);
+      if (command === "check_docker" && failing) throw new Error("Node unavailable");
+      return {
+        outcome: "ok",
+        result:
+          command === "check_docker"
+            ? { available: true, reason: null }
+            : command === "get_docker_system_stats"
+              ? unknownStats
+              : command === "get_projects" || command === "get_orkestrator_containers"
+                ? []
+                : undefined,
+      };
+    });
     try {
       const view = render(
         <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
@@ -352,7 +356,6 @@ describe("Docker settings section", () => {
       expect(callbacks.size).toBe(0);
     } finally {
       cleanup();
-      delete window.orkestratorPortal;
       mock.restore();
     }
   });

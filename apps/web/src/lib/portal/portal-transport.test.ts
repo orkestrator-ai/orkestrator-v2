@@ -2,7 +2,14 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
 import { PortalStore, portalStore } from "./portal-store";
-import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
+import * as commandScope from "./command-scope";
+import * as pagePortal from "./page-portal";
+import {
+  portalInvoke,
+  portalListen,
+  portalListenAuthoritative,
+  workspaceTarget,
+} from "./portal-transport";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const listenMock = listen as unknown as ReturnType<typeof mock>;
@@ -44,6 +51,13 @@ afterEach(() => {
   invokeMock.mockReset();
   listenMock.mockClear();
   portalStore.store.setState({ selfId: null, nodes: [], self: null, status: null });
+});
+
+test("the old names are a thin adapter over the command scope (plan item 5004)", () => {
+  expect(portalInvoke).toBe(commandScope.commandScopeInvoke);
+  expect(portalListen).toBe(commandScope.commandScopeListen);
+  expect(portalListenAuthoritative).toBe(commandScope.commandScopeListenAuthoritative);
+  expect(workspaceTarget).toBe(pagePortal.workspaceTarget);
 });
 
 describe("the portal channel", () => {

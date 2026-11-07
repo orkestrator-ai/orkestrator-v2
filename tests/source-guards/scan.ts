@@ -18,6 +18,7 @@ import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion"
 import { smallFakePid } from "./small-fake-pid";
 import { subprocessWithoutBudget } from "./subprocess-without-budget";
 import { windowOrkestratorDirect } from "./window-orkestrator-direct";
+import { windowOrkestratorPortal } from "./window-orkestrator-portal";
 import { workspaceCommandBoundCall } from "./workspace-command-bound-call";
 
 export const SOURCE_GUARDS: readonly SourceGuard[] = [
@@ -29,6 +30,7 @@ export const SOURCE_GUARDS: readonly SourceGuard[] = [
   directTransportImport,
   scopedStoreShim,
   libBackendCommandDefault,
+  windowOrkestratorPortal,
   workspaceCommandBoundCall,
 ];
 

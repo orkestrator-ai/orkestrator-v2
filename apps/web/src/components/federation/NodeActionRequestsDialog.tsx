@@ -15,7 +15,7 @@ import {
   resolveNodeActionRequest,
   type NodeActionRequestView,
 } from "@/lib/portal/portal-store";
-import { portalListenAuthoritative } from "@/lib/portal/portal-transport";
+import { commandScopeListenAuthoritative } from "@/lib/portal/command-scope";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { useFederation } from "./FederationProvider";
 import { RootChangesApprovalDialog } from "./RootChangesApprovalDialog";
@@ -90,7 +90,7 @@ export function NodeActionRequestsDialog() {
     if (kind === "none") return;
     let stop: (() => void) | null = null;
     let active = true;
-    void portalListenAuthoritative(NODE_ACTION_REQUESTS_CHANGED_EVENT, refresh, {
+    void commandScopeListenAuthoritative(NODE_ACTION_REQUESTS_CHANGED_EVENT, refresh, {
       onResync: refresh,
       resyncOnSubscribe: true,
     }).then((unlisten) => {

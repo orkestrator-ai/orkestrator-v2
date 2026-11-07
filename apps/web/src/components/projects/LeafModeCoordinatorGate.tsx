@@ -13,7 +13,7 @@ import { useFederation } from "@/components/federation/FederationProvider";
 import { useWindowGrouping } from "@/components/federation/useWindowGrouping";
 import { projectStore } from "@/stores/projectStore";
 import { portalStore } from "@/lib/portal/portal-store";
-import { workspaceTarget } from "@/lib/portal/portal-transport";
+import { workspaceTarget } from "@/lib/portal/page-portal";
 import { useProjectStore, useUIStore } from "@/stores";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 
@@ -25,6 +25,11 @@ function isInTreeLeaf(scope: NodeScope | null): boolean {
   return scope?.role === "leaf" && workspaceTarget() === null;
 }
 
+/** Whether this page is a workspace realm document on a leaf. */
+function onLeafPage(): boolean {
+  return workspaceTarget() !== null;
+}
+
 /** The workspace's node and the project: a project id is per node. */
 export function leafCoordinatorGateKey(
   projectId: string | undefined,
@@ -34,37 +39,83 @@ export function leafCoordinatorGateKey(
   return `${node}:${projectId ?? ""}`;
 }
 
+/** What the gate needs of the command node, on a leaf. */
+interface CommandNodeFacts {
+  /** Whether `self` has been read (a failed read counts: `self` is then null). */
+  readonly loaded: boolean;
+  readonly self: {
+    readonly displayName: string;
+    readonly truncated: boolean;
+    readonly projects: ReadonlyArray<{
+      readonly ref: { readonly projectId: string };
+      readonly name: string;
+      readonly repositoryHint?: string | null;
+    }>;
+  } | null;
+  /** The command node, for opening its coordinator; null while unknown. */
+  readonly nodeId: string | null;
+  readonly retry: () => Promise<void>;
+}
+
 /**
- * For a node in the window's tree: the command node's own projects, as a
- * realm reads them from the command node's self summary. The window's command
- * scope holds them directly.
+ * A realm document's command node: the portal's self summary, read over the
+ * page's portal channel (until realms are deleted, plan item 6002).
  */
-function useCommandNodeSelf(enabled: boolean) {
+function usePortalCommandNode(): CommandNodeFacts {
+  const self = useStore(portalStore.store, (state) => state.self);
+  const selfId = useStore(portalStore.store, (state) => state.selfId);
+  const loaded = useStore(portalStore.store, (state) => state.loaded);
+  return useMemo(
+    () => ({ loaded, self, nodeId: selfId, retry: () => portalStore.refresh() }),
+    [loaded, self, selfId],
+  );
+}
+
+/**
+ * For a node in the window's tree (plan items 4001 and 5004): the command
+ * node is the window's command scope, which holds its projects directly. A
+ * failed read of them leaves `self` null, so the gate offers a retry rather
+ * than waiting for ever.
+ */
+function useCommandScopeNode(enabled: boolean): CommandNodeFacts | null {
   const { windowScope } = useScopesWithCommandFallback();
+  const commandScope = windowScope.commandScope();
   const { boundMachine } = useFederation();
-  const commandProjects = useStore(windowScope.commandScope().store(projectStore), (state) =>
+  const selfId = useStore(portalStore.store, (state) => state.selfId);
+  const projects = useStore(commandScope.store(projectStore), (state) =>
     enabled ? state.projects : null,
   );
-  const commandLoaded = useStore(windowScope.commandScope().store(projectStore), (state) =>
-    enabled ? state.hasLoaded : false,
+  const hasLoaded = useStore(
+    commandScope.store(projectStore),
+    (state) => enabled && state.hasLoaded,
+  );
+  const failed = useStore(
+    commandScope.store(projectStore),
+    (state) => enabled && !state.hasLoaded && !state.isLoading && state.error !== null,
   );
   return useMemo(
     () =>
-      commandProjects
+      projects
         ? {
-            loaded: commandLoaded,
-            self: {
-              displayName: boundMachine?.name ?? "",
-              truncated: false,
-              projects: commandProjects.map((project) => ({
-                ref: { projectId: project.id },
-                name: project.name,
-                repositoryHint: repositoryHint(project.gitUrl),
-              })),
-            },
+            loaded: hasLoaded || failed,
+            self: hasLoaded
+              ? {
+                  displayName: boundMachine?.name ?? "",
+                  truncated: false,
+                  projects: projects.map((project) => ({
+                    ref: { projectId: project.id },
+                    name: project.name,
+                    repositoryHint: repositoryHint(project.gitUrl),
+                  })),
+                }
+              : null,
+            // Opening the command node's own project needs no portal id: the
+            // window shows its own node for its command scope's id too.
+            nodeId: selfId ?? commandScope.nodeId,
+            retry: () => loadProjectsFromBackend(commandScope),
           }
         : null,
-    [boundMachine?.name, commandLoaded, commandProjects],
+    [boundMachine?.name, commandScope, failed, hasLoaded, projects, selfId],
   );
 }
 
@@ -91,8 +142,11 @@ function PendingCoordination() {
  * and so nothing starts the coordinator, until the portal status has loaded;
  * a failed status read counts as loaded, so a broken portal never hides it.
  *
- * A node the user reaches through a command node (this workspace is a realm
- * on a leaf) follows the window's sidebar grouping. Grouped by repository,
+ * A node the user reaches through a command node (a leaf shown in the
+ * window's tree, or a realm document on a leaf) follows the window's sidebar
+ * grouping: in the tree it reads the window's `machineViewStore` and takes
+ * the command node's projects from the window's command scope; a realm is
+ * told the grouping and reads the portal's self summary. Grouped by repository,
  * the notice leads to the command node's coordinator for the same
  * repository when the command node has one, and the leaf's opens directly
  * when it has not. An unavailable or incomplete summary cannot establish
@@ -108,16 +162,15 @@ export function LeafModeCoordinatorGate({
   children: ReactNode;
 }) {
   const status = useStore(portalStore.store, (state) => state.status);
-  const portalSelf = useStore(portalStore.store, (state) => state.self);
-  const selfId = useStore(portalStore.store, (state) => state.selfId);
   const portalStatusLoaded = useStore(portalStore.store, (state) => state.loaded);
   const scope = useShimNodeScope("project");
   // Another node in the window's tree is on a leaf as a realm is; the
   // command node's projects come from the window's command scope.
   const inTreeLeaf = isInTreeLeaf(scope);
-  const commandSelf = useCommandNodeSelf(inTreeLeaf);
-  const self = commandSelf ? commandSelf.self : portalSelf;
-  const portalLoaded = commandSelf ? commandSelf.loaded : portalStatusLoaded;
+  const portalCommandNode = usePortalCommandNode();
+  const commandNode = useCommandScopeNode(inTreeLeaf) ?? portalCommandNode;
+  const { self, nodeId: commandNodeId } = commandNode;
+  const portalLoaded = inTreeLeaf ? commandNode.loaded : portalStatusLoaded;
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const projectsLoading = useProjectStore((state) => state.isLoading);
   const projectsError = useProjectStore((state) => state.error);
@@ -134,7 +187,7 @@ export function LeafModeCoordinatorGate({
   const openLeafCoordinator = useUIStore((state) => state.openLeafCoordinator);
   const openAnyway = () => openLeafCoordinator(gateKey);
   const [retrying, setRetrying] = useState(false);
-  const onLeaf = workspaceTarget() !== null || inTreeLeaf;
+  const onLeaf = onLeafPage() || inTreeLeaf;
   useEffect(() => {
     if (!portalStore.getState().loaded) void portalStore.refresh();
   }, []);
@@ -188,7 +241,7 @@ export function LeafModeCoordinatorGate({
                   setRetrying(true);
                   try {
                     await Promise.all([
-                      portalStore.refresh(),
+                      commandNode.retry(),
                       ...(!projectsLoaded ? [loadProjectsFromBackend(scope)] : []),
                     ]);
                   } finally {
@@ -234,13 +287,13 @@ export function LeafModeCoordinatorGate({
             : null}
         </p>
         <div className="flex flex-wrap gap-2">
-          {commandProject && selfId ? (
+          {commandProject && commandNodeId ? (
             <Button
               type="button"
               size="sm"
               onClick={() =>
                 openMachineWorkspace({
-                  connectionId: selfId,
+                  connectionId: commandNodeId,
                   projectId: commandProject.ref.projectId,
                   boardTab: "coordinator",
                   title: commandProject.name,

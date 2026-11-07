@@ -75,6 +75,19 @@ function answer(owner: string, command: string, args: Record<string, unknown> = 
     return { installed: false, authenticated: false, canSignIn: false };
   return undefined;
 }
+/** The command node's own answers, and another node's through `invoke_on_node`. */
+async function commandNodeAnswer(command: string, args?: Record<string, unknown>) {
+  return command === "invoke_on_node"
+    ? {
+        outcome: "ok",
+        result: answer(
+          String(args?.nodeId),
+          String(args?.command),
+          args?.args as Record<string, unknown>,
+        ),
+      }
+    : answer("command", command, args);
+}
 beforeEach(() => {
   writes.length = 0;
   configs = Object.fromEntries(["command", "leaf", "other"].map((owner) => [owner, config(owner)]));
@@ -83,18 +96,7 @@ beforeEach(() => {
   );
   window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
   window.orkestratorPortal = {
-    invoke: mock(async (command: string, args?: Record<string, unknown>) =>
-      command === "invoke_on_node"
-        ? {
-            outcome: "ok",
-            result: answer(
-              String(args?.nodeId),
-              String(args?.command),
-              args?.args as Record<string, unknown>,
-            ),
-          }
-        : answer("command", command, args),
-    ),
+    invoke: mock(commandNodeAnswer),
     listen: () => () => {},
   } as never;
   portalStore.store.setState({
@@ -216,10 +218,10 @@ test("the Schedules section is offered only while experimental scheduling is on"
 });
 
 test("a command window with a leaf selected only offers scheduling on the window machine", async () => {
+  // The command node's own window: no realm page globals, its command scope is the window's.
   delete window.orkestratorWorkspaceTarget;
-  workspace.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
-    answer("command", command, args),
-  );
+  delete window.orkestratorPortal;
+  workspace.mockImplementation(commandNodeAnswer);
   mount("experimental");
   await screen.findByText(/Experimental settings belong to the machine this window runs on/);
   expect(screen.queryByRole("switch", { name: "Enable scheduling" }) === null).toBe(true);
@@ -250,7 +252,7 @@ test("a command window with a leaf selected only offers scheduling on the window
     expect(workspace.mock.calls.some(([command]) => command === "list_scheduled_jobs")).toBe(true),
   );
   expect(
-    (window.orkestratorPortal!.invoke as ReturnType<typeof mock>).mock.calls.some(
+    workspace.mock.calls.some(
       ([command, args]) => command === "invoke_on_node" && args?.command === "list_scheduled_jobs",
     ),
   ).toBe(false);

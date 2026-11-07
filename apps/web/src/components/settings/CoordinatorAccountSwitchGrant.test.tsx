@@ -65,16 +65,19 @@ mock.module("@/lib/native/authoritative-events", () => ({
     return Promise.resolve(() => {});
   },
 }));
-mock.module("@/lib/portal/portal-transport", () => ({
-  portalListen: (_event: string, handler: (event: { payload: unknown }) => void) => {
+// The portal APIs are command-scope calls (plan item 5004); `portal-transport` re-exports these.
+mock.module("@/lib/portal/command-scope", () => ({
+  commandScopeListen: (_event: string, handler: (event: { payload: unknown }) => void) => {
     notice = handler;
     return Promise.resolve(() => {
       noticeStop++;
     });
   },
-  workspaceTarget: () => null,
-  portalListenAuthoritative: () => Promise.resolve(() => {}),
-  portalInvoke: (command: string, args?: Record<string, unknown>) => answer(command, args),
+  commandScopeListenAuthoritative: () => Promise.resolve(() => {}),
+  commandScopeInvoke: (command: string, args?: Record<string, unknown>) => answer(command, args),
+  commandScopeBackendClient: {
+    invokeRaw: (command: string, args?: Record<string, unknown>) => answer(command, args),
+  },
 }));
 
 const record: CoordinatorAccountSwitchRecord = {

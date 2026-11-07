@@ -14,7 +14,7 @@
  * One lease per node covers every view's events; it is renewed while any view
  * still subscribes and dropped with the last one. The command node's own
  * resources (shown from its self summary) need no relay and are subscribed
- * on the portal channel directly.
+ * on the command scope directly.
  *
  * Frames arrive under the watched node's own name when the command node says it
  * relays that way, on a stream each transport scopes to what is listened to: the
@@ -32,7 +32,7 @@ import {
 } from "@orkestrator/protocol/node-events";
 import { portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { portalStore } from "@/lib/portal/portal-store";
-import { portalListen, portalListenAuthoritative } from "@/lib/portal/portal-transport";
+import { commandScopeListen, commandScopeListenAuthoritative } from "@/lib/portal/command-scope";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.federation");
@@ -97,7 +97,7 @@ function applyRelayedFrame(payload: unknown): void {
 }
 
 function ensureListening(): Promise<void> {
-  listening ??= portalListenAuthoritative<unknown>(
+  listening ??= commandScopeListenAuthoritative<unknown>(
     RELAYED_NODE_EVENT,
     ({ payload }) => applyRelayedFrame(payload),
     {
@@ -128,7 +128,7 @@ function ensureListening(): Promise<void> {
  */
 async function listenPerNode(watch: NodeWatch): Promise<void> {
   if (watch.stopPerNodeListener) return;
-  watch.stopPerNodeListener = await portalListen<unknown>(
+  watch.stopPerNodeListener = await commandScopeListen<unknown>(
     relayedNodeEventName(watch.nodeId),
     ({ payload }) => applyRelayedFrame(payload),
   );
@@ -227,7 +227,7 @@ function subscribeSelf(subscriber: NodeEventSubscriber): () => void {
   };
   void Promise.allSettled(
     subscriber.events.map((event, index) =>
-      portalListenAuthoritative<unknown>(
+      commandScopeListenAuthoritative<unknown>(
         event,
         ({ payload }) => {
           if (!released) subscriber.onEvent(event, payload);
@@ -248,7 +248,7 @@ function subscribeSelf(subscriber: NodeEventSubscriber): () => void {
   };
 }
 
-/** Subscribe a view to the command node's own events, on the portal channel. */
+/** Subscribe a view to the command node's own events, on the command scope. */
 export function subscribeCommandNodeEvents(subscriber: NodeEventSubscriber): () => void {
   return subscribeSelf(subscriber);
 }

@@ -15,7 +15,8 @@ import { getNodeStatus, listNodes, nodeErrorText } from "@/lib/backend/command-n
 import { subscribeToConnections } from "@/lib/connections";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
-import { portalListen, workspaceTarget } from "@/lib/portal/portal-transport";
+import { commandScopeListen } from "@/lib/portal/command-scope";
+import { workspaceTarget } from "@/lib/portal/page-portal";
 import { buildMachineList, type MachineEntry } from "./machine-list";
 
 export type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -108,9 +109,9 @@ export function useMachines() {
       else unlisten.push(stop);
     };
     for (const event of [NODES_CHANGED_EVENT, NODE_STATUS_CHANGED_EVENT]) {
-      void portalListen(event, () => void loadNodes()).then(keep);
+      void commandScopeListen(event, () => void loadNodes()).then(keep);
     }
-    void portalListen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
+    void commandScopeListen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
       try {
         const next = parseBackendProfile(payload);
         setSelfProfile((current) => (current && current.revision > next.revision ? current : next));

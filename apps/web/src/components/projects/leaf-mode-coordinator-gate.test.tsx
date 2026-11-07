@@ -12,6 +12,7 @@ import { projectStore } from "@/stores/projectStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import * as openWorkspace from "@/lib/federation/open-workspace";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
 
 const nativeInvoke = invoke as ReturnType<typeof mock>;
@@ -481,4 +482,190 @@ test("a leaf shown in the window's tree follows the window's own grouping, not a
     useMachineViewStore.setState(initialViews, true);
     useUIChromeStore.setState(initialChrome, true);
   }
+});
+
+/**
+ * The same decisions for a leaf shown in the window's own tree (plan items
+ * 4001, 4005 and 5004): the grouping comes from the window's `machineViewStore`
+ * and the command node's projects from the window's command scope. Nothing
+ * reads the realm page globals or the portal's self summary.
+ */
+describe("a leaf shown in the window's tree", () => {
+  const gitUrl = "git@github.com:acme/app.git";
+  const initialViews = useMachineViewStore.getState();
+  const initialChrome = useUIChromeStore.getState();
+
+  afterEach(() => {
+    cleanupNodeScopes();
+    delete window.orkestratorPortal;
+    useMachineViewStore.setState(initialViews, true);
+    useUIChromeStore.setState(initialChrome, true);
+    mock.restore();
+  });
+
+  /** Counts reads of `window.orkestratorPortal`; nothing on this path should make any. */
+  function watchPortalGlobal() {
+    let reads = 0;
+    Object.defineProperty(window, "orkestratorPortal", {
+      configurable: true,
+      get() {
+        reads += 1;
+        return { invoke: mock(), listen: mock() };
+      },
+    });
+    return () => reads;
+  }
+
+  function renderInTree({
+    commandProjects = [{ id: "top-project", name: "app", gitUrl } as Project],
+    commandState = "loaded",
+    grouping = "repository",
+    sortMode = "project",
+  }: {
+    commandProjects?: Project[];
+    commandState?: "loaded" | "loading" | "failed";
+    grouping?: "machine" | "project" | "repository" | "compact";
+    sortMode?: "project" | "activity";
+  } = {}) {
+    const commandClient = new FakeNodeClient({
+      nodeId: "bk_top" as never,
+      invoke: { get_projects: () => commandProjects },
+    });
+    const windowScope = new WindowScope();
+    const commandScope = windowScope.open({ role: "command", client: commandClient });
+    commandScope
+      .store(projectStore)
+      .setState(
+        commandState === "loaded"
+          ? { hasLoaded: true, isLoading: false, error: null, projects: commandProjects }
+          : commandState === "loading"
+            ? { hasLoaded: false, isLoading: true, error: null, projects: [] }
+            : { hasLoaded: false, isLoading: false, error: "Offline", projects: [] },
+      );
+    useUIChromeStore.setState({ environmentSortMode: sortMode });
+    useMachineViewStore.setState({ grouping });
+    const rendered = renderInNodeScope(
+      <LeafModeCoordinatorGate projectId="leaf-project">
+        <div data-testid="coordinator-chat">chat</div>
+      </LeafModeCoordinatorGate>,
+      { role: "leaf", nodeId: "bk_leaf" as never, windowScope },
+    );
+    act(() =>
+      rendered.scope.store(projectStore).setState({
+        hasLoaded: true,
+        projects: [{ id: "leaf-project", name: "app", gitUrl } as Project],
+      }),
+    );
+    return { ...rendered, commandScope, commandClient };
+  }
+
+  test("grouped by repository, it leads to the command scope's coordinator for the same repository", () => {
+    const reads = watchPortalGlobal();
+    const open = spyOn(openWorkspace, "openMachineWorkspace").mockImplementation(() => undefined);
+    // The portal's self summary is a realm's source; in the tree it is not read.
+    portalStore.store.setState({ loaded: false, self: null, selfId: null });
+    renderInTree();
+    expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+    expect(screen.getByTestId("leaf-mode-coordinator-gate").textContent).toContain(
+      "Coordination happens on the command node",
+    );
+    // No portal id yet: the command scope's own node is opened.
+    fireEvent.click(screen.getByRole("button", { name: /^Open the coordinator on/ }));
+    expect(open).toHaveBeenCalledWith({
+      connectionId: "bk_top",
+      projectId: "top-project",
+      boardTab: "coordinator",
+      title: "app",
+    });
+    expect(reads()).toBe(0);
+  });
+
+  test("the portal's id names the command node once known", () => {
+    const open = spyOn(openWorkspace, "openMachineWorkspace").mockImplementation(() => undefined);
+    portalStore.store.setState({ loaded: true, selfId: "bk_command" as never });
+    renderInTree();
+    fireEvent.click(screen.getByRole("button", { name: /^Open the coordinator on/ }));
+    expect(open.mock.calls[0]?.[0]).toMatchObject({ connectionId: "bk_command" });
+  });
+
+  test("compact links repositories as repository grouping does", () => {
+    renderInTree({ grouping: "compact" });
+    expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+  });
+
+  test("the leaf's coordinator opens directly when the command scope has no copy", () => {
+    // A realm's summary would say otherwise; the tree does not consult it.
+    portalStore.store.setState({
+      loaded: true,
+      self: {
+        nodeId: "bk_top" as never,
+        displayName: "Office desktop",
+        loadedAt: 1,
+        truncated: false,
+        projects: [
+          {
+            ref: { backendId: "bk_top" as never, projectId: "top-project-0" },
+            key: "bk_top:top-project-0",
+            name: "app",
+            order: 0,
+            repositoryHint: "github.com/acme/app",
+          },
+        ],
+        environments: [],
+      } as never,
+    });
+    renderInTree({
+      commandProjects: [
+        { id: "other", name: "other", gitUrl: "git@github.com:acme/other.git" } as Project,
+      ],
+    });
+    expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+  });
+
+  for (const [label, options] of [
+    ["machine", { grouping: "machine" }],
+    ["project", { grouping: "project" }],
+    ["activity", { sortMode: "activity" }],
+  ] as const) {
+    test(`grouped by ${label}, the leaf's coordinator opens directly`, () => {
+      renderInTree(options);
+      expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+      expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
+    });
+  }
+
+  test("waits for the command scope's projects, then follows them", () => {
+    const { commandScope } = renderInTree({ commandState: "loading" });
+    expect(screen.getByTestId("leaf-mode-coordinator-pending")).toBeTruthy();
+    expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+    act(() =>
+      commandScope.store(projectStore).setState({
+        hasLoaded: true,
+        isLoading: false,
+        projects: [{ id: "top-project", name: "app", gitUrl } as Project],
+      }),
+    );
+    expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+  });
+
+  test("a failed read of the command scope's projects stays gated and retries on the command scope", async () => {
+    const { commandClient } = renderInTree({ commandState: "failed" });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "repository information is unavailable",
+    );
+    expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByRole("button", { name: /^Open the coordinator on/ });
+    expect(commandClient.calls("get_projects")).toHaveLength(1);
+    expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+  });
+
+  test("opening anyway is remembered under the leaf node, in the leaf's own UI state", () => {
+    const { scope } = renderInTree();
+    fireEvent.click(screen.getByRole("button", { name: /Open this node's coordinator anyway/ }));
+    expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+    expect(scope.store(uiStore).getState().openedLeafCoordinators).toEqual([
+      "bk_leaf:leaf-project",
+    ]);
+  });
 });

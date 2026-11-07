@@ -62,7 +62,7 @@ import {
   type NodeTransportOptions,
 } from "@/lib/native/node-transport";
 import { browserWindowLifecycle } from "@/lib/native/window-shell";
-import { portalInvoke } from "@/lib/portal/portal-transport";
+import { commandScopeInvoke } from "@/lib/portal/command-scope";
 import {
   closeLeafWorkspace,
   keepWorkspaceAlive,
@@ -151,7 +151,7 @@ export const DEFAULT_GRANT_OPEN_POLICY: GrantOpenPolicy = {
 export const CREDENTIAL_REOPEN_MIN_INTERVAL_MS = 30_000;
 
 export interface NodeClientRegistryOptions {
-  /** The command node's commands. Defaults to `portalInvoke`. */
+  /** The command node's commands (grants). Defaults to the window's command scope. */
   readonly commandInvoke?: CommandNodeInvoke;
   /** Names the command node in a relayed route's `via`. */
   readonly commandNodeName?: () => string;
@@ -405,7 +405,7 @@ interface Entry {
 export function createNodeClientRegistry(
   options: NodeClientRegistryOptions = {},
 ): NodeClientRegistry {
-  const invoke = options.commandInvoke ?? portalInvoke;
+  const invoke = options.commandInvoke ?? commandScopeInvoke;
   const lifecycle = options.lifecycle ?? browserWindowLifecycle();
   const closeOnPageHide = options.closeOnPageHide ?? keepaliveCloseOnCommandGateway;
   const createClient = options.createClient ?? createBrowserNodeClient;

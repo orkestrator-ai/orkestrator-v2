@@ -17,8 +17,8 @@
  * One parent is not a scope yet: a workspace realm document (until plan items
  * 6002 and 6003 delete realms) is its own window whose command scope is the
  * leaf, and it reaches its command node only through the page's portal
- * channel (`window.orkestratorPortal`). That channel is the realm command
- * scope's settings parent.
+ * channel (`./page-portal`). That channel is the realm command scope's
+ * settings parent (`pagePortalParent`).
  */
 import {
   INHERITED_GLOBAL_SETTING_KEYS,
@@ -35,13 +35,14 @@ import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { deepEqualJson } from "@/lib/chat/message-identity";
-import { portalBackendClient, scopeBackendClient, type BackendClient } from "@/lib/backend/client";
+import { scopeBackendClient, type BackendClient } from "@/lib/backend/client";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, isAppCommandScope } from "@/lib/node-scope-slots";
 import type { AppConfig, GlobalConfig } from "@/types";
 import { portalStore } from "./portal-store";
-import { portalListen } from "./portal-transport";
+import { commandScopeBackendClient, commandScopeListen } from "./command-scope";
+import { pagePortal } from "./page-portal";
 
 /** The two nodes one config read or save involves. */
 export interface ConfigTargets {
@@ -326,16 +327,16 @@ function scopeParent(parent: NodeScope): SettingsParent {
 
 /**
  * The page's portal channel to its command node, when the page has one: a
- * workspace realm document (desktop preload `exposePortal`, browser
- * `workspaceTargetGatewayOptions`). Deleted with realms.
+ * workspace realm document (`pagePortal`). The command-scope calls reach it
+ * there. Deleted with realms.
  */
 function pagePortalParent(): SettingsParent | null {
-  if (typeof window === "undefined" || !window.orkestratorPortal) return null;
+  if (!pagePortal()) return null;
   return {
     scope: null,
-    client: portalBackendClient,
+    client: commandScopeBackendClient,
     onConfigChanged: (handler) =>
-      portalListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
+      commandScopeListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
         if (event.payload?.resource === "config") handler();
       }),
   };
@@ -405,11 +406,11 @@ export async function invokeGlobalConfigCommand(
   machine?: string | null,
 ): Promise<AppConfig> {
   if (machine === null || machine === portalStore.getState().selfId) {
-    return runConfigCommand({ commandNode: portalBackendClient, node: null }, command, args);
+    return runConfigCommand({ commandNode: commandScopeBackendClient, node: null }, command, args);
   }
   if (machine !== undefined) {
     return runConfigCommand(
-      { commandNode: portalBackendClient, node: routedNodeClient(machine as BackendId) },
+      { commandNode: commandScopeBackendClient, node: routedNodeClient(machine as BackendId) },
       command,
       args,
     );

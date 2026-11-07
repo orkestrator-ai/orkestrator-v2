@@ -21,8 +21,8 @@ import { invoke } from "@/lib/native/backend";
 import { appCommandScope, isAppCommandScope } from "@/lib/node-scope-slots";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { invokeInScope } from "@/lib/node-scope/scope-transport";
-import { portalStore } from "@/lib/portal/portal-store";
-import { portalInvoke } from "@/lib/portal/portal-transport";
+import { commandScopeBackendClient, commandScopeInvoke } from "@/lib/portal/command-scope";
+import { invokeOnMachine } from "@/lib/portal/machine-scope";
 
 /**
  * What a factory needs of a node: its untyped command call. A `NodeClient` is
@@ -60,14 +60,11 @@ export const commandBackendClient: BackendClient = {
 };
 
 /**
- * The command node over the portal channel (`portalInvoke`), which reaches it
- * even while the window's workspace is on a leaf. The shim client of
- * `command-nodes.ts`.
+ * The window's command node for the portal APIs (`commandScopeBackendClient`,
+ * plan item 5004): the command scope, or a realm document's portal channel.
+ * The shim client of `command-nodes.ts`.
  */
-export const portalBackendClient: BackendClient = {
-  invokeRaw: <T>(...call: [string, Readonly<Record<string, unknown>>?]) =>
-    portalInvoke<T>(...(call as [command: string, args?: Record<string, unknown>])),
-};
+export const portalBackendClient: BackendClient = commandScopeBackendClient;
 
 /** `client`'s command call in the `invoke` shape. */
 export function clientInvoke(client: BackendClient): BackendInvoke {
@@ -126,10 +123,11 @@ export function backendApiForScope<A extends object, K extends keyof A>(
 }
 
 /**
- * Which machine a call is for. `null` selects the command node; `undefined`
- * selects the factory's client (for the shim, this view's backend: the leaf,
- * inside a leaf's workspace); a node id asks that node through the command
- * node.
+ * Which machine a call is for. `null` selects the command node (the window's
+ * command scope); `undefined` selects the factory's client (for the shim,
+ * this view's backend: the leaf, inside a leaf's workspace); a node id asks
+ * that node: on its own scope when the window holds it warm or live, else
+ * through the command scope (`invokeOnMachine`, plan item 5004).
  */
 export type AccountMachine = string | null | undefined;
 
@@ -142,17 +140,17 @@ export type MachineInvoke = <T>(
 /** `machineInvoke` over `client`: `undefined` is `client`'s node. */
 export function machineInvoker(client: BackendClient): MachineInvoke {
   return <T>(machine: AccountMachine, command: string, args: Record<string, unknown> = {}) => {
-    if (machine === null) return portalInvoke<T>(command, args);
+    if (machine === null) return commandScopeInvoke<T>(command, args);
     return machine === undefined
       ? client.invokeRaw<T>(command, args)
-      : portalStore.invokeOnNode<T>(machine as BackendId, command, args);
+      : invokeOnMachine<T>(machine as BackendId, command, args);
   };
 }
 
 /**
  * `client` aimed at `machine` (`AccountMachine`): `undefined` is `client`'s
- * own node, `null` the command node over the portal, a node id that node
- * through the command node. Its calls carry no negotiated range, so a domain
+ * own node, `null` the window's command scope, a node id that node (its
+ * scope, or through the command scope; see `machineInvoker`). Its calls carry no negotiated range, so a domain
  * client over it (`@/lib/node-scope/domains/domain-api`) uses the legacy
  * adapter.
  */

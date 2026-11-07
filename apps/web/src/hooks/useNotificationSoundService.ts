@@ -5,6 +5,7 @@ import {
   isCoordinatorWakeAttentionEvent,
   isEnvironmentAttentionEvent,
   isInputNeededAttentionReason,
+  type EnvironmentAttentionEvent,
   type EnvironmentAttentionReason,
 } from "@orkestrator/protocol/environment-attention";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
@@ -19,6 +20,7 @@ import {
 } from "@/stores/activeCoordinatorConversationStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
+import { remoteAttentionTarget, useRemoteNodeAttention } from "./useRemoteNodeAttention";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import {
   playConfiguredNotificationSound,
@@ -87,6 +89,7 @@ function alertInputNeeded(
   input: { environmentId: string; projectId: string; reason: EnvironmentAttentionReason },
   visibleEnvironmentId: string | null,
   lastCue: { current: LastCue },
+  remote?: ReturnType<typeof remoteAttentionTarget>,
 ): void {
   if (input.environmentId === visibleEnvironmentId && windowFocused()) return;
   const settings = soundSettings();
@@ -101,9 +104,33 @@ function alertInputNeeded(
   }
   if (settings.questionDesktopNotification) {
     void playback.then((played) => {
-      showQuestionDesktopNotification({ ...input, silent: played });
+      showQuestionDesktopNotification({ ...input, silent: played, ...(remote ? { remote } : {}) });
     });
   }
+}
+
+/**
+ * Attention from another node with no open realm in this window. Nothing of
+ * that node is on screen, so it always alerts, under the same settings and
+ * coalescing as this window's own node.
+ */
+function alertRemoteAttention(
+  nodeId: string,
+  { environmentId, projectId, reason }: EnvironmentAttentionEvent,
+  lastCue: { current: LastCue },
+): void {
+  if (isInputNeededAttentionReason(reason)) {
+    alertInputNeeded(
+      { environmentId, projectId, reason },
+      null,
+      lastCue,
+      remoteAttentionTarget(nodeId, projectId, environmentId),
+    );
+    return;
+  }
+  if (!soundSettings().agentStopped) return;
+  if (!claimCue(lastCue, "agent-stopped")) return;
+  void playConfiguredNotificationSound("agent-stopped");
 }
 
 /**
@@ -129,6 +156,9 @@ function alertInputNeeded(
  * An attention event whose reason means the agent needs input (a question, an
  * approval, a plan) gets the "agent question" cue and a desktop notification
  * instead; see {@link alertInputNeeded}.
+ *
+ * The window's shell also alerts for other nodes it has no open realm for
+ * ({@link useRemoteNodeAttention}); an open realm alerts for its own node.
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);
@@ -159,6 +189,7 @@ export function useNotificationSoundService(): void {
     visibleEnvironmentRef.current = selectedEnvironmentId;
   }, [selectedEnvironmentId]);
   const [eventDriven, setEventDriven] = useState(false);
+  useRemoteNodeAttention((nodeId, event) => alertRemoteAttention(nodeId, event, lastCueRef));
 
   useEffect(() => {
     let disposed = false;

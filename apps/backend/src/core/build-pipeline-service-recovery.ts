@@ -14,6 +14,7 @@ import {
   boundedPipelineSessionError,
   pipelineDeliverySummary,
   pipelineDeliveryTooLateNote,
+  pipelineReachedPullRequestStage,
   MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
   taskSnapshotCriteria,
   verificationCriterionResults,
@@ -582,10 +583,14 @@ export class BuildPipelineRecovery {
           pipeline.phase === "complete" && pipeline.delivery
             ? pipelineDeliverySummary(pipeline.delivery)
             : undefined;
-        await this.updateKanbanLifecycle(pipeline, {
-          ...buildPipelineKanbanUpdate(pipeline.phase === "complete" ? "complete" : "failed"),
-          ...(delivered ? { comment: `✅ ${delivered}` } : {}),
-        });
+        await this.updateKanbanLifecycle(
+          pipeline,
+          {
+            ...buildPipelineKanbanUpdate(pipeline.phase === "complete" ? "complete" : "failed"),
+            ...(delivered ? { comment: `✅ ${delivered}` } : {}),
+          },
+          { terminal: true },
+        );
         pipeline.completionCommentStatus = "posted";
         pipeline.completionCommentPostedAt = new Date().toISOString();
         delete pipeline.completionCommentError;
@@ -648,7 +653,11 @@ export class BuildPipelineRecovery {
       prUrl?: string;
       prState?: "open" | "merged" | "closed";
     },
-    options: { requireTicket?: boolean } = {},
+    options: {
+      requireTicket?: boolean;
+      /** The build has ended (`complete`/`failed`), see {@link terminalTicketStatus}. */
+      terminal?: boolean;
+    } = {},
   ): Promise<void> {
     const source = pipeline.source;
     if (source?.type !== "kanban") return;
@@ -666,6 +675,12 @@ export class BuildPipelineRecovery {
       if (options.requireTicket) throw new Error(`Kanban task not found: ${source.taskId}`);
       // A deleted ticket has no lifecycle left to record, and must not fail the run.
       return;
+    }
+    if (options.terminal && updates.status) {
+      updates = {
+        ...updates,
+        status: await this.terminalTicketStatus(pipeline, task, updates.status),
+      };
     }
     if (
       (updates.status && task.status !== updates.status) ||
@@ -685,6 +700,31 @@ export class BuildPipelineRecovery {
         text: updates.comment,
       });
     }
+  }
+
+  /**
+   * The column a ticket moves to when its build ends, or undefined to leave
+   * it. A build that ends after its pull request merged closes the ticket
+   * (`kanban-merge-closure.ts`) instead of moving it back to review or
+   * backlog, and a ticket already done is never reopened by a build ending.
+   */
+  private async terminalTicketStatus(
+    pipeline: BuildPipeline,
+    task: { id: string; status: string },
+    status: "backlog" | "in-progress" | "review",
+  ): Promise<"backlog" | "in-progress" | "review" | undefined> {
+    const environment =
+      pipeline.environmentId && pipelineReachedPullRequestStage(pipeline)
+        ? await this.ctx.storage.getEnvironment(pipeline.environmentId)
+        : null;
+    if (environment?.prState === "merged" && environment.prUrl) {
+      await this.ctx.invoke("close_kanban_task_for_merged_pr", {
+        taskId: task.id,
+        prUrl: environment.prUrl,
+      });
+      return undefined;
+    }
+    return task.status === "done" ? undefined : status;
   }
 
   async configureEnvironment(pipeline: BuildPipeline): Promise<void> {

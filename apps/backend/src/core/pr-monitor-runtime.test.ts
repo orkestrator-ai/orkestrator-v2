@@ -409,3 +409,30 @@ test("batch changes wake every matching snapshot entry and leave other PRs alone
     runtime.shutdown();
   }
 });
+
+test("the first sync closes tickets whose recorded merge never closed them, once per process", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const closeKanbanTasksForMergedPullRequests = mock(async () => ["task-1"]);
+  const context: CommandContext = {
+    runtime,
+    storage: {
+      loadEnvironments: async () => [],
+      kanban: { closeKanbanTasksForMergedPullRequests },
+    } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+  };
+  try {
+    await runtime.prMonitor.sync(context);
+    await runtime.prMonitor.sync(context);
+    // The sweep runs off the sync path; let it settle.
+    await Promise.resolve();
+    expect(closeKanbanTasksForMergedPullRequests).toHaveBeenCalledTimes(1);
+    // Called without names: every board's recorded merges.
+    expect(closeKanbanTasksForMergedPullRequests.mock.calls[0]).toEqual([]);
+  } finally {
+    runtime.shutdown();
+  }
+});

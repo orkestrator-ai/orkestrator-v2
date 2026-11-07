@@ -172,6 +172,12 @@ export type KanbanTask = {
   prState?: PrState;
   prMergeCommented?: boolean;
   /**
+   * The merged pull request that moved this ticket to done
+   * (`kanban-merge-closure.ts`). Its merge never closes the ticket again, so
+   * a ticket reopened afterwards stays open.
+   */
+  prMergeDoneUrl?: string;
+  /**
    * Sync with other machines: this node's change sequence and field
    * revisions, and on a leaf's copy of a command node's ticket, that ticket's
    * (`@orkestrator/protocol/ticket-sync`). Absent on rows never changed since.

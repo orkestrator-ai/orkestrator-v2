@@ -58,7 +58,7 @@ function prHarness(generation = "pr-gen-1") {
       persistPr: async () => {},
       clearPr: async () => {},
       findTaskForEnvironment: async () => null,
-      moveTaskToReview: async () => {},
+      closeTaskForMerge: async () => {},
       addTaskComment: async () => {},
       updateTaskPrMetadata: async () => {},
     },

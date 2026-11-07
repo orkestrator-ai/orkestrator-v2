@@ -65,6 +65,15 @@ describe("update-ticket", () => {
     expect((await ticket(w, taskId)).status).toBe("backlog");
   });
 
+  test("a run ending never reopens a done ticket", async () => {
+    const { w, taskId } = await world();
+    complete(await w.executor().start(w.context(w.activation("started"))));
+    // Its pull request merged and closed it while the run was still going.
+    await w.storage.kanban.updateKanbanTask(taskId, { status: "done" });
+    complete(await w.executor().start(w.context(w.activation("failed"))));
+    expect((await ticket(w, taskId)).status).toBe("done");
+  });
+
   test("the lifecycle table is the pipeline's", () => {
     expect(
       Object.fromEntries(

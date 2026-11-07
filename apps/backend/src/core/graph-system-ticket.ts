@@ -111,6 +111,10 @@ export const updateTicketAction: GraphSystemActionHandler = {
     await ctx.effect(ctx.slotKey(), async () => {
       const task = await findTask(ctx);
       const kanban = ctx.deps.storage.kanban;
+      // A run ending never reopens a done ticket, which its merged pull
+      // request may have closed (`kanban-merge-closure.ts`).
+      const ending = ctx.params.lifecycle === "complete" || ctx.params.lifecycle === "failed";
+      if (ending && task.status === "done") delete update.status;
       const moves =
         (update.status !== undefined && task.status !== update.status) ||
         (update.prUrl !== undefined && task.prUrl !== update.prUrl) ||

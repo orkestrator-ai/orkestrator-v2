@@ -49,6 +49,12 @@ import {
   type KanbanSyncStore,
 } from "./storage-kanban-sync.js";
 
+import {
+  kanbanTaskAwaitsMergeClosure,
+  pendingMergeClosures,
+  type KanbanMergeClosure,
+} from "./kanban-merge-closure.js";
+
 const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
@@ -530,6 +536,49 @@ export class KanbanRepository {
 
   // A deletion retains only the last publication restriction, not ticket content.
   // Save it before removing the row so Verify can read it without the pipeline lock.
+  /**
+   * Moves tickets whose linked pull request merged to done, once per pull
+   * request (`kanban-merge-closure.ts`). With `closures`, those tickets for
+   * those URLs; without, every board's recorded merges not yet applied.
+   * A missing ticket, or one already done or already closed by that URL, is
+   * skipped. Returns the ids moved.
+   */
+  async closeKanbanTasksForMergedPullRequests(
+    closures?: readonly KanbanMergeClosure[],
+  ): Promise<string[]> {
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+      const due = closures ?? pendingMergeClosures(tasks.map(normalizeKanbanTask));
+      const changes: Array<{ before: KanbanTask; stored: KanbanTask }> = [];
+      for (const { taskId, prUrl } of due) {
+        const task = tasks.find((candidate) => candidate.id === taskId);
+        if (!task || !kanbanTaskAwaitsMergeClosure(task, prUrl)) continue;
+        const before = normalizeKanbanTask(structuredClone(task));
+        task.order =
+          Math.max(
+            -1,
+            ...tasks
+              .filter(
+                (candidate) =>
+                  candidate.projectId === task.projectId &&
+                  candidate.status === "done" &&
+                  candidate.id !== taskId,
+              )
+              .map((candidate) => candidate.order),
+          ) + 1;
+        task.status = "done";
+        task.prMergeDoneUrl = prUrl;
+        changes.push({ before, stored: task });
+      }
+      if (changes.length === 0) return [];
+      await this.commitKanban(tasks, changes);
+      for (const projectId of new Set(changes.map(({ stored }) => stored.projectId))) {
+        this.context.changes.announce("kanban", projectId);
+      }
+      return changes.map(({ stored }) => stored.id);
+    });
+  }
+
   private deletedDeliveryFile(taskId: string): string {
     const key = createHash("sha256").update(taskId).digest("hex");
     return `${this.files.kanbanFile()}.delivery/${key}.json`;
@@ -1871,6 +1920,7 @@ export type KanbanStorage = Pick<
   | "findKanbanTaskByRequestId"
   | "updateKanbanTask"
   | "recordKanbanCriteriaChecks"
+  | "closeKanbanTasksForMergedPullRequests"
   | "deleteKanbanTask"
   | "getDeletedKanbanDeliveryPolicy"
   | "onDeliveryPolicyChange"

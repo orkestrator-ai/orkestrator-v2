@@ -792,13 +792,16 @@ describe("direct backend command registry coverage", () => {
     await expect(
       invoke("cache_agent_model_catalog", { agent: "codex", models: [] }, context),
     ).rejects.toThrow("at least one model");
+    // A defined command (plan item 7009) drops an unknown argument key; one the
+    // sender marks critical is refused before the catalogue is written.
     await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        { agent: "claude", models: claudeModels, extra: true },
-        context,
-      ),
-    ).rejects.toThrow(/[Uu]nexpected/);
+      (async () =>
+        registry.get("cache_agent_model_catalog")!(
+          { agent: "claude", models: claudeModels, extra: true },
+          context,
+          { critical: ["extra"] },
+        ))(),
+    ).rejects.toMatchObject({ code: "unsupported-field" });
 
     expect(cacheAgentModelCatalog).toHaveBeenCalledTimes(3);
   });

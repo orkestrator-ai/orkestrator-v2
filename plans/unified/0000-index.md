@@ -384,7 +384,7 @@ Report: [§11](../../docs/reports/unified-federation.md#11-versioned-interfaces)
 | --- | --- | --- | --- | --- | --- |
 | 1001 | [1001-schema-library-spike.md](1001-schema-library-spike.md) | 1 | in-progress | — | Measure the renderer bundle cost of Effect Schema against Zod 4, `zod/mini` and hand-written guards, record Decision 13.8 (Effect, the user's choice), and add `effect` to protocol. |
 | 1002 | [1002-contract-primitives.md](1002-contract-primitives.md) | 1 | done | 1001 | `defineDomain`, `defineCommand`, `defineEvent`, the invoke envelope, typed error codes and `domainClient` types in `packages/protocol/src/contract/`. |
-| 1003 | [1003-backend-register-overload.md](1003-backend-register-overload.md) | 1 | in-progress | 1002 | `register(def, handler)` with tolerant parsing and critical fields, through every wrapping registrar; the envelope on HTTP, IPC and the relay. |
+| 1003 | [1003-backend-register-overload.md](1003-backend-register-overload.md) | 1 | done | 1002 | `register(def, handler)` with tolerant parsing and critical fields, through every wrapping registrar; the envelope on HTTP, IPC and the relay. |
 | 1004 | [1004-hello-domains.md](1004-hello-domains.md) | 1 | done | 1002, 1003 | A new top-level hello field, `domains: {min, max}` per domain, parsed explicitly with bounds. Pre-contract nodes are detected. |
 | 1005 | [1005-typed-incompatibility-errors.md](1005-typed-incompatibility-errors.md) | 1 | done | 1002, 0007 | `unknown-command` / `unsupported-version` / `unsupported-field` codes survive web HTTP and Electron IPC (both drop `code` today). All text matchers are replaced. |
 | 1006 | [1006-contract-manifest-generator.md](1006-contract-manifest-generator.md) | 1 | done | 1003 | `contracts/manifest.json` from the live registry, with `--check` in CI. Every string-registered command must be assigned a domain. |
@@ -407,7 +407,7 @@ Report: [§5](../../docs/reports/unified-federation.md#5-target-architecture), [
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | in-progress | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
+| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | done | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
 | 2002 | [2002-browser-transport-split.md](2002-browser-transport-split.md) | 2 | done | 2001 | Move `createNodeTransport` out of `web-gateway.ts` (1,743 lines) and cut its couplings to the window shell. Two transports coexist. |
 | 2003 | [2003-browser-credentials-and-auth-transport.md](2003-browser-credentials-and-auth-transport.md) | 2 | done | 2002 | `setCredential` on reopen, rich-content cleared per node, no global `fetch`/`EventSource` patch for node clients, and an `acp-client.ts` fix. |
 | 2004 | [2004-browser-node-clients-registry.md](2004-browser-node-clients-registry.md) | 2 | done | 2002, 2003 | `node-clients.ts`: in-memory grants, direct then relay, reopen without reload, a `pagehide` close, per-node URLs, WebSocket terminals for leaves. |
@@ -444,17 +444,17 @@ Report: [§7](../../docs/reports/unified-federation.md#7-store-and-service-scopi
 | 3010 | [3010-sessions-terminals-tmux-mail.md](3010-sessions-terminals-tmux-mail.md) | 3 | done | 3008, 3009 | `session`, `terminalSession` (a hot spot the report missed), `claudeTmux` and `agentMail` stores. |
 | 3011 | [3011-workflow-stores-a.md](3011-workflow-stores-a.md) | 3 | done | 3004 | Pipeline, Kanban, feature plan, coordinator and graph stores, plus their persistence services. |
 | 3012 | [3012-workflow-stores-b.md](3012-workflow-stores-b.md) | 3 | done | 3004, 3016 | Design, web annotations, GitHub issues, PRs, change projection, file dirty and preview service stores. |
-| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | in-progress | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
+| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | done | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
 | 3014 | [3014-scoped-services-and-startup.md](3014-scoped-services-and-startup.md) | 3 | done | 3001 | `App.tsx:355-369`'s six `start*` services become per-scope services; the read coordinator is split into window and node parts. |
 | 3015 | [3015-persistence-keys-per-node.md](3015-persistence-keys-per-node.md) | 3 | done | 2001 | `desktopConnectionStorageKey(base, nodeId)`; the local-drafts key is namespaced; the command node's keys do not move. |
 | 3016 | [3016-rich-content-and-caches.md](3016-rich-content-and-caches.md) | 3 | done | 2001, 2003 | Rich-content identity per node, byte-bounded caches under window budgets, and capability caches per scope. |
 | 3017 | [3017-window-stores-node-qualified.md](3017-window-stores-node-qualified.md) | 3 | done | 2001 | Window stores (dialogs, merge PR, coordinator conversation, scroll targets, host path picker) carry `nodeId`. |
-| 3018 | [3018-retire-command-scope-shim.md](3018-retire-command-scope-shim.md) | 3 | not-started | 3013, 4004 | Added 2026-11-07: tests seed stores through scopes, the command-scope statics and the hook's provider-less fallback go. |
+| 3018 | [3018-retire-command-scope-shim.md](3018-retire-command-scope-shim.md) | 3 | done | 3013, 4004 | Added 2026-11-07: tests seed stores through scopes, the command-scope statics and the hook's provider-less fallback go. |
 
 Exit criteria:
 
 - [x] The shim baseline is zero for every store the workspace subtree touches. *(Completeness check 2026-11-07: the `scoped-store-shim` entry of `tests/source-guards/baseline.json` is empty for every store.)*
-- [ ] `mise run test` and the browser suites pass with only the command scope. *(Open 2026-11-07: the browser smoke passed at `ee73894da` and `9d061d7aa` apart from the base-failing vim case; the aggregate `mise run test` is not recorded yet; the orchestrator runs it at the end.)*
+- [x] `mise run test` and the browser suites pass with only the command scope. *(The browser smoke passed at `ee73894da`, `9d061d7aa` and `1b6913632` apart from the base-failing vim case. `mise run test` at `13d3b79ea` (2026-11-07, orchestrator): the workspace (web, backend, desktop, web-public, cli, protocol, toolchain), bridges and codex-lockfile groups pass; the root group fails only on tests that fail identically at the base `148e9ad0a`: `dom-absence-scan` (`NativeChart.test.tsx`, `RichBlockFrame.test.tsx`), the two `test-suite-ownership` checks (`e2e/agent-testing/session-history-environment.test.ts`, `tests/unit/tmux-mail-benchmark.test.ts`), and `goals-plan`/`graphs-plan`, which scan the `plans/goals` and `plans/graphs` folders the base deleted. None of these files is touched by this branch.)*
 
 ## Phase 4: in-tree workspace behind a per-node setting
 
@@ -465,7 +465,7 @@ Report: [§8](../../docs/reports/unified-federation.md#8-data-lifecycle-hydratio
 | 4001 | [4001-in-tree-workspace-seam.md](4001-in-tree-workspace-seam.md) | 4 | done | 2013, 3013, 3014 | `<InTreeWorkspace nodeId>` when `inTreeNodes` has the node; a loopback for the realm protocol; `NodeErrorBoundary`. |
 | 4002 | [4002-hydration-tiers-and-budgets.md](4002-hydration-tiers-and-budgets.md) | 4 | done | 4001, 0004 | Summary, warm, live and suspended tiers, suspension timers per host, and pressure eviction at data granularity. |
 | 4003 | [4003-snapshot-first-rehydration.md](4003-snapshot-first-rehydration.md) | 4 | done | 4001 | A new bounded IndexedDB snapshot store (none exists today), with a stale marker until the authoritative read; no content in snapshots. |
-| 4004 | [4004-runtime-shim-guard.md](4004-runtime-shim-guard.md) | 4 | in-progress | 4001 | A shim call under a mounted leaf throws in development and tests and is counted in production. |
+| 4004 | [4004-runtime-shim-guard.md](4004-runtime-shim-guard.md) | 4 | done | 4001 | A shim call under a mounted leaf throws in development and tests and is counted in production. |
 | 4005 | [4005-direct-navigation.md](4005-direct-navigation.md) | 4 | done | 4001, 3006 | `select`, `sidebar`, `filesPanel`, `grouping`, `visibility`, `ready`, `selection` and `open` become direct calls for in-tree nodes. |
 | 4006 | [4006-multi-node-qualification.md](4006-multi-node-qualification.md) | 4 | in-progress | 4002, 4003, 4004, 4005, 2009, 4007 | A new multi-node e2e on desktop and browser, the inactive-environment cycle for a leaf, six-node switching, preview z-order, and iPad memory. |
 | 4007 | [4007-workspace-calls-its-node.md](4007-workspace-calls-its-node.md) | 4 | done | 4001 | Added 2026-11-07: a guard over the workspace import graph for command-bound `@/lib/backend` calls, and the conversions (incl. the design canvas and the tmux client), so an in-tree leaf sends everything to its node. |

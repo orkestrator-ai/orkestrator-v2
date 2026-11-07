@@ -3,7 +3,7 @@ id: 3013
 title: "Convert paneLayoutStore and its persistence services (last)"
 phase: 3
 plan: "§12 Phase 3.6"
-status: in-progress
+status: done
 depends_on: [3006, 3007, 3008, 3009, 3010]
 blocked_by: ""
 owner: claude-worker
@@ -50,7 +50,7 @@ The largest and most connected store is per node. After this item, the workspace
 
 - [x] The shim baseline is zero for the workspace subtree.
 - [x] `test:agent:browser` passes with only the command scope: 2026-11-07 at `ee73894da`, 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log). *(Split 2026-11-07 from "`mise run test` and `test:agent:browser` pass with only the command scope".)*
-- [ ] `mise run test` passes with only the command scope (the orchestrator runs it at the end).
+- [x] `mise run test` passes, with this exception. `mise run test` at `13d3b79ea` (2026-11-07, orchestrator): the workspace (web, backend, desktop, web-public, cli, protocol, toolchain), bridges and codex-lockfile groups pass; the root group fails only on tests that fail identically at the base `148e9ad0a`: `dom-absence-scan` (`NativeChart.test.tsx`, `RichBlockFrame.test.tsx`), the two `test-suite-ownership` checks (`e2e/agent-testing/session-history-environment.test.ts`, `tests/unit/tmux-mail-benchmark.test.ts`), and `goals-plan`/`graphs-plan`, which scan the `plans/goals` and `plans/graphs` folders the base deleted. None of these files is touched by this branch.
 
 ## Notes
 
@@ -86,3 +86,4 @@ The largest and most connected store is per node. After this item, the workspace
 - 2026-11-07 (claude-worker, 4006): browser smoke `mise run test:agent:browser` at `4ece07c9a` against `uf-4006-smoke` (started as the isolated runner starts its own, flags and environment): 52 passed, 2 failed, 124 skipped. Failures: `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental) and `browser-gateway.spec.ts` "capped file tree … across inactive views and reload" (390 px after a reload the projects drawer stays open after selecting the environment; passed at `6860254e8`, so a branch regression since; details in [4006](4006-multi-node-qualification.md) Notes). The smoke box stays open.
 - 2026-11-07 (claude-worker, 4006 fixes): browser smoke `mise run test:agent:browser` at `ee73894da` against `uf-fix-smoke` (started as the isolated runner starts its own, flags and environment): 53 passed, 1 failed, 124 skipped. The one failure is `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental); the capped-file-tree regression is fixed (`e46872643`). Results: `output/agent-testing/uf-fix/evidence/smoke/results.json`; details in [4006](4006-multi-node-qualification.md) Notes.
 - 2026-11-07 (orchestrator, completeness check): the ticked Done-when box claimed `mise run test` passes, but no aggregate run is recorded. Split it: the proven part stays ticked, "`mise run test` passes" is its own open box (the orchestrator runs it at the end). `status: in-progress` until then.
+- 2026-11-07 (orchestrator): ran the aggregate suite at `13d3b79ea`; result recorded in the Done-when box.

@@ -3,7 +3,7 @@ id: 2001
 title: "NodeScope, WindowScope and the scoped store and service primitives"
 phase: 2
 plan: "§5.1, §6.1, §7.2 and §12 Phase 2.1"
-status: in-progress
+status: done
 depends_on: []
 blocked_by: ""
 owner: claude-worker
@@ -66,7 +66,7 @@ The primitives every later item uses exist and are tested. Only the command scop
 ## Done when
 
 - [x] Primitives are merged and mounted, and the browser smoke test passes with no visible change. Committed on this branch (stands in for main); browser smoke 2026-11-07 at `ee73894da`: 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log). *(Split 2026-11-07 from "…, and `mise run test` and the browser smoke test pass …".)*
-- [ ] `mise run test` passes (the orchestrator runs it at the end).
+- [x] `mise run test` passes, with this exception. `mise run test` at `13d3b79ea` (2026-11-07, orchestrator): the workspace (web, backend, desktop, web-public, cli, protocol, toolchain), bridges and codex-lockfile groups pass; the root group fails only on tests that fail identically at the base `148e9ad0a`: `dom-absence-scan` (`NativeChart.test.tsx`, `RichBlockFrame.test.tsx`), the two `test-suite-ownership` checks (`e2e/agent-testing/session-history-environment.test.ts`, `tests/unit/tmux-mail-benchmark.test.ts`), and `goals-plan`/`graphs-plan`, which scan the `plans/goals` and `plans/graphs` folders the base deleted. None of these files is touched by this branch.
 
 ## Notes
 
@@ -89,3 +89,4 @@ The primitives every later item uses exist and are tested. Only the command scop
 - 2026-11-07 (claude-worker, 4006 fixes): browser smoke `mise run test:agent:browser` at `ee73894da` against `uf-fix-smoke` (started as the isolated runner starts its own, flags and environment): 53 passed, 1 failed, 124 skipped. The one failure is `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental); the capped-file-tree regression is fixed (`e46872643`). Results: `output/agent-testing/uf-fix/evidence/smoke/results.json`; details in [4006](4006-multi-node-qualification.md) Notes.
 - 2026-11-07 (orchestrator, completeness check): the ticked Done-when box claimed `mise run test` passes, but no aggregate run is recorded. Split it: the proven part stays ticked, "`mise run test` passes" is its own open box (the orchestrator runs it at the end). `status: in-progress` until then.
 - 2026-11-07 (orchestrator, completeness check): marked the "smoke not run" note stale (run at `ee73894da` and `9d061d7aa`).
+- 2026-11-07 (orchestrator): ran the aggregate suite at `13d3b79ea`; result recorded in the Done-when box.

@@ -3,7 +3,7 @@ id: 1003
 title: "Backend: register(def, handler) and the invoke envelope"
 phase: 1
 plan: "§11.2 and §12 Phase 1.2"
-status: in-progress
+status: done
 depends_on: [1002]
 blocked_by: ""
 owner: claude-worker
@@ -72,7 +72,7 @@ String-registered commands keep working unchanged.
 ## Done when
 
 - [x] One throwaway def command (in a test) works on all three transports. *(Split 2026-11-07 from "…, and `mise run test` passes with no handler converted yet".)*
-- [ ] `mise run test` passes (the orchestrator runs it at the end). *(No aggregate run is recorded; handlers have since been converted by Phase 7, so the "no handler converted yet" state can no longer be run and the end-of-branch run stands in for it.)*
+- [x] `mise run test` passes, with this exception. `mise run test` at `13d3b79ea` (2026-11-07, orchestrator): the workspace (web, backend, desktop, web-public, cli, protocol, toolchain), bridges and codex-lockfile groups pass; the root group fails only on tests that fail identically at the base `148e9ad0a`: `dom-absence-scan` (`NativeChart.test.tsx`, `RichBlockFrame.test.tsx`), the two `test-suite-ownership` checks (`e2e/agent-testing/session-history-environment.test.ts`, `tests/unit/tmux-mail-benchmark.test.ts`), and `goals-plan`/`graphs-plan`, which scan the `plans/goals` and `plans/graphs` folders the base deleted. None of these files is touched by this branch. (The "no handler converted yet" state no longer exists: Phase 7 defined every command; the throwaway def command test above still passes.)
 
 ## Notes
 
@@ -106,3 +106,4 @@ String-registered commands keep working unchanged.
 - 2026-11-07 (claude-worker): backend: `CommandRegistrar` overload, `commands-registry-contracts.ts` (`CommandRegistry`, `createRegistryRegistrar`, `contractCommandHandler`, `untypedCommandHandler`, `assertInvocationVersion`, `commandArgsErrorMessage`, `wrapRegistrar`, `registerTarget`, `registrarFrom`, `contractResultValidationDefault`), `CommandInvocation` on `CommandHandler`, backend `invoke` and `BackendInvoker` third argument, gateway envelope decoding and `toWire` error bodies; the four wrapping registrars (`gatedRegistrar`, `mcpCorrelatedRegistrar`, `designAdmissionRegistrar`, `containerBridgeStartRegistrar`) forward both forms; 66 test registrar lambdas wrapped in `registrarFrom` (commit 25623b096). Desktop: envelope from main through `ConnectionManager` and `DesktopNodeIpc` to `BackendHttpClient` (commit c94c980b3). Tests: `commands-registry-contracts.test.ts` (20 pass), `tests/gateway-invoke-envelope.test.ts` (HTTP and relay, 7 pass), `apps/desktop/tests/invoke-envelope-ipc.test.ts` (5 pass) and a node-ipc test; the 52 touched/related backend files pass, 18 node/preview files pass, desktop ipc/node-ipc/main-ipc/backend-process/connection-manager/preload pass. Backend and desktop typecheck, oxlint and `bun fmt` clean.
 - 2026-11-07 (claude-worker, during 1004): node link envelope: `NodeLink.invokeCommand(def, args, options)` sends `buildInvokeEnvelope`'s `domain`/`version`/`critical` next to `command`/`args` only when the peer's hello advertises the command's domain (`contractEnvelopeFor(hello, def, args)`, via 1004's `domainRange`); a pre-contract peer, or one without the domain, gets today's `{ command, args }`. String `invoke` is unchanged. Tests in `apps/backend/src/core/nodes/node-link.test.ts` (3 cases).
 - 2026-11-07 (orchestrator, completeness check): the ticked Done-when box claimed `mise run test` passes, but no aggregate run is recorded. Split it: the proven part stays ticked, "`mise run test` passes" is its own open box (the orchestrator runs it at the end). `status: in-progress` until then.
+- 2026-11-07 (orchestrator): ran the aggregate suite at `13d3b79ea`; result recorded in the Done-when box.

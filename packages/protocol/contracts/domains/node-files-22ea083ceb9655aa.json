@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "domain": "node-files",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "abort_node_file_write": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e64a47314eb18ea4bfcb9dd2867a4643a21b4d165e552c97e639faf1f0fd9a27",
+      "resultDigest": "sha256:6bde15139496a6921f7e2747992bbbe48bd0e7566f9d046370609533116f0196"
+    },
+    "append_node_file_write": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:899d146880f566105249ca59935fe14fcfde85cff3e65d884f3a1ea11d9d868e",
+      "resultDigest": "sha256:db8a58a4030483aa11cfdcc207769190e65cf9c022828bdf7c032de6caea5748"
+    },
+    "begin_node_file_write": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["sha256"],
+      "argsDigest": "sha256:11835cd316f3ea624625e53d1b8175d96971145338cc745cdb4bd4770a6e45b0",
+      "resultDigest": "sha256:4f21483d94b47a91068f71175ad9a31dcff9364db25fbc8f533b5a35fe80ebbc"
+    },
+    "commit_node_file_write": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e64a47314eb18ea4bfcb9dd2867a4643a21b4d165e552c97e639faf1f0fd9a27",
+      "resultDigest": "sha256:0b2ec8d0b1ea53167abe6b6d0c8f42c80629eae6eb42a8cc12ce775d16f12920"
+    },
+    "list_node_transfers": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:c930faf07833814e6d0e4317f92ad76f0c8865a9b251ace8e09e34173541f59a"
+    },
+    "read_node_file": {
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7a830950de30938a5a0ec3b74acc6e055cee019ef30b4ee2f5abfa0aeb0cf350",
+      "resultDigest": "sha256:30eff7dc27f9f59171474f6a00bf65f00c0b169a7adeb5b43588ff57943a0e79"
+    },
+    "stat_node_file": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:20af5c19da3bf7a3679a9edab599b05ad1b0cb84bb7a6c486f90657d4c4ade11",
+      "resultDigest": "sha256:f476acd0cfc9f6a2ae9d0d0e5b39172ec07961914c381c2e93bd79b02572d860"
+    },
+    "transfer_node_files": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d03569ea5a7111d215409a59972af631ea94f4714d84c4c79302dd6828676d5b",
+      "resultDigest": "sha256:f230d8b038f27d544c27c3e15502708f84d3793c57668fecdc4e156972141b79"
+    }
+  }
+}

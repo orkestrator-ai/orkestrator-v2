@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "domain": "multi-review",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "address_multi_review": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "cancel_multi_review": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "cancel_review_validation": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0c8ad47c915d2cdac3596d9ebfa547be747aeed71cd3510fbc89f39c5d27578",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
+    },
+    "delete_multi_review_workflow": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "get_multi_review_reviewer_history_page": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0c80031f80d92d6b61bcc6ec9c25c1298099c6daae77ab85a5fafd277831f6bc",
+      "resultDigest": "sha256:66f8aa2f3713085734bb362adbd435b72d7ed876d8a9a31822197e795051b237"
+    },
+    "get_multi_review_reviewer_projection": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:342bade8795c18351d1c721ba4c62a0fb3be6d8cfcf7255038da2d9fd8f5a78b",
+      "resultDigest": "sha256:70f2e9d952297c291ff59c6839cf625619758735649cf42b906c58f6dc1b76fd"
+    },
+    "get_multi_review_reviewer_tool_details": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b0b9419eb69481226316e751de3bf3a9769b701aeffc150003be7082f4682332",
+      "resultDigest": "sha256:9df81e33f17bb4f7502c16bfcf016b5f08b32e15accce5605ef8f551bda5cb17"
+    },
+    "get_multi_review_reviewer_transcript": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4895efe3e4f53863fa2d5c163c526047f5d9abae2f1885620af2ff40e30befdd",
+      "resultDigest": "sha256:d358a030c986c3be800e6d6d801aa74fde41a9bb81baf5c3adc46bb1db7a97f9"
+    },
+    "get_multi_review_step_tool_details": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c8c2ad3cd08893cd54b520fa172dcc778924f92a9d411bb63e9362ec495f3817",
+      "resultDigest": "sha256:9df81e33f17bb4f7502c16bfcf016b5f08b32e15accce5605ef8f551bda5cb17"
+    },
+    "get_multi_review_step_transcript": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d84353b2c6cca791037d19630bca501b1daf6c5d87ffefdadf77ae2a2d58c9df",
+      "resultDigest": "sha256:b0f4d1d19e3c0c42f9198131cfb36f34dc6d97b6c39f5f7a4ea48344e55d654e"
+    },
+    "get_multi_review_workflow": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c6edb98fee93fb66f00cfa601bb7857c3d658d750bacf635a378f8d7b0f389ab",
+      "resultDigest": "sha256:879a0e6d93283917262eba7e2e837097120522a374bd7970ccb90e1cd975da87"
+    },
+    "get_review_validation_output": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:bb4bce4a5de584ff209685eb24a01701c7738f36258933092085e9c10f8b3ee6",
+      "resultDigest": "sha256:81a44d971148a9d1defdb20f8d2085d4408d998ea69bb0a4c3e0ada5cc09638b"
+    },
+    "list_multi_review_workflows": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
+      "resultDigest": "sha256:90611f0df5b38f748408eeaaff2d290c36653ba37d267ed0b62baec222803f53"
+    },
+    "pause_multi_review_step": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9a7506543495adcdac276440091705192c98ef66df439471dd4cf983495af840",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "preview_multi_review_code_rewind": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:591582f7ec8873110ef84048e53e5d5862218460c45eedc95ffa45f2e56586e2",
+      "resultDigest": "sha256:a542e740cb61565d6d1f80150e6ee9a3f96252e03edd3b2dcc11fff5ceda4801"
+    },
+    "recover_multi_review_fix_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:977f49d975b5b17a57ce1e0c6421664e14358ca1ca3c9e3c77d7535bfea63c8f",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "restart_multi_review_reviewer": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["model"],
+      "argsDigest": "sha256:79d41484112827ce8e672be4b97c21e63d4bc8293f455e1c0864bd5c8b0ccdcf",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "restart_multi_review_step": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["model"],
+      "argsDigest": "sha256:eef4095f01fc4b28600f79d1a49e6ac1dbe4b7322b02db259c829deeb18226fc",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "resume_multi_review_step": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9a7506543495adcdac276440091705192c98ef66df439471dd4cf983495af840",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "retry_multi_review": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "rewind_multi_review_code": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a14f6addf3170a3a2b744782f9b10c936584033fbc59585c860cac787d6b4c9f",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "skip_multi_review_step": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:591582f7ec8873110ef84048e53e5d5862218460c45eedc95ffa45f2e56586e2",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "start_multi_review": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8be8f219587b6294af0e3796193bb07a41f385d52feb365e035ed7b9b3fb5893",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "start_multi_review_custom_fix": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4268a4de29e6bc5b20a3dbcbc19bd0509252bc4a0e5196662637db8bff8f9123",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "start_review_validation": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0c8ad47c915d2cdac3596d9ebfa547be747aeed71cd3510fbc89f39c5d27578",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
+    },
+    "status_review_validation": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0c8ad47c915d2cdac3596d9ebfa547be747aeed71cd3510fbc89f39c5d27578",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
+    },
+    "stop_multi_review_reviewer": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9d265308c858033d15dcac14a2bce1a176cf3de518cffcf00622df6a116e51ca",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "stop_multi_review_validation": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c44e371b368078d2c7049661e83e20981bcf7ca117a3f3c8519515899ff863fa",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    },
+    "stop_review_validation_command": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bfeb4105781994cb4c1072d8ec3b4fbf5e750dfb31f1743250bb48ab3aaa8451",
+      "resultDigest": "sha256:bfe9d6534c27cd6ef8884145f527ce3f55806cafdd26caa7aa130e661a7adcf4"
+    },
+    "unstick_multi_review_reviewer": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9d265308c858033d15dcac14a2bce1a176cf3de518cffcf00622df6a116e51ca",
+      "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
+    }
+  }
+}

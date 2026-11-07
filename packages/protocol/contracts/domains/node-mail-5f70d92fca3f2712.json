@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "domain": "node-mail",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "ack_node_outbox": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c52b127a7fd63ea05e0f62976bf39601f84e0d9590f19050b02fc8f6260c2961",
+      "resultDigest": "sha256:6a3ef05aa407237fd680e097e8035b004f08af83af86a298f1185dc400666c7f"
+    },
+    "collect_node_outbox": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:3abc33044de8f3d2b68f8dc7920928edaddb1372213db50ebb5538ab375b3fc3",
+      "resultDigest": "sha256:72a502e0700129e7d8f6c1d0b43e23b54f6b60c87ff633f2910efb8165e04479"
+    },
+    "create_node_action_request": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:00ffb6d9dfad52244b483f2603d97187c3c0b21447971bfe4da32b6092417a46",
+      "resultDigest": "sha256:1207d6ab1b0e75169b5127ac1e8d11eecaeb68016252531c190988711e9c7a0f"
+    },
+    "deliver_node_mail": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["attachments", "nodeParent", "requestId", "steer"],
+      "argsDigest": "sha256:c3ad5ac27dcc0ba4ac93fb95f89281091f6507a7a2b4327e6d118df7588d2d76",
+      "resultDigest": "sha256:2b1bba7cde567582dc3ffe7d919c852c0be772720013ca51c15e7217352b5e10"
+    },
+    "get_node_project_coordinator": {
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:be6502d330ffcbcf92a6ee3f986945e36d68b9bc1e6f1c08be18a965a8d1713c"
+    },
+    "get_worker_request_state": {
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a0d6eec5c947629e71bf200b1665dc49c0cfd7eafc115c639076208931c66e3d",
+      "resultDigest": "sha256:e7a869579fd19c59e02fd5cae5bb67b4c6669281f134f08cc37a74351c10bdd8"
+    },
+    "list_node_action_requests": {
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b2dd3f3fbb95127ee40d71e425988aa2441e32c1f800fa8a609f042922dd8c5a",
+      "resultDigest": "sha256:c781e653c11e37ba0cba18de24fb3fe413987edd93abc3637447484606e5bbe4"
+    },
+    "place_node_mail_attachments": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b4d60f1562eed5c7351fe9ed43c2366e575b496ed4f6ae3d3954b2d777b962b3",
+      "resultDigest": "sha256:acd121cb990db1d09e859ec060cada43d09b04c4e6c443d937630f814145c526"
+    },
+    "prepare_node_mail_attachments": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b4d60f1562eed5c7351fe9ed43c2366e575b496ed4f6ae3d3954b2d777b962b3",
+      "resultDigest": "sha256:2ba9ef4655e43d0b3c48aa9ccb8e739d67fbc0b7024029cc9942a2b21b1ee3bd"
+    },
+    "record_node_environment_origin": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f8631faf351e7ed8f42e9b5f8bbb56799981b6c52d9e8f4098c9fe133bfa301f",
+      "resultDigest": "sha256:cf517a96e2a51faf07e22a7853c352873a2cfc38ca37234d39c07a4db15aa3c4"
+    },
+    "resolve_node_action_request": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e005d2bd16f3b3e69d62a147c70032bc72f697f666c170a9427c56870e21b6c5",
+      "resultDigest": "sha256:1207d6ab1b0e75169b5127ac1e8d11eecaeb68016252531c190988711e9c7a0f"
+    },
+    "return_node_outbox_mail": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:89b91b3f8f5d375c018a171edd3808b8d2ff6935d681b032244504ad8ac9b116",
+      "resultDigest": "sha256:5957557ad5a85e429d0c66dadefaf2b79056520e28a1013ca8d7e11e620da36c"
+    },
+    "send_coordinator_command_node_mail": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["attachments", "replyToMessageId", "requestId"],
+      "argsDigest": "sha256:09ffd3038e3a8b258c64c445c0a1db78368a7ac886777c7c39f8335e0b231f0f",
+      "resultDigest": "sha256:9dc68a6dad76b7f28a83814135e9ff597eac09324d2814f159a5544127d51df7"
+    }
+  }
+}

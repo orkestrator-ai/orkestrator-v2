@@ -1,6 +1,6 @@
 {
   "name": "orkestrator",
-  "version": "2.36.6-beta",
+  "version": "2.37.0-alpha",
   "description": "Run the Orkestrator backend service without the desktop application",
   "homepage": "https://orkestrator.dev",
   "repository": {

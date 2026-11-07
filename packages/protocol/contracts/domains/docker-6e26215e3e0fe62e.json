@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "domain": "docker",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "check_base_image": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
+    },
+    "check_container_host_reachability": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:96641af5c8ea2695289f998330d0b4b7f0265085443d51f8d52f42566354d560"
+    },
+    "check_docker": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:49987218226e6f70de5173666f5b2fb88c38f2b3eda62f1d354ea10f51bd9578"
+    },
+    "cleanup_orphaned_containers": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "close_container_logs": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c373400a5190b3468a7cc83c4e184fa78acacbac6b32a471a174a4284c68ed67",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "docker_cleanup_execute": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["selectionToken"],
+      "argsDigest": "sha256:7747f6376cb3ecc94f4ff511397dc61b2d9df9b0c52334c6065b91af5456bb50",
+      "resultDigest": "sha256:860e9905e43b4ad6e984de9c1872666f02d9407e4ff1b56112e6af6c366965f6"
+    },
+    "docker_cleanup_preview": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:ef122d9205390d97c9b79635743ec01fcf871a699cb4a4b09591d698e8e6d7a4"
+    },
+    "docker_container_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:a5febf33ba73a92a8452ccdba1fdb6863b869de29de2e89a072ba969cd16fe9f"
+    },
+    "docker_remove_container": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "docker_start_container": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "docker_stop_container": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "docker_system_prune": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "docker_version": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "get_container_host_port": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:63df2bf9a9645b1991d1583ecec1c3fdb12e8b822924e599cb5bdf38605f2237",
+      "resultDigest": "sha256:08e0a8ec5673d2c0227b309bc576f75cfaaaabe9b1f3258843ed1979a9560051"
+    },
+    "get_container_host_reachability": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:96641af5c8ea2695289f998330d0b4b7f0265085443d51f8d52f42566354d560"
+    },
+    "get_container_logs": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:fec3d578844a596d8eafe73c31a7f9d79faa87f60cb5a6849fdb51f4c8e053b2",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "get_container_usage": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:a6c491d8c304de72183923626aca1cf839f768f6ac8adeba972b913786599a2d"
+    },
+    "get_docker_capacity": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cfcf1119dda31479cf9e39ab26e9bde04ce4366a684131a66d683e6ef804c070",
+      "resultDigest": "sha256:878ba3c6733fc3324e2851f1706110c1d7595ee7b9d80d1af56ae22daba536d1"
+    },
+    "get_docker_image_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:b0b5f7fd4242e725c9eec3d77e86de66f36d939b56e687dcacda2757e4f7d6cb"
+    },
+    "get_docker_system_stats": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:eb914de819bd403fa5c286026f306095a7c079d82cbcf2508df6bf0303034f84"
+    },
+    "get_docker_topology": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cfcf1119dda31479cf9e39ab26e9bde04ce4366a684131a66d683e6ef804c070",
+      "resultDigest": "sha256:d31ab02079289105570d10f1cf1bd058a4a06d0dcf98a5382d7a0e246f4c3e1b"
+    },
+    "get_orkestrator_containers": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:6c2793a7a8438e5086069504d8adb234672dcb7dd51e3e3701f8bccc317904ec"
+    },
+    "list_docker_containers": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:e5059d246c503dd1ba779511929c1950c2b81903793822f63c26d9a6819fcca4"
+    },
+    "open_container_logs": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:87ddb8b052b0b08aa39687cde494ad79ed3890106458cbf4ade98ff7d12b1a14"
+    },
+    "propagate_github_token_to_containers": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:0d921cca13df3d75389cdc4498a0fa4d4bcf3c48c34efe2b158703b9349c5bb9"
+    },
+    "provision_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:a3d1c08cd0dc9aecddc72061726a94e7c4ac4218f308a004d1f881374cf97a67"
+    },
+    "read_container_logs": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:8712f1ca0075df3472174f9ddb4958f600661a9e6294386ad792f0403fe77e52",
+      "resultDigest": "sha256:a26fe87e188fae80dbfa3128ff5c6ac414358f2c52d0043647e3997f287ebb76"
+    },
+    "reattach_container": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b72f7b34c8d0796f2b87ec9da82c417b80016042853d099bf2b47502a1218f03",
+      "resultDigest": "sha256:a097aa8283a67af977e9ab404845aba5333b781ab49e55d808aa693bc913400d"
+    },
+    "stream_container_logs": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:bfba62bf42112daf79fbb4045dd0610cac9a2caeef71723556a7e59adb2d0070"
+    }
+  }
+}

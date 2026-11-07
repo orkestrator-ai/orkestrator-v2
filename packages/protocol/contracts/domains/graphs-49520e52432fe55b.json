@@ -1,0 +1,320 @@
+{
+  "schemaVersion": 1,
+  "domain": "graphs",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "graph_capability_ceiling_get": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:65c84d6119922add92cc4a9d2631eb58efc7bef1124b0bdba99f8cbf1d712c70"
+    },
+    "graph_capability_ceiling_set": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:7691ba2ed626767c5d8284c9bcdfb161d449bb81e7c005002db4d59541d4f84f",
+      "resultDigest": "sha256:65c84d6119922add92cc4a9d2631eb58efc7bef1124b0bdba99f8cbf1d712c70"
+    },
+    "graph_describe_cancel": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0d06dac3e0feeea0fa7bb17fb897b9dcf70e0737968a71773042e55514216032",
+      "resultDigest": "sha256:f669c037d550822e0d7ebd5565a42de3faf15ef5d5800aef5ffb0625e6c39b91"
+    },
+    "graph_describe_dismiss": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bd2bc83e288df6848cff6b2a5f1c4170e7a5b76208fc716154be76fa12ad3b4e",
+      "resultDigest": "sha256:58550adbce345e1852d146122acefd98ecaf98edf34fafd1c0031582bd521043"
+    },
+    "graph_describe_start": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:84a02e0408dd5d0928b6046e4a8484ed1ed0aa99f29aca15d395414b197a0f28",
+      "resultDigest": "sha256:303b8c777d5674db33b8926bd524baeb4ae7c4323b92b0bb334dbde20011e6a0"
+    },
+    "graph_describe_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0d06dac3e0feeea0fa7bb17fb897b9dcf70e0737968a71773042e55514216032",
+      "resultDigest": "sha256:f669c037d550822e0d7ebd5565a42de3faf15ef5d5800aef5ffb0625e6c39b91"
+    },
+    "graph_launch_options": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:457ce702f50425bd6a10278788dea051bf8b50e2cda8e19c40500cb6d4e3f3a6",
+      "resultDigest": "sha256:d077bcb297e4b9d3a9dc1c21e2e273e4f1283e3f85b02af022a57a7e7de5a537"
+    },
+    "graph_project_template_review": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:116aea31f88b2addfe9796be9f1cc8b8b61853b16f2f58153e565194374339e0",
+      "resultDigest": "sha256:47a0faae94e21d401edc658d04e73ce78cccdeaf5858d5391aeb6ae894b209aa"
+    },
+    "graph_project_template_review_decide": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:499018beae9e63c9086ec06a68ce283880f6bca33b8b0ec5b60525ffbf769340",
+      "resultDigest": "sha256:5ac87a3b928be6f445129a34f78f0c9fdc20b34f4ebdd8b334e70d46cbfd2e1e"
+    },
+    "graph_run_answer": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["value"],
+      "argsDigest": "sha256:8a8503df7ae8a3786f65850ca3ef937e3189db1272c679fdc9c68032f2b64d5c",
+      "resultDigest": "sha256:0dda5d275529657248173192e7ffb3074711f848759b8529f53c5700b91d7bd6"
+    },
+    "graph_run_artifact": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:38be45abf4825be5332bb8e27e6b6ae8f86d0b88054d2ed200417a779ccee4b1",
+      "resultDigest": "sha256:ec78a0ddcaa6bf5f1d23be94e7d96921a2c0e8874355183e2afa96292df43432"
+    },
+    "graph_run_cancel": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ad25bbf6bb0f9077efa3d73ae023bb115e773ae34d25efe488a6ec8be2814de2",
+      "resultDigest": "sha256:5b23863865a09d44c349c76bd5ff3734982726d04b27c215fd8efa0720e386d7"
+    },
+    "graph_run_effects": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:ad25bbf6bb0f9077efa3d73ae023bb115e773ae34d25efe488a6ec8be2814de2",
+      "resultDigest": "sha256:11e1cd60f1c2c8e4fbb6994dc71fb9a0fc09664091d8cabe1ea508007c8212d6"
+    },
+    "graph_run_get": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:fa6deccd7460245ac46c094c1b533433af186ad87b1b4ab67e80e5829c146e4a",
+      "resultDigest": "sha256:5b23863865a09d44c349c76bd5ff3734982726d04b27c215fd8efa0720e386d7"
+    },
+    "graph_run_launch": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:309ca3da471946ce06464feb9e3986ecfd572423738b67061f276f17b00f3ce2",
+      "resultDigest": "sha256:7dc879d7ea9e8883cb10314f5cfd5b53bf78ff03b96956aa17ff9063337e86a7"
+    },
+    "graph_run_mock": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:571f255e5b57eb9a109b3ca4703c21fa64ab0db86f93f1d9d05abd08378fb23d",
+      "resultDigest": "sha256:15151220cc18789b513a96344d5bd86250568e23abfea5a5f94acd383210c486"
+    },
+    "graph_run_pause": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ad25bbf6bb0f9077efa3d73ae023bb115e773ae34d25efe488a6ec8be2814de2",
+      "resultDigest": "sha256:5b23863865a09d44c349c76bd5ff3734982726d04b27c215fd8efa0720e386d7"
+    },
+    "graph_run_pending": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:ca1db95ffda9c0d23b1051097f497a4f6688ff2f5a739f50a654b189cf1e80f0",
+      "resultDigest": "sha256:9faa79d9dac9f06814d5f268927af01ff84d528daff0d6b9523df87dcd155ae3"
+    },
+    "graph_run_restart": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:4de3f1012a64fa4354f39ab48ecb36dcb8309bf94d182b4d425f8dea9d9ffaa3",
+      "resultDigest": "sha256:11d2e58b1086bef98e0efd20696cfd439d0f7efd8de0a9bb86e85c112f4729c4"
+    },
+    "graph_run_resume": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ad25bbf6bb0f9077efa3d73ae023bb115e773ae34d25efe488a6ec8be2814de2",
+      "resultDigest": "sha256:5b23863865a09d44c349c76bd5ff3734982726d04b27c215fd8efa0720e386d7"
+    },
+    "graph_run_retry": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7f9cec65caa933e3fa6f77304aab58c82a7184c902577910434df0d37bb7dead",
+      "resultDigest": "sha256:5b23863865a09d44c349c76bd5ff3734982726d04b27c215fd8efa0720e386d7"
+    },
+    "graph_run_rewind_code": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:edcfeccd8ba7aaa2945b40464f8d6c01eeaa22beef0d18613c1fe4bdcf43d2e8",
+      "resultDigest": "sha256:11d2e58b1086bef98e0efd20696cfd439d0f7efd8de0a9bb86e85c112f4729c4"
+    },
+    "graph_run_rewind_code_preview": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7f9cec65caa933e3fa6f77304aab58c82a7184c902577910434df0d37bb7dead",
+      "resultDigest": "sha256:bbec6f28f4e3d3f3e637c09c3fce8248d2476a694a6e4c23ac7709c431a99117"
+    },
+    "graph_run_skip": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7f9cec65caa933e3fa6f77304aab58c82a7184c902577910434df0d37bb7dead",
+      "resultDigest": "sha256:5b23863865a09d44c349c76bd5ff3734982726d04b27c215fd8efa0720e386d7"
+    },
+    "graph_run_transcript": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:2c455688117276e98a6011eb34ab02e819ea1f44b63b3ac81c1e017e4fac54d4",
+      "resultDigest": "sha256:4908d8208d1baf7e5680be2904d651bc20a44eb74736f7a9e726ae2a12897e26"
+    },
+    "graph_runs_list": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0d06dac3e0feeea0fa7bb17fb897b9dcf70e0737968a71773042e55514216032",
+      "resultDigest": "sha256:27f72f7eeff9c5724e4ec26962c30fe92235b2dc00df053853e1d46ead41c3dc"
+    },
+    "graph_sharing_key_trust": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:25d2247fa9c2924ecc0c7031ebe380dfb1d2e43c89e4daca7f25ca31c6fccc4e",
+      "resultDigest": "sha256:0369a0f124101685f4bffef70ed9760a54932bc4c9ab38899900ae52d67e36bb"
+    },
+    "graph_sharing_keys": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b488a12592e7ea75c2629137aa670d1b1745688cbbe21995ace4f90abb45c99e",
+      "resultDigest": "sha256:0369a0f124101685f4bffef70ed9760a54932bc4c9ab38899900ae52d67e36bb"
+    },
+    "graph_template_compile": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:bc70b93b246e7bab5c4cd195aabc85bcc115e044d1f4caf0606344668bd2cf1d",
+      "resultDigest": "sha256:a89ce1eea17e8ae032573d4afc6ced263be005bd23be55df6f410a3c40406b36"
+    },
+    "graph_template_delete": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:319e8872fa5df7083d34f247f4438ce7ba21beb8efb0d7f6b583bbc87c35fc35",
+      "resultDigest": "sha256:fa508eeaf9f6cbff2e58a05147061b3c6ae21c9effa326078682e4ff7995e89f"
+    },
+    "graph_template_duplicate": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["digest"],
+      "argsDigest": "sha256:76d788a8d27328ef9702c74c6d9fc8bccca36783d5015a2cea5171a62ed606a0",
+      "resultDigest": "sha256:a5a5a1551d16916c31aec15aa89757410d4ca264f267b32eb4a31ada0cd41068"
+    },
+    "graph_template_export": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7994d9d6a133ce926393409cef3734d6a61639f283d6010f844d90615a2b4c37",
+      "resultDigest": "sha256:d81b4eb08fa502c43f995e83245f2095454173a40125a44f7982d717b89ab7ec"
+    },
+    "graph_template_get": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:bdbb674b4acef6aaa6225034f9421c63c6150fdf6507bfe55df92b80501d3a77",
+      "resultDigest": "sha256:a5a5a1551d16916c31aec15aa89757410d4ca264f267b32eb4a31ada0cd41068"
+    },
+    "graph_template_import": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:dc36a96af22e263dbe7260dcfefc809b4a468601929bb2943ef7c3cf1337bb4c",
+      "resultDigest": "sha256:565256de43381c3b310e05f76d5e0a47f8064355e9f4bb4d5f2cd0370d481f91"
+    },
+    "graph_template_save": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:afb502086813596e83919962cefacd61567c2d25d44d93c575101864350c5d31",
+      "resultDigest": "sha256:a5a5a1551d16916c31aec15aa89757410d4ca264f267b32eb4a31ada0cd41068"
+    },
+    "graph_template_share_export": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6e095d3e131a258e19a5ea5a5b926ef530d5ea5db069fef0af8f4223a530afd0",
+      "resultDigest": "sha256:920e615b9c52acaabf80135fc297ca8d745e77b78d6ae853634888f879f231b8"
+    },
+    "graph_template_share_import": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:17724533f12de5a6f813194f942fdcce2a22c947ed3eaf6ce1f6de5fb4fce7d1",
+      "resultDigest": "sha256:72c8e0301e0f04c9f2bc6d87e429f472df09c83841951dcc367159779177e6d5"
+    },
+    "graph_template_trust": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:47ff5d9f062e768b96a0c9306f0886f632b7362392c32ba9c68966875a139312",
+      "resultDigest": "sha256:990c891383cf3422300bdafeaa656c186f2125f1f097090157a1d8454d8c41ec"
+    },
+    "graph_templates_list": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:1ef530ed9df5fe1ccf0528c40ea9c9913b47ecfb3f069ecd16cc6b8e0eb23029"
+    }
+  }
+}

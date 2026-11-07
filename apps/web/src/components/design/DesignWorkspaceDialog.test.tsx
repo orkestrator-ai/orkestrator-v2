@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
-import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import { toast } from "sonner";
@@ -127,7 +128,7 @@ afterEach(() => {
 function mount(createTab: (type: CreatableTabType, options?: CreateTabOptions) => boolean) {
   const onOpenChange = mock((_open: boolean) => {});
   const loadReadiness = mock(async (_probe: boolean) => ready);
-  render(
+  renderInAppCommandScope(
     <DesignWorkspaceDialog
       open
       onOpenChange={onOpenChange}
@@ -303,7 +304,9 @@ describe("DesignWorkspaceDialog", () => {
       createTab: () => true,
       loadReadiness,
     };
-    const view = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+    const view = renderInAppCommandScope(
+      <DesignWorkspaceDialog {...props} environmentId="env-1" />,
+    );
     try {
       await flush();
       await pasteImage(brief());
@@ -446,7 +449,9 @@ describe("DesignWorkspaceDialog", () => {
           createTab,
           loadReadiness: async () => ready,
         };
-        const rendered = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+        const rendered = renderInAppCommandScope(
+          <DesignWorkspaceDialog {...props} environmentId="env-1" />,
+        );
         await flush();
         await switchTo("Open design");
         fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
@@ -759,7 +764,7 @@ describe("DesignWorkspaceDialog", () => {
                 .attachments,
             ).toEqual(images);
           } else {
-            const hook = renderHook(() =>
+            const hook = renderHookInAppCommandScope(() =>
               useNativeComposeDraftPersistence(
                 "claude",
                 "env-1",
@@ -776,7 +781,7 @@ describe("DesignWorkspaceDialog", () => {
             expect(saved!.value).toMatchObject({ text: "", attachments: [] });
             // A hidden tab can now remount without resurrecting queue-owned images.
             appCommandStore(nativeComposeStore).getState().clearDraft(sessionKey);
-            renderHook(() =>
+            renderHookInAppCommandScope(() =>
               useNativeComposeDraftPersistence(
                 "claude",
                 "env-1",
@@ -888,7 +893,7 @@ describe("DesignWorkspaceDialog", () => {
         return true;
       });
       const onOpenChange = mock();
-      render(
+      renderInAppCommandScope(
         <DesignWorkspaceDialog
           open
           onOpenChange={onOpenChange}
@@ -972,7 +977,9 @@ describe("DesignWorkspaceDialog", () => {
           createTab,
           loadReadiness: () => new Promise<DesignReadinessView>(() => {}),
         };
-        const rendered = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+        const rendered = renderInAppCommandScope(
+          <DesignWorkspaceDialog {...props} environmentId="env-1" />,
+        );
         await flush();
         fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
         await flush();
@@ -1041,7 +1048,7 @@ describe("DesignWorkspaceDialog", () => {
         return true;
       });
       try {
-        render(
+        renderInAppCommandScope(
           <DesignWorkspaceDialog
             open
             onOpenChange={() => {}}
@@ -1101,7 +1108,7 @@ describe("DesignWorkspaceDialog", () => {
         };
       throw new Error(`Unexpected command: ${command}`);
     });
-    render(
+    renderInAppCommandScope(
       <DesignWorkspaceDialog
         open
         onOpenChange={() => {}}
@@ -1132,7 +1139,7 @@ describe("DesignWorkspaceDialog", () => {
 
   test("an unavailable renderer blocks creation but not opening", async () => {
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <DesignWorkspaceDialog
         open
         onOpenChange={onOpenChange}

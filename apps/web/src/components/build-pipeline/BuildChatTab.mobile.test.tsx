@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -175,7 +176,7 @@ function renderPipeline(next: BuildPipeline, layout?: "graph" | "stacked") {
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
   });
-  render(
+  renderInAppCommandScope(
     <BuildChatTab
       data={{
         pipelineId: next.id,

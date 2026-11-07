@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { configureLogger } from "@orkestrator/protocol/logger";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { configStore } from "../../../apps/web/src/stores/configStore";
 import { buildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
@@ -153,7 +154,7 @@ mock.module("@/lib/backend", () => ({
 import { listen } from "@/lib/native/events";
 const mockListen = listen as ReturnType<typeof mock>;
 
-// The suite seeds through the statics, which are the app command scope's stores.
+// The suite seeds the app command scope's stores (appCommandStore).
 import { appCommandScope } from "@/lib/node-scope-slots";
 
 // Import hook AFTER mocking
@@ -267,7 +268,7 @@ describe("useEnvironments", () => {
   });
 
   test("returns empty environments when no projectId", () => {
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     expect(result.current.environments).toEqual([]);
     expect(result.current.isLoading).toBe(false);
@@ -280,7 +281,7 @@ describe("useEnvironments", () => {
     ];
     mockGetEnvironments.mockImplementation(() => Promise.resolve(mockEnvs));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.environments).toHaveLength(1);
@@ -293,7 +294,7 @@ describe("useEnvironments", () => {
   test("does not discard an environment created after a snapshot request began", async () => {
     const snapshot = createDeferred<Environment[]>();
     mockGetEnvironmentSnapshots.mockImplementation(() => snapshot.promise);
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let refreshPromise!: Promise<void>;
     act(() => {
@@ -333,7 +334,7 @@ describe("useEnvironments", () => {
     const snapshot = createDeferred<Environment[]>();
     mockCreateEnvironment.mockImplementation(() => creation.promise);
     mockGetEnvironmentSnapshots.mockImplementation(() => snapshot.promise);
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let creationPromise!: Promise<Environment>;
     act(() => {
@@ -392,7 +393,7 @@ describe("useEnvironments", () => {
       isLoading: false,
     });
 
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await result.current.loadEnvironments("project-1", { silent: true, reconcileStatus: false });
@@ -414,7 +415,7 @@ describe("useEnvironments", () => {
       error: "Existing visible error",
       isLoading: false,
     });
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     try {
       await act(async () => {
@@ -443,7 +444,7 @@ describe("useEnvironments", () => {
   });
 
   test("createEnvironment creates an environment successfully", async () => {
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -466,7 +467,7 @@ describe("useEnvironments", () => {
   });
 
   test("createEnvironment forwards optional creation parameters", async () => {
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
     const portMappings = [{ hostPort: 5173, containerPort: 5173, protocol: "tcp" as const }];
 
     await waitFor(() => {
@@ -498,7 +499,7 @@ describe("useEnvironments", () => {
   });
 
   test("forkEnvironment creates an environment from the source", async () => {
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -531,7 +532,7 @@ describe("useEnvironments", () => {
     mockGetEnvironmentSnapshots.mockImplementation(() => Promise.resolve([]));
     mockToastError.mockClear();
 
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let thrownError: Error | undefined;
     try {
@@ -565,7 +566,7 @@ describe("useEnvironments", () => {
     const expectedError = new Error("Failed to create");
     mockCreateEnvironment.mockImplementation(() => Promise.reject(expectedError));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -603,7 +604,7 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
     const pipelineId = seedBuildPipeline("env-1");
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -639,7 +640,7 @@ describe("useEnvironments", () => {
       collapsedProjects: ["project-1"],
     });
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
@@ -681,7 +682,7 @@ describe("useEnvironments", () => {
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([deleted, kept]));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -721,7 +722,7 @@ describe("useEnvironments", () => {
     });
     const pipelineId = seedBuildPipeline("env-1");
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -774,7 +775,7 @@ describe("useEnvironments", () => {
       selectedEnvironmentId: "env-1",
     });
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
@@ -811,7 +812,7 @@ describe("useEnvironments", () => {
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -875,9 +876,12 @@ describe("useEnvironments", () => {
         delete: mockDeleteEnvironment,
       }[failingStep];
       failingBackend.mockImplementation(() => failure.promise);
-      const { result, rerender } = renderHook(({ projectId }) => useEnvironments(projectId), {
-        initialProps: { projectId: environment.projectId },
-      });
+      const { result, rerender } = renderHookInAppCommandScope(
+        ({ projectId }) => useEnvironments(projectId),
+        {
+          initialProps: { projectId: environment.projectId },
+        },
+      );
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
       const initialPrompt = "Keep this initial prompt available for recovery";
@@ -941,7 +945,7 @@ describe("useEnvironments", () => {
         });
       }
       mockStartEnvironment.mockRejectedValue(new Error("Start rejected"));
-      const { result } = renderHook(() => useEnvironments(null));
+      const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
       await act(async () => {
         await expect(result.current.startEnvironment("env-orphan")).rejects.toThrow(
           "Start rejected",
@@ -986,7 +990,7 @@ describe("useEnvironments", () => {
       Promise.resolve(createMockEnvironment({ ...existingEnv, status: "running" })),
     );
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1009,7 +1013,7 @@ describe("useEnvironments", () => {
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
     mockGetEnvironments.mockResolvedValue([existingEnv]);
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -1038,7 +1042,7 @@ describe("useEnvironments", () => {
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
     mockGetEnvironments.mockResolvedValue([existingEnv]);
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -1060,7 +1064,7 @@ describe("useEnvironments", () => {
     });
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
     mockStartEnvironmentInBackground.mockRejectedValue(new Error("background start rejected"));
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let thrownError: Error | undefined;
     try {
@@ -1095,7 +1099,7 @@ describe("useEnvironments", () => {
         ? Promise.reject(new Error("background start rejected"))
         : Promise.resolve();
     });
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await expect(
@@ -1151,7 +1155,7 @@ describe("useEnvironments", () => {
       environments: [environment],
     });
     mockGetEnvironmentSnapshots.mockImplementation(() => staleSnapshot.promise);
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let loadPromise!: Promise<void>;
     act(() => {
@@ -1211,7 +1215,7 @@ describe("useEnvironments", () => {
     mockStartEnvironment.mockImplementation(() => Promise.resolve({}));
     mockGetEnvironment.mockImplementation(() => Promise.resolve(startedEnv));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1263,7 +1267,7 @@ describe("useEnvironments", () => {
     );
     mockGetEnvironment.mockImplementation(() => Promise.resolve(completedEnv));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1328,7 +1332,7 @@ describe("useEnvironments", () => {
       });
     });
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1370,7 +1374,7 @@ describe("useEnvironments", () => {
     configureLogger({ level: "debug" });
 
     try {
-      const { result } = renderHook(() => useEnvironments("project-1"));
+      const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
       await act(async () => {
         await result.current.startEnvironment("env-1");
       });
@@ -1435,7 +1439,7 @@ describe("useEnvironments", () => {
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1476,7 +1480,7 @@ describe("useEnvironments", () => {
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1510,7 +1514,7 @@ describe("useEnvironments", () => {
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1549,7 +1553,7 @@ describe("useEnvironments", () => {
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1576,7 +1580,7 @@ describe("useEnvironments", () => {
       Promise.reject(new Error("docker unavailable")),
     );
     const logs = captureLogs();
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     try {
       let synced: Environment | undefined;
@@ -1612,7 +1616,7 @@ describe("useEnvironments", () => {
     mockGetEnvironment.mockImplementation(() =>
       Promise.resolve({ ...existingEnv, status: "running" }),
     );
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await result.current.restartEnvironment("env-1");
@@ -1631,7 +1635,7 @@ describe("useEnvironments", () => {
     });
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
     mockStopEnvironment.mockImplementation(() => Promise.reject(new Error("stop failed")));
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let thrownError: Error | undefined;
     try {
@@ -1655,7 +1659,7 @@ describe("useEnvironments", () => {
     });
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
     mockStartEnvironment.mockRejectedValue(new Error("replacement start failed"));
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let thrownError: Error | undefined;
     try {
@@ -1689,7 +1693,7 @@ describe("useEnvironments", () => {
     });
 
     try {
-      const { result } = renderHook(() => useEnvironments(null));
+      const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
       let thrownError: Error | undefined;
       try {
         await act(async () => {
@@ -1714,7 +1718,7 @@ describe("useEnvironments", () => {
   test("setEnvironmentPR updates PR state", async () => {
     const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1" });
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await result.current.setEnvironmentPR("env-1", "https://github.com/acme/repo/pull/1", "open");
@@ -1740,7 +1744,7 @@ describe("useEnvironments", () => {
     });
 
     try {
-      const { result } = renderHook(() => useEnvironments(null));
+      const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
       let thrownError: Error | undefined;
       try {
         await act(async () => {
@@ -1774,7 +1778,7 @@ describe("useEnvironments", () => {
         { ...first, order: 1 },
       ]),
     );
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await result.current.reorderEnvironments("project-1", ["env-2", "env-1"]);
@@ -1793,7 +1797,7 @@ describe("useEnvironments", () => {
     appCommandStore(environmentStore).setState({ environments: [first, second] });
     mockReorderEnvironments.mockImplementation(() => Promise.reject(new Error("write failed")));
     mockGetEnvironments.mockImplementation(() => Promise.resolve([first, second]));
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     let thrownError: Error | undefined;
     try {
@@ -1819,7 +1823,7 @@ describe("useEnvironments", () => {
     mockUpdatePortMappings.mockImplementation(() =>
       Promise.resolve({ ...existingEnv, portMappings }),
     );
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await result.current.updatePortMappings("env-1", portMappings);
@@ -1848,7 +1852,7 @@ describe("useEnvironments", () => {
       name: "before",
     });
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     act(() => {
       result.current.updateEnvironment("env-1", { name: "after" });
@@ -1873,7 +1877,7 @@ describe("useEnvironments", () => {
       Promise.resolve(envs.filter((e) => e.projectId === projectId)),
     );
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1899,7 +1903,7 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
 
-    renderHook(() => useEnvironments(null));
+    renderHookInAppCommandScope(() => useEnvironments(null));
 
     await waitFor(() => expect(eventNames).toContain("environment-renamed"));
     expect(eventNames).not.toContain("environment-setup-started");
@@ -1910,7 +1914,7 @@ describe("useEnvironments", () => {
   test("handles load error gracefully", async () => {
     mockGetEnvironments.mockImplementation(() => Promise.reject(new Error("Network error")));
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -1936,7 +1940,7 @@ describe("useEnvironments", () => {
         return Promise.resolve(() => {});
       },
     );
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
 
     await waitFor(() => {
       expect(callbacks.has("environment-setup-started")).toBe(true);
@@ -2058,7 +2062,7 @@ describe("useEnvironments", () => {
       lifecycleError: "Git worktree creation failed",
     });
     mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await result.current.loadEnvironments("project-1", {
@@ -2103,7 +2107,7 @@ describe("useEnvironments", () => {
     mockGetEnvironmentSnapshots.mockResolvedValue([
       { ...environment, status: "error", lifecycleError: "Environment start failed." },
     ]);
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await expect(result.current.startEnvironment(environment.id)).rejects.toThrow(
@@ -2144,7 +2148,7 @@ describe("useEnvironments", () => {
     mockGetEnvironmentSnapshots.mockResolvedValue([
       { ...environment, status: "error", lifecycleError: "Environment start failed." },
     ]);
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await act(async () => {
       await expect(result.current.restartEnvironment(environment.id)).rejects.toThrow(
@@ -2178,7 +2182,7 @@ describe("useEnvironments", () => {
         });
       });
     mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
-    const { result } = renderHook(() => useEnvironments(null));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments(null));
 
     await refresh(result);
     expect(mockToastError).toHaveBeenCalledTimes(1);
@@ -2284,7 +2288,7 @@ describe("useEnvironments", () => {
         return Promise.resolve(() => {});
       },
     );
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(callbacks.has("environment-setup-started")).toBe(true));
 
     act(() => {
@@ -2323,7 +2327,7 @@ describe("useEnvironments", () => {
         return Promise.resolve(() => {});
       },
     );
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
@@ -2360,7 +2364,7 @@ describe("useEnvironments", () => {
     appCommandStore(environmentStore).setState({ environments: [environment] });
     mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
 
-    const { result } = renderHook(() => {
+    const { result } = renderHookInAppCommandScope(() => {
       useEnvironmentLifecycleService();
       return useEnvironments(null);
     });
@@ -2391,7 +2395,7 @@ describe("useEnvironments", () => {
         return Promise.resolve(() => {});
       },
     );
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
@@ -2427,7 +2431,7 @@ describe("useEnvironments", () => {
         return Promise.resolve(() => {});
       },
     );
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
@@ -2458,7 +2462,7 @@ describe("useEnvironments", () => {
         return Promise.resolve(() => {});
       },
     );
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
@@ -2842,7 +2846,7 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
 
-    const { unmount } = renderHook(() => useEnvironmentLifecycleService());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(listened).toContain("native-event-stream-connected"));
     expect(connectedCallback).toBeDefined();
 
@@ -2908,7 +2912,7 @@ describe("useEnvironments", () => {
       get: () => "hidden",
     });
     try {
-      renderHook(() => useEnvironmentLifecycleService());
+      renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
       await act(async () => {
         document.dispatchEvent(new Event("visibilitychange"));
         await Promise.resolve();
@@ -2935,7 +2939,7 @@ describe("useEnvironments", () => {
       collapsedProjects: ["project-1"],
     });
 
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
 
     act(() => {
       appCommandStore(environmentStore).getState().updateEnvironment("env-1", {
@@ -2957,7 +2961,7 @@ describe("useEnvironments", () => {
     });
     // Setup lifecycle listeners are registered once by the app-root service
     // hook; useEnvironments only owns the optional rename listener.
-    renderHook(() => {
+    renderHookInAppCommandScope(() => {
       useEnvironmentLifecycleService();
       useEnvironments(null, { listenForRenameEvents: false });
     });
@@ -2979,7 +2983,7 @@ describe("useEnvironments", () => {
     });
     appCommandStore(environmentStore).setState({ environments: [environment] });
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-active" });
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(callbacks.has("native-agent-async-question")).toBe(true));
 
     act(() => {
@@ -3014,7 +3018,7 @@ describe("useEnvironments", () => {
         },
         "env-active",
       );
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(callback).toBeDefined());
 
     act(() => {
@@ -3045,7 +3049,7 @@ describe("useEnvironments", () => {
     appCommandStore(paneLayoutStore)
       .getState()
       .addTab("default", { id: "terminal-tab", type: "plain" }, "env-active");
-    renderHook(() => useEnvironmentLifecycleService());
+    renderHookInAppCommandScope(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(callback).toBeDefined());
 
     act(() => {
@@ -3074,7 +3078,7 @@ describe("useEnvironments", () => {
           resolvers.push(resolve);
         }),
     );
-    const { unmount } = renderHook(() => {
+    const { unmount } = renderHookInAppCommandScope(() => {
       useEnvironmentLifecycleService();
       useEnvironments(null);
     });
@@ -3125,7 +3129,7 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -3177,7 +3181,7 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -3232,7 +3236,7 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -3284,7 +3288,7 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
 
-    const { result } = renderHook(() => useEnvironments("project-1"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironments("project-1"));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionRequest,
@@ -141,7 +142,7 @@ describe("request card execution details", () => {
       dispatchMode: "session",
       cancelArrivedLate: true,
     });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(within(article).getByText("The agent's turn failed: Rate limit exceeded")).toBeTruthy();
     expect(within(article).getByText(/Sent with the session's own mode/)).toBeTruthy();
@@ -152,7 +153,7 @@ describe("request card execution details", () => {
 
   test("a cancelled request names its cancel source", async () => {
     seed("cancelled", { cancelSource: "chat-queue" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(
       within(article).getByText("Removed from the chat queue before it was sent"),
@@ -168,7 +169,7 @@ describe("request card execution details", () => {
       outcome: "not-cancellable",
       refusal: "newer-turn",
     }));
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(within(article).getByText("Stop failed — may still be running")).toBeTruthy();
     fireEvent.click(within(article).getByRole("button", { name: "Try stopping again" }));
@@ -183,7 +184,7 @@ describe("request card execution details", () => {
     backend.overrides.set("web_annotation_request_recover", () => ({
       request: backend.requests.get("request-queued"),
     }));
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     const alert = within(article).getByRole("alert");
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
@@ -203,7 +204,7 @@ describe("request card execution details", () => {
       destinationMissingAt: "2026-09-21T12:00:00Z",
     });
     backend.destinations = [...backend.destinations, OTHER_SESSION];
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(within(article).getByText(/no longer exists/)).toBeTruthy();
     fireEvent.click(within(article).getByRole("button", { name: "Send to another session…" }));
@@ -228,7 +229,7 @@ describe("request card execution details", () => {
   test("Discuss is labelled advisory for a session without per-turn plan mode", async () => {
     seed("completed");
     backend.destinations = [OTHER_SESSION];
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await card();
     fireEvent.click(screen.getByRole("button", { name: "Discuss…" }));
     const composer = await screen.findByRole("region", { name: "Ask an agent" });
@@ -256,7 +257,7 @@ describe("request card execution details", () => {
       sessionId: "session-1",
       revision: 2,
     }));
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     const waiting = within(article).getByRole("region", { name: "Waiting for your answer" });
     const input = await within(waiting).findByLabelText("Which padding value? response");
@@ -283,7 +284,7 @@ describe("request card execution details", () => {
         turnId: "turn-7",
       },
     });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     fireEvent.click(await within(article).findByRole("button", { name: "Open full conversation" }));
     expect(
@@ -298,7 +299,7 @@ describe("request card execution details", () => {
   test("linked requests open the thread of a request outside this one", async () => {
     seed("completed", { followUpOf: "request-earlier" });
     backend.requests.set("request-earlier", fixtureRequest("completed", { id: "request-earlier" }));
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     fireEvent.click(within(article).getByRole("button", { name: "Follows up an earlier request" }));
     await waitFor(() =>
@@ -331,7 +332,7 @@ describe("request card execution details", () => {
       resultId: null,
     };
     backend.overrides.set("web_annotation_request_follow_up", () => candidates);
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     fireEvent.click(within(article).getByRole("button", { name: "Send remaining work…" }));
     const preview = await within(article).findByRole("region", { name: "Send remaining work" });

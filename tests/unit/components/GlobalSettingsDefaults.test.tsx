@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { configStore } from "@/stores/configStore";
 import type { ActionDefaults } from "../../../packages/protocol/src/action-defaults";
 import { installControlledTimeout } from "../../helpers/controlled-timeout";
@@ -97,7 +98,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("offers a picker per action, all on the app default until configured", () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     for (const action of [
       "New environments",
@@ -116,7 +117,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("saves the chosen platform and model for an action", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -136,7 +137,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("edits and clears the new Multi Review defaults independently", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review 2");
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
@@ -169,7 +170,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("switching provider on the rail drops the previous provider's model", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("PR");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -187,7 +188,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("uses unsaved platform changes when configuring defaults before one combined save", async () => {
-    const view = render(<GlobalSettings activeSection="platforms" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="platforms" />);
 
     // Platform changes live in GlobalSettings until the shared Save button is
     // pressed. The Defaults pane must consume that same draft rather than the
@@ -231,7 +232,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     const picker = screen.getByRole("combobox", {
       name: "Push default agent, model and reasoning",
@@ -250,7 +251,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("keeps unsaved edits when the picker's favorite star writes to the store", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -279,7 +280,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("re-syncs the form when the stored defaults actually change", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -311,7 +312,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("sets and clears an action's reasoning level", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     // The picker opens on the app default platform, so reach Codex's catalog
     // through the rail before choosing one of its models.
@@ -359,7 +360,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     // The value is kept and sent as-is rather than quietly rewritten, so the
     // pane has to say why it is not showing a catalog entry.
@@ -377,7 +378,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Push");
     fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
@@ -408,7 +409,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     // Only the changed field travels; the backend merges it onto its own
     // copy, so another window's newer defaults cannot be overwritten from here.
@@ -443,7 +444,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     fireEvent.change(screen.getByLabelText("Review instruction"), {
       target: { value: "Preserve unrelated preferences." },
@@ -464,7 +465,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("edits a two-column variable reviewer list shared with Defaults", async () => {
-    const view = render(<GlobalSettings activeSection="review" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const grid = screen.getByRole("group", { name: "Default Multi Review models" });
     expect(grid.className).toContain("sm:grid-cols-2");
@@ -525,7 +526,7 @@ describe("GlobalSettings defaults section", () => {
       },
     }));
 
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     expect(
       screen.getByRole("combobox", {
@@ -559,7 +560,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Use one fewer reviewer" }));
     expect(
@@ -593,7 +594,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const rows = screen
       .getByRole("group", { name: "Default Multi Review models" })
@@ -625,7 +626,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const rows = screen
       .getByRole("group", { name: "Default Multi Review models" })
@@ -651,7 +652,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    const view = render(<GlobalSettings activeSection="review" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     expect(
       (screen.getByRole("button", { name: "Use one fewer reviewer" }) as HTMLButtonElement)
         .disabled,
@@ -671,7 +672,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     expect(
       (screen.getByRole("button", { name: "Use one more reviewer" }) as HTMLButtonElement).disabled,
     ).toBe(true);

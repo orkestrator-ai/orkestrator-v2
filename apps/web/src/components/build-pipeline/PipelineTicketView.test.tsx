@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { kanbanStore } from "@/stores/kanbanStore";
 import { build, session } from "./pipeline-test-fixture";
 import { pipelineCriteriaStatusWord } from "@orkestrator/protocol/build-pipeline-criteria";
@@ -51,7 +52,7 @@ describe("pipeline ticket references", () => {
   });
 
   test("shows both BMP and SVG snapshot references and opens their previews", () => {
-    render(<PipelineTicketView pipeline={build({ taskSnapshot: snapshot })} />);
+    renderInAppCommandScope(<PipelineTicketView pipeline={build({ taskSnapshot: snapshot })} />);
     const images = screen.getByRole("region", { name: "Reference images (2)" });
     expect(
       within(images)
@@ -82,7 +83,7 @@ describe("pipeline ticket references", () => {
         },
       ] as never,
     });
-    render(<PipelineTicketView pipeline={build({ taskSnapshot: snapshot })} />);
+    renderInAppCommandScope(<PipelineTicketView pipeline={build({ taskSnapshot: snapshot })} />);
     expect(screen.getByTestId("pipeline-ticket-changed").textContent).toContain("has been edited");
     expect(screen.getByRole("heading", { name: "Original ticket" }).textContent).toBe(
       "Original ticket",
@@ -125,7 +126,7 @@ describe("pipeline ticket references", () => {
         }),
       ],
     });
-    render(<PipelineTicketView pipeline={pipeline} />);
+    renderInAppCommandScope(<PipelineTicketView pipeline={pipeline} />);
     expect(screen.getByRole("region", { name: "Problem" }).textContent).toContain("It is a blob.");
     expect(
       screen
@@ -154,7 +155,7 @@ describe("pipeline ticket references", () => {
         }),
       ],
     });
-    render(<PipelineTicketView pipeline={pipeline} />);
+    renderInAppCommandScope(<PipelineTicketView pipeline={pipeline} />);
     expect(
       screen.getAllByTestId("ticket-criterion").map((item) => item.getAttribute("data-status")),
     ).toEqual(["passed", "failed"]);
@@ -190,7 +191,7 @@ describe("pipeline ticket references", () => {
           }),
         ],
       });
-      render(<PipelineTicketView pipeline={pipeline} />);
+      renderInAppCommandScope(<PipelineTicketView pipeline={pipeline} />);
       const criteria = screen.getAllByTestId("ticket-criterion");
       expect(criteria).toHaveLength(120);
       expect(criteria[0]?.textContent).toContain(long);
@@ -207,7 +208,7 @@ describe("pipeline ticket references", () => {
   );
 
   test("an older record without snapshot content explains the missing ticket", () => {
-    render(
+    renderInAppCommandScope(
       <PipelineTicketView
         pipeline={build({ taskSnapshot: { ...snapshot, title: "", description: "" } })}
       />,

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
@@ -72,7 +73,7 @@ async function flush() {
 
 describe("DesignLaunchButton", () => {
   test("keeps sm viewport gutters while capping the launch dialog at 42rem", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignLaunchButton
         environmentId="env-1"
         disabled={false}
@@ -93,7 +94,7 @@ describe("DesignLaunchButton", () => {
   });
 
   test("stays enabled without a renderer or free tabs and probes only when opened", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignLaunchButton environmentId="env-1" disabled tabCount={99} createTab={() => true} />,
     );
     await flush();
@@ -113,7 +114,7 @@ describe("DesignLaunchButton", () => {
   });
 
   test("is disabled only without an environment", () => {
-    render(<DesignLaunchButton disabled={false} tabCount={0} createTab={null} />);
+    renderInAppCommandScope(<DesignLaunchButton disabled={false} tabCount={0} createTab={null} />);
     expect(
       (screen.getByRole("button", { name: "New design workspace" }) as HTMLButtonElement).disabled,
     ).toBe(true);

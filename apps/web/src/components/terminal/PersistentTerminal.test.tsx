@@ -1,7 +1,9 @@
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { InAppCommandScope, renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { render } from "@testing-library/react";
 import { StrictMode, useCallback, useState } from "react";
 import * as realSessionStore from "@/stores/sessionStore";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
@@ -703,7 +705,7 @@ describe("PersistentTerminal", () => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
     window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
     try {
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={createTerminalData()}
           tabId="tab-1"
@@ -739,7 +741,7 @@ describe("PersistentTerminal", () => {
       label: "PersistentTerminal visibility redraw final refresh",
     });
     try {
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={terminalData}
           tabId="tab-1"
@@ -769,7 +771,7 @@ describe("PersistentTerminal", () => {
 
   it("does not force a redraw when opening a fresh terminal already visible", async () => {
     portalTerminalIsOpened = false;
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -791,7 +793,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("forces a redraw when an opened terminal DOM is reattached on mount", async () => {
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -825,7 +827,7 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await waitFor(() => {
       expect(resizeMock).toHaveBeenCalledWith(80, 25);
@@ -857,7 +859,7 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await waitFor(() => {
       expect(resizeMock).toHaveBeenCalledWith(80, 25);
@@ -880,7 +882,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -940,18 +942,20 @@ describe("PersistentTerminal", () => {
 
     render(
       <StrictMode>
-        <PersistentTerminal
-          terminalData={createTerminalData()}
-          tabId="tab-1"
-          tabType="plain"
-          containerId="container-1"
-          environmentId="env-1"
-          isEnvironmentVisible
-          isActive
-          isFocused
-          isFirstTab={false}
-          paneId="pane-1"
-        />
+        <InAppCommandScope>
+          <PersistentTerminal
+            terminalData={createTerminalData()}
+            tabId="tab-1"
+            tabType="plain"
+            containerId="container-1"
+            environmentId="env-1"
+            isEnvironmentVisible
+            isActive
+            isFocused
+            isFirstTab={false}
+            paneId="pane-1"
+          />
+        </InAppCommandScope>
       </StrictMode>,
     );
 
@@ -979,7 +983,7 @@ describe("PersistentTerminal", () => {
   it("uses the fallback connection for an already-open disconnected terminal", async () => {
     useTerminalIsConnected = false;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1018,7 +1022,7 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
     };
     const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
 
@@ -1064,7 +1068,7 @@ describe("PersistentTerminal", () => {
     });
     const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1097,7 +1101,7 @@ describe("PersistentTerminal", () => {
     // also Testing Library's default timeout, so the queries here name another.
     const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS, THIRD_RETRY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1145,7 +1149,7 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
 
@@ -1212,7 +1216,7 @@ describe("PersistentTerminal", () => {
       isSetupTab: true,
     };
     const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
     expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
@@ -1235,7 +1239,7 @@ describe("PersistentTerminal", () => {
     useTerminalBootstrapped = false;
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const terminalData = createTerminalData();
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="startup-agent"
@@ -1267,7 +1271,7 @@ describe("PersistentTerminal", () => {
         });
     });
     const terminalData = createTerminalData();
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -1312,7 +1316,7 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
       backendManagedTerminal: true,
     };
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await waitFor(() => {
       expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
@@ -1345,7 +1349,7 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
 
@@ -1367,7 +1371,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("forwards the environment identity to terminal compose draft persistence", () => {
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1393,7 +1397,7 @@ describe("PersistentTerminal", () => {
     setMobileViewport(true);
     const terminalData = createTerminalData();
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -1417,7 +1421,7 @@ describe("PersistentTerminal", () => {
   it("shows mobile terminal keys and sends their control sequences to the PTY", async () => {
     setMobileViewport(true);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1452,7 +1456,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("does not render the terminal key bar on desktop", () => {
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1477,7 +1481,7 @@ describe("PersistentTerminal", () => {
       value: true,
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -1507,7 +1511,7 @@ describe("PersistentTerminal", () => {
   it("hides mobile keys while inactive and disables them while disconnected", () => {
     setMobileViewport(true);
     const terminalData = createTerminalData();
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -1549,7 +1553,7 @@ describe("PersistentTerminal", () => {
 
   it("reserves safe-area space and raises the compose bar above mobile keys", () => {
     setMobileViewport(true);
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1585,7 +1589,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1614,7 +1618,7 @@ describe("PersistentTerminal", () => {
 
   it("publishes the write function only for connected terminals", async () => {
     const onWrite = mock((_write: (data: string) => Promise<void>) => {});
-    const connectedView = render(
+    const connectedView = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1635,7 +1639,7 @@ describe("PersistentTerminal", () => {
     onWrite.mockClear();
     useTerminalIsConnected = false;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1658,7 +1662,7 @@ describe("PersistentTerminal", () => {
   it("focuses the terminal when activated on desktop", async () => {
     const terminalData = createTerminalData();
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -1682,7 +1686,7 @@ describe("PersistentTerminal", () => {
     setMobileViewport(true);
     const terminalData = createTerminalData();
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -1710,7 +1714,7 @@ describe("PersistentTerminal", () => {
 
   it("forces a redraw when the environment becomes visible again", async () => {
     const terminalData = createTerminalData();
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -1770,7 +1774,7 @@ describe("PersistentTerminal", () => {
       });
     try {
       const terminalData = createTerminalData();
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={terminalData}
           tabId="tab-1"
@@ -1802,7 +1806,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("clicking the terminal updates the active pane for its own environment", async () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1828,7 +1832,7 @@ describe("PersistentTerminal", () => {
   it("keeps only one input handler attached to a persistent xterm instance", async () => {
     const terminalData = createTerminalData();
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <>
         <PersistentTerminal
           terminalData={terminalData}
@@ -1874,7 +1878,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("passes the root terminal user to the terminal hook for root tabs", async () => {
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1904,7 +1908,7 @@ describe("PersistentTerminal", () => {
   ] as const)(
     "sets environment activity tracking for %s terminal tabs",
     async (tabType, expected) => {
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={createTerminalData()}
           tabId="tab-1"
@@ -1946,7 +1950,7 @@ describe("PersistentTerminal", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -1978,7 +1982,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2015,7 +2019,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2054,7 +2058,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2112,7 +2116,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2169,7 +2173,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2214,7 +2218,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2258,7 +2262,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2304,7 +2308,7 @@ describe("PersistentTerminal", () => {
     const terminal = terminalData.terminal as unknown as MockTerminal;
     const arbitraryTail = new Uint8Array([0x9b, 0x33, 0x31, 0x6d, 0xf0, 0x9f, 0x99]);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2343,7 +2347,7 @@ describe("PersistentTerminal", () => {
   describe("warning dismissal", () => {
     const renderForWarnings = (tabType: "plain" | "claude" = "plain") => {
       const terminalData = createTerminalData();
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={terminalData}
           tabId="tab-1"
@@ -2489,7 +2493,7 @@ describe("PersistentTerminal", () => {
         connectMock.mockImplementation(() => new Promise(() => {}));
         const terminalData = createTerminalData();
         const props = disconnectedProps(terminalData);
-        const view = render(<PersistentTerminal {...props} />);
+        const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
         await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
         act(() => {
@@ -2526,7 +2530,7 @@ describe("PersistentTerminal", () => {
         connectMock.mockImplementation(() => new Promise(() => {}));
         const terminalData = createTerminalData();
         const props = disconnectedProps(terminalData);
-        const view = render(<PersistentTerminal {...props} />);
+        const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
         await waitFor(() => expect(timer.hasTimer()).toBe(true));
         act(() => timer.fire());
@@ -2572,7 +2576,9 @@ describe("PersistentTerminal", () => {
           sessionId: "env-1:setup",
         });
         const terminalData = createTerminalData({ serializedBuffer: "saved setup output\r\n" });
-        render(<PersistentTerminal {...disconnectedProps(terminalData)} isSetupTab />);
+        renderInAppCommandScope(
+          <PersistentTerminal {...disconnectedProps(terminalData)} isSetupTab />,
+        );
 
         await waitFor(() => expect(timer.hasTimer()).toBe(true));
         act(() => timer.fire());
@@ -2604,7 +2610,7 @@ describe("PersistentTerminal", () => {
     const terminal = terminalData.terminal as unknown as MockTerminal;
     const arbitraryTail = new Uint8Array([0x9b, 0x33, 0x31, 0x6d, 0xf0, 0x9f]);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2649,7 +2655,7 @@ describe("PersistentTerminal", () => {
       }
       return undefined;
     });
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -2673,7 +2679,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("reveals the history button only while the pointer is in the top-right corner", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -2715,7 +2721,7 @@ describe("PersistentTerminal", () => {
   it("keeps history usable alongside manual setup completion in the shared toolbar", async () => {
     setMobileViewport(true);
     const onSetupComplete = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -2769,7 +2775,7 @@ describe("PersistentTerminal", () => {
     const truncatedTail = new TextEncoder().encode("possibly overlapping tail\r\n");
     const live = new TextEncoder().encode("live after snapshot\r\n");
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2835,7 +2841,7 @@ describe("PersistentTerminal", () => {
       const terminalData = createTerminalData();
       const terminal = terminalData.terminal as unknown as MockTerminal;
 
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={terminalData}
           tabId="tab-1"
@@ -2904,7 +2910,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -2963,7 +2969,7 @@ describe("PersistentTerminal", () => {
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData({ containerId: null })}
         tabId="tab-1"
@@ -3017,7 +3023,7 @@ describe("PersistentTerminal", () => {
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData({ containerId: null })}
         tabId="tab-1"
@@ -3061,7 +3067,7 @@ describe("PersistentTerminal", () => {
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData({ containerId: null })}
         tabId="tab-1"
@@ -3091,7 +3097,7 @@ describe("PersistentTerminal", () => {
   ])("marks a non-first tab ready after %s", async (_label, output) => {
     holdSessionPersistence();
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -3126,7 +3132,7 @@ describe("PersistentTerminal", () => {
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -3168,7 +3174,7 @@ describe("PersistentTerminal", () => {
     terminal.getSelection.mockImplementation(() => "selected text");
     mockReadText.mockImplementation(() => Promise.resolve("pasted text"));
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -3211,7 +3217,7 @@ describe("PersistentTerminal", () => {
   it.each(["metaKey", "ctrlKey"])(
     "yields %s+Shift+/ to the dialog without PTY input",
     async (modifier) => {
-      render(
+      renderInAppCommandScope(
         <>
           <KeyboardShortcutsDialog />
           <PersistentTerminal
@@ -3253,7 +3259,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -3292,7 +3298,7 @@ describe("PersistentTerminal", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={terminalData}
           tabId="tab-1"
@@ -3335,7 +3341,7 @@ describe("PersistentTerminal", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <PersistentTerminal
           terminalData={createTerminalData()}
           tabId="tab-1"
@@ -3372,7 +3378,7 @@ describe("PersistentTerminal", () => {
     const terminal = terminalData.terminal as unknown as MockTerminal;
     terminal.hasSelection.mockImplementation(() => false);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -3431,7 +3437,7 @@ describe("PersistentTerminal", () => {
     holdSessionPersistence();
     const terminalData = createTerminalData();
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -3492,7 +3498,7 @@ describe("PersistentTerminal", () => {
   it("sends compose images sequentially before normalized single-line text", async () => {
     const terminalData = createTerminalData();
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -3557,7 +3563,7 @@ describe("PersistentTerminal", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData({ containerId: null })}
         tabId="tab-1"
@@ -3583,7 +3589,7 @@ describe("PersistentTerminal", () => {
   it("restores the serialized buffer when a terminal moves panes", async () => {
     const terminalData = createTerminalData({ serializedBuffer: "pane-buffer" });
     const terminal = terminalData.terminal as unknown as MockTerminal;
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -3629,7 +3635,7 @@ describe("PersistentTerminal", () => {
     const logs = captureLogs();
 
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <PersistentTerminal
           terminalData={terminalData}
           tabId="tab-1"
@@ -3682,7 +3688,7 @@ describe("PersistentTerminal", () => {
     const terminalData = createTerminalData();
     storedContainerElement.textContent = "";
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={terminalData}
         tabId="tab-1"
@@ -3728,7 +3734,7 @@ describe("PersistentTerminal", () => {
     });
 
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -3785,7 +3791,7 @@ describe("PersistentTerminal", () => {
     });
 
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -3873,7 +3879,7 @@ describe("PersistentTerminal", () => {
       activeEnvironmentId: "env-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData({ containerId: null })}
         tabId="tab-1"
@@ -3903,7 +3909,7 @@ describe("PersistentTerminal", () => {
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -3938,7 +3944,7 @@ describe("PersistentTerminal", () => {
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -3985,7 +3991,7 @@ describe("PersistentTerminal", () => {
       ]),
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4032,7 +4038,7 @@ describe("PersistentTerminal", () => {
       ]),
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4075,7 +4081,7 @@ describe("PersistentTerminal", () => {
       composeDraftImages: new Map(),
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4101,7 +4107,7 @@ describe("PersistentTerminal", () => {
   it("only signals setup completion when the OSC success marker arrives", async () => {
     const onSetupComplete = mock((_payload: { persistSetupComplete: boolean }) => {});
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4132,7 +4138,7 @@ describe("PersistentTerminal", () => {
   it("signals completion without persistence when the OSC failure marker arrives", async () => {
     const onSetupComplete = mock((_payload: { persistSetupComplete: boolean }) => {});
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4157,7 +4163,7 @@ describe("PersistentTerminal", () => {
 
   it("treats the manual setup-complete button as a runtime-only override", async () => {
     const onSetupComplete = mock((_payload: { persistSetupComplete: boolean }) => {});
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4193,7 +4199,7 @@ describe("PersistentTerminal", () => {
       ),
     }));
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4217,7 +4223,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("still offers the manual setup-complete button while setup is unfinished", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4242,7 +4248,7 @@ describe("PersistentTerminal", () => {
 
   it("emits success and failure OSC markers for setup completion", async () => {
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4278,7 +4284,7 @@ describe("PersistentTerminal", () => {
 
   it("launches first container setup commands without waiting for workspace-ready output", async () => {
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4310,7 +4316,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("persists serialized buffers for persistent sessions on cleanup", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData({ serializedBuffer: "persisted-buffer" })}
         tabId="tab-1"
@@ -4348,7 +4354,7 @@ describe("PersistentTerminal", () => {
     const logs = captureLogs();
 
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <PersistentTerminal
           terminalData={terminalData}
           tabId="tab-1"
@@ -4397,7 +4403,7 @@ describe("PersistentTerminal", () => {
         ],
       ]),
     });
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData({ serializedBuffer: "too-short" })}
         tabId="tab-1"
@@ -4437,7 +4443,7 @@ describe("PersistentTerminal", () => {
         order: 0,
       },
     ];
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4491,7 +4497,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4562,7 +4568,7 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
       isSetupTab: true,
     };
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
 
     await act(async () => {
       await Promise.resolve();
@@ -4630,7 +4636,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4676,7 +4682,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4716,7 +4722,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4755,7 +4761,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4783,7 +4789,7 @@ describe("PersistentTerminal", () => {
       throw new Error("list failed");
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4821,7 +4827,7 @@ describe("PersistentTerminal", () => {
     });
     const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4881,7 +4887,7 @@ describe("PersistentTerminal", () => {
     ];
     const clocks = installTerminalClocks(FIRST_RETRY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4934,7 +4940,7 @@ describe("PersistentTerminal", () => {
     // The 1 s clock is also Testing Library's default timeout: name another.
     const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS, THIRD_RETRY_MS);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -4971,7 +4977,7 @@ describe("PersistentTerminal", () => {
       throw new Error("create failed");
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5008,7 +5014,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5050,7 +5056,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5090,7 +5096,7 @@ describe("PersistentTerminal", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5120,7 +5126,7 @@ describe("PersistentTerminal", () => {
       composeDraftImages: new Map(),
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5155,7 +5161,7 @@ describe("PersistentTerminal", () => {
       composeDraftImages: new Map(),
     });
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5189,7 +5195,7 @@ describe("PersistentTerminal", () => {
     });
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5226,7 +5232,7 @@ describe("PersistentTerminal", () => {
     });
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5260,7 +5266,7 @@ describe("PersistentTerminal", () => {
     );
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5299,7 +5305,7 @@ describe("PersistentTerminal", () => {
 
     const clock = installControlledTimeout(300, { label: "PersistentTerminal bootstrap flush" });
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <PersistentTerminal
           terminalData={createTerminalData()}
           tabId="tab-1"
@@ -5363,7 +5369,7 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
     };
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
@@ -5416,7 +5422,7 @@ describe("PersistentTerminal", () => {
     });
 
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    const view = render(<PersistentTerminal {...props(["echo ready"])} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props(["echo ready"])} />);
     act(() => {
       void terminalOnData?.(new TextEncoder().encode("workspace $ "));
     });
@@ -5450,7 +5456,7 @@ describe("PersistentTerminal", () => {
     );
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5488,7 +5494,7 @@ describe("PersistentTerminal", () => {
     });
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5545,7 +5551,7 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
     };
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
@@ -5589,7 +5595,7 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
     };
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    const view = render(<PersistentTerminal {...props} />);
+    const view = renderInAppCommandScope(<PersistentTerminal {...props} />);
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
@@ -5609,7 +5615,7 @@ describe("PersistentTerminal", () => {
 
   it("launches Codex terminal mode without an initial prompt", async () => {
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5632,7 +5638,7 @@ describe("PersistentTerminal", () => {
 
   it("escapes quotes and dollar signs in Codex prompts", async () => {
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"
@@ -5656,7 +5662,7 @@ describe("PersistentTerminal", () => {
 
   it("preserves newlines in Codex prompts", async () => {
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
-    render(
+    renderInAppCommandScope(
       <PersistentTerminal
         terminalData={createTerminalData()}
         tabId="tab-1"

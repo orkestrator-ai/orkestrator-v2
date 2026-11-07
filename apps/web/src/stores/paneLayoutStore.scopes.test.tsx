@@ -144,7 +144,7 @@ describe("pane layouts per node", () => {
     expect(clientB.calls("teardown_tab")).toEqual([]);
   });
 
-  test("the hook reads the rendered scope; the barrel exports the def; the statics are the app's", () => {
+  test("the hook reads the rendered scope; the barrel exports the def; the app command scope is another instance", () => {
     expect(barrel.paneLayoutStore).toBe(paneLayoutStore);
     expect(barrel.usePaneLayoutStore).toBe(usePaneLayoutStore);
     function TabCount() {
@@ -155,7 +155,7 @@ describe("pane layouts per node", () => {
     expect(screen.getByTestId("tab-count").textContent).toBe("0");
     act(() => seedLayout(scope, [TAB]));
     expect(screen.getByTestId("tab-count").textContent).toBe("1");
-    // The deprecated statics reach the app's command scope, a different instance.
+    // The app command scope is a different instance.
     expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toEqual([]);
     expect(getWindowScope().commandScope().store(paneLayoutStore)).not.toBe(
       scope.store(paneLayoutStore),

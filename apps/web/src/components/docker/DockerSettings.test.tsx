@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { ContainerInfo, DockerSystemStats } from "@/lib/backend";
@@ -69,7 +70,7 @@ function install(stats: DockerSystemStats, containers: ContainerInfo[]) {
 describe("Docker settings section", () => {
   test("an unassigned pre-label container can be reattached", async () => {
     install(unknownStats, [container({ isAssigned: false, cleanupExclusion: "legacy-unadopted" })]);
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     expect(await screen.findByTitle("Reattach to project")).toBeTruthy();
     expect(screen.getByText("Legacy")).toBeTruthy();
     expect(screen.queryByText("Protected") === null).toBe(true);
@@ -81,7 +82,7 @@ describe("Docker settings section", () => {
 
   test("what Docker did not report reads as unknown, never as zero", async () => {
     install(unknownStats, [container({})]);
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     await screen.findByText(/Not measured: Docker did not answer/);
     expect(screen.getAllByText(/unknown/).length).toBeGreaterThanOrEqual(4);
     expect(screen.queryAllByText("0 B")).toHaveLength(0);
@@ -102,7 +103,7 @@ describe("Docker settings section", () => {
       },
       [container({})],
     );
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     await screen.findByText(/CPU: 2.50 cores/);
     expect(screen.getByText("2 out-of-memory kills")).toBeTruthy();
     expect(screen.getByText(/created time unknown/)).toBeTruthy();
@@ -112,7 +113,7 @@ describe("Docker settings section", () => {
 
   test("refresh reloads both the figures and the containers", async () => {
     const calls = install(unknownStats, []);
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     await screen.findByText(/Not measured/);
     const before = calls.filter((command) => command === "get_docker_system_stats").length;
     fireEvent.click(screen.getAllByRole("button", { name: "Refresh" })[0]!);
@@ -125,7 +126,7 @@ describe("Docker settings section", () => {
 
   test("asks for Docker when it is not running, without calling it", async () => {
     const calls = install(unknownStats, []);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <DockerSettings />
       </DockerAvailabilityProvider>,
@@ -145,7 +146,7 @@ describe("Docker settings section", () => {
     });
     try {
       const calls = install(unknownStats, []);
-      const view = render(
+      const view = renderInAppCommandScope(
         <DockerAvailabilityProvider available>
           <DockerSettings />
         </DockerAvailabilityProvider>,
@@ -206,7 +207,7 @@ describe("Docker settings section", () => {
     routeRemote(remote);
     invokeMock.mockClear();
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <DockerAvailabilityProvider available={false}>
           <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
             <DockerSettings />
@@ -265,7 +266,7 @@ describe("Docker settings section", () => {
       return { outcome: "ok", result };
     });
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
           <DockerSettings />
         </AccountMachineProvider>,
@@ -338,7 +339,7 @@ describe("Docker settings section", () => {
       };
     });
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
           <DockerSettings />
         </AccountMachineProvider>,

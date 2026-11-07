@@ -4,7 +4,8 @@
  * tab click, and the labelled loading state.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   coordinatorRuntimeId,
   type CoordinatorConversation,
@@ -300,14 +301,14 @@ describe("CoordinatorPanel tab strip", () => {
   }
 
   test("marks the main tab only once side agents are open beside it", async () => {
-    const single = render(<CoordinatorPanel projectId="project-1" />);
+    const single = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const alone = await screen.findByRole("tab", { name: "Coordinator, Codex" });
     expect(alone.getAttribute("aria-selected")).toBe("true");
     expect(document.querySelector("[data-coordinator-main-marker]") === null).toBe(true);
     single.unmount();
 
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const main = await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
     expect(main.querySelector("[data-coordinator-main-marker]")?.textContent).toBe("Main");
     const side = screen.getByRole("tab", { name: "Side 1, Codex" });
@@ -343,7 +344,7 @@ describe("CoordinatorPanel tab strip", () => {
       });
       return ensuredSnapshot;
     });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
 
     fireEvent.click(screen.getByRole("button", { name: "Change agent" }));
@@ -407,7 +408,7 @@ describe("CoordinatorPanel tab strip", () => {
         return closed;
       });
       createConversation.mockImplementation(() => pendingCreate);
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
       fireEvent.click(screen.getByRole("button", { name: "Change agent" }));
       fireEvent.click(
@@ -541,7 +542,7 @@ describe("CoordinatorPanel tab strip", () => {
 
   test("closing the main explains Change agent only when there is an agent to change", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    const assigned = render(<CoordinatorPanel projectId="project-1" />);
+    const assigned = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
     fireEvent.click(screen.getByRole("button", { name: /^Close Coordinator\./ }));
     expect((await screen.findByRole("alertdialog")).textContent).toContain(
@@ -552,7 +553,7 @@ describe("CoordinatorPanel tab strip", () => {
     ensuredSnapshot = withWorkspace({
       conversations: [{ ...mainConversation, agent: undefined }, sideConversation],
     });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("tab", { name: "Coordinator, main, no agent chosen yet" });
     fireEvent.click(screen.getByRole("button", { name: /^Close Coordinator\./ }));
     const dialog = await screen.findByRole("alertdialog");
@@ -562,7 +563,7 @@ describe("CoordinatorPanel tab strip", () => {
 
   test("the tab menu opens from the keyboard and moves a tab to a new group and back", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const side = await screen.findByRole("tab", { name: "Side 1, Codex" });
 
     act(() => side.focus());
@@ -639,7 +640,7 @@ describe("CoordinatorPanel tab strip", () => {
     appCommandStore(coordinatorPaneLayoutStore)
       .getState()
       .setLayout("project-1", { ...grouped, activePaneId: single.activePaneId });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
     await waitFor(() => expect(storedLayout().activePaneId).toBe(single.activePaneId));
     select.mockClear();
@@ -657,12 +658,12 @@ describe("CoordinatorPanel tab strip", () => {
 
   test("the loading state is announced, and New side agent keeps its name when only its icon shows", async () => {
     hangLoads = true;
-    const loading = render(<CoordinatorPanel projectId="project-1" />);
+    const loading = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect((await screen.findByRole("status")).textContent).toBe("Loading coordinator");
     loading.unmount();
 
     hangLoads = false;
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const create = await screen.findByRole("button", { name: "New side agent" });
     // Its tooltip says what a side agent is for, not only its name.
     expect(create.getAttribute("title")).toBe(

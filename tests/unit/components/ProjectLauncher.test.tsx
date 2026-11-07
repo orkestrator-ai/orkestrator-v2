@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realUseProjects from "@/hooks/useProjects";
 import * as realCreateEnvironmentFlow from "@/components/environments/CreateEnvironmentFlowDialog";
 import { uiStore } from "@/stores/uiStore";
@@ -122,7 +123,7 @@ describe("ProjectLauncher", () => {
     const onCreateEnvironment = mock(() => {});
     const projects = [makeProject(1), makeProject(2)];
 
-    render(
+    renderInAppCommandScope(
       <ProjectLauncherContent
         projects={projects}
         isLoading={false}
@@ -151,16 +152,16 @@ describe("ProjectLauncher", () => {
       onCreateEnvironment: () => {},
     };
 
-    const loadingView = render(<ProjectLauncherContent {...props} isLoading />);
+    const loadingView = renderInAppCommandScope(<ProjectLauncherContent {...props} isLoading />);
     expect(screen.getByText("Loading projects...")).toBeTruthy();
     loadingView.unmount();
 
-    render(<ProjectLauncherContent {...props} isLoading={false} />);
+    renderInAppCommandScope(<ProjectLauncherContent {...props} isLoading={false} />);
     expect(screen.getByText("No projects yet")).toBeTruthy();
   });
 
   test("keeps available projects visible while a refresh is loading", () => {
-    render(
+    renderInAppCommandScope(
       <ProjectLauncherContent
         projects={[makeProject(1)]}
         isLoading
@@ -184,7 +185,7 @@ describe("ProjectLauncher", () => {
     projectsValue = [makeProject(1), makeProject(2)];
     appCommandStore(uiStore).setState({ recentProjectIds: ["project-2"] });
 
-    render(<ProjectLauncher {...operations} />);
+    renderInAppCommandScope(<ProjectLauncher {...operations} />);
 
     const projectButtons = screen.getAllByRole("button", { name: /^Open Project/ });
     expect(projectButtons.map((button) => button.getAttribute("aria-label"))).toEqual([

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import * as realTerminalPortalHost from "./TerminalPortalHost";
@@ -51,20 +52,20 @@ describe("LazyTerminalPortalHost", () => {
 
   test("does not load the host for an environment with only agent tabs", async () => {
     setTabs("env-1", [{ id: "agent", type: "agent-native" }]);
-    render(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
+    renderInAppCommandScope(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
     await settle();
     expect(screen.queryByTestId("loaded-host") === null).toBe(true);
   });
 
   test("ignores a terminal tab in another environment", async () => {
     setTabs("env-other", [{ id: "shell", type: "plain" }]);
-    render(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
+    renderInAppCommandScope(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
     await settle();
     expect(screen.queryByTestId("loaded-host") === null).toBe(true);
   });
 
   test("loads the host when the environment gains a terminal tab", async () => {
-    render(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
+    renderInAppCommandScope(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
     await settle();
     expect(screen.queryByTestId("loaded-host") === null).toBe(true);
 
@@ -74,7 +75,7 @@ describe("LazyTerminalPortalHost", () => {
 
   test("keeps the host mounted after the last terminal tab closes, so it can dispose terminals", async () => {
     setTabs("env-1", [{ id: "shell", type: "plain" }]);
-    render(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
+    renderInAppCommandScope(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
     await screen.findByTestId("loaded-host");
 
     setTabs("env-1", []);

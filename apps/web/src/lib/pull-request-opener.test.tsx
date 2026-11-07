@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, renderHook } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
 import type { Environment, Project } from "@/types";
 import { uiStore } from "@/stores/uiStore";
 
@@ -11,7 +11,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { environmentStore } from "@/stores/environmentStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { projectStore } from "@/stores/projectStore";
-import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { FakeNodeClient, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   currentFilesPanelTargetId,
   openPullRequestInApp,
@@ -172,7 +172,7 @@ test("with a leaf shown in the window's tree, the pull request opens in the leaf
 
 test("subtree providers route links to their host and acknowledge handling", () => {
   const calls: unknown[] = [];
-  const { result } = renderHook(usePullRequestOpener, {
+  const { result } = renderHookInAppCommandScope(usePullRequestOpener, {
     wrapper: ({ children }) => (
       <PullRequestOpenerProvider open={(...args) => void calls.push(args)}>
         {children}
@@ -192,7 +192,7 @@ function withBrowser() {
 }
 
 test("a provider can decline, so the link falls back to the browser", () => {
-  const { result } = renderHook(usePullRequestOpener, {
+  const { result } = renderHookInAppCommandScope(usePullRequestOpener, {
     wrapper: ({ children }) => (
       <PullRequestOpenerProvider open={() => false}>{children}</PullRequestOpenerProvider>
     ),

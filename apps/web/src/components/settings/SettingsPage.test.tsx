@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as federation from "@/components/federation/FederationProvider";
 import * as commandNode from "@/components/federation/useCommandNode";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -47,14 +48,14 @@ test("scope banners name the owner of each section in a leaf window", () => {
     "skills",
     "sounds",
   ] as const) {
-    const view = render(<SettingsScopeBanner section={section} />);
+    const view = renderInAppCommandScope(<SettingsScopeBanner section={section} />);
     expect(screen.getByTestId("settings-scope").textContent).toBe(
       "Machine settings for Leaf. Changes apply to this machine.",
     );
     view.unmount();
   }
   for (const section of ["review", "messaging"] as const) {
-    const view = render(<SettingsScopeBanner section={section} />);
+    const view = renderInAppCommandScope(<SettingsScopeBanner section={section} />);
     expect(screen.getByTestId("settings-scope").textContent).toContain("Preferences for Desk");
     view.unmount();
   }
@@ -70,20 +71,20 @@ test("scope banners name the owner of each section in a leaf window", () => {
     "opencode",
     "pi",
   ] as const) {
-    const view = render(<SettingsScopeBanner section={section} />);
+    const view = renderInAppCommandScope(<SettingsScopeBanner section={section} />);
     expect(screen.getByTestId("settings-scope").textContent).toContain(
       "Preferences come from Desk",
     );
     expect(screen.getByTestId("settings-scope").textContent).toContain("belong to Leaf");
     view.unmount();
   }
-  render(<SettingsScopeBanner section="machines" />);
+  renderInAppCommandScope(<SettingsScopeBanner section="machines" />);
   expect(screen.getByTestId("settings-scope").textContent).toContain("Command node: Desk");
 });
 
 test("single-machine windows only show scope for the Machines section", () => {
   installScope(false);
-  const view = render(<SettingsScopeBanner section="network" />);
+  const view = renderInAppCommandScope(<SettingsScopeBanner section="network" />);
   const banner = screen.queryByTestId("settings-scope");
   expect(banner).toBeNull();
   view.rerender(<SettingsScopeBanner section="machines" />);
@@ -92,14 +93,14 @@ test("single-machine windows only show scope for the Machines section", () => {
 
 test("the machine picked in the header owns its machine settings", () => {
   installScope();
-  render(
+  renderInAppCommandScope(
     <SettingsScopeBanner section="network" machine={{ name: "Build box", colorToken: "amber" }} />,
   );
   expect(screen.getByTestId("settings-scope").textContent).toBe(
     "Machine settings for Build box. Changes apply to this machine.",
   );
   cleanup();
-  render(
+  renderInAppCommandScope(
     <SettingsScopeBanner section="claude" machine={{ name: "Build box", colorToken: "amber" }} />,
   );
   expect(screen.getByTestId("settings-scope").textContent).toContain("belong to Build box");
@@ -199,7 +200,9 @@ test("the Docker tab renders while global config is still loading", async () => 
     if (command === "get_orkestrator_containers" || command === "get_projects") return [];
     return undefined;
   });
-  render(<SettingsPage open defaultSection="docker" onOpenChange={() => undefined} />);
+  renderInAppCommandScope(
+    <SettingsPage open defaultSection="docker" onOpenChange={() => undefined} />,
+  );
   expect(await screen.findByText("System Resources")).toBeTruthy();
   expect(appCommandStore(configStore).getState().isLoading).toBe(true);
   expect(screen.queryByText("Loading Docker stats...") === null).toBe(true);
@@ -287,7 +290,7 @@ test("a remote workspace opens Docker in parent Settings and every action target
     direct.push(command);
     return answer(command, false);
   });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <DockerAvailabilityProvider available>
         <GlobalSettingsHost />
@@ -462,7 +465,7 @@ for (const scenario of [
       direct.push({ command, args });
       return answer(command, false);
     });
-    const view = render(
+    const view = renderInAppCommandScope(
       <FederationProvider>
         <DockerAvailabilityProvider available>
           <SettingsPage open defaultSection="docker" onOpenChange={() => undefined} />

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   FIXTURE_ENVIRONMENT_ID,
   fixturePreviewCapabilities,
@@ -54,7 +55,7 @@ describe("environment preview services", () => {
       }),
     });
     const onAddPortMapping = mock((_port: number) => undefined);
-    render(
+    renderInAppCommandScope(
       <EnvironmentPreviewServices
         environment={{ id: FIXTURE_ENVIRONMENT_ID, environmentType: "containerized" }}
         onAddPortMapping={onAddPortMapping}
@@ -98,7 +99,7 @@ describe("environment preview services", () => {
         definition: { ...service.definition, userOverride: true },
       }),
     });
-    render(
+    renderInAppCommandScope(
       <EnvironmentPreviewServices
         environment={{ id: FIXTURE_ENVIRONMENT_ID, environmentType: "local" }}
       />,
@@ -131,7 +132,7 @@ describe("environment preview services", () => {
         throw new Error("Unknown backend command: get_preview_capabilities");
       },
     });
-    render(
+    renderInAppCommandScope(
       <EnvironmentPreviewServices
         environment={{ id: FIXTURE_ENVIRONMENT_ID, environmentType: "local" }}
       />,
@@ -190,7 +191,7 @@ describe("preview operator settings", () => {
       update_preview_settings: () => ({ stored: settings, effective: settings }),
       revoke_preview_access: () => ({ revoked: 2 }),
     });
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     const toggle = await screen.findByRole("switch", { name: "Issue new preview access" });
     expect(screen.getByText("Private preview publication is disabled.")).toBeTruthy();
     expect(screen.getByText("tunnel.sockets")).toBeTruthy();

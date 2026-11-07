@@ -11,7 +11,8 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { memo } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   CoordinatorConversation,
   CoordinatorSnapshot,
@@ -175,7 +176,7 @@ function counts() {
 }
 
 async function renderPanel() {
-  render(<CoordinatorPanel projectId="project-1" />);
+  renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
   await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
   // Let the first reads (git, prompts, the checkout turn) settle.
   await act(async () => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX,
   type AgentMailMailboxSnapshot,
@@ -113,7 +114,7 @@ describe("mounted mail tool tiles", () => {
       }
       throw new Error(`Unexpected command ${command}`);
     });
-    render(<MailToolPart call={call} expansionKey="old" />);
+    renderInAppCommandScope(<MailToolPart call={call} expansionKey="old" />);
     expect(await screen.findByText("Recipient")).toBeTruthy();
     expect(senderText()).toBe("To Recipient · Codex worker");
     expect(screen.getByText("handled")).toBeTruthy();
@@ -140,7 +141,7 @@ describe("mounted mail tool tiles", () => {
       if (command === "get_agent_mail_mailboxes") return { revision: 1, mailboxes: [pending] };
       throw new Error(`Unexpected command ${command}`);
     });
-    render(<MailToolPart call={call} expansionKey="awaiting-agent" />);
+    renderInAppCommandScope(<MailToolPart call={call} expansionKey="awaiting-agent" />);
     expect(await screen.findByText("waiting for agent")).toBeTruthy();
   });
 
@@ -155,7 +156,7 @@ describe("mounted mail tool tiles", () => {
       if (command === "get_agent_mail_mailboxes") return { revision: 1, mailboxes: [initial] };
       throw new Error("Unexpected initial request");
     });
-    const mounted = render(<MailToolPart call={call} expansionKey="missed" />);
+    const mounted = renderInAppCommandScope(<MailToolPart call={call} expansionKey="missed" />);
     expect(await screen.findByText("waiting to deliver")).toBeTruthy();
     mounted.unmount();
     expect(appCommandStore(agentMailStore).getState().sent.size).toBe(0);
@@ -166,11 +167,11 @@ describe("mounted mail tool tiles", () => {
       throw new Error("Unexpected resync request");
     });
     await act(async () => appCommandStore(agentMailStore).getState().refreshSummary());
-    render(<MailToolPart call={call} expansionKey="missed" />);
+    renderInAppCommandScope(<MailToolPart call={call} expansionKey="missed" />);
     expect(screen.getByText("handled")).toBeTruthy();
   });
   test("unknown recipients have useful names and missing metadata never restores an obsolete send-time status", () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <MailToolPart call={{ ...call, to: undefined }} expansionKey="fallback" />,
     );
     expect(screen.getByText("To another agent")).toBeTruthy();
@@ -185,7 +186,7 @@ describe("mounted mail tool tiles", () => {
   });
   test("names the recipient's environment from the environment store until its mailbox loads", async () => {
     invokeMock.mockImplementation(async () => new Promise(() => {}));
-    render(<MailToolPart call={call} expansionKey="loading" />);
+    renderInAppCommandScope(<MailToolPart call={call} expansionKey="loading" />);
     // Neither name is known yet: the short environment id and the tab id stand in.
     expect(senderText()).toBe("To recipien · agent");
     act(() =>
@@ -196,7 +197,7 @@ describe("mounted mail tool tiles", () => {
     expect(senderText()).toBe("To fix-login-bug · agent");
   });
   test("names a recipient on another node from the send result, without asking this node", () => {
-    render(
+    renderInAppCommandScope(
       <MailToolPart
         call={{
           ...call,
@@ -219,7 +220,7 @@ describe("mounted mail tool tiles", () => {
     [{ kind: "external" }, "external", "external"],
     [call.from, "cross-project", "external"],
   ] as const)("read tile presents sender and trust (%j, %s)", (from, trust, kind) => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailToolPart
         call={{ ...call, tool: "read_message", direction: "in", from, trust }}
         expansionKey="read"

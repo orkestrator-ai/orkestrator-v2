@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import type { Mock } from "bun:test";
 import type { Environment } from "@/types";
@@ -66,7 +67,7 @@ describe("SetupPendingOverlay", () => {
   });
 
   test("renders the waiting copy and agent-specific subtext", () => {
-    render(
+    renderInAppCommandScope(
       <SetupPendingOverlay
         environmentId="env-1"
         setupPhase="running"
@@ -78,7 +79,7 @@ describe("SetupPendingOverlay", () => {
   });
 
   test("shows the queued opening prompt as a sent message with the wait beneath it", () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />,
     );
     expect(screen.queryByTestId("setup-pending-prompt") === null).toBe(true);
@@ -101,7 +102,7 @@ describe("SetupPendingOverlay", () => {
 
   test("the transcript layout keeps skip confirmation and failed-setup recovery", async () => {
     const pendingPrompt = { text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" };
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <SetupPendingOverlay
         environmentId="env-1"
         setupPhase="running"
@@ -141,7 +142,7 @@ describe("SetupPendingOverlay", () => {
       defaultBranchCommands: [],
       approvalRequired: true,
     });
-    render(
+    renderInAppCommandScope(
       <SetupPendingOverlay
         environmentId="env-1"
         setupPhase="failed"
@@ -175,7 +176,7 @@ describe("SetupPendingOverlay", () => {
             rejectOperation = reject;
           }),
       );
-      render(
+      renderInAppCommandScope(
         <SetupPendingOverlay
           environmentId="env-1"
           setupPhase="failed"
@@ -243,7 +244,7 @@ describe("SetupPendingOverlay", () => {
           pendingPrompt={{ text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" }}
         />
       );
-      const { unmount } = render(overlay);
+      const { unmount } = renderInAppCommandScope(overlay);
       expect(screen.getByText("1m 4s")).toBeTruthy();
       now.mockReturnValue(startedAt + 66_000);
       act(() => ticks.forEach((tick) => tick()));
@@ -252,7 +253,7 @@ describe("SetupPendingOverlay", () => {
       unmount();
       expect(clear).toHaveBeenCalledWith(1);
       now.mockReturnValue(startedAt + 70_000);
-      render(overlay);
+      renderInAppCommandScope(overlay);
       expect(screen.getByText("1m 10s")).toBeTruthy();
     } finally {
       cleanup();
@@ -265,7 +266,7 @@ describe("SetupPendingOverlay", () => {
   test("an invalid queued timestamp omits the clock and keeps the prompt and setup controls", () => {
     const interval = spyOn(globalThis, "setInterval");
     try {
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <SetupPendingOverlay
           environmentId="env-1"
           setupPhase="running"
@@ -286,7 +287,9 @@ describe("SetupPendingOverlay", () => {
   });
 
   test("Skip button requires a confirmation step before firing the override", () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
 
@@ -297,7 +300,9 @@ describe("SetupPendingOverlay", () => {
   });
 
   test("Cancel returns to the plain wait state without flipping gates", () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
@@ -308,7 +313,9 @@ describe("SetupPendingOverlay", () => {
   });
 
   test("renders failed setup actions instead of an indefinite waiting spinner", () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
 
     expect(screen.getByText("Environment setup failed.")).toBeTruthy();
     expect(screen.queryByText("Waiting for setup scripts to complete...") === null).toBe(true);
@@ -324,7 +331,9 @@ describe("SetupPendingOverlay", () => {
           resolveRetry = () => resolve(undefined);
         }),
     );
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /^retry setup$/i }));
 
@@ -342,7 +351,9 @@ describe("SetupPendingOverlay", () => {
 
   test("surfaces override failures and lets the user try again", async () => {
     forceResolveSetupRuntime.mockRejectedValueOnce(new Error("Backend unavailable"));
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /^skip setup$/i }));
     fireEvent.click(screen.getByRole("button", { name: /^skip anyway$/i }));
 

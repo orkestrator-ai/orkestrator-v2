@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { graphRunSummary } from "@orkestrator/protocol/graphs/run-view";
 import {
   TerminalProvider,
@@ -71,7 +72,9 @@ describe("GraphQuestionAnswerForm", () => {
     const onSubmit = mock(async () => {
       throw new Error("The question was already answered");
     });
-    render(<GraphQuestionAnswerForm question={question} asker="Fix" onSubmit={onSubmit} />);
+    renderInAppCommandScope(
+      <GraphQuestionAnswerForm question={question} asker="Fix" onSubmit={onSubmit} />,
+    );
     expect(screen.getByRole("heading", { name: "Fix asks" })).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Not today" } });
     fireEvent.click(screen.getByRole("button", { name: "Decline" }));
@@ -83,7 +86,7 @@ describe("GraphQuestionAnswerForm", () => {
 
   test("an empty answer is caught before sending; an answered question shows its answer", () => {
     const onSubmit = mock(async () => {});
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <GraphQuestionAnswerForm question={question} asker="Fix" onSubmit={onSubmit} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
@@ -108,7 +111,7 @@ describe("GraphQuestionAnswerForm", () => {
     "%s+Enter requires a choice even with text",
     async (modifier) => {
       const onSubmit = mock(async () => {});
-      render(
+      renderInAppCommandScope(
         <GraphQuestionAnswerForm
           question={question}
           asker="Fix"
@@ -135,7 +138,9 @@ describe("GraphQuestionAnswerForm", () => {
 
   test("⌘↵ in the answer or on a choice sends it; plain Enter does not", async () => {
     const onSubmit = mock(async () => {});
-    render(<GraphQuestionAnswerForm question={question} asker="Fix" onSubmit={onSubmit} />);
+    renderInAppCommandScope(
+      <GraphQuestionAnswerForm question={question} asker="Fix" onSubmit={onSubmit} />,
+    );
     const yes = screen.getByRole("radio", { name: "Yes" });
     fireEvent.click(yes);
     fireEvent.keyDown(yes, { key: "Enter", metaKey: true });
@@ -181,7 +186,7 @@ describe("GraphRunsList", () => {
       command === "graph_runs_list" ? [graphRunSummary(run)] : undefined,
     );
     window.orkestrator = { invoke: invokeMock, listen: () => () => undefined } as never;
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <Register />
         <GraphRunsList environmentId="env-1" />
@@ -204,7 +209,7 @@ describe("GraphRunsList", () => {
   test("says when there are no runs", async () => {
     invokeMock.mockImplementation(async () => []);
     window.orkestrator = { invoke: invokeMock, listen: () => () => undefined } as never;
-    render(<GraphRunsList environmentId="env-2" />);
+    renderInAppCommandScope(<GraphRunsList environmentId="env-2" />);
     await waitFor(() =>
       expect(screen.getByTestId("graph-runs-empty").textContent).toContain("No graph runs"),
     );

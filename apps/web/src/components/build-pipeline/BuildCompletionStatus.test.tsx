@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { type BuildPipelineSource, buildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
@@ -103,7 +104,7 @@ describe("BuildCompletionStatus", () => {
     });
     appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
     expect(screen.getByText("Unexpected authorization")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry failed build phase" }));
 
@@ -121,7 +122,7 @@ describe("BuildCompletionStatus", () => {
       phase: "complete",
       autoDeclineCount: 3,
     });
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
     expect(screen.getByText(/3 unattended input requests were auto-declined/)).toBeTruthy();
   });
 
@@ -137,7 +138,7 @@ describe("BuildCompletionStatus", () => {
       },
     });
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(/could not be resolved safely/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry failed build phase" })).toBeTruthy();
@@ -163,7 +164,7 @@ describe("BuildCompletionStatus", () => {
           rejectRetry = reject;
         }),
     );
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry failed build phase",
     }) as HTMLButtonElement;
@@ -207,7 +208,7 @@ describe("BuildCompletionStatus", () => {
       autoDeclineCount: 1,
     });
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getAllByRole("alert")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Retry failed build phase" })).toBeTruthy();
@@ -240,7 +241,7 @@ describe("BuildCompletionStatus", () => {
           resolveRetry = resolve;
         }),
     );
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry failed build phase",
     }) as HTMLButtonElement;
@@ -293,7 +294,7 @@ describe("BuildCompletionStatus", () => {
           resolveRetry = resolve;
         }),
     );
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
     const interaction = screen.getByRole("button", {
       name: "Retry failed build phase",
     }) as HTMLButtonElement;
@@ -341,7 +342,7 @@ describe("BuildCompletionStatus", () => {
       .getState()
       .pipelines.get("prompt-dispatch-failure")!;
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     // Only an interactive-request failure has a safe retry here; offering one
     // for a dispatch failure would replay a prompt that may already have run.
@@ -375,7 +376,7 @@ describe("BuildCompletionStatus", () => {
       .getState()
       .pipelines.get("running-with-context")!;
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.queryByRole("button", { name: "Retry failed build phase" }) === null).toBe(true);
     expect(screen.getAllByRole("alert")).toHaveLength(1);
@@ -399,7 +400,7 @@ describe("BuildCompletionStatus", () => {
       .getState()
       .pipelines.get("sourceless-auto-declines")!;
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(/2 unattended input requests were auto-declined/)).toBeTruthy();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
@@ -417,7 +418,7 @@ describe("BuildCompletionStatus", () => {
     });
     const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(/GitHub completion comment failed/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry GitHub completion comment" }));
@@ -450,7 +451,7 @@ describe("BuildCompletionStatus", () => {
     const pipelineId = seedFailedPipeline(source);
     const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(label)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: retryLabel }));
@@ -474,7 +475,7 @@ describe("BuildCompletionStatus", () => {
         }),
       );
     const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get("sourceless")!;
-    const { container } = render(<BuildCompletionStatus pipeline={pipeline} />);
+    const { container } = renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(container.childElementCount).toBe(0);
   });
@@ -491,7 +492,7 @@ describe("BuildCompletionStatus", () => {
         }),
       );
     const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get("posting")!;
-    const { container } = render(<BuildCompletionStatus pipeline={pipeline} />);
+    const { container } = renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(container.childElementCount).toBe(0);
   });
@@ -510,7 +511,7 @@ describe("BuildCompletionStatus", () => {
       });
     const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
 
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(/The task could not be moved to its final column\./)).toBeTruthy();
   });
@@ -533,7 +534,7 @@ describe("BuildCompletionStatus", () => {
           resolveRetry = resolve;
         }),
     );
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry GitHub completion comment",
     }) as HTMLButtonElement;
@@ -564,7 +565,7 @@ describe("BuildCompletionStatus", () => {
     });
     const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
     retryCompletionCommentMock.mockRejectedValueOnce(new Error("still offline"));
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry GitHub completion comment",
     }) as HTMLButtonElement;
@@ -584,7 +585,7 @@ describe("BuildCompletionStatus", () => {
     const pipelineId = seedFailedPipeline({ type: "kanban", taskId: "task-1" });
     const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
     retryCompletionCommentMock.mockRejectedValueOnce("board offline");
-    render(<BuildCompletionStatus pipeline={pipeline} />);
+    renderInAppCommandScope(<BuildCompletionStatus pipeline={pipeline} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Retry the task board update" }));
 

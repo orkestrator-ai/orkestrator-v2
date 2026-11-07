@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   nativeAgentInteractionDraftKey,
   nativeAsyncQuestionDraftKey,
@@ -119,20 +120,24 @@ describe("promptDraftStore", () => {
 
 describe("usePromptDraftField", () => {
   test("applies functional updates to shared and component-local fields", () => {
-    const shared = renderHook(() => usePromptDraftField("draft", "count", () => 1));
+    const shared = renderHookInAppCommandScope(() =>
+      usePromptDraftField("draft", "count", () => 1),
+    );
     act(() => shared.result.current[1]((value) => value + 1));
     expect(shared.result.current[0]).toBe(2);
     expect(appCommandStore(promptDraftStore).getState().drafts.get("draft")?.count).toBe(2);
     shared.unmount();
 
-    const local = renderHook(() => usePromptDraftField<number>(undefined, "count", () => 4));
+    const local = renderHookInAppCommandScope(() =>
+      usePromptDraftField<number>(undefined, "count", () => 4),
+    );
     act(() => local.result.current[1]((value) => value + 3));
     expect(local.result.current[0]).toBe(7);
     expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(1);
   });
 
   test("switches key and field identities without leaking the previous fallback", () => {
-    const hook = renderHook(
+    const hook = renderHookInAppCommandScope(
       ({ draftKey, field, seed }: { draftKey?: string; field: string; seed: number }) =>
         usePromptDraftField(draftKey, field, () => seed),
       { initialProps: { draftKey: "first", field: "count", seed: 1 } },
@@ -152,7 +157,7 @@ describe("usePromptDraftField", () => {
 
   test("prefers a stored value over a new identity's initializer", () => {
     appCommandStore(promptDraftStore).getState().setDraftValue("second", "count", 42);
-    const hook = renderHook(
+    const hook = renderHookInAppCommandScope(
       ({ draftKey, seed }: { draftKey: string; seed: number }) =>
         usePromptDraftField(draftKey, "count", () => seed),
       { initialProps: { draftKey: "first", seed: 1 } },
@@ -163,7 +168,7 @@ describe("usePromptDraftField", () => {
   });
 
   test("reinitializes local fallback state when its field identity changes", () => {
-    const hook = renderHook(
+    const hook = renderHookInAppCommandScope(
       ({ field, seed }: { field: string; seed: number }) =>
         usePromptDraftField<number>(undefined, field, () => seed),
       { initialProps: { field: "first", seed: 1 } },

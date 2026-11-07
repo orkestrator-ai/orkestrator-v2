@@ -4,7 +4,8 @@
  * conversation other than the focused one.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   coordinatorRuntimeId,
   type CoordinatorConversation,
@@ -319,7 +320,7 @@ describe("first sends in two tab groups", () => {
 
   test("each keeps its own prompt until its own turn is observed", async () => {
     const { first, second } = unassignedSides();
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
 
     // The second send lands before the first conversation's first projection.
@@ -339,7 +340,7 @@ describe("first sends in two tab groups", () => {
 
   test("both observed in one update release together", async () => {
     const { first, second } = unassignedSides();
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-2" }));
@@ -359,7 +360,7 @@ describe("first sends in two tab groups", () => {
 
   test("closing a conversation lets go of the prompt its turn can no longer consume", async () => {
     const { first, second } = unassignedSides();
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-2" }));
@@ -403,7 +404,7 @@ describe("Git and conversation actions", () => {
   }
 
   async function renderSettled() {
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     await waitFor(() => expect(fetchGit).toHaveBeenCalled());
     await waitFor(() => expect(refresh().hasAttribute("disabled")).toBe(false));
@@ -496,7 +497,7 @@ describe("branch switch and Sync while any turn runs", () => {
           side.id,
         ),
       );
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() =>
       expect(screen.getByTestId("native-agent").getAttribute("data-tab-id")).toBe(side.tabId),
     );
@@ -666,7 +667,7 @@ describe("branch switch and Sync while any turn runs", () => {
   });
 
   test("coming back to the panel sees a turn that started while it was away", async () => {
-    const away = render(<CoordinatorPanel projectId="project-1" />);
+    const away = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
     await screen.findByTestId("native-agent");
     await waitFor(() => expect(gated()).toBe(false));
@@ -674,7 +675,7 @@ describe("branch switch and Sync while any turn runs", () => {
 
     // Started from the project home's own tab: nothing hints a panel that is not there.
     getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(gated()).toBe(true));
     expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");
   });
@@ -692,7 +693,7 @@ describe("branch switch and Sync while any turn runs", () => {
   test("a mounted conversation counts before the backend has observed its turn", async () => {
     ensuredSnapshot = snapshotOf([mainConversation, side], side.id);
     showInTwoGroups(mainConversation, side);
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
     await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
     await waitFor(() => expect(gated()).toBe(false));

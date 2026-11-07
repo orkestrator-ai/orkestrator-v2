@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
 
@@ -16,7 +17,7 @@ afterEach(cleanup);
 
 describe("native renderer mail tool routing", () => {
   test.each(["send_message", "reply_message"])("renders %s as a sent tile", (toolName) => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={message({
           type: "tool-invocation",
@@ -50,7 +51,7 @@ describe("native renderer mail tool routing", () => {
         },
       }),
     }));
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={message({
           type: "tool-invocation",
@@ -73,7 +74,7 @@ describe("native renderer mail tool routing", () => {
       detailRef,
       toolError: "Message no longer exists",
     }));
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={message({
           type: "tool-invocation",

@@ -108,7 +108,7 @@ describe("claudeOptionsStore", () => {
     expect(other.getState().options).toEqual({});
   });
 
-  test("the deprecated statics reach the app's command scope", () => {
+  test("the app command scope keeps its own instance", () => {
     resetWindowScopeForTests(new FakeNodeClient({ nodeId: NODE_A }));
     appCommandStore(claudeOptionsStore).getState().setOptions("env-1", {
       launchAgent: false,

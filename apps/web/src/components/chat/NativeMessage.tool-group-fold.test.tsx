@@ -4,7 +4,8 @@
  * list and, from its place at the top of that list, folds it again.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { VirtuosoMockContext } from "react-virtuoso";
@@ -41,7 +42,7 @@ function messageView(id: string, parts: NativeMessagePart[], scope = "fold-test"
 function renderParts(parts: NativeMessagePart[]) {
   messageCounter += 1;
   // Unique per test so persisted expansion state cannot leak between them.
-  return render(messageView(`tool-group-fold-${messageCounter}`, parts));
+  return renderInAppCommandScope(messageView(`tool-group-fold-${messageCounter}`, parts));
 }
 
 function shell(
@@ -113,7 +114,7 @@ describe("folded tool group", () => {
     messageCounter += 1;
     const id = `tool-group-fold-${messageCounter}`;
     const calls = Array.from({ length: 6 }, (_, index) => shell(index, `echo ${index}`));
-    const { rerender } = render(messageView(id, calls.slice(2, 5)));
+    const { rerender } = renderInAppCommandScope(messageView(id, calls.slice(2, 5)));
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
 
     rerender(messageView(id, calls.slice(2, 6)));
@@ -128,7 +129,7 @@ describe("folded tool group", () => {
   test("stays closed after an opened group grows and is folded again", () => {
     const id = `close-after-growth-${++messageCounter}`;
     const calls = Array.from({ length: 7 }, (_, index) => shell(index, `echo ${index}`));
-    const { rerender } = render(messageView(id, calls.slice(2, 5)));
+    const { rerender } = renderInAppCommandScope(messageView(id, calls.slice(2, 5)));
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
     rerender(messageView(id, calls.slice(2, 6)));
     fireEvent.click(screen.getByRole("button", { name: /^Fold 4 tool calls:/ }));
@@ -147,18 +148,18 @@ describe("folded tool group", () => {
   test("restores expansion after virtualized unmounts and isolates transcript scopes", () => {
     const id = `remount-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff --stat"), shell(2, "git log -5")];
-    const first = render(messageView(id, calls, "transcript-a"));
+    const first = renderInAppCommandScope(messageView(id, calls, "transcript-a"));
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
     first.unmount();
-    const other = render(messageView(id, calls, "transcript-b"));
+    const other = renderInAppCommandScope(messageView(id, calls, "transcript-b"));
     expect(
       screen.getByRole("button", { name: /^Show 3 tool calls:/ }).getAttribute("aria-expanded"),
     ).toBe("false");
     other.unmount();
-    const restored = render(messageView(id, calls, "transcript-a"));
+    const restored = renderInAppCommandScope(messageView(id, calls, "transcript-a"));
     fireEvent.click(screen.getByRole("button", { name: /^Fold 3 tool calls:/ }));
     restored.unmount();
-    render(messageView(id, calls, "transcript-a"));
+    renderInAppCommandScope(messageView(id, calls, "transcript-a"));
     expect(
       screen.getByRole("button", { name: /^Show 3 tool calls:/ }).getAttribute("aria-expanded"),
     ).toBe("false");
@@ -167,10 +168,10 @@ describe("folded tool group", () => {
   test("stays open when paging and streaming replace both endpoints before a remount", () => {
     const id = `both-ends-${++messageCounter}`;
     const calls = Array.from({ length: 7 }, (_, index) => shell(index, `echo ${index}`));
-    const first = render(messageView(id, calls.slice(2, 5)));
+    const first = renderInAppCommandScope(messageView(id, calls.slice(2, 5)));
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
     first.unmount();
-    render(messageView(`${id}-earlier`, calls));
+    renderInAppCommandScope(messageView(`${id}-earlier`, calls));
     expect(
       screen.getByRole("button", { name: /^Fold 7 tool calls:/ }).getAttribute("aria-expanded"),
     ).toBe("true");
@@ -180,7 +181,7 @@ describe("folded tool group", () => {
   test("keeps expansion when calls acquire provider ids", () => {
     const id = `new-ids-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff --stat"), shell(2, "git log -5")];
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       messageView(
         id,
         calls.map((call) => ({ ...call, toolUseId: undefined })),
@@ -201,7 +202,7 @@ describe("folded tool group", () => {
       toolArgs: { questions: [{ question: "Which approach?", options: [{ label: "Simple" }] }] },
     });
     const calls = [shell(0, "git status"), shell(1, "git diff --stat"), question];
-    const { rerender } = render(messageView(id, calls));
+    const { rerender } = renderInAppCommandScope(messageView(id, calls));
     expect(screen.queryByRole("button", { name: /^Show .*tool calls:/ }) === null).toBe(true);
     expect(screen.getByText("Which approach?")).toBeTruthy();
     rerender(messageView(id, [...calls.slice(0, 2), { ...question, toolState: "success" }]));
@@ -212,7 +213,7 @@ describe("folded tool group", () => {
   test("a visible group crossing the threshold folds in the same host and animates its line in", () => {
     const id = `threshold-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-    const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+    const { container, rerender } = renderInAppCommandScope(messageView(id, calls.slice(0, 2)));
     const frame = container.querySelector("[data-transcript-group-frame]");
     const content = container.querySelector(".tool-group-fold-content");
     expect(content?.getAttribute("data-state")).toBe("open");
@@ -237,13 +238,13 @@ describe("folded tool group", () => {
   test("short and restored open groups mount without the reader opening animation", () => {
     const id = `mount-animation-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-    const first = render(messageView(id, calls.slice(0, 2)));
+    const first = renderInAppCommandScope(messageView(id, calls.slice(0, 2)));
     expect(first.container.querySelector(".tool-group-reader-open") === null).toBe(true);
     first.rerender(messageView(id, calls));
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
     expect(first.container.querySelector(".tool-group-reader-open")).toBeTruthy();
     first.unmount();
-    const restored = render(messageView(id, calls));
+    const restored = renderInAppCommandScope(messageView(id, calls));
     expect(screen.getByRole("button", { name: /^Fold 3 tool calls:/ })).toBeTruthy();
     expect(restored.container.querySelector(".tool-group-reader-open") === null).toBe(true);
   });
@@ -251,7 +252,7 @@ describe("folded tool group", () => {
   test("a summary enters only on its first short-to-long crossing", () => {
     const id = `recross-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-    const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+    const { container, rerender } = renderInAppCommandScope(messageView(id, calls.slice(0, 2)));
     rerender(messageView(id, calls));
     expect(container.querySelector(".tool-group-head-enter")).toBeTruthy();
     rerender(messageView(id, calls.slice(0, 2)));
@@ -262,7 +263,7 @@ describe("folded tool group", () => {
   test("an initially long summary never animates on a later re-crossing", () => {
     const id = `long-recross-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-    const { container, rerender } = render(messageView(id, calls));
+    const { container, rerender } = renderInAppCommandScope(messageView(id, calls));
     rerender(messageView(id, calls.slice(0, 2)));
     rerender(messageView(id, calls));
     expect(container.querySelector(".tool-group-head-enter") === null).toBe(true);
@@ -272,7 +273,7 @@ describe("folded tool group", () => {
     test(`defers threshold folding while row ${interaction} is held`, () => {
       const id = `interaction-${++messageCounter}`;
       const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-      const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+      const { container, rerender } = renderInAppCommandScope(messageView(id, calls.slice(0, 2)));
       const row = screen.getByText("git status");
       const control = row.closest("button")!;
       if (interaction === "focus") {
@@ -303,7 +304,7 @@ describe("folded tool group", () => {
   test("an explicit fold overrides a held selection and a later short run protects focus again", () => {
     const id = `explicit-fold-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-    const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+    const { container, rerender } = renderInAppCommandScope(messageView(id, calls.slice(0, 2)));
     const range = document.createRange();
     range.selectNodeContents(screen.getByText("git status"));
     document.getSelection()!.addRange(range);
@@ -325,7 +326,9 @@ describe("folded tool group", () => {
 
   test("renders a group that arrives already long folded without animating", () => {
     const calls = [shell(0, "git status"), shell(1, "git diff --stat"), shell(2, "git log -5")];
-    const { container } = render(messageView(`arrives-folded-${++messageCounter}`, calls));
+    const { container } = renderInAppCommandScope(
+      messageView(`arrives-folded-${++messageCounter}`, calls),
+    );
     expect(
       screen.getByRole("button", { name: /^Show 3 tool calls:/ }).getAttribute("aria-expanded"),
     ).toBe("false");
@@ -370,7 +373,7 @@ describe("folded tool group", () => {
     const calls = Array.from({ length: 300 }, (_, index) => shell(index % 10, `step ${index}`));
     messageCounter += 1;
     // happy-dom lays nothing out; give the inner virtualizer fixed geometry.
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <VirtuosoMockContext.Provider value={{ viewportHeight: 400, itemHeight: 40 }}>
         {messageView(`tool-group-fold-${messageCounter}`, calls)}
       </VirtuosoMockContext.Provider>,
@@ -415,7 +418,7 @@ describe("folded tool group", () => {
   test("members prepended by history keep the existing rows mounted", () => {
     const id = `prepend-${++messageCounter}`;
     const later = [shell(3, "git status"), shell(4, "git log"), shell(5, "git show")];
-    const { rerender } = render(messageView(id, later));
+    const { rerender } = renderInAppCommandScope(messageView(id, later));
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
     const row = screen.getByText("git log").closest(".px-2");
     rerender(messageView(id, [shell(2, "git fetch"), ...later]));

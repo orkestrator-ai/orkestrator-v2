@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { configStore } from "@/stores/configStore";
@@ -536,7 +537,7 @@ describe("AgentInfoButton popover lifecycle", () => {
     disabled.global.agentMessaging = { ...disabled.global.agentMessaging!, enabled: false };
     appCommandStore(configStore).setState({ config: disabled });
     try {
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       expect(screen.queryByRole("button", { name: "Messages…" }) === null).toBe(true);
 
@@ -550,7 +551,7 @@ describe("AgentInfoButton popover lifecycle", () => {
   });
 
   test("the panel is hidden until the trigger is clicked and closes again on a second click", () => {
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
 
     /*
      * The section is always in the DOM — `aria-hidden` plus the visibility
@@ -581,7 +582,7 @@ describe("AgentInfoButton popover lifecycle", () => {
   });
 
   test("the X button closes the panel and returns focus to the trigger", async () => {
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     const trigger = screen.getByRole("button", { name: "Open agent information" });
     open();
 
@@ -598,7 +599,7 @@ describe("AgentInfoButton popover lifecycle", () => {
   });
 
   test("the backdrop closes the panel and returns focus to the trigger", async () => {
-    const { container } = render(<AgentInfoButton activeTab={claudeTab()} />);
+    const { container } = renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     const trigger = screen.getByRole("button", { name: "Open agent information" });
     open();
 
@@ -611,7 +612,7 @@ describe("AgentInfoButton popover lifecycle", () => {
   });
 
   test("Escape closes the panel, and a key a nested control consumed does not", () => {
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const consumed = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
@@ -643,7 +644,7 @@ describe("AgentInfoButton popover lifecycle", () => {
     window.addEventListener("keydown", chatTabHandler);
 
     try {
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
@@ -669,7 +670,7 @@ describe("AgentInfoButton popover lifecycle", () => {
     window.addEventListener("keydown", chatTabHandler);
 
     try {
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       act(() => {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
       });
@@ -680,7 +681,7 @@ describe("AgentInfoButton popover lifecycle", () => {
   });
 
   test("the Escape listener is torn down when the panel closes", () => {
-    const { unmount } = render(<AgentInfoButton activeTab={claudeTab()} />);
+    const { unmount } = renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
     act(() => {
@@ -691,7 +692,7 @@ describe("AgentInfoButton popover lifecycle", () => {
   });
 
   test("switching tabs closes the panel", () => {
-    const { rerender } = render(<AgentInfoButton activeTab={claudeTab()} />);
+    const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(isPopoverOpen()).toBe(true);
 
@@ -707,7 +708,7 @@ describe("AgentInfoButton popover lifecycle", () => {
       parentSawMouseDown = true;
     });
 
-    const { container } = render(<AgentInfoButton activeTab={null} mobile />, {
+    const { container } = renderInAppCommandScope(<AgentInfoButton activeTab={null} mobile />, {
       container: host.appendChild(document.createElement("div")),
     });
     const wrapper = container.firstElementChild as HTMLElement;
@@ -727,7 +728,7 @@ describe("AgentInfoButton popover lifecycle", () => {
 
 describe("AgentInfoButton provider resolution", () => {
   test("shows the empty state when no native tab is active", () => {
-    render(<AgentInfoButton activeTab={null} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={null} />);
     open();
 
     expect(screen.getByText("No native agent")).toBeTruthy();
@@ -736,7 +737,9 @@ describe("AgentInfoButton provider resolution", () => {
   });
 
   test("a tab whose native data is missing is treated as no session", () => {
-    render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "agent-native" } as TabInfo} />);
+    renderInAppCommandScope(
+      <AgentInfoButton activeTab={{ id: TAB_ID, type: "agent-native" } as TabInfo} />,
+    );
     open();
     expect(screen.getByText("No native agent")).toBeTruthy();
   });
@@ -760,7 +763,7 @@ describe("AgentInfoButton provider resolution", () => {
         promptSuggestionsEnabled: false,
       },
     });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     expect(screen.getByText("OpenCode")).toBeTruthy();
@@ -771,7 +774,7 @@ describe("AgentInfoButton provider resolution", () => {
     seedUsage(usage({ source: "codex" }), "codex", {
       composer: composerState({ selectedModelId: "gpt-5.3-codex" }),
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     expect(screen.getByText("Codex Native")).toBeTruthy();
@@ -825,7 +828,7 @@ describe("AgentInfoButton provider resolution", () => {
         }),
       );
 
-    render(<AgentInfoButton activeTab={buildTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={buildTab()} />);
     open();
 
     expect(screen.getByText("Codex Native")).toBeTruthy();
@@ -898,7 +901,7 @@ describe("AgentInfoButton provider resolution", () => {
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
       viewedSessionIds: new Map([["pipeline-1", "validation:validation-1"]]),
     });
-    render(<AgentInfoButton activeTab={buildTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={buildTab()} />);
     open();
 
     expect(screen.getByText("Codex Native")).toBeTruthy();
@@ -948,7 +951,7 @@ describe("AgentInfoButton provider resolution", () => {
           : Promise.resolve(),
     );
 
-    render(<AgentInfoButton activeTab={buildTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={buildTab()} />);
     open();
 
     await waitFor(() =>
@@ -995,7 +998,7 @@ describe("AgentInfoButton provider resolution", () => {
           : Promise.resolve(),
     );
 
-    render(<AgentInfoButton activeTab={buildTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={buildTab()} />);
     open();
     await waitFor(() =>
       expect(
@@ -1050,7 +1053,9 @@ describe("AgentInfoButton usage panel", () => {
         return undefined;
       });
 
-      render(<AgentInfoButton activeTab={provider === "claude" ? claudeTab() : codexTab()} />);
+      renderInAppCommandScope(
+        <AgentInfoButton activeTab={provider === "claude" ? claudeTab() : codexTab()} />,
+      );
       open();
 
       const dialog = within(screen.getByRole("dialog", { name: "Agent information" }));
@@ -1103,7 +1108,7 @@ describe("AgentInfoButton usage panel", () => {
       return undefined;
     });
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const quota = within(screen.getByRole("region", { name: "Account usage" }));
@@ -1130,7 +1135,7 @@ describe("AgentInfoButton usage panel", () => {
         })),
       );
 
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       const quota = within(screen.getByRole("region", { name: "Account usage" }));
@@ -1144,7 +1149,7 @@ describe("AgentInfoButton usage panel", () => {
       let account = quotaAccount();
       const read = mock(async () => account);
       routeQuotaAccountRead(read);
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       const quota = within(screen.getByRole("region", { name: "Account usage" }));
       expect(await quota.findByText("(Work)")).toBeTruthy();
@@ -1180,7 +1185,7 @@ describe("AgentInfoButton usage panel", () => {
       );
       const read = mock(async () => quotaAccount("claude", "Personal"));
       routeQuotaAccountRead(read);
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       await waitFor(() => expect(read).toHaveBeenCalled());
       const quota = within(screen.getByRole("region", { name: "Account usage" }));
@@ -1204,7 +1209,7 @@ describe("AgentInfoButton usage panel", () => {
           return { ...quotaAccount(), source: result };
         });
         routeQuotaAccountRead(read);
-        render(<AgentInfoButton activeTab={claudeTab()} />);
+        renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
         open();
         const quota = within(screen.getByRole("region", { name: "Account usage" }));
         if (initiallyLabeled) {
@@ -1243,7 +1248,7 @@ describe("AgentInfoButton usage panel", () => {
         const newRead = deferred<AgentSessionAccount | null>();
         const read = mock<() => Promise<AgentSessionAccount | null>>(async () => quotaAccount());
         routeQuotaAccountRead(read);
-        const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+        const view = renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
         open();
         expect(await screen.findByText("(Work)")).toBeTruthy();
 
@@ -1325,7 +1330,7 @@ describe("AgentInfoButton usage panel", () => {
         : undefined,
     );
 
-    render(<AgentInfoButton activeTab={claudeTab()} mobile />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} mobile />);
     expect(nativeInvokeMock).not.toHaveBeenCalledWith("get_system_usage");
     open();
 
@@ -1363,7 +1368,7 @@ describe("AgentInfoButton usage panel", () => {
         calls += 1;
         throw new Error(unsupported ? "Unknown backend command: get_system_usage" : "offline");
       });
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       expect(await screen.findByText("Data unavailable")).toBeTruthy();
       reopen();
@@ -1398,7 +1403,7 @@ describe("AgentInfoButton usage panel", () => {
       };
     });
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     expect(usageCalls).toBe(0);
     open();
     await waitFor(() =>
@@ -1451,7 +1456,7 @@ describe("AgentInfoButton usage panel", () => {
       };
     });
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     await waitFor(() => expect(usageCalls).toBe(1));
     fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
@@ -1536,7 +1541,7 @@ describe("AgentInfoButton usage panel", () => {
       };
     });
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     expect(screen.getByText("Loading Cursor account usage…")).toBeTruthy();
@@ -1567,7 +1572,7 @@ describe("AgentInfoButton usage panel", () => {
         : undefined,
     );
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("Account usage unavailable")).toBeTruthy());
@@ -1597,7 +1602,7 @@ describe("AgentInfoButton usage panel", () => {
         : undefined,
     );
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
@@ -1634,7 +1639,7 @@ describe("AgentInfoButton usage panel", () => {
         : undefined,
     );
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("Pro")).toBeTruthy());
@@ -1665,7 +1670,7 @@ describe("AgentInfoButton usage panel", () => {
         : undefined,
     );
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("Pro")).toBeTruthy());
@@ -1713,7 +1718,7 @@ describe("AgentInfoButton usage panel", () => {
         : undefined,
     );
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
@@ -1740,7 +1745,7 @@ describe("AgentInfoButton usage panel", () => {
       return undefined;
     });
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("Account usage unavailable")).toBeTruthy());
@@ -1768,7 +1773,7 @@ describe("AgentInfoButton usage panel", () => {
         : undefined,
     );
 
-    const { rerender } = render(<AgentInfoButton activeTab={cursorTab()} />);
+    const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
     await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
 
@@ -1791,7 +1796,7 @@ describe("AgentInfoButton usage panel", () => {
       });
     });
 
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
     expect(screen.getByText("Loading Cursor account usage…")).toBeTruthy();
 
@@ -1819,7 +1824,7 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test.skip("legacy Cursor account command was removed", async () => {
-    render(<AgentInfoButton activeTab={cursorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
     await waitFor(() => expect(nativeInvokeMock).toHaveBeenCalledWith("get_cursor_account_usage"));
@@ -1934,7 +1939,7 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("prompts for a first snapshot when usage is unavailable", () => {
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(
       screen.getByText(/Usage will appear after this session reports its first token snapshot/),
@@ -1950,7 +1955,7 @@ describe("AgentInfoButton usage panel", () => {
       composer: composerState({ selectedModelId: "claude-sonnet" }),
     });
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.getByText("Account")).toBeTruthy();
@@ -1996,7 +2001,7 @@ describe("AgentInfoButton usage panel", () => {
       "claude",
       { composer: composerState({ selectedModelId: "claude-opus" }) },
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.getByText("25%")).toBeTruthy();
@@ -2036,7 +2041,7 @@ describe("AgentInfoButton usage panel", () => {
         ],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const chart = screen.getByRole("region", { name: "Daily tokens" });
@@ -2061,7 +2066,7 @@ describe("AgentInfoButton usage panel", () => {
       { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000 },
       { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
     ]);
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const chart = screen.getByRole("region", { name: "Daily tokens" });
@@ -2086,7 +2091,7 @@ describe("AgentInfoButton usage panel", () => {
     seedDailyUsage(
       dailyBuckets(35, (index) => (index === 0 ? 999_000_000 : (index + 1) * 1_000_000)),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const chart = screen.getByRole("region", { name: "Daily tokens" });
@@ -2107,7 +2112,7 @@ describe("AgentInfoButton usage panel", () => {
       { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000, spendUsd: 12.5 },
       { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
     ]);
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const cards = screen.getByRole("region", { name: "Account usage" });
@@ -2122,7 +2127,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("drops the account card list when every window is a plottable day", () => {
     seedDailyUsage(dailyBuckets(3, (index) => (index + 1) * 1_000_000));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
@@ -2133,7 +2138,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("renders flat bars rather than NaN heights when every day is zero", () => {
     seedDailyUsage(dailyBuckets(3, () => 0));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const chart = screen.getByRole("region", { name: "Daily tokens" });
@@ -2152,7 +2157,7 @@ describe("AgentInfoButton usage panel", () => {
     "clamps token boundaries for %p used of %p total",
     (usedTokens, totalTokens, expectedTotal, expectedRemaining) => {
       seedUsage(usage({ usedTokens, totalTokens }));
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       expect(
@@ -2171,7 +2176,7 @@ describe("AgentInfoButton usage panel", () => {
     "formats the context percentage boundary at %p",
     (percentUsed, expectedText, expectedLabel) => {
       seedUsage(usage({ percentUsed }));
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       expect(screen.getByText(expectedText)).toBeTruthy();
@@ -2181,7 +2186,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("omits every optional metric the snapshot does not carry", () => {
     seedUsage(usage());
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     for (const label of [
@@ -2201,7 +2206,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("labels an estimated snapshot as estimated", () => {
     seedUsage(usage({ estimated: true }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("Estimated")).toBeTruthy();
     expect(screen.queryByText("Provider reported") === null).toBe(true);
@@ -2211,7 +2216,7 @@ describe("AgentInfoButton usage panel", () => {
     seedUsage(usage({ modelId: "snapshot-model" }), "claude", {
       composer: composerState({ selectedModelId: "composer-model" }),
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("snapshot-model")).toBeTruthy();
     expect(screen.queryByText("composer-model") === null).toBe(true);
@@ -2219,7 +2224,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("shows 'Model unavailable' when neither source names one", () => {
     seedUsage(usage());
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByText("Model unavailable")).toBeTruthy();
   });
@@ -2232,7 +2237,7 @@ describe("AgentInfoButton usage panel", () => {
     [1234.567, "$1234.57"],
   ])("formats a cost of %p as %p", (costUsd, expected) => {
     seedUsage(usage({ costUsd }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(metricValue("Cost")).toBe(expected);
   });
@@ -2258,7 +2263,7 @@ describe("AgentInfoButton usage panel", () => {
           sessionId: `${platform}-session-1`,
         },
       } as Partial<TabInfo>);
-      render(<AgentInfoButton activeTab={tab} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
       open();
       expect(metricValue("Cost")).toBe(expected);
       const amount = screen
@@ -2277,7 +2282,7 @@ describe("AgentInfoButton usage panel", () => {
     [3_600_000, "60m 0s"],
   ])("formats a duration of %p as %p", (durationMs, expected) => {
     seedUsage(usage({ durationMs }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(metricValue("Elapsed")).toBe(expected);
   });
@@ -2289,7 +2294,7 @@ describe("AgentInfoButton usage panel", () => {
     [{ hasCredits: false }, "Unavailable"],
   ])("renders credits %p as %p in the account section", (credits, expected) => {
     seedUsage(usage({ credits }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     const account = screen.getByRole("region", { name: "Account usage" });
     expect(within(account).getByText("Credits")).toBeTruthy();
@@ -2315,7 +2320,7 @@ describe("AgentInfoButton usage panel", () => {
         ],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const account = screen.getByRole("region", { name: "Account usage" });
@@ -2349,7 +2354,7 @@ describe("AgentInfoButton usage panel", () => {
         ],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const account = screen.getByRole("region", { name: "Account usage" });
@@ -2390,7 +2395,7 @@ describe("AgentInfoButton usage panel", () => {
         ],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const account = screen.getByRole("region", { name: "Account usage" });
@@ -2417,7 +2422,7 @@ describe("AgentInfoButton usage panel", () => {
         account: [{ window: "billing_cycle", label: "Plan quota", windowMinutes }],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const account = screen.getByRole("region", { name: "Account usage" });
@@ -2436,7 +2441,7 @@ describe("AgentInfoButton usage panel", () => {
         ],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const account = screen.getByRole("region", { name: "Account usage" });
@@ -2454,7 +2459,7 @@ describe("AgentInfoButton usage panel", () => {
         ],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(
@@ -2482,7 +2487,7 @@ describe("AgentInfoButton usage panel", () => {
           ],
         }),
       );
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       const marker = screen.getByRole("img", {
@@ -2524,7 +2529,7 @@ describe("AgentInfoButton usage panel", () => {
           ],
         }),
       );
-      const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+      const view = renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       expect(
         screen.getByRole("img", {
@@ -2567,7 +2572,7 @@ describe("AgentInfoButton usage panel", () => {
 
     try {
       seedUsage(usage({ rateLimits: [{ label: "5h window", usedPercent: 20 }] }));
-      const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+      const view = renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
       expect(screen.queryByRole("img") === null).toBe(true);
       expect(setIntervalCalls).toBe(0);
@@ -2646,7 +2651,7 @@ describe("AgentInfoButton usage panel", () => {
   test("omits an invalid reset timestamp instead of rendering Invalid Date", () => {
     expect(formatResetDateTime("not-a-date")).toBeNull();
     seedUsage(usage({ rateLimits: [{ label: "Weekly", resetsAt: "not-a-date" }] }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.getByText("Weekly")).toBeTruthy();
@@ -2656,7 +2661,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("places the account section below the session's own context readout", () => {
     seedUsage(usage({ rateLimits: [{ label: "Weekly", usedPercent: 4 }] }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const context = screen.getByText("Context");
@@ -2682,7 +2687,7 @@ describe("AgentInfoButton usage panel", () => {
           ],
         }),
       );
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       expect(
@@ -2695,7 +2700,7 @@ describe("AgentInfoButton usage panel", () => {
 
   test("omits the account section entirely when nothing account-scoped is reported", () => {
     seedUsage(usage({ rateLimits: [] }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
   });
@@ -2704,7 +2709,7 @@ describe("AgentInfoButton usage panel", () => {
     seedUsage(usage({ rateLimits: [{ label: "Stale 5h", usedPercent: 90 }] }), "claude", {
       rateLimits: [],
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
@@ -2751,7 +2756,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     // Codex reads the same panel as every other platform now, so a session with
     // no projected runtime gets the same "nothing to report" line rather than a
     // Codex-shaped loading state fed by a second, renderer-owned health fetch.
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     expect(screen.getByText("Codex Native does not report runtime details.")).toBeTruthy();
@@ -2759,7 +2764,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
 
   test("renders the state and version the projection carries", async () => {
     seedCodexRuntime({ state: "ready", version: "0.144.1" });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("ready")).toBeTruthy());
@@ -2770,7 +2775,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     // Counting the bridge's inventory shapes is the backend's job — see
     // `bridgeRuntimeSummary`. The panel renders the numbers it is given.
     seedCodexRuntime({ mcpServers: 2, skills: 3, hooks: 1 });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() => expect(metricValue("MCP")).toBe("2"));
@@ -2783,7 +2788,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
       state: "ready",
       drift: { unknownEvents: 7, unknownKinds: ["codex/brand/new", "codex/other"] },
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() =>
@@ -2794,7 +2799,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
 
   test("counts a single unrecognised event in the singular", async () => {
     seedCodexRuntime({ drift: { unknownEvents: 1, unknownKinds: [] } });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() =>
@@ -2814,7 +2819,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         { method: "m6", message: "notice six" },
       ],
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("notice six")).toBeTruthy());
@@ -2834,7 +2839,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         },
       ],
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("github MCP failed to start")).toBeTruthy());
@@ -2861,7 +2866,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         },
       ],
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     const triggers = await screen.findAllByRole("button", {
@@ -2892,7 +2897,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         { method: "warning", message: "Codex reported warning" },
       ],
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() =>
@@ -2936,7 +2941,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         },
       ],
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     const noticeTrigger = screen.getByRole("button", {
@@ -2993,7 +2998,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
       state: "ready",
       notices: [{ method: "m1", message: "notice one", count: 2 }],
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("notice one (2)")).toBeTruthy());
@@ -3078,7 +3083,7 @@ describe("AgentInfoButton Claude session options", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(CLAUDE_KEY, neutralClaudeProjection({ executionProfiles: [] }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
 
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
@@ -3110,7 +3115,7 @@ describe("AgentInfoButton Claude session options", () => {
           ],
         },
       });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.getByText("Claude authentication refreshed")).toBeTruthy();
@@ -3124,7 +3129,7 @@ describe("AgentInfoButton Claude session options", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(CLAUDE_KEY, neutralClaudeProjection({ executionProfiles: [] }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.queryByLabelText("Execution profile") === null).toBe(true);
@@ -3133,7 +3138,7 @@ describe("AgentInfoButton Claude session options", () => {
   });
 
   test("renders both checkboxes before the projection arrives", () => {
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
   });
@@ -3142,7 +3147,7 @@ describe("AgentInfoButton Claude session options", () => {
     // The backend owns these settings and there is no session to update yet,
     // so the boxes stay disabled rather than sending an update it must refuse.
     routeNativeCommands();
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const [localSettings, suggestions] = screen.getAllByRole("checkbox") as HTMLInputElement[];
@@ -3170,7 +3175,7 @@ describe("AgentInfoButton Claude session options", () => {
     );
     appCommandStore(nativeAgentProjectionStore).getState().setProjection(CLAUDE_KEY, initial);
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
     const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
@@ -3219,7 +3224,7 @@ describe("AgentInfoButton Claude session options", () => {
     );
     appCommandStore(nativeAgentProjectionStore).getState().setProjection(CLAUDE_KEY, initial);
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "reviewer" } });
@@ -3264,7 +3269,7 @@ describe("AgentInfoButton Claude session options", () => {
       };
     });
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     const [localSettings, suggestions] = screen.getAllByRole("checkbox") as HTMLInputElement[];
 
@@ -3296,7 +3301,7 @@ describe("AgentInfoButton Claude session options", () => {
       return undefined;
     });
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     const localSettings = screen.getAllByRole("checkbox")[0] as HTMLInputElement;
     fireEvent.click(localSettings);
@@ -3311,7 +3316,7 @@ describe("AgentInfoButton Claude session options", () => {
 
   test("neither checkbox is offered for a non-Claude provider", () => {
     seedCodexProjection();
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
@@ -3327,7 +3332,7 @@ describe("AgentInfoButton Claude session options", () => {
         ],
       }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const select = screen.getByLabelText("Execution profile") as HTMLSelectElement;
@@ -3388,7 +3393,7 @@ describe("AgentInfoButton session actions", () => {
   }
 
   function startHandoff(tab: TabInfo, destination: "Claude" | "Codex" | "OpenCode") {
-    render(<AgentInfoButton activeTab={tab} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
     fireEvent.click(screen.getByRole("button", { name: destination }));
@@ -3402,7 +3407,7 @@ describe("AgentInfoButton session actions", () => {
   }
 
   test("fork and compact are disabled until a session id exists", () => {
-    render(
+    renderInAppCommandScope(
       <AgentInfoButton
         activeTab={claudeTab({
           nativeAgentData: { platform: "claude", environmentId: ENVIRONMENT_ID },
@@ -3419,7 +3424,7 @@ describe("AgentInfoButton session actions", () => {
 
   test("reveals only the two other providers and explains the copy boundary", () => {
     seedClaudeProjection();
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     const continueButton = screen.getByRole("button", { name: /Continue in/ });
@@ -3507,7 +3512,7 @@ describe("AgentInfoButton session actions", () => {
       return answer(command, args);
     });
 
-    const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+    const view = renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
@@ -3562,7 +3567,9 @@ describe("AgentInfoButton session actions", () => {
   test("does not open a destination tab when the source tab carries no native data", async () => {
     seedCodexProjection();
 
-    render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "agent-native" } as TabInfo} />);
+    renderInAppCommandScope(
+      <AgentInfoButton activeTab={{ id: TAB_ID, type: "agent-native" } as TabInfo} />,
+    );
     open();
 
     // Without native data there is no container or locality to copy onto the
@@ -3586,7 +3593,7 @@ describe("AgentInfoButton session actions", () => {
 
   test("does not allow a handoff while the source turn is running", () => {
     seedClaudeProjection({ turn: { phase: "running" } });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.getByRole("button", { name: /Continue in/ }).hasAttribute("disabled")).toBe(true);
   });
@@ -3617,7 +3624,7 @@ describe("AgentInfoButton session actions", () => {
             ? openCodeTab(bootstrap)
             : codexTab(bootstrap);
 
-      render(<AgentInfoButton activeTab={tab} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
       open();
       fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
@@ -3662,7 +3669,7 @@ describe("AgentInfoButton session actions", () => {
       title: "Fork",
       controls,
     }));
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
     await waitFor(() =>
@@ -3687,7 +3694,7 @@ describe("AgentInfoButton session actions", () => {
   test("names the fork tab after the provider when the fork has no title", async () => {
     seedClaudeProjection();
     mockNativeFork.mockImplementation(async () => ({ sessionId: "claude-fork" }));
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
@@ -3705,7 +3712,7 @@ describe("AgentInfoButton session actions", () => {
     mockNativeFork.mockImplementation(async () => {
       throw new Error("Codex session cannot be forked while it is running");
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
@@ -3728,7 +3735,7 @@ describe("AgentInfoButton session actions", () => {
           release = resolve;
         }),
     );
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
@@ -3751,7 +3758,7 @@ describe("AgentInfoButton session actions", () => {
       });
       const tab =
         provider === "claude" ? claudeTab() : provider === "opencode" ? openCodeTab() : codexTab();
-      render(<AgentInfoButton activeTab={tab} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
       open();
       fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
 
@@ -3770,7 +3777,7 @@ describe("AgentInfoButton session actions", () => {
     mockNativeAction.mockImplementation(async () => {
       throw new Error("The provider could not compact this session");
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
 
@@ -3782,7 +3789,7 @@ describe("AgentInfoButton session actions", () => {
 
   test("starts a Codex review through the backend", async () => {
     seedCodexProjection();
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Review changes/ }));
 
@@ -3805,7 +3812,7 @@ describe("AgentInfoButton session actions", () => {
     mockNativeAction.mockImplementation(async () => {
       throw new Error("Codex native review could not start");
     });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Review changes/ }));
 
@@ -3816,7 +3823,7 @@ describe("AgentInfoButton session actions", () => {
 
   test("undo targets the latest user message and redo takes none", async () => {
     seedOpenCodeSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
     await waitFor(() =>
@@ -3849,7 +3856,7 @@ describe("AgentInfoButton session actions", () => {
         },
       ],
     });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
@@ -3869,7 +3876,7 @@ describe("AgentInfoButton session actions", () => {
       mockNativeAction.mockImplementation(async () => {
         throw new Error(`OpenCode ${kind} endpoint unavailable`);
       });
-      render(<AgentInfoButton activeTab={openCodeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
       open();
 
       fireEvent.click(screen.getByRole("button", { name: button }));
@@ -3889,7 +3896,7 @@ describe("AgentInfoButton session actions", () => {
     mockNativeAction.mockImplementation(async () => {
       throw "transport closed";
     });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
@@ -3900,7 +3907,7 @@ describe("AgentInfoButton session actions", () => {
 
   test("forks and compacts OpenCode through the backend session actions", async () => {
     seedOpenCodeSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Compact/ }));
     await waitFor(() =>
@@ -3925,7 +3932,7 @@ describe("AgentInfoButton session actions", () => {
         { id: "task-2", description: "Finished", status: "completed" },
       ],
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(screen.getByText("Run the suite")).toBeTruthy();
@@ -3949,7 +3956,7 @@ describe("AgentInfoButton session actions", () => {
 
   test("hides the background-task section when nothing is running", () => {
     seedClaudeProjection({ backgroundTasks: [{ id: "task-2", status: "completed" }] });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.queryByText("Background tasks") === null).toBe(true);
   });
@@ -3961,7 +3968,7 @@ describe("AgentInfoButton session actions", () => {
       const description = `${status[0]!.toUpperCase()}${status.slice(1)} review`;
       seedClaudeProjection({ backgroundTasks: [{ id: taskId, description, status }] });
 
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       expect(screen.getByText(description)).toBeTruthy();
@@ -3978,7 +3985,7 @@ describe("AgentInfoButton session actions", () => {
         backgroundTasks: [{ id: "task-2", description: "Settled", status }],
       });
 
-      render(<AgentInfoButton activeTab={claudeTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
       open();
 
       expect(screen.queryByText("Background tasks") === null).toBe(true);
@@ -4027,7 +4034,7 @@ describe("AgentInfoButton rewind confirmation", () => {
         { file: "src/auth/index.ts" },
       ],
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
 
@@ -4055,7 +4062,7 @@ describe("AgentInfoButton rewind confirmation", () => {
     seedClaudeWithMessages();
     confirmResult = false;
     rewindPreview({ files: ["a.ts"] });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
 
@@ -4070,7 +4077,7 @@ describe("AgentInfoButton rewind confirmation", () => {
   test("says so when the dry run reports no files", async () => {
     seedClaudeWithMessages();
     rewindPreview({ unexpected: "shape" });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
 
@@ -4091,7 +4098,7 @@ describe("AgentInfoButton rewind confirmation", () => {
         },
       ],
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
 
@@ -4106,7 +4113,7 @@ describe("AgentInfoButton rewind confirmation", () => {
     rewindPreview({
       files: Array.from({ length: 13 }, (_, index) => `src/file-${index}.ts`),
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Rewind files/ }));
 
@@ -4234,7 +4241,7 @@ describe("AgentInfoButton session sharing", () => {
 
   test("OpenCode itself no longer offers sharing", () => {
     seedOpenCodeProjection("opencode-session-1");
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     expect(screen.getByRole("button", { name: /Undo turn/ })).toBeTruthy();
@@ -4246,7 +4253,7 @@ describe("AgentInfoButton session sharing", () => {
       shareUrl: "https://share.opencode.test/projected",
     });
 
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
@@ -4254,7 +4261,7 @@ describe("AgentInfoButton session sharing", () => {
 
   test("copies the link and offers revocation", async () => {
     seedShareableSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
 
@@ -4274,7 +4281,7 @@ describe("AgentInfoButton session sharing", () => {
      */
     seedShareableSession();
     clipboardRejection = new Error("Document is not focused");
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
 
@@ -4289,7 +4296,7 @@ describe("AgentInfoButton session sharing", () => {
   test("a share with no returned URL is still revocable", async () => {
     seedShareableSession();
     mockNativeAction.mockImplementation(async () => ({ outcome: "applied" }));
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
 
@@ -4302,7 +4309,7 @@ describe("AgentInfoButton session sharing", () => {
   test("declining the confirmation shares nothing", async () => {
     seedShareableSession();
     confirmResult = false;
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
 
@@ -4316,7 +4323,7 @@ describe("AgentInfoButton session sharing", () => {
     mockNativeAction.mockImplementation(async () => {
       throw new Error("OpenCode share endpoint unavailable");
     });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
 
@@ -4337,7 +4344,7 @@ describe("AgentInfoButton session sharing", () => {
         shareUrl: "https://share.opencode.test/live",
       }),
     );
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
@@ -4345,7 +4352,7 @@ describe("AgentInfoButton session sharing", () => {
 
   test("a failed projection refresh does not hide an already-known share", async () => {
     seedShareableSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     await shareAndWaitForRevocation();
 
@@ -4362,7 +4369,7 @@ describe("AgentInfoButton session sharing", () => {
 
   test("an authoritative unshared snapshot clears a formerly shared session", async () => {
     seedShareableSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     await shareAndWaitForRevocation();
 
@@ -4380,7 +4387,7 @@ describe("AgentInfoButton session sharing", () => {
 
   test("stop sharing revokes and hides the control", async () => {
     seedShareableSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     await shareAndWaitForRevocation();
 
@@ -4392,7 +4399,7 @@ describe("AgentInfoButton session sharing", () => {
 
   test("a failed unshare remains visible and can be retried", async () => {
     seedShareableSession();
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     await shareAndWaitForRevocation();
     mockNativeAction.mockImplementation(async () => {
@@ -4420,7 +4427,7 @@ describe("AgentInfoButton session sharing", () => {
 
   test("switching tabs clears the optimistic shared flag", async () => {
     seedShareableSession();
-    const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
+    const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     await shareAndWaitForRevocation();
 
@@ -4432,7 +4439,7 @@ describe("AgentInfoButton session sharing", () => {
   test("a delayed share cannot mark a resumed session as shared", async () => {
     seedShareableSession("opencode-session-a");
     const releaseShare = deferShare();
-    const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
+    const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
     await waitFor(() => expect(nativeActionKinds()).toEqual(["share"]));
@@ -4464,7 +4471,7 @@ describe("AgentInfoButton session sharing", () => {
             releaseCompact = () => resolve({ outcome: "applied" });
           }),
     );
-    const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
+    const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
 
@@ -4532,7 +4539,7 @@ describe("AgentInfoButton backend-owned steering", () => {
 
   test("only offers the steer panel when the backend projection enables a running turn", () => {
     seedProjection(TAB_ID, "idle");
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
     expect(screen.queryByPlaceholderText("Correct or redirect Codex") === null).toBe(true);
   });
@@ -4550,7 +4557,7 @@ describe("AgentInfoButton backend-owned steering", () => {
           createdAt: "2026-08-28T10:00:00.000Z",
         },
       });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     expect(screen.queryByPlaceholderText("Correct or redirect Codex") === null).toBe(true);
@@ -4559,7 +4566,7 @@ describe("AgentInfoButton backend-owned steering", () => {
   test("routes trimmed intent through the backend without a renderer request id", async () => {
     seedRunningCodex();
     steerOutcome({ outcome: "applied" });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
@@ -4591,7 +4598,7 @@ describe("AgentInfoButton backend-owned steering", () => {
   test("keeps the text while backend-owned recovery is unresolved", async () => {
     seedRunningCodex();
     steerOutcome({ outcome: "unknown", requestId: "opaque-backend-id" });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
@@ -4609,7 +4616,7 @@ describe("AgentInfoButton backend-owned steering", () => {
   test("reports an authoritative run mismatch without clearing the text", async () => {
     seedRunningCodex();
     steerOutcome({ outcome: "mismatch" });
-    render(<AgentInfoButton activeTab={codexTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
@@ -4634,7 +4641,7 @@ describe("AgentInfoButton backend-owned steering", () => {
         isLocal: false,
       },
     } as TabInfo;
-    render(<AgentInfoButton activeTab={tab} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     open();
 
     expect(screen.getByText(/Sends directly to the current Pi turn/) !== null).toBe(true);
@@ -4658,7 +4665,7 @@ describe("AgentInfoButton backend-owned steering", () => {
 
   test("does not carry unsent steering text into another session", () => {
     seedRunningCodex("tab-2");
-    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
+    const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
       target: { value: "meant for session A" },
@@ -4724,7 +4731,7 @@ describe("AgentInfoButton runtime inventory", () => {
         generation: "test",
       } satisfies NativeAgentSessionProjection);
 
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     expect(metricValue("Input")).toBe("800");
     expect(metricValue("Output")).toBe("300");
@@ -4738,7 +4745,7 @@ describe("AgentInfoButton runtime inventory", () => {
 
   test("counts Claude MCP servers, plugins and commands from the projection", () => {
     seedClaudeProjection({ runtime: { mcpServers: 2, plugins: 1, commands: 3 } });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     expect(metricValue("MCP")).toBe("2");
@@ -4755,7 +4762,7 @@ describe("AgentInfoButton runtime inventory", () => {
         mcp: [{ id: "docs", name: "docs", status: "connected", toolCount: 4, actions: [] }],
       },
     });
-    render(<AgentInfoButton activeTab={claudeTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
     // The server list says the same thing, with names and states.
@@ -4868,7 +4875,7 @@ describe("AgentInfoButton ACP agents", () => {
       appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(ACP_KEY, acpProjection("cursor"));
-      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       expect(await screen.findByText("fixture@example.test")).toBeTruthy();
       expect(screen.getByText(`${state.replaceAll("-", " ")} · pro`)).toBeTruthy();
@@ -4902,7 +4909,7 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     expect(await screen.findByText("fixture@example.test")).toBeTruthy();
     const line = document.querySelector("[data-sign-in-expiry]");
@@ -4925,7 +4932,7 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     // Not part of the projection: nothing asks until the account is shown.
     expect(accountReads()).toBe(0);
 
@@ -4956,7 +4963,7 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     await screen.findByText("old@example.test");
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
@@ -4992,7 +4999,7 @@ describe("AgentInfoButton ACP agents", () => {
       appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(ACP_KEY, acpProjection("cursor"));
-      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
       expect(await screen.findByText("new@example.test")).toBeTruthy();
@@ -5032,7 +5039,7 @@ describe("AgentInfoButton ACP agents", () => {
       appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(ACP_KEY, acpProjection("cursor"));
-      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
       await waitFor(() =>
@@ -5094,7 +5101,7 @@ describe("AgentInfoButton ACP agents", () => {
       appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(ACP_KEY, acpProjection("cursor"));
-      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
       await waitFor(() =>
@@ -5149,7 +5156,7 @@ describe("AgentInfoButton ACP agents", () => {
       appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(ACP_KEY, acpProjection("cursor"));
-      const view = render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      const view = renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
       await waitFor(() => expect(mockToastInfo).toHaveBeenCalled());
@@ -5167,7 +5174,7 @@ describe("AgentInfoButton ACP agents", () => {
       expect(mockToastDismiss.mock.calls.some(([id]) => id === originalId)).toBe(false);
       view.unmount();
       // Reopening the owning scope recovers the code and URL through an account read.
-      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       await waitFor(() => expect(mockToastInfo.mock.calls.length).toBeGreaterThan(1));
       expect(
@@ -5199,7 +5206,7 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(mockToastInfo).toHaveBeenCalled());
@@ -5223,7 +5230,7 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(reads).toBe(2));
@@ -5248,7 +5255,7 @@ describe("AgentInfoButton ACP agents", () => {
       appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(ACP_KEY, acpProjection("cursor"));
-      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Retry account status" }));
       expect(await screen.findByRole("button", { name: "Sign in" })).toBeTruthy();
@@ -5274,7 +5281,7 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(reads).toBe(2));
@@ -5305,7 +5312,7 @@ describe("AgentInfoButton ACP agents", () => {
         actions: ["reconnect"],
       },
     ]);
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     const summary = await waitFor(() => screen.getByRole("button", { name: /Tools 256/ }));
@@ -5341,7 +5348,7 @@ describe("AgentInfoButton ACP agents", () => {
         actions: ["reconnect"],
       },
     ]);
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 0/ })));
@@ -5353,7 +5360,7 @@ describe("AgentInfoButton ACP agents", () => {
     // row is not labelled as destructive, so clicking it must do nothing and the
     // teardown must live behind its own labelled button.
     seedMcp([{ id: "context7", name: "context7", status: "connected", actions: ["disable"] }]);
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools/ })));
@@ -5389,7 +5396,7 @@ describe("AgentInfoButton ACP agents", () => {
         actions: ["reconnect", "disable", "sign-in"],
       },
     ]);
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 12/ })));
@@ -5413,7 +5420,7 @@ describe("AgentInfoButton ACP agents", () => {
       { id: "context7", name: "context7", status: "connected", actions: ["disable"] },
       { id: "sentry", name: "sentry", status: "connected", actions: ["disable"] },
     ]);
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     const summary = await waitFor(() => screen.getByRole("button", { name: /Tools/ }));
@@ -5432,7 +5439,7 @@ describe("AgentInfoButton ACP agents", () => {
     seedMcp([
       { id: "orkestrator", name: "orkestrator", status: "connected", toolCount: 9, actions: [] },
     ]);
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 9/ })));
@@ -5458,7 +5465,7 @@ describe("AgentInfoButton ACP agents", () => {
           },
         }),
       );
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     await waitFor(() =>
@@ -5504,7 +5511,7 @@ describe("AgentInfoButton ACP agents", () => {
         }),
       );
 
-    render(<AgentInfoButton activeTab={acpTab("grok")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("grok")} />);
     open();
 
     expect(screen.getByRole("heading", { name: "Grok Build" })).toBeTruthy();
@@ -5556,7 +5563,7 @@ describe("AgentInfoButton ACP agents", () => {
         }),
       );
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     expect(screen.getByRole("heading", { name: "Cursor Agent" })).toBeTruthy();
@@ -5602,7 +5609,7 @@ describe("AgentInfoButton ACP agents", () => {
         }),
       );
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     const account = screen.getByRole("region", { name: "Account usage" });
@@ -5636,7 +5643,7 @@ describe("AgentInfoButton ACP agents", () => {
         }),
       );
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     expect(screen.getByRole("heading", { name: "Cursor Agent" })).toBeTruthy();
@@ -5672,7 +5679,7 @@ describe("AgentInfoButton ACP agents", () => {
         }),
       );
 
-    render(<AgentInfoButton activeTab={acpTab("grok")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("grok")} />);
     open();
 
     expect(metricValue("Input")).toBe("200");
@@ -5698,7 +5705,7 @@ describe("AgentInfoButton ACP agents", () => {
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     expect(screen.queryByRole("button", { name: /Fork session/ }) === null).toBe(true);
@@ -5719,7 +5726,7 @@ describe("AgentInfoButton ACP agents", () => {
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
 
@@ -5738,7 +5745,7 @@ describe("AgentInfoButton ACP agents", () => {
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     expect(screen.queryByRole("button", { name: /Continue in/ }) === null).toBe(true);
@@ -5784,7 +5791,7 @@ describe("AgentInfoButton ACP agents", () => {
       };
     });
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
     fireEvent.click(screen.getByRole("button", { name: "Claude" }));
@@ -5813,7 +5820,7 @@ describe("AgentInfoButton ACP agents", () => {
       .getState()
       .setProjection(ACP_KEY, acpProjection("cursor"));
 
-    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
     expect(popover().textContent).toContain("Cursor Agent does not report runtime details.");

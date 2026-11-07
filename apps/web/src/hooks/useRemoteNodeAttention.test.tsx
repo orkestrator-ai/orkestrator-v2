@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { ENVIRONMENT_ATTENTION_EVENT } from "@orkestrator/protocol/environment-attention";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
@@ -10,7 +10,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { configStore } from "@/stores/configStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { FakeNodeClient, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { appCommandStore } from "@/test/app-command-store";
 
 const playConfiguredNotificationSound = mock(async (_kind: string) => true);
@@ -168,13 +168,13 @@ afterEach(() => {
 describe("subscriptions", () => {
   test("subscribes each other node, never this node itself", () => {
     setNodes(node("bk_self", "Self"), node("bk_leaf", "Leaf"), node("bk_other", "Other"));
-    renderHook(() => useRemoteNodeAttention(() => undefined));
+    renderHookInAppCommandScope(() => useRemoteNodeAttention(() => undefined));
     expect(Array.from(subscriptions.keys()).sort()).toEqual(["bk_leaf", "bk_other"]);
     expect(live("bk_leaf")?.subscriber.events).toEqual([ENVIRONMENT_ATTENTION_EVENT]);
   });
 
   test("drops a node that leaves the summaries", () => {
-    renderHook(() => useRemoteNodeAttention(() => undefined));
+    renderHookInAppCommandScope(() => useRemoteNodeAttention(() => undefined));
     const entry = live("bk_leaf")!;
     setNodes();
     expect(entry.stop).toHaveBeenCalledTimes(1);
@@ -182,7 +182,7 @@ describe("subscriptions", () => {
 
   test("releases every subscription on unmount", () => {
     setNodes(node("bk_leaf", "Leaf"), node("bk_other", "Other"));
-    const view = renderHook(() => useRemoteNodeAttention(() => undefined));
+    const view = renderHookInAppCommandScope(() => useRemoteNodeAttention(() => undefined));
     const entries = [live("bk_leaf")!, live("bk_other")!];
     view.unmount();
     for (const entry of entries) expect(entry.stop).toHaveBeenCalledTimes(1);
@@ -191,7 +191,7 @@ describe("subscriptions", () => {
   test("hands each (node, attention) on once, and ignores other events and malformed payloads", () => {
     setNodes(node("bk_leaf", "Leaf"), node("bk_other", "Other"));
     const seen: string[] = [];
-    renderHook(() =>
+    renderHookInAppCommandScope(() =>
       useRemoteNodeAttention((nodeId, event) => seen.push(`${nodeId}:${event.attentionId}`)),
     );
     deliver("bk_leaf", attention("a1"));
@@ -204,7 +204,9 @@ describe("subscriptions", () => {
 
   test("a resync replays nothing, and an event redelivered after it stays deduplicated", () => {
     const seen: string[] = [];
-    renderHook(() => useRemoteNodeAttention((_nodeId, event) => seen.push(event.attentionId)));
+    renderHookInAppCommandScope(() =>
+      useRemoteNodeAttention((_nodeId, event) => seen.push(event.attentionId)),
+    );
     live("bk_leaf")!.subscriber.onResync();
     expect(seen).toEqual([]);
     deliver("bk_leaf", attention("a1"));
@@ -215,7 +217,9 @@ describe("subscriptions", () => {
 
   test("remembers delivered attention across the region holding and releasing a node", () => {
     const seen: string[] = [];
-    renderHook(() => useRemoteNodeAttention((_nodeId, event) => seen.push(event.attentionId)));
+    renderHookInAppCommandScope(() =>
+      useRemoteNodeAttention((_nodeId, event) => seen.push(event.attentionId)),
+    );
     deliver("bk_leaf", attention("a1"));
     act(() => useRemoteWorkspaceStore.setState({ openNodes: ["bk_leaf"] }));
     act(() => useRemoteWorkspaceStore.setState({ openNodes: [] }));
@@ -226,7 +230,7 @@ describe("subscriptions", () => {
 
 describe("through the notification sound service", () => {
   async function mounted() {
-    const view = renderHook(() => useNotificationSoundService());
+    const view = renderHookInAppCommandScope(() => useNotificationSoundService());
     await flush();
     return view;
   }

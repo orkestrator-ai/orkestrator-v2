@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ChangeDiffFileBody } from "@orkestrator/protocol/change-resources";
 import { TerminalProvider } from "@/contexts";
 import type { LegacyPayloadSummary } from "@/lib/backend/changes";
@@ -51,7 +52,7 @@ function file(overrides: Partial<ChangeDiffFileBody>): ChangeDiffFileBody {
 }
 
 function renderEdit(before: string, after: string) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <EditToolPart
         expansionKey={`edit-${before.length}-${after.length}`}

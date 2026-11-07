@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { BugReportSnapshot, BugReportSummary } from "@orkestrator/protocol/bug-report";
 import * as backend from "@/lib/backend";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
@@ -13,7 +13,7 @@ import { useOptionalNodeScope, WindowScopeProvider } from "@/lib/node-scope/prov
 import { openBugReport } from "@/lib/bug-report/open-bug-report";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { appCommandStore } from "@/test/app-command-store";
 
 const nativeAgentSnapshot = { ...realNativeAgent };
@@ -66,7 +66,7 @@ afterAll(() => {
 });
 
 async function openSheet() {
-  render(<BugReportSheet />);
+  renderInAppCommandScope(<BugReportSheet />);
   await act(async () => {
     useBugReportStore.getState().openSheet();
   });
@@ -364,7 +364,7 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
     window.orkestrator = {
       bugReport: { captureWindow: async () => "AAAA" },
     } as unknown as typeof window.orkestrator;
-    render(
+    renderInAppCommandScope(
       <WindowScopeProvider>
         <BugReportSheetHost />
       </WindowScopeProvider>,
@@ -402,7 +402,7 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
 
   test("a sheet asked for a node with no scope, and not opening one, is closed", async () => {
     spyOn(backend, "getBugReport").mockResolvedValue(snapshot(null));
-    render(
+    renderInAppCommandScope(
       <WindowScopeProvider>
         <BugReportSheetHost />
       </WindowScopeProvider>,

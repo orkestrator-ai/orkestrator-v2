@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import { fixtureCapture } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
@@ -42,7 +43,7 @@ describe("batch review tray", () => {
       stateReason: "layout moved",
     });
     seedBrowserLayout({ open: true, filter: { scope: "all", state: "open" } });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("checkbox", { name: /Select note 1: First/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Select note 2: Second/ }));
     const tray = await screen.findByRole("region", { name: "Batch review" });

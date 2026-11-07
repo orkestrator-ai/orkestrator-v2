@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
 import { useRef, useState } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { mockReadImage } from "../../../../../tests/mocks/clipboard";
 import { toast } from "sonner";
@@ -143,7 +144,7 @@ describe("addDesignImagesToDraft", () => {
 describe("useDesignPromptImagePaste", () => {
   test("restores native text paste at the image cap without an image rejection toast", async () => {
     seedEnvironment();
-    render(
+    renderInAppCommandScope(
       <Harness
         initial={Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT }, (_, i) => image(`seed-${i}`))}
       />,
@@ -175,7 +176,7 @@ describe("useDesignPromptImagePaste", () => {
     seedEnvironment();
     const read = deferred<Awaited<ReturnType<typeof mockReadImage>>>();
     mockReadImage.mockImplementationOnce(() => read.promise);
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     act(() => dispatchImagePaste(screen.getByRole("textbox", { name: "Prompt" })));
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -190,7 +191,7 @@ describe("useDesignPromptImagePaste", () => {
     seedEnvironment();
     const write = deferred<string>();
     invokeMock.mockImplementation(() => write.promise);
-    render(
+    renderInAppCommandScope(
       <Harness
         initial={Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT - 1 }, (_, i) =>
           image(`seed-${i}`),
@@ -225,7 +226,7 @@ describe("useDesignPromptImagePaste", () => {
     seedEnvironment();
     const write = deferred<string>();
     invokeMock.mockImplementation(() => write.promise);
-    render(
+    renderInAppCommandScope(
       <Harness
         initial={Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT - 1 }, (_, i) =>
           image(`seed-${i}`),
@@ -246,7 +247,7 @@ describe("useDesignPromptImagePaste", () => {
       const old = deferred<string>();
       invokeMock.mockImplementationOnce(() => old.promise);
       const onChange = mock(() => {});
-      const view = render(<Harness onChange={onChange} />);
+      const view = renderInAppCommandScope(<Harness onChange={onChange} />);
       await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
       if (changed === "environment") {
         act(() => seedEnvironment({ id: "env-2", worktreePath: "/tmp/other" }));
@@ -269,7 +270,7 @@ describe("useDesignPromptImagePaste", () => {
 
   test("freezes new pastes synchronously while submission owns the images", async () => {
     seedEnvironment();
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
       dispatchImagePaste(screen.getByRole("textbox", { name: "Prompt" }));
@@ -283,7 +284,7 @@ describe("useDesignPromptImagePaste", () => {
 
   test("renders an always visible, keyboard accessible image removal control", () => {
     const onRemove = mock();
-    render(<DesignPromptImages images={[image("shot")]} onRemove={onRemove} />);
+    renderInAppCommandScope(<DesignPromptImages images={[image("shot")]} onRemove={onRemove} />);
     const button = screen.getByRole("button", { name: "Remove shot.png" });
     expect(button.className).not.toContain("opacity-0");
     button.focus();
@@ -294,7 +295,7 @@ describe("useDesignPromptImagePaste", () => {
 
   test("writes a pasted image into the worktree and attaches it", async () => {
     seedEnvironment();
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
 
@@ -309,7 +310,7 @@ describe("useDesignPromptImagePaste", () => {
   test("ignores pastes outside the prompt", async () => {
     seedEnvironment();
     const onChange = mock(() => {});
-    render(<Harness onChange={onChange} />);
+    renderInAppCommandScope(<Harness onChange={onChange} />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Elsewhere" }));
 
@@ -325,7 +326,7 @@ describe("useDesignPromptImagePaste", () => {
       containerId: "c1",
     });
     const onChange = mock(() => {});
-    render(<Harness onChange={onChange} />);
+    renderInAppCommandScope(<Harness onChange={onChange} />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
 
@@ -342,7 +343,7 @@ describe("useDesignPromptImagePaste", () => {
     });
     const write = deferred<void>();
     invokeMock.mockImplementation(() => write.promise);
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -365,7 +366,7 @@ describe("useDesignPromptImagePaste", () => {
     invokeMock.mockImplementation(async (command, args) =>
       command === "write_container_file" ? `/workspace/${args?.filePath}` : undefined,
     );
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
 

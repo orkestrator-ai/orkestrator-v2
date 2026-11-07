@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, type ReactNode } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { LineCount } from "@orkestrator/protocol/change-measurements";
 import {
   environmentChangeResourceKey,
@@ -244,7 +245,7 @@ function renderPart(part: NativeMessagePart, scope: NativeChangeScope | null = S
       <NativeMessage message={message} />
     </TerminalProvider>
   );
-  return render(
+  return renderInAppCommandScope(
     scope ? (
       <NativeChangeScopeContext.Provider value={scope}>{tree}</NativeChangeScopeContext.Provider>
     ) : (
@@ -277,7 +278,7 @@ afterEach(() => {
 });
 
 test("a capped file list without a cursor shows the omitted-files note", () => {
-  render(
+  renderInAppCommandScope(
     <ChangeFileRows
       environmentId={undefined}
       projection={projection(EFFECT_KEY, {

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
 import { appCommandStore } from "@/test/app-command-store";
@@ -75,7 +76,7 @@ afterAll(() => {
 
 describe("HtmlFileTab", () => {
   test("opens on the rendered page in an iframe with no sandbox grants", () => {
-    render(renderTab());
+    renderInAppCommandScope(renderTab());
 
     expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state")).toBe("active");
     expect(screen.getByText("docs/report.html")).toBeTruthy();
@@ -87,7 +88,7 @@ describe("HtmlFileTab", () => {
   });
 
   test("Raw shows the source, and raw edits reach the store and the rendered page", async () => {
-    render(renderTab());
+    renderInAppCommandScope(renderTab());
 
     selectMode("Raw");
     const editor = await screen.findByRole("textbox", { name: "Monaco html" });
@@ -107,7 +108,7 @@ describe("HtmlFileTab", () => {
   });
 
   test.each(["ctrlKey", "metaKey"])("saves from Rendered using %s", async (modifier) => {
-    render(renderTab());
+    renderInAppCommandScope(renderTab());
     selectMode("Raw");
     const editor = await screen.findByRole("textbox");
     fireEvent.change(editor, { target: { value: "<p>Dirty</p>" } });
@@ -118,20 +119,20 @@ describe("HtmlFileTab", () => {
 
   test("restores an unsaved buffer instead of the disk content", () => {
     appCommandStore(fileDirtyStore).getState().setContent(TAB_ID, "<h1>Unsaved</h1>");
-    render(renderTab());
+    renderInAppCommandScope(renderTab());
 
     expect(frame().getAttribute("srcdoc")).toContain("<h1>Unsaved</h1>");
   });
 
   test("opens on Raw when asked for a line", async () => {
-    render(renderTab({ lineNumber: 12, navigationRequestId: 1 }));
+    renderInAppCommandScope(renderTab({ lineNumber: 12, navigationRequestId: 1 }));
 
     expect(screen.getByRole("tab", { name: "Raw" }).getAttribute("data-state")).toBe("active");
     expect(await screen.findByRole("textbox", { name: "Monaco html" })).toBeTruthy();
   });
 
   test("switches to Raw when a later navigation names a line", async () => {
-    const view = render(renderTab());
+    const view = renderInAppCommandScope(renderTab());
     expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state")).toBe("active");
 
     view.rerender(renderTab({ lineNumber: 3, navigationRequestId: 1 }));
@@ -144,7 +145,7 @@ describe("HtmlFileTab", () => {
     appCommandStore(fileDirtyStore)
       .getState()
       .setContent(TAB_ID, "<script>draw()</script><h1>Chart</h1>");
-    render(renderTab());
+    renderInAppCommandScope(renderTab());
     const notice = /does not run scripts or load external files/;
 
     expect(screen.getByText(notice)).toBeTruthy();
@@ -163,7 +164,7 @@ describe("HtmlFileTab", () => {
   });
 
   test("shows no notice for a self-contained page", () => {
-    render(renderTab());
+    renderInAppCommandScope(renderTab());
 
     expect(screen.queryByText(/does not run scripts/) === null).toBe(true);
   });

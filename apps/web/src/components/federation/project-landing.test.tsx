@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -65,7 +66,7 @@ function installTwoMachines() {
 }
 
 function renderWithFederation(node: ReactNode) {
-  return render(<FederationProvider>{node}</FederationProvider>);
+  return renderInAppCommandScope(<FederationProvider>{node}</FederationProvider>);
 }
 
 function RemoteSections() {

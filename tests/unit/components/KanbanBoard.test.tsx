@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
 import { projectStore } from "@/stores/projectStore";
-import { kanbanStore, useKanbanStore } from "@/stores/kanbanStore";
-import { githubIssuesStore, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import { kanbanStore, type KanbanState } from "@/stores/kanbanStore";
+import { githubIssuesStore, type GitHubIssuesState } from "@/stores/githubIssuesStore";
 import { uiStore } from "@/stores/uiStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
@@ -37,7 +38,7 @@ beforeEach(() => {
   });
   appCommandStore(kanbanStore).setState({
     tasks: [],
-    loadTasks: loadTasksMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadTasks"],
+    loadTasks: loadTasksMock as unknown as KanbanState["loadTasks"],
   });
   appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
   appCommandStore(environmentStore).setState({ environments: [] });
@@ -64,9 +65,7 @@ beforeEach(() => {
     ]),
     loadingProjects: new Set(),
     projectErrors: new Map(),
-    loadIssues: loadGitHubIssuesMock as unknown as ReturnType<
-      typeof useGitHubIssuesStore.getState
-    >["loadIssues"],
+    loadIssues: loadGitHubIssuesMock as unknown as GitHubIssuesState["loadIssues"],
   });
 });
 
@@ -176,7 +175,7 @@ describe("canClearTaskBuildStatus", () => {
 
 describe("KanbanBoard ticket sources", () => {
   test("renders the kanban board content for a project board", async () => {
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.getByText("Backlog")).toBeTruthy();
     expect(screen.getByText("In Progress")).toBeTruthy();
@@ -188,7 +187,7 @@ describe("KanbanBoard ticket sources", () => {
   test("mounts the GitHub issues view for the GitHub project-board tab", async () => {
     appCommandStore(uiStore).setState({ projectBoardTab: "github" });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.getByText("acme/repo")).toBeTruthy();
     expect(screen.getByText("No open issues")).toBeTruthy();
@@ -203,7 +202,7 @@ describe("KanbanBoard environment labels", () => {
     appCommandStore(kanbanStore).setState({ tasks: [makeTask({ environmentId: "env-1" })] });
     appCommandStore(environmentStore).setState({ environments: [makeEnvironment()] });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.getByText("attach-images-to")).toBeTruthy();
   });
@@ -220,7 +219,7 @@ describe("KanbanBoard environment labels", () => {
       buildEnvironmentIds: new Set(["env-2"]),
     });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.getByText("fix-provider-icons")).toBeTruthy();
   });
@@ -238,7 +237,7 @@ describe("KanbanBoard environment labels", () => {
       buildEnvironmentIds: new Set(["env-2"]),
     });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.getByText("attach-images-to")).toBeTruthy();
     expect(screen.queryByText("pipeline-environment") === null).toBe(true);
@@ -254,7 +253,7 @@ describe("KanbanBoard environment labels", () => {
       buildEnvironmentIds: new Set(["env-1"]),
     });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.queryByText("attach-images-to") === null).toBe(true);
   });
@@ -263,7 +262,7 @@ describe("KanbanBoard environment labels", () => {
     appCommandStore(kanbanStore).setState({ tasks: [makeTask({ environmentId: "env-deleted" })] });
     appCommandStore(environmentStore).setState({ environments: [makeEnvironment()] });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(screen.queryByText("attach-images-to") === null).toBe(true);
   });
@@ -280,7 +279,7 @@ describe("KanbanBoard experimental graphs", () => {
   test("a card offers no Run graph… while graphs are off", () => {
     appCommandStore(kanbanStore).setState({ tasks: [makeTask()] });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(within(openCardMenu()).queryByRole("menuitem", { name: "Run graph…" }) === null).toBe(
       true,
@@ -293,7 +292,7 @@ describe("KanbanBoard experimental graphs", () => {
       config: { ...initialConfig, global: { ...initialConfig.global, experimentalGraphs: true } },
     });
 
-    render(<KanbanBoard projectId="project-1" />);
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
 
     expect(within(openCardMenu()).getByRole("menuitem", { name: "Run graph…" })).toBeTruthy();
   });

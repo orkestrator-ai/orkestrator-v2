@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   TerminalProvider,
   useTerminalContext,
@@ -224,7 +225,7 @@ describe("Files panel components", () => {
           <FilesPanel />
         </TerminalProvider>
       );
-      const view = render(renderPanel());
+      const view = renderInAppCommandScope(renderPanel());
       fireEvent.click(screen.getByRole("button", { name: "Rename…" }));
       fireEvent.change(screen.getByLabelText("File name"), { target: { value: "renamed.txt" } });
       const staleConfirm = screen.getByRole("button", { name: "Rename" });
@@ -243,7 +244,7 @@ describe("Files panel components", () => {
 
   test("ChangedFileItem renders directory, filename, stats, and click target", () => {
     const onClick = mock(() => {});
-    render(<ChangedFileItem change={change} onClick={onClick} />);
+    renderInAppCommandScope(<ChangedFileItem change={change} onClick={onClick} />);
 
     const directory = screen.getByText("src/components").parentElement!;
     const filename = screen.getByText("/Button.tsx");
@@ -268,7 +269,7 @@ describe("Files panel components", () => {
     const onReveal = mock(() => {});
     const onRevert = mock(() => {});
     const onDelete = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <ChangedFileItem
         change={change}
         onReveal={onReveal}
@@ -287,7 +288,9 @@ describe("Files panel components", () => {
   });
 
   test("ChangedFileItem hides reveal for deleted files", () => {
-    render(<ChangedFileItem change={{ ...change, status: "D" }} onReveal={mock(() => {})} />);
+    renderInAppCommandScope(
+      <ChangedFileItem change={{ ...change, status: "D" }} onReveal={mock(() => {})} />,
+    );
 
     expect(screen.queryByRole("button", { name: "Reveal in file manager" }) === null).toBe(true);
   });
@@ -299,7 +302,7 @@ describe("Files panel components", () => {
       filename: "page-2026-08-16T23-58-53-138Z.yml",
       directory: ".playwright-mcp",
     };
-    render(<ChangedFileItem change={dotChange} />);
+    renderInAppCommandScope(<ChangedFileItem change={dotChange} />);
 
     // The RTL truncation direction reorders a leading neutral "." to the visual end
     // unless the text sits in its own LTR bidi isolate.
@@ -316,7 +319,7 @@ describe("Files panel components", () => {
       filename: "README.md",
       directory: "",
     };
-    render(<ChangedFileItem change={rootChange} />);
+    renderInAppCommandScope(<ChangedFileItem change={rootChange} />);
 
     const filename = screen.getByText("README.md");
     expect(filename.parentElement?.childElementCount).toBe(1);
@@ -325,7 +328,7 @@ describe("Files panel components", () => {
   });
 
   test("ChangedFileItem suppresses zero and negative change counts", () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <ChangedFileItem change={{ ...change, additions: 0, deletions: 0 }} />,
     );
 
@@ -341,7 +344,9 @@ describe("Files panel components", () => {
   test("ChangedFileItem exposes only the supplied context action", () => {
     const onRevert = mock(() => {});
     const onDelete = mock(() => {});
-    const { rerender } = render(<ChangedFileItem change={change} onRevert={onRevert} />);
+    const { rerender } = renderInAppCommandScope(
+      <ChangedFileItem change={change} onRevert={onRevert} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Revert" }));
     expect(onRevert).toHaveBeenCalledWith(change.path);
@@ -355,7 +360,7 @@ describe("Files panel components", () => {
   });
 
   test("ChangedFileItem remains clickable when onClick is omitted", () => {
-    render(<ChangedFileItem change={change} />);
+    renderInAppCommandScope(<ChangedFileItem change={change} />);
 
     expect(() => fireEvent.click(screen.getByTitle(change.path))).not.toThrow();
   });
@@ -364,7 +369,7 @@ describe("Files panel components", () => {
     const file: FileNode = { name: "App.tsx", path: "src/App.tsx", isDirectory: false };
     const onRevert = mock(() => {});
     const onDelete = mock(() => {});
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <FileTreeNode
         item={file}
         depth={0}
@@ -403,7 +408,7 @@ describe("Files panel components", () => {
       isLoadingTree: false,
     });
 
-    render(<FilesPanelHeader onRefresh={refreshMock} />);
+    renderInAppCommandScope(<FilesPanelHeader onRefresh={refreshMock} />);
 
     expect(screen.getByText("1")).toBeTruthy();
     const refreshButton = screen
@@ -419,7 +424,7 @@ describe("Files panel components", () => {
       isLoadingChanges: false,
       isLoadingTree: false,
     });
-    render(<FilesPanelHeader onRefresh={refreshMock} />);
+    renderInAppCommandScope(<FilesPanelHeader onRefresh={refreshMock} />);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "All files" }), {
       button: 0,
@@ -435,7 +440,7 @@ describe("Files panel components", () => {
 
   test("view components render loading and empty states", () => {
     appCommandStore(filesPanelStore).setState({ isLoadingTree: true, fileTree: [] });
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <AllFilesView />
       </TerminalProvider>,
@@ -477,7 +482,7 @@ describe("Files panel components", () => {
       fileTree,
       changes: [change],
     });
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <FileViewHarness createFileTab={createFileTab}>
           <AllFilesView />
@@ -506,7 +511,7 @@ describe("Files panel components", () => {
   test("FileActionDialog describes and dispatches revert and delete actions", () => {
     const onCancel = mock(() => {});
     const onConfirm = mock(async () => {});
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <FileActionDialog
         action={{ environmentId: "env-1", kind: "revert", paths: ["src/App.tsx"] }}
         targetRef="main"
@@ -581,7 +586,7 @@ describe("Files panel components", () => {
 
   test("bounds a large bulk-delete path list", () => {
     const paths = Array.from({ length: 50 }, (_, index) => `src/file-${index}.ts`);
-    render(
+    renderInAppCommandScope(
       <FileActionDialog
         action={{ environmentId: "env-1", kind: "delete", paths }}
         targetRef="main"
@@ -606,7 +611,7 @@ describe("Files panel components", () => {
       changes: [change],
     });
 
-    const { container, rerender } = render(
+    const { container, rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -634,7 +639,7 @@ describe("Files panel components", () => {
       fileTree,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -656,7 +661,7 @@ describe("Files panel components", () => {
       fileTree,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -678,7 +683,7 @@ describe("Files panel components", () => {
       fileTree: nestedFileTree,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -700,7 +705,7 @@ describe("Files panel components", () => {
 
   test("FilesPanel confirms actions and keeps failed actions open for retry", async () => {
     appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -752,7 +757,7 @@ describe("Files panel components", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -800,7 +805,7 @@ describe("Files panel components", () => {
       })
       .mockImplementationOnce(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -828,7 +833,7 @@ describe("Files panel components", () => {
   test("FilesPanel does not queue destructive actions without an environment", () => {
     mockEnvironmentId = null;
     appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -844,7 +849,7 @@ describe("Files panel components", () => {
     mockIsLocalEnvironment = true;
     mockWorktreePath = "/worktrees/feature/";
     appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -873,7 +878,7 @@ describe("Files panel components", () => {
     mockWorktreePath = "/worktrees/feature";
     invokeMock.mockRejectedValueOnce(new Error("file manager unavailable"));
     appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,

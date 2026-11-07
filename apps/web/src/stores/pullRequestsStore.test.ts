@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, renderHook } from "@testing-library/react";
+import { act } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { gitHubPullRequestKey } from "@orkestrator/protocol/github-pull-requests";
 import { usePullRequestDetail } from "@/hooks/usePullRequestData";
 import {
@@ -175,9 +176,12 @@ describe("pull request polling", () => {
   });
 
   test("the detail hook polls only while active", async () => {
-    const { rerender, unmount } = renderHook(({ active }) => usePullRequestDetail(prRef, active), {
-      initialProps: { active: true },
-    });
+    const { rerender, unmount } = renderHookInAppCommandScope(
+      ({ active }) => usePullRequestDetail(prRef, active),
+      {
+        initialProps: { active: true },
+      },
+    );
     expect(clock.pendingCount()).toBe(1);
     expect(callsFor("get_github_pull_request")).toHaveLength(1);
 

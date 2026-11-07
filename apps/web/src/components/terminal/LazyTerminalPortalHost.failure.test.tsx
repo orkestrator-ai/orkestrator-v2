@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 const state = appCommandStore(paneLayoutStore).getState();
 import * as realLoaders from "@/lib/lazy-view-loaders";
@@ -35,7 +36,7 @@ test("failed host import is contained in the inline fallback", async () => {
       ],
     ]),
   });
-  render(
+  renderInAppCommandScope(
     <main>
       <nav>Shell</nav>
       <LazyTerminalPortalHost environmentId="env" containerId={null} />

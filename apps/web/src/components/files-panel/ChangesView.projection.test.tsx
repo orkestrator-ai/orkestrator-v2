@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect } from "react";
 import type { ChangesGetFilesResult } from "@orkestrator/protocol/change-resources";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
@@ -37,7 +38,7 @@ function RegisterFileTab() {
 }
 
 function renderChanges(props: Partial<Parameters<typeof ChangesView>[0]> = {}) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <RegisterFileTab />
       <ChangesView environmentId="env-1" {...props} />
@@ -177,7 +178,7 @@ describe("ChangesView on the environment change projection", () => {
       environmentType: "local",
     } as Environment;
     const noop = () => undefined;
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <EnvironmentItem
           environment={environment}
@@ -385,7 +386,7 @@ describe("ChangesView on the environment change projection", () => {
     appCommandStore(changeProjectionStore)
       .getState()
       .applyProjection(environmentProjectionFixture("env-1"));
-    const view = render(
+    const view = renderInAppCommandScope(
       <FilesPanelHeader onRefresh={() => undefined} changeEnvironmentId="env-1" />,
     );
     expect(screen.getByRole("tab", { name: /Changes/ }).textContent).toBe("Changes2");
@@ -401,7 +402,9 @@ describe("ChangesView on the environment change projection", () => {
           counters: { additions: unknownCount(), deletions: unknownCount(), changedFiles: null },
         }),
       );
-    render(<FilesPanelHeader onRefresh={() => undefined} changeEnvironmentId="env-1" />);
+    renderInAppCommandScope(
+      <FilesPanelHeader onRefresh={() => undefined} changeEnvironmentId="env-1" />,
+    );
     expect(screen.getByRole("tab", { name: /Changes/ }).textContent).toBe("Changes?");
   });
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
@@ -92,7 +93,7 @@ function labels() {
 }
 
 const renderReadings = () =>
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <MachineCpuReadings />
     </FederationProvider>,

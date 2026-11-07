@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEnvironments } from "./useEnvironments";
 import * as backend from "@/lib/backend";
 import { appCommandScope } from "@/lib/node-scope-slots";
@@ -313,7 +314,7 @@ describe("refreshEnvironmentSnapshot", () => {
           }),
       );
       try {
-        const { result } = renderHook(() =>
+        const { result } = renderHookInAppCommandScope(() =>
           useEnvironments(null, { listenForRenameEvents: false }),
         );
         let snapshot = settled

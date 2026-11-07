@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { MCP_MANAGEMENT_CHANGED_EVENT } from "@orkestrator/protocol/mcp-management";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -58,7 +59,7 @@ function renderSection(
   list: NativeAgentMcpServer[] | undefined,
   provider: AgentPlatform = "codex",
 ) {
-  return render(
+  return renderInAppCommandScope(
     <AgentInfoMcpSection
       environmentId="env-1"
       provider={provider}
@@ -128,7 +129,7 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
     const join = joinLiveMcpServer(rows, liveRef);
     expect(join.kind).toBe("injected");
     if (join.kind === "other-target") throw new Error("wrong target");
-    render(<McpLiveJoinNotice liveRef={liveRef} join={join} snapshot={rows} />);
+    renderInAppCommandScope(<McpLiveJoinNotice liveRef={liveRef} join={join} snapshot={rows} />);
     expect(screen.getByRole("note").textContent).toContain("Orkestrator's own connection");
     expect(screen.getByRole("note").textContent).toContain("not saved in these files");
   });
@@ -159,7 +160,7 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
 
   test("platform settings link opens that platform's servers", () => {
     const intents = captureIntents();
-    render(<McpServersSettingsLink platform="pi" />);
+    renderInAppCommandScope(<McpServersSettingsLink platform="pi" />);
     fireEvent.click(screen.getByRole("button", { name: "Manage Pi MCP servers" }));
     expect(intents).toEqual([{ provider: "pi" }]);
   });

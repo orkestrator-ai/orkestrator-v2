@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as backend from "@/lib/backend";
 import { configStore } from "@/stores/configStore";
 import { AccountMachineProvider } from "./account-machine";
@@ -23,7 +24,7 @@ afterEach(() => {
 });
 
 function mount() {
-  return render(
+  return renderInAppCommandScope(
     <AccountMachineProvider value={{ machine: null, name: "Local" }}>
       <MachineConfigProvider machine={null}>
         <GlobalSettings activeSection="review" />

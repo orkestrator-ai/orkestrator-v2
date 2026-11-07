@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, mock, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
@@ -98,7 +99,7 @@ function seed(next: BuildPipeline, tabs: TabInfo[] = [buildTab, briefTab]) {
 
 function renderTab(next: BuildPipeline, tabs?: TabInfo[]) {
   seed(next, tabs);
-  render(
+  renderInAppCommandScope(
     <PipelineKeyInformationTab data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID }} />,
   );
   return screen.getByTestId("pipeline-key-information-tab");
@@ -113,7 +114,7 @@ describe("PipelineKeyInformationTab", () => {
 
   function renderCold() {
     appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
-    render(
+    renderInAppCommandScope(
       <PipelineKeyInformationTab
         data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID }}
       />,
@@ -162,7 +163,7 @@ describe("PipelineKeyInformationTab", () => {
 
   describe("notes view", () => {
     const renderNotes = () =>
-      render(
+      renderInAppCommandScope(
         <PipelineKeyInformationTab
           data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID, view: "notes" }}
         />,

@@ -9,7 +9,8 @@ import {
   useFilesPanelChromeStore,
   type FilesPanelChromeState,
 } from "@/stores/filesPanelChromeStore";
-import { useFilesPanelStore, type FilesPanelState } from "@/stores/filesPanelStore";
+import { filesPanelStore, type FilesPanelState } from "@/stores/filesPanelStore";
+import { appCommandStore } from "./app-command-store";
 
 type ChromeFields = Pick<FilesPanelChromeState, "isOpen" | "panelWidth">;
 
@@ -29,14 +30,14 @@ export function setFilesPanelTestState(
   if (isOpen !== undefined) chrome.isOpen = isOpen;
   if (panelWidth !== undefined) chrome.panelWidth = panelWidth;
   if (Object.keys(chrome).length > 0) useFilesPanelChromeStore.setState(chrome);
-  if (Object.keys(node).length > 0) (store ?? useFilesPanelStore).setState(node);
+  if (Object.keys(node).length > 0) (store ?? appCommandStore(filesPanelStore)).setState(node);
 }
 
 /** The window's chrome fields together with the node's panel state. */
 export function filesPanelTestState(store?: StoreApi<FilesPanelState>): FilesPanelTestState {
   const chrome = useFilesPanelChromeStore.getState();
   return {
-    ...(store ?? useFilesPanelStore).getState(),
+    ...(store ?? appCommandStore(filesPanelStore)).getState(),
     isOpen: chrome.isOpen,
     panelWidth: chrome.panelWidth,
   };

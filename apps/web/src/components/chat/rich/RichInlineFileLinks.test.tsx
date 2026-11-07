@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { searchRootText } from "@/lib/chat/rich-markdown/find-reveal";
 import { clearMarkdownSearchCache } from "@/lib/chat/rich-markdown/markdown-search";
@@ -29,7 +30,7 @@ function renderWithFileTabs(content: string) {
     }, [setCreateFileTab]);
     return null;
   }
-  const view = render(
+  const view = renderInAppCommandScope(
     <TerminalProvider>
       <RegisterFileTab />
       <NativeMessage message={message(content)} />
@@ -97,7 +98,7 @@ describe("inline code file references", () => {
   });
 
   test("without an environment the link explains how to open the file", () => {
-    render(<NativeMessage message={message("See `src/app.ts:12`.")} />);
+    renderInAppCommandScope(<NativeMessage message={message("See `src/app.ts:12`.")} />);
     fireEvent.click(screen.getByRole("link", { name: "src/app.ts:12" }));
     expect(mockToastInfo).toHaveBeenCalledTimes(1);
     expect(String(mockToastInfo.mock.calls[0]?.[0])).toContain("Start or open the environment");

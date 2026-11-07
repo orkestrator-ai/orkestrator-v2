@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
 import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
@@ -114,7 +115,7 @@ describe("useAgentMailEnvironmentName", () => {
       limit: 100,
       revision: 1,
     };
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ id }: { id: string | undefined }) => useAgentMailEnvironmentName(id),
       { initialProps: { id: "env-1" as string | undefined } },
     );

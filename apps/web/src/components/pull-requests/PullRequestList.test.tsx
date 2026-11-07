@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { PullRequestList } from "./PullRequestList";
 import {
   callsFor,
@@ -34,7 +35,9 @@ afterEach(() => {
 
 describe("PullRequestList", () => {
   test("switching filters lists with the matching filter", async () => {
-    render(<PullRequestList projectId="project-1" layout="sidebar" onOpenPullRequest={() => {}} />);
+    renderInAppCommandScope(
+      <PullRequestList projectId="project-1" layout="sidebar" onOpenPullRequest={() => {}} />,
+    );
     await screen.findByText("Pull request 3");
     expect(callsFor("list_github_pull_requests")).toEqual([
       { projectId: "project-1", filter: "open" },
@@ -63,7 +66,9 @@ describe("PullRequestList", () => {
   });
 
   test("search is debounced and passed as the query", async () => {
-    render(<PullRequestList projectId="project-1" layout="sidebar" onOpenPullRequest={() => {}} />);
+    renderInAppCommandScope(
+      <PullRequestList projectId="project-1" layout="sidebar" onOpenPullRequest={() => {}} />,
+    );
     await screen.findByText("Pull request 3");
     fireEvent.change(screen.getByRole("searchbox", { name: "Search pull requests" }), {
       target: { value: "  usage " },
@@ -80,7 +85,7 @@ describe("PullRequestList", () => {
 
   test("pins the highlighted pull request and opens rows by reference", async () => {
     const onOpen = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <PullRequestList
         projectId="project-1"
         layout="page"
@@ -105,7 +110,9 @@ describe("PullRequestList", () => {
       list_github_pull_requests: () =>
         fail ? Promise.reject(new Error("GitHub could not list pull requests.")) : makeList([]),
     });
-    render(<PullRequestList projectId="project-1" layout="sidebar" onOpenPullRequest={() => {}} />);
+    renderInAppCommandScope(
+      <PullRequestList projectId="project-1" layout="sidebar" onOpenPullRequest={() => {}} />,
+    );
     expect(await screen.findByText("GitHub could not list pull requests.")).toBeTruthy();
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));

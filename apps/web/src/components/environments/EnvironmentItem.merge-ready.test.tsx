@@ -1,5 +1,6 @@
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { Environment } from "@/types";
@@ -56,7 +57,9 @@ const callbacks = {
 };
 
 function renderItem(environment: Environment) {
-  return render(<EnvironmentItem environment={environment} isSelected={false} {...callbacks} />);
+  return renderInAppCommandScope(
+    <EnvironmentItem environment={environment} isSelected={false} {...callbacks} />,
+  );
 }
 
 function nameElement(): HTMLElement {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GraphDescribeJobView } from "@orkestrator/protocol/graphs/describe";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { configStore } from "@/stores/configStore";
@@ -34,7 +35,7 @@ function renderDialog(overrides: Partial<Parameters<typeof GraphDescribeDialog>[
   const onSubmit = mock((_submission: GraphDescribeSubmission) => undefined);
   const onCancelJob = mock(() => undefined);
   const onOpenChange = mock((_open: boolean) => undefined);
-  render(
+  renderInAppCommandScope(
     <GraphDescribeDialog
       open
       onOpenChange={onOpenChange}

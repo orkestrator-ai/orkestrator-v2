@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { readLocalDraft } from "@/lib/web-annotations/local-drafts";
 import {
@@ -13,7 +14,7 @@ let backend: FakeWebAnnotationBackend;
 let bus: ReturnType<typeof installFakeOrkestrator>;
 
 function renderDraft(editorId = "editor-local") {
-  return renderHook(() =>
+  return renderHookInAppCommandScope(() =>
     useAnnotationDraft({
       environmentId: "env-1",
       editorId,

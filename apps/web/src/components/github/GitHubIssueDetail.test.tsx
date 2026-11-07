@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { githubIssueDetailKey, githubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssueDetail, GitHubRepository } from "@/types/github";
@@ -190,7 +191,7 @@ describe("GitHubIssueDetail", () => {
     onBack?: () => void;
     onClosed?: () => void;
   } = {}) {
-    return render(
+    return renderInAppCommandScope(
       <GitHubIssueDetailContent
         projectId="project-1"
         repository={repository}
@@ -272,7 +273,7 @@ describe("GitHubIssueDetail", () => {
   });
 
   test("initializes editing from fresh detail rather than a stale list summary", async () => {
-    render(
+    renderInAppCommandScope(
       <GitHubIssueDetailContent
         projectId="project-1"
         repository={repository}
@@ -512,7 +513,7 @@ describe("GitHubIssueDetail", () => {
         />
       </DockerAvailabilityProvider>
     );
-    const view = render(renderWithDocker(true));
+    const view = renderInAppCommandScope(renderWithDocker(true));
 
     expect(
       (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,

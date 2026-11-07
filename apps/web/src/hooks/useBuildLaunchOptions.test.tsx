@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { configStore } from "@/stores/configStore";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
@@ -50,7 +51,7 @@ describe("useBuildLaunchOptions", () => {
       recent: [],
       variant: {},
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     expect(result.current.favoriteOpenCodeModelIds).toEqual([
@@ -71,14 +72,14 @@ describe("useBuildLaunchOptions", () => {
       recent: [],
       variant: {},
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     expect(result.current.favoriteOpenCodeModelIds).toEqual(["provider/model-a"]);
   });
 
   test("does not fetch models or preferences while disabled", async () => {
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", false));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", false));
     await flushPromises();
 
     expect(getCachedOpenCodeModelCatalogMock).not.toHaveBeenCalled();
@@ -92,7 +93,7 @@ describe("useBuildLaunchOptions", () => {
       recent: [],
       variant: {},
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("", true));
     await flushPromises();
 
     expect(getCachedOpenCodeModelCatalogMock).not.toHaveBeenCalled();
@@ -114,7 +115,7 @@ describe("useBuildLaunchOptions", () => {
           }
         : null,
     );
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     const opencode = result.current.catalog.opencode ?? [];
@@ -129,7 +130,7 @@ describe("useBuildLaunchOptions", () => {
       projectId: "project-1",
       models: [{ id: modelId, name: modelId, provider: "provider" }],
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
     expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["provider/model-a"]);
 
@@ -163,7 +164,7 @@ describe("useBuildLaunchOptions", () => {
         },
       },
     });
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(
@@ -185,7 +186,7 @@ describe("useBuildLaunchOptions", () => {
         },
       },
     });
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     expect(result.current.catalog.opencode).toEqual([
@@ -208,14 +209,14 @@ describe("useBuildLaunchOptions", () => {
         },
       },
     });
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["default"]);
   });
 
   test("reacts to shared backend-hydrated Cursor and Pi catalogues", async () => {
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["default"]);
@@ -248,7 +249,7 @@ describe("useBuildLaunchOptions", () => {
       projectId: "other-project",
       models: [{ id: "other/model", name: "Other", provider: "Other" }],
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHookInAppCommandScope(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
     const opencode = result.current.catalog.opencode ?? [];
@@ -269,7 +270,7 @@ describe("useBuildLaunchOptions", () => {
       variant: {},
     }));
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       (props: { projectId: string }) => useBuildLaunchOptions(props.projectId, true),
       { initialProps: { projectId: "project-1" } },
     );

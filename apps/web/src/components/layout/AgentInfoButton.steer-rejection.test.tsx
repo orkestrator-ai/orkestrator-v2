@@ -7,7 +7,8 @@
  * steer history is shown as a content-free runtime card with no control.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   nativeAgentCapabilities,
   nativeAgentSteerRejectionMessage,
@@ -65,7 +66,7 @@ function steerOutcome(outcome: NativeAgentSessionActionOutcome) {
 }
 
 async function sendSteer(text: string): Promise<HTMLInputElement> {
-  render(<AgentInfoButton activeTab={codexTab} />);
+  renderInAppCommandScope(<AgentInfoButton activeTab={codexTab} />);
   fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
   const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
   fireEvent.change(input, { target: { value: text } });
@@ -127,7 +128,7 @@ describe("AgentRuntimePanel steer history", () => {
   };
 
   test("shows a saturated history as counts and limits, with no control", () => {
-    render(<AgentRuntimePanel runtime={{ steer }} providerLabel="Cursor" />);
+    renderInAppCommandScope(<AgentRuntimePanel runtime={{ steer }} providerLabel="Cursor" />);
 
     const card = screen.getByTestId("agent-runtime-steer-saturated");
     expect(card.textContent).toContain("Steering is full for this turn");
@@ -138,7 +139,7 @@ describe("AgentRuntimePanel steer history", () => {
   });
 
   test("an unsaturated history stays out of the panel", () => {
-    render(
+    renderInAppCommandScope(
       <AgentRuntimePanel
         runtime={{ steer: { ...steer, entries: 3, saturated: false } }}
         providerLabel="Cursor"

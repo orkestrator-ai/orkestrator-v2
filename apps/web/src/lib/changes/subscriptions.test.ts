@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   CHANGE_PROJECTION_CHANGED_EVENT,
   type ChangeProjection,
@@ -228,8 +229,8 @@ describe("change projection subscriptions", () => {
   });
 
   test("V02: unmounting every consumer releases interest; a later mount re-reads the current revision", async () => {
-    const first = renderHook(() => useChangeProjection(KEY));
-    const second = renderHook(() => useChangeProjection(KEY));
+    const first = renderHookInAppCommandScope(() => useChangeProjection(KEY));
+    const second = renderHookInAppCommandScope(() => useChangeProjection(KEY));
     await act(settle);
     // One shared read for both consumers.
     expect(views).toHaveLength(1);
@@ -252,7 +253,7 @@ describe("change projection subscriptions", () => {
 
     // The backend kept measuring meanwhile; remounting re-reads from the
     // revision the client last held and shows the backend's current one.
-    const again = renderHook(() => useChangeProjection(KEY));
+    const again = renderHookInAppCommandScope(() => useChangeProjection(KEY));
     await act(settle);
     expect(views).toHaveLength(1);
     expect(views[0]!.args).toEqual({

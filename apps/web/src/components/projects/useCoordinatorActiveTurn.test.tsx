@@ -4,7 +4,8 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Profiler } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import type { Environment } from "@/types";
@@ -70,7 +71,7 @@ describe("useCoordinatorActiveTurn", () => {
   });
 
   test("a write to another environment renders nothing; a new project home is followed", async () => {
-    render(
+    renderInAppCommandScope(
       <Profiler id="probe" onRender={() => (renders += 1)}>
         <Probe />
       </Profiler>,

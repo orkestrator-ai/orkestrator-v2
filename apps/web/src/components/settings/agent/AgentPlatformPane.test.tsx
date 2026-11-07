@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import { AgentPlatformPane } from "./AgentPlatformPane";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
@@ -32,7 +33,7 @@ const catalog = { claude: [], codex: [], opencode: [] };
 describe("AgentPlatformPane model refresh", () => {
   test("offers an environment-free refresh action", () => {
     const onRefreshModels = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <AgentPlatformPane
         platform="opencode"
         tier={{}}
@@ -51,7 +52,7 @@ describe("AgentPlatformPane model refresh", () => {
   });
 
   test("disables the action while a catalogue refresh is running", () => {
-    render(
+    renderInAppCommandScope(
       <AgentPlatformPane
         platform="opencode"
         tier={{}}
@@ -70,7 +71,7 @@ describe("AgentPlatformPane model refresh", () => {
   });
 
   test("explains repository scope and disables refresh when no scope exists", () => {
-    render(
+    renderInAppCommandScope(
       <AgentPlatformPane
         platform="opencode"
         tier={{}}
@@ -91,7 +92,7 @@ describe("AgentPlatformPane model refresh", () => {
   });
 
   test("keeps the environment guidance when no refresh action is available", () => {
-    render(
+    renderInAppCommandScope(
       <AgentPlatformPane
         platform="opencode"
         tier={{}}
@@ -183,7 +184,7 @@ describe("AgentPlatformPane Claude SDK defaults", () => {
         },
       ],
     };
-    render(
+    renderInAppCommandScope(
       <AgentPlatformPane
         platform="claude"
         tier={{
@@ -212,7 +213,7 @@ describe("AgentPlatformPane Claude SDK defaults", () => {
 
   test("stores thinking and 1M context choices in Claude settings", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<ClaudeSettingsHarness onChange={onChange} />);
+    renderInAppCommandScope(<ClaudeSettingsHarness onChange={onChange} />);
 
     const thinking = screen.getByRole("combobox", { name: "Thinking" });
     fireEvent.keyDown(thinking, { key: "Enter" });
@@ -235,7 +236,7 @@ describe("AgentPlatformPane Claude SDK defaults", () => {
 
   test("stores and inherits the Claude in Chrome choice", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<ClaudeSettingsHarness onChange={onChange} />);
+    renderInAppCommandScope(<ClaudeSettingsHarness onChange={onChange} />);
 
     const chrome = screen.getByRole("radiogroup", { name: "Claude in Chrome" });
     fireEvent.click(within(chrome).getByRole("radio", { name: "On" }));
@@ -247,7 +248,7 @@ describe("AgentPlatformPane Claude SDK defaults", () => {
 
   test("labels and restores inherited Claude SDK defaults", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<InheritedClaudeSettingsHarness onChange={onChange} />);
+    renderInAppCommandScope(<InheritedClaudeSettingsHarness onChange={onChange} />);
 
     const thinking = screen.getByRole("combobox", { name: "Thinking" });
     fireEvent.keyDown(thinking, { key: "Enter" });
@@ -299,7 +300,7 @@ function CursorSettingsHarness({
 describe("AgentPlatformPane Cursor speed", () => {
   test("offers Fast/Normal for a Cursor model that supports speed", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<CursorSettingsHarness onChange={onChange} />);
+    renderInAppCommandScope(<CursorSettingsHarness onChange={onChange} />);
 
     fireEvent.pointerDown(screen.getByRole("combobox", { name: "Cursor Agent default model" }));
     const speedGroup = screen.getByRole("group", { name: "Speed mode" });
@@ -319,7 +320,7 @@ describe("AgentPlatformPane Cursor speed", () => {
   });
 
   test("uses the first catalog model for speed capability when no model is pinned", () => {
-    render(
+    renderInAppCommandScope(
       <AgentPlatformPane
         platform="cursor"
         tier={{}}
@@ -346,7 +347,7 @@ describe("AgentPlatformPane Cursor speed", () => {
 
   test("clears a stored speed choice through the inherit row", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<CursorSettingsHarness onChange={onChange} initialFastMode />);
+    renderInAppCommandScope(<CursorSettingsHarness onChange={onChange} initialFastMode />);
 
     fireEvent.pointerDown(screen.getByRole("combobox", { name: "Cursor Agent default model" }));
     const speedGroup = screen.getByRole("group", { name: "Speed mode" });
@@ -357,7 +358,7 @@ describe("AgentPlatformPane Cursor speed", () => {
 
   test("clears a stored speed choice when the selected model does not support it", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<CursorSettingsHarness onChange={onChange} initialFastMode />);
+    renderInAppCommandScope(<CursorSettingsHarness onChange={onChange} initialFastMode />);
 
     fireEvent.pointerDown(screen.getByRole("combobox", { name: "Cursor Agent default model" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Auto Cursor/ }));
@@ -367,7 +368,7 @@ describe("AgentPlatformPane Cursor speed", () => {
   });
 
   test("does not offer speed on OpenCode", () => {
-    render(
+    renderInAppCommandScope(
       <AgentPlatformPane
         platform="opencode"
         tier={{ platforms: { opencode: { model: "provider/model-a" } } }}

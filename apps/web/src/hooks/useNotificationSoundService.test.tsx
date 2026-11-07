@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   COORDINATOR_WAKE_ATTENTION_EVENT,
@@ -121,7 +122,7 @@ describe("when a coordinator is woken for its worker", () => {
     for (const handler of handlers) handler({ payload });
   };
   async function mounted() {
-    const view = renderHook(() => useNotificationSoundService());
+    const view = renderHookInAppCommandScope(() => useNotificationSoundService());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -220,7 +221,7 @@ describe("from the backend's attention events", () => {
     for (const handler of handlers) handler({ payload });
   };
   async function mounted() {
-    const view = renderHook(() => useNotificationSoundService());
+    const view = renderHookInAppCommandScope(() => useNotificationSoundService());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -425,7 +426,7 @@ describe("useNotificationSoundService", () => {
     appCommandStore(environmentStore).setState({
       environments: [environment("existing-unread", true), environment("worker", false)],
     });
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
 
     act(() => {
       appCommandStore(environmentStore).setState({
@@ -448,7 +449,7 @@ describe("useNotificationSoundService", () => {
     appCommandStore(environmentStore).setState({
       environments: [environment("finished", false), environment("asking", false)],
     });
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
     act(() => {
       appCommandStore(environmentStore).setState({
         environments: [
@@ -468,7 +469,7 @@ describe("useNotificationSoundService", () => {
   });
 
   test("baselines a newly hydrated unread environment without replaying it", () => {
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
     act(() => {
       appCommandStore(environmentStore).setState({
         environments: [environment("late-snapshot", true)],
@@ -480,7 +481,7 @@ describe("useNotificationSoundService", () => {
   test("does not replay a cue when the selected environment unread clear is reconciled", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "worker" });
     appCommandStore(environmentStore).setState({ environments: [environment("worker", true)] });
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
 
     act(() => {
       appCommandStore(environmentStore).setState({ environments: [environment("worker", false)] });
@@ -500,7 +501,7 @@ describe("useNotificationSoundService", () => {
         environment("three", false),
       ],
     });
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
 
     act(() => {
       appCommandStore(environmentStore).setState({
@@ -517,7 +518,7 @@ describe("useNotificationSoundService", () => {
 
   test("retries audio priming after a gesture fails and unregisters after success", async () => {
     primeNotificationSounds.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
 
     await act(async () => {
       window.dispatchEvent(new Event("pointerdown"));
@@ -544,7 +545,7 @@ describe("useNotificationSoundService", () => {
           questionDesktopNotification: true,
         },
       });
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
 
     window.dispatchEvent(new Event("pointerdown"));
     window.dispatchEvent(new Event("keydown"));
@@ -557,7 +558,7 @@ test("Home completion sounds while the board obscures it, but not while Home is 
   const home = { ...environment("home", false), projectHome: true };
   appCommandStore(environmentStore).setState({ environments: [home] });
   appCommandStore(uiStore).setState({ selectedEnvironmentId: home.id, projectBoardTab: "kanban" });
-  renderHook(() => useNotificationSoundService());
+  renderHookInAppCommandScope(() => useNotificationSoundService());
   act(() =>
     appCommandStore(environmentStore)
       .getState()
@@ -601,7 +602,7 @@ test.each([false, true])(
           questionDesktopNotification: false,
         },
       });
-    renderHook(() => useNotificationSoundService());
+    renderHookInAppCommandScope(() => useNotificationSoundService());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });

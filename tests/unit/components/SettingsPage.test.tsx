@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import { invoke } from "@/lib/native/backend";
 import { configStore } from "@/stores/configStore";
@@ -99,7 +100,7 @@ describe("SettingsPage", () => {
   });
 
   test("loads config and routes menu items to their settings sections", async () => {
-    render(<SettingsPage open onOpenChange={() => undefined} />);
+    renderInAppCommandScope(<SettingsPage open onOpenChange={() => undefined} />);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(screen.getByTestId("active-settings-section").textContent).toBe("general");
@@ -118,7 +119,7 @@ describe("SettingsPage", () => {
   });
 
   test("draws every platform menu entry in its shared accent colour", async () => {
-    render(<SettingsPage open onOpenChange={() => undefined} />);
+    renderInAppCommandScope(<SettingsPage open onOpenChange={() => undefined} />);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
 
@@ -136,7 +137,7 @@ describe("SettingsPage", () => {
   });
 
   test("gives every platform a menu entry, in the order the protocol lists them", async () => {
-    render(<SettingsPage open onOpenChange={() => undefined} />);
+    renderInAppCommandScope(<SettingsPage open onOpenChange={() => undefined} />);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
 
@@ -161,7 +162,9 @@ describe("SettingsPage", () => {
         }),
     );
 
-    const { container } = render(<SettingsPage open onOpenChange={() => undefined} />);
+    const { container } = renderInAppCommandScope(
+      <SettingsPage open onOpenChange={() => undefined} />,
+    );
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(container.querySelector(".animate-spin")).toBeTruthy();
@@ -175,7 +178,9 @@ describe("SettingsPage", () => {
   test("keeps sound controls unavailable while the initial config is loading", async () => {
     invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
 
-    const { container } = render(<SettingsPage open onOpenChange={() => undefined} />);
+    const { container } = renderInAppCommandScope(
+      <SettingsPage open onOpenChange={() => undefined} />,
+    );
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     fireEvent.click(screen.getByRole("button", { name: "Sounds" }));
 
@@ -186,7 +191,9 @@ describe("SettingsPage", () => {
   test("opens the read-only Skills browser without waiting for config or rendering GlobalSettings", async () => {
     invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
 
-    const { container } = render(<SettingsPage open onOpenChange={() => undefined} />);
+    const { container } = renderInAppCommandScope(
+      <SettingsPage open onOpenChange={() => undefined} />,
+    );
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(container.querySelector(".animate-spin")).toBeTruthy();
@@ -207,7 +214,7 @@ describe("SettingsPage", () => {
         }),
     );
 
-    render(<SettingsPage open onOpenChange={() => undefined} />);
+    renderInAppCommandScope(<SettingsPage open onOpenChange={() => undefined} />);
     fireEvent.click(screen.getByRole("button", { name: "Skills and plugins" }));
     expect(screen.getByTestId("skills-settings")).toBeTruthy();
 
@@ -219,7 +226,9 @@ describe("SettingsPage", () => {
   });
 
   test("reuses a successful initial load when the page is reopened", async () => {
-    const { rerender } = render(<SettingsPage open onOpenChange={() => undefined} />);
+    const { rerender } = renderInAppCommandScope(
+      <SettingsPage open onOpenChange={() => undefined} />,
+    );
     await screen.findByTestId("active-settings-section");
     expect(configReads()).toBe(1);
 
@@ -236,7 +245,9 @@ describe("SettingsPage", () => {
     const logs = captureLogs();
     try {
       invokeMock.mockRejectedValue(new Error("config unavailable"));
-      const { rerender } = render(<SettingsPage open onOpenChange={() => undefined} />);
+      const { rerender } = renderInAppCommandScope(
+        <SettingsPage open onOpenChange={() => undefined} />,
+      );
 
       await waitFor(() =>
         expect(logs.records()).toContainEqual(

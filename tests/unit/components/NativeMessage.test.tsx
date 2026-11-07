@@ -1,7 +1,8 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect } from "react";
 import type { NativeMessage as NativeMessageType } from "../../../apps/web/src/lib/chat/native-message-types";
 import type { LegacyPayloadSummary } from "../../../apps/web/src/lib/backend/changes";
@@ -159,7 +160,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "First line\nSecond line\nThird line" }],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
     const lineBreaks = container.querySelectorAll("br");
 
     expect(container.textContent).toContain("First line");
@@ -178,7 +179,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const toggle = screen.getByRole("button", { name: "show more" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -207,11 +208,11 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content }],
     };
 
-    const first = render(<NativeMessage message={message} />);
+    const first = renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: "show more" }));
     first.unmount();
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const toggle = screen.getByRole("button", { name: "show less" });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -246,7 +247,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { rerender } = render(<NativeMessage message={shortUserMessage} />);
+    const { rerender } = renderInAppCommandScope(<NativeMessage message={shortUserMessage} />);
 
     expect(screen.queryByRole("button", { name: "show more" }) === null).toBe(true);
 
@@ -267,7 +268,7 @@ describe("NativeMessage", () => {
       parts: [],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const toggle = screen.getByRole("button", { name: "show more" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -294,7 +295,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: crContent }],
     };
 
-    const { rerender } = render(<NativeMessage message={crlfMessage} />);
+    const { rerender } = renderInAppCommandScope(<NativeMessage message={crlfMessage} />);
 
     expect(screen.getByRole("button", { name: "show more" })).toBeTruthy();
 
@@ -312,7 +313,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "Copy this user prompt" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     const bubble = screen.getByText("Copy this user prompt").closest(".rounded-xl") as HTMLElement;
     expect(bubble.textContent).not.toContain("12:00");
     expect(bubble.className).toContain("[&_.prose_p]:my-2");
@@ -363,7 +364,7 @@ describe("NativeMessage", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <>
         {messages.map((message, index) => (
           <NativeMessage
@@ -395,7 +396,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "Read [the docs](https://example.com/docs)." }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("link", { name: "the docs" }));
 
@@ -411,7 +412,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "Read [the missing destination]()." }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const emptyLink = screen.getByText("the missing destination").closest("a");
     expect(emptyLink).toBeTruthy();
@@ -433,7 +434,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
       fireEvent.click(screen.getByRole("link", { name: "the docs" }));
 
       await waitFor(() => {
@@ -473,7 +474,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
     const renderedText = container.textContent ?? "";
 
     const firstTextIndex = renderedText.indexOf("First explanation.");
@@ -523,7 +524,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { unmount } = render(<NativeMessage message={subagentMessage} />);
+    const { unmount } = renderInAppCommandScope(<NativeMessage message={subagentMessage} />);
 
     const topLevelText = screen.getByText("Top-level text after subagent");
     expect(topLevelText.closest(".prose")?.parentElement?.className).toContain(
@@ -562,7 +563,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={fallbackMessage} />);
+    renderInAppCommandScope(<NativeMessage message={fallbackMessage} />);
 
     const fallbackText = screen.getByText("Fallback text after tool");
     expect(fallbackText.closest(".prose")?.parentElement?.className).toContain(
@@ -580,7 +581,9 @@ describe("NativeMessage", () => {
       parts: [],
     };
 
-    const { container, rerender } = render(<NativeMessage message={systemMessage} />);
+    const { container, rerender } = renderInAppCommandScope(
+      <NativeMessage message={systemMessage} />,
+    );
 
     expect(screen.getByText("Generated environment name")).toBeTruthy();
     expect(container.querySelector(".italic")).toBeTruthy();
@@ -646,7 +649,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
     expect(screen.getByText("Image read")).toBeTruthy();
     const thumbnail = await screen.findByAltText("Thumbnail: layout.png");
@@ -672,7 +675,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
     expect(screen.queryByText("Image read") === null).toBe(true);
     expect(screen.queryByText("preview unavailable") === null).toBe(true);
@@ -704,7 +707,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
     expect(screen.queryByText("Image read") === null).toBe(true);
     expect(screen.queryByText("preview unavailable") === null).toBe(true);
@@ -735,7 +738,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     await waitFor(() => {
       expect(mockReadFileBase64).toHaveBeenCalledWith("/Users/ada/Downloads/outside.png");
@@ -772,7 +775,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} loadToolDetails={loadToolDetails} />);
+    renderInAppCommandScope(<NativeMessage message={message} loadToolDetails={loadToolDetails} />);
 
     const thumbnail = await screen.findByAltText("Thumbnail: codex-view.png");
     expect(thumbnail.getAttribute("src")).toBe("data:image/png;base64,registered-temp-image");
@@ -789,7 +792,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "C:\\Users\\Ada\\AppData\\Local\\Temp\\shot.png" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(await screen.findByAltText("Thumbnail: shot.png")).toBeTruthy();
     expect(mockReadFileBase64).toHaveBeenCalledWith(
@@ -819,14 +822,14 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const first = render(<NativeMessage message={message} />);
+    const first = renderInAppCommandScope(<NativeMessage message={message} />);
     await waitFor(() => {
       expect(screen.queryByText("Image read") === null).toBe(true);
     });
     expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
     first.unmount();
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     await waitFor(() => {
       expect(screen.queryByText("Image read") === null).toBe(true);
     });
@@ -855,7 +858,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(await screen.findByText("preview unavailable")).toBeTruthy();
     expect(screen.getByText("Image read")).toBeTruthy();
@@ -879,7 +882,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const tile = await screen.findByLabelText("Open full image: remote.png");
     // A model-supplied URL is a request to a host the user did not choose, so
@@ -909,7 +912,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: /screenshot\.png/i }));
 
@@ -933,7 +936,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/app-preview.AVIF" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: /app-preview\.AVIF/i }));
 
@@ -954,11 +957,11 @@ describe("NativeMessage", () => {
       createdAt: "2026-10-21T12:00:00Z",
       parts: [{ type: "text", content }],
     };
-    const first = render(<NativeMessage message={message} />);
+    const first = renderInAppCommandScope(<NativeMessage message={message} />);
     for (const remount of [false, true]) {
       if (remount) {
         first.unmount();
-        render(<NativeMessage message={JSON.parse(JSON.stringify(message))} />);
+        renderInAppCommandScope(<NativeMessage message={JSON.parse(JSON.stringify(message))} />);
       }
       expect(screen.getByText("Use these")).toBeTruthy();
       expect(screen.getAllByRole("button", { name: "Open full image: shot.png" })).toHaveLength(1);
@@ -989,7 +992,7 @@ describe("NativeMessage", () => {
         },
       ],
     };
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     expect(await screen.findByAltText("Thumbnail: opencode.png")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Open full image: opencode.png" })).toHaveLength(
       1,
@@ -1013,7 +1016,7 @@ describe("NativeMessage", () => {
       createdAt: "2026-10-21T12:00:00Z",
       parts: [{ type: "file", content: "/tmp/caption.png" }],
     };
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     const tile = screen.getByRole("button", { name: "Open full image: caption.png" });
     expect(tile.textContent).toContain("caption.png");
     await waitFor(() => expect(tile.getAttribute("aria-busy")).toBe("true"));
@@ -1035,7 +1038,7 @@ describe("NativeMessage", () => {
       createdAt: "2026-10-21T12:00:00Z",
       parts: [{ type: "file", content: "/tmp/missing-caption.png" }],
     };
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     expect(await screen.findByText("preview unavailable")).toBeTruthy();
     expect(screen.getByText("missing-caption.png")).toBeTruthy();
   });
@@ -1053,7 +1056,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     const flow = container.querySelector('[data-message-attachment-flow="true"]');
     expect(flow).toBeTruthy();
@@ -1086,7 +1089,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     const flows = Array.from(container.querySelectorAll('[data-message-attachment-flow="true"]'));
     expect(flows).toHaveLength(2);
@@ -1107,7 +1110,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/cached.png" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     const attachment = screen.getByRole("button", { name: /cached\.png/i });
 
     fireEvent.click(attachment);
@@ -1133,7 +1136,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/overlay.png" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     const attachment = screen.getByRole("button", { name: /overlay\.png/i });
     fireEvent.click(attachment);
 
@@ -1177,7 +1180,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/notes.txt" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const attachment = screen.getByRole("button", { name: "Preview file: notes.txt (Text)" });
     expect(mockReadFileBase64).not.toHaveBeenCalled();
@@ -1209,7 +1212,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /screenshot\.png/i }));
 
@@ -1237,7 +1240,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
     fireEvent.click(screen.getByRole("button", { name: /shot\.png/i }));
 
     await screen.findByAltText("shot.png");
@@ -1265,7 +1268,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} containerId="container-1" />);
+      renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
       fireEvent.click(screen.getByRole("button", { name: /safe-looking\.png/i }));
 
       await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
@@ -1297,7 +1300,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} containerId="container-1" />);
+      renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
       fireEvent.click(screen.getByRole("button", { name: /workspace/i }));
 
       await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
@@ -1325,7 +1328,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} containerId="container-1" />);
+      renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
       fireEvent.click(screen.getByRole("button", { name: /passwd\.png/i }));
 
@@ -1366,7 +1369,7 @@ describe("NativeMessage", () => {
           createdAt: "2026-03-07T12:00:00.000Z",
           parts: [{ type: "file", content: unsafePath }],
         };
-        const { container, unmount } = render(
+        const { container, unmount } = renderInAppCommandScope(
           <NativeMessage message={message} containerId="container-1" />,
         );
 
@@ -1400,7 +1403,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { rerender } = render(<NativeMessage message={dataUrlMessage} />);
+    const { rerender } = renderInAppCommandScope(<NativeMessage message={dataUrlMessage} />);
 
     fireEvent.click(screen.getByRole("button", { name: /inline\.png/i }));
 
@@ -1447,7 +1450,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "remote.gif", fileUrl: remoteUrl }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /remote\.gif/i }));
 
     const image = await screen.findByAltText("remote.gif");
@@ -1466,7 +1469,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "tracker.png", fileUrl: remoteUrl }],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.querySelector(`img[src="${remoteUrl}"]`) === null).toBe(true);
     expect(screen.getByText("tracker.png")).toBeTruthy();
@@ -1502,7 +1505,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /error #1\.png/i }));
 
     await screen.findByAltText("error #1.png");
@@ -1524,7 +1527,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { rerender } = render(<NativeMessage message={windowsFileUrlMessage} />);
+    const { rerender } = renderInAppCommandScope(<NativeMessage message={windowsFileUrlMessage} />);
 
     fireEvent.click(screen.getByRole("button", { name: /windows-shot\.png/i }));
 
@@ -1567,7 +1570,7 @@ describe("NativeMessage", () => {
         createdAt: "2026-03-07T12:00:00.000Z",
         parts: [{ type: "file", content: path, fileUrl }],
       };
-      const { unmount } = render(<NativeMessage message={message} />);
+      const { unmount } = renderInAppCommandScope(<NativeMessage message={message} />);
 
       fireEvent.click(
         screen.getByRole("button", {
@@ -1593,7 +1596,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
       fireEvent.click(screen.getByRole("button", { name: /relative\.png/i }));
 
       await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
@@ -1623,7 +1626,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
 
       fireEvent.click(screen.getByRole("button", { name: /missing\.png/i }));
 
@@ -1653,7 +1656,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
       const trigger = screen.getByRole("button", { name: /retry\.png/i });
 
       fireEvent.click(trigger);
@@ -1691,7 +1694,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
         <TerminalContextHarness createFileTab={createFileTab}>
           <NativeMessage message={message} />
@@ -1744,7 +1747,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
         <TerminalContextHarness createFileTab={createFileTab}>
           <NativeMessage message={message} />
@@ -1781,7 +1784,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -1815,7 +1818,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={unifiedDiffMessage} />
       </TerminalContextHarness>,
@@ -1907,7 +1910,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -1956,7 +1959,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -2007,7 +2010,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -2054,7 +2057,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -2097,7 +2100,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -2132,7 +2135,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -2169,7 +2172,7 @@ describe("NativeMessage", () => {
       ],
     });
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={buildMessage("first old", "first new")} />
       </TerminalContextHarness>,
@@ -2215,7 +2218,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness createFileTab={createFileTab}>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -2252,7 +2255,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", {
       name: /Run Command pwd && rg --files \| head -200 success/i,
@@ -2309,7 +2312,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /^Show 5 tool calls:/ }));
 
     expect(screen.getByRole("button", { name: /glob src\/\*\*\/\*\.tsx success/i })).toBeTruthy();
@@ -2345,7 +2348,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", { name: /thinking task list/i });
     expect(trigger).toBeTruthy();
@@ -2371,7 +2374,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.queryByRole("button", { name: /thinking/i }) === null).toBe(true);
     expect(container.querySelector(".border-zinc-700\\/70") === null).toBe(true);
@@ -2394,7 +2397,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     const buttonCount = screen.getAllByRole("button").length;
     fireEvent.click(screen.getByRole("button", { name: /reviewer active/i }));
 
@@ -2414,7 +2417,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Before tools")).toBeTruthy();
     expect(screen.getByText("After tools")).toBeTruthy();
@@ -2442,7 +2445,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Response")).toBeTruthy();
     expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
@@ -2481,7 +2484,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Agent")).toBeTruthy();
     expect(screen.getByText("Active")).toBeTruthy();
@@ -2533,7 +2536,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Finished")).toBeTruthy();
     expect(screen.getByText("Failed")).toBeTruthy();
@@ -2560,7 +2563,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
   });
@@ -2608,7 +2611,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Summarized the repository layout.")).toBeTruthy();
     expect(screen.getByText("grep")).toBeTruthy();
@@ -2641,7 +2644,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Run Command")).toBeTruthy();
     expect(screen.queryByText("bash") === null).toBe(true);
@@ -2679,7 +2682,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Reviewer")).toBeTruthy();
     expect(screen.getByText("Search files")).toBeTruthy();
@@ -2713,7 +2716,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", { name: /Subagent Active/i });
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
@@ -2751,7 +2754,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     const trigger = screen.getByRole("button", { name: /Closer Active/i });
 
     fireEvent.click(trigger);
@@ -2785,7 +2788,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /\bbash\b/i }) === null).toBe(true);
@@ -2809,7 +2812,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", {
       name: /Run Command rg --files failure/i,
@@ -2838,7 +2841,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: /glob \*\.ts success/i }));
 
@@ -2877,7 +2880,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
 
     // The pending row, and the group line above it that reports it.
@@ -2909,7 +2912,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", { name: /Run Command success/i });
     expect((trigger as HTMLButtonElement).disabled).toBe(true);
@@ -2936,7 +2939,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByRole("button", { name: /read README\.md success/i })).toBeTruthy();
   });
@@ -2963,7 +2966,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", {
       name: /Run Command ls -la success/i,
@@ -2998,7 +3001,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -3039,7 +3042,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -3084,7 +3087,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -3117,7 +3120,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -3140,7 +3143,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /screenshot\.jpg/i }));
     const jpeg = await screen.findByAltText("screenshot.jpg");
@@ -3171,7 +3174,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: `/workspace/${filename}` }],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
     fireEvent.click(
       screen.getByRole("button", {
         name: `Open full image: ${filename}`,
@@ -3195,7 +3198,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /photo\.webp/i }));
     const webp = await screen.findByAltText("photo.webp?v=2#top");
@@ -3230,7 +3233,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/slow.png" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: /slow\.png/i }));
 
@@ -3260,7 +3263,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/eager.png" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     await waitFor(() => expect(mockReadFileBase64).toHaveBeenCalledTimes(1));
     const attachment = screen.getByRole("button", {
@@ -3292,7 +3295,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/assistant-shot.png" }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const attachment = screen.getByRole("button", {
       name: "Open full image: assistant-shot.png",
@@ -3320,14 +3323,14 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/remounted.png" }],
     };
 
-    const first = render(<NativeMessage message={message} />);
+    const first = renderInAppCommandScope(<NativeMessage message={message} />);
     expect(await screen.findByAltText("Thumbnail: remounted.png")).toBeTruthy();
     expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
 
     first.unmount();
     // The file changed meanwhile: a live read is never served from the cache.
     mockReadFileBase64.mockImplementation(async () => "changed-base64");
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     await waitFor(() =>
       expect(screen.getByAltText("Thumbnail: remounted.png").getAttribute("src")).toBe(
@@ -3358,7 +3361,7 @@ describe("NativeMessage", () => {
       </RichTranscriptScopeContext.Provider>
     );
 
-    const first = render(inTranscript());
+    const first = renderInAppCommandScope(inTranscript());
     expect(await screen.findByAltText("Thumbnail: pinned.png")).toBeTruthy();
     expect(mockPinTranscriptMedia).toHaveBeenCalledTimes(1);
     expect(mockPinTranscriptMedia.mock.calls[0]?.[0]).toEqual({
@@ -3369,7 +3372,7 @@ describe("NativeMessage", () => {
     });
 
     first.unmount();
-    render(inTranscript());
+    renderInAppCommandScope(inTranscript());
 
     // Painted from the cache on the first render, with no second backend read.
     expect(screen.getByAltText("Thumbnail: pinned.png").getAttribute("src")).toBe(
@@ -3388,13 +3391,15 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "workspace/shared.png" }],
     };
 
-    const first = render(<NativeMessage message={message} containerId="container-1" />);
+    const first = renderInAppCommandScope(
+      <NativeMessage message={message} containerId="container-1" />,
+    );
     expect(await screen.findByAltText("Thumbnail: shared.png")).toBeTruthy();
     expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(1);
 
     first.unmount();
     mockReadContainerFileBase64.mockImplementation(async () => "second-container-base64");
-    render(<NativeMessage message={message} containerId="container-2" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-2" />);
 
     await waitFor(() =>
       expect(screen.getByAltText("Thumbnail: shared.png").getAttribute("src")).toBe(
@@ -3418,7 +3423,7 @@ describe("NativeMessage", () => {
     };
 
     try {
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
 
       fireEvent.click(screen.getByRole("button", { name: /broken\.png/i }));
 
@@ -3444,7 +3449,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Non-image rows are preview buttons named by their display name and type;
     // the display name still falls back to the raw path, then to "file".
@@ -3463,7 +3468,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "/tmp/overlay-keys.png" }],
     };
 
-    const { unmount } = render(<NativeMessage message={message} />);
+    const { unmount } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: /overlay-keys\.png/i }));
     await screen.findByAltText("overlay-keys.png");
@@ -3505,7 +3510,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.queryAllByRole("button", { name: "Copy text" })).toHaveLength(0);
 
@@ -3532,7 +3537,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: buildContent(13) }],
     };
 
-    const { rerender } = render(<NativeMessage message={boundaryMessage} />);
+    const { rerender } = renderInAppCommandScope(<NativeMessage message={boundaryMessage} />);
 
     expect(screen.queryByRole("button", { name: "show more" }) === null).toBe(true);
 
@@ -3550,7 +3555,7 @@ describe("NativeMessage", () => {
       parts: [],
     };
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Workspace configuration changed")).toBeTruthy();
     expect(container.querySelector(".italic")).toBeTruthy();
@@ -3574,7 +3579,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "Recovered response" }],
     };
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage message={message} previousMessage={previousMessage} assistantLabel="Worker" />,
     );
 
@@ -3591,7 +3596,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "  \n\t " }],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.queryByText("Fallback copy content") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
@@ -3613,7 +3618,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("First assistant block")).toBeTruthy();
     expect(screen.getByText("Second assistant block")).toBeTruthy();
@@ -3636,7 +3641,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "text", content: "Model-labelled response" }],
     };
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={message}
         assistantLabel="Fallback assistant"
@@ -3666,7 +3671,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", { name: /read success/i });
     expect(trigger.textContent).not.toContain("workspace");
@@ -3704,7 +3709,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <TerminalContextHarness>
         <NativeMessage message={message} />
       </TerminalContextHarness>,
@@ -3738,7 +3743,7 @@ describe("NativeMessage", () => {
       ],
     };
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", { name: /inspect success/i });
     expect((trigger as HTMLButtonElement).disabled).toBe(false);

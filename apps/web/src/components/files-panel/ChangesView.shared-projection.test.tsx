@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   CHANGE_PROJECTION_CHANGED_EVENT,
   type ChangeProjection,
@@ -43,7 +44,7 @@ const environment = {
 
 function renderSurfaces() {
   const noop = () => undefined;
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <EnvironmentItem
         environment={environment}

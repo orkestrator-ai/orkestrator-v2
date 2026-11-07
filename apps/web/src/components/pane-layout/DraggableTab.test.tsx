@@ -1,6 +1,7 @@
 import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realSortable from "@dnd-kit/sortable";
 import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId } from "@/types/paneLayout";
@@ -68,7 +69,7 @@ afterAll(() => {
 });
 
 function renderTab(tab: TabInfo, index = 0) {
-  return render(
+  return renderInAppCommandScope(
     <DraggableTab
       tab={tab}
       paneId="pane-1"
@@ -846,7 +847,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("marks an active tab with an accent even when its pane is not focused", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -867,7 +868,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     const onClose = mock(() => {});
     const onSelect = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -887,7 +888,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("does not render a close button when canClose is false", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -905,7 +906,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   test("exposes the close actions through the context menu", () => {
     const onClose = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -932,7 +933,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   test("exposes Refresh for server-backed agent tabs", () => {
     const onRefresh = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{
           id: "tab-claude",
@@ -1041,7 +1042,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   }, 20_000);
 
   test("marks a focused active tab with a full-opacity accent", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1142,7 +1143,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     const onCloseOthers = mock(() => {});
     const onCloseToRight = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1172,7 +1173,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables the bulk close items when the pane says they are unavailable", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1197,7 +1198,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables bulk close items when their handlers are absent", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1217,7 +1218,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables Close when the tab cannot be closed", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1235,7 +1236,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables Close when no onClose handler was supplied", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1268,7 +1269,7 @@ describe("DraggableTab tab semantics", () => {
     props: Partial<Parameters<typeof DraggableTab>[0]> = {},
     tab: TabInfo = { id: "tab-terminal", type: "plain" },
   ) {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={tab}
         paneId="pane-1"
@@ -1314,7 +1315,7 @@ describe("DraggableTab tab semantics", () => {
     appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-file", { content: "edited", originalContent: "on disk" }]]),
     });
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-file", type: "file", fileData: { filePath: "src/Bar.tsx" } }}
         paneId="pane-1"
@@ -1382,7 +1383,7 @@ describe("DraggableTab tab semantics", () => {
     const onPaneClick = mock(() => {});
     const onKeyDown = mock((_event: unknown) => {});
     sortableListeners = { onKeyDown };
-    render(
+    renderInAppCommandScope(
       <div onClick={onPaneClick}>
         <DraggableTab
           tab={{ id: "tab-terminal", type: "plain" }}
@@ -1476,7 +1477,7 @@ describe("DraggableTab tab semantics", () => {
   });
 
   test("the file tooltip still shows when the tab takes focus", async () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-file", type: "file", fileData: { filePath: "src/lib/Bar.tsx" } }}
         paneId="pane-1"
@@ -1508,7 +1509,7 @@ describe("DraggableTab active state", () => {
   });
 
   function renderPlainTab(isActive: boolean, isFocused?: boolean) {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-a", type: "plain" }}
         paneId="pane-1"

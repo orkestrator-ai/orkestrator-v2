@@ -7,7 +7,8 @@
  * through the store under that scope's id.
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { toNodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
@@ -85,7 +86,7 @@ function ask(request: WorkspaceRequest) {
 
 function open(request: WorkspaceRequest = { projectId: project.id }, tree = <Workspace />) {
   ask(request);
-  return render(tree);
+  return renderInAppCommandScope(tree);
 }
 
 /**
@@ -231,7 +232,7 @@ test("a host remounted on the same scope resumes without reopening a one-shot di
   const first = useAppDialogStore.getState().requestSequence;
   // Try again after a crash: a new host, on the same node scope and request.
   cleanup();
-  render(<NodeWorkspaceHost />);
+  renderInAppCommandScope(<NodeWorkspaceHost />);
   await settle();
   expect(useAppDialogStore.getState().requestSequence).toBe(first);
 });
@@ -283,7 +284,7 @@ for (const [grouping, board] of [
       truncated: false,
       loadedAt: 1,
     } satisfies MachineView;
-    const tree = render(
+    const tree = renderInAppCommandScope(
       <RemoteProjectGroup
         machine={machine}
         project={summary}
@@ -429,7 +430,7 @@ test("remote Updates Rebuild reaches the node's visible Container section withou
     if (command === "invoke_on_node") return { outcome: "ok", result: snapshot };
     return undefined;
   });
-  const updates = render(
+  const updates = renderInAppCommandScope(
     <MachineUpdatesDialog
       machine={{
         key: leafId,

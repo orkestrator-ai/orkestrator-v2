@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as backend from "@/lib/backend";
 import { environmentStore } from "@/stores/environmentStore";
@@ -47,7 +48,7 @@ afterEach(() => {
 
 describe("useUnreadEnvironmentSync", () => {
   test("keeps a newer unread activity signal when the optimistic clear resolves late", async () => {
-    const { unmount } = renderHook(() => useUnreadEnvironmentSync());
+    const { unmount } = renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     expect(
       appCommandStore(environmentStore).getState().getEnvironmentById("env-1")?.hasUnreadWork,
     ).toBe(false);
@@ -77,7 +78,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(environmentStore).setState({
       environments: [environment({ unreadReason: "agent_finished" })],
     });
-    renderHook(() => useUnreadEnvironmentSync());
+    renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     expect(mockToast).toHaveBeenCalledTimes(1);
     const newerActivityAt = "2026-09-15T09:00:00.000Z";
     // A resource snapshot advances the activity token while the clear is in flight.
@@ -135,7 +136,7 @@ describe("activation toast", () => {
         environment({ id: "env-2", name: "Fixes", unreadReason: "agent_waiting" }),
       ],
     });
-    renderHook(() => useUnreadEnvironmentSync());
+    renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     expect(mockToast).not.toHaveBeenCalled();
 
     act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" }));
@@ -153,7 +154,7 @@ describe("activation toast", () => {
     appCommandStore(environmentStore).setState({
       environments: [environment({ hasUnreadWork: false })],
     });
-    renderHook(() => useUnreadEnvironmentSync());
+    renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
 
     act(() => {
       appCommandStore(environmentStore).getState().updateEnvironment("env-1", {
@@ -169,7 +170,7 @@ describe("activation toast", () => {
 
   test("a selection restored before environments load still toasts once they arrive", () => {
     appCommandStore(environmentStore).setState({ environments: [] });
-    renderHook(() => useUnreadEnvironmentSync());
+    renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
 
     act(() => {
       appCommandStore(environmentStore).setState({
@@ -189,7 +190,7 @@ test("an obscured home toasts and clears unread work only when Home becomes visi
     ],
   });
   appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
-  renderHook(() => useUnreadEnvironmentSync());
+  renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
   expect(setUnread).not.toHaveBeenCalled();
   expect(mockToast).not.toHaveBeenCalled();
   expect(appCommandStore(environmentStore).getState().environments[0]?.hasUnreadWork).toBe(true);

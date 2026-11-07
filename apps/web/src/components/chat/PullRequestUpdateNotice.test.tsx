@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import {
   CoordinatorPullRequestWatchProvider,
@@ -42,7 +43,9 @@ describe("PullRequestUpdateNotice", () => {
   });
 
   test("is one quiet line with the number, title and what changed", () => {
-    const { container } = render(<PullRequestUpdateNotice mail={mail()} timestampLabel="10:04" />);
+    const { container } = renderInAppCommandScope(
+      <PullRequestUpdateNotice mail={mail()} timestampLabel="10:04" />,
+    );
     const row = container.querySelector<HTMLElement>("[data-pr-update-notice]")!;
     expect(row.textContent).toBe("PR #12updated· Add the watch· checks passing, approved10:04");
     // Not a mail tile: no expandable body, no conversation button.
@@ -53,7 +56,7 @@ describe("PullRequestUpdateNotice", () => {
 
   test("the number opens the pull request in the app", () => {
     const open = mock(() => true);
-    render(
+    renderInAppCommandScope(
       <PullRequestOpenerProvider open={open}>
         <PullRequestUpdateNotice mail={mail()} />
       </PullRequestOpenerProvider>,
@@ -68,7 +71,7 @@ describe("PullRequestUpdateNotice", () => {
       const nativeInvoke = invoke as ReturnType<typeof mock>;
       nativeInvoke.mockClear();
       const open = mock(() => true);
-      render(
+      renderInAppCommandScope(
         <CoordinatorPullRequestWatchProvider projectId="project-a">
           <PullRequestOpenerProvider open={open}>
             <PullRequestUpdateNotice

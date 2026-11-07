@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import * as sortable from "@dnd-kit/sortable";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
@@ -237,7 +238,9 @@ test("a machine heading is dragged by its name and puts the chevron where its st
 });
 
 test("a connected machine still shows catching-up freshness without an offline icon", () => {
-  render(<MachineSectionHeader machine={machineView({ freshness: "catching-up" })} />);
+  renderInAppCommandScope(
+    <MachineSectionHeader machine={machineView({ freshness: "catching-up" })} />,
+  );
   const header = screen.getByTestId("machine-section-header");
   expect(within(header).getByText("Catching up")).toBeTruthy();
   expect(header.querySelector(".lucide-wifi-off") === null).toBe(true);
@@ -270,7 +273,7 @@ test("merged lists draw this window's own projects and rows with its full contro
     projects: [],
     environmentsByProject: new Map(),
   });
-  const view = render(
+  const view = renderInAppCommandScope(
     <FederatedActivityList
       machines={[local, remote]}
       renderBoundRow={(id) => <button aria-label={`Start local ${id}`}>Start</button>}
@@ -279,7 +282,7 @@ test("merged lists draw this window's own projects and rows with its full contro
   expect(screen.getByRole("button", { name: "Start local env-1" })).toBeTruthy();
   view.unmount();
   for (const mode of ["project", "repository"] as const) {
-    const list = render(
+    const list = renderInAppCommandScope(
       <MergedProjectList
         machines={[local, remote]}
         shownIds={new Set(["a", "b"])}
@@ -295,7 +298,7 @@ test("merged lists draw this window's own projects and rows with its full contro
 
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {
-    render(<MachineDot colorToken="teal" machineName="Machine A" />);
+    renderInAppCommandScope(<MachineDot colorToken="teal" machineName="Machine A" />);
     const dot = screen.getByTestId("machine-dot");
     expect(dot.getAttribute("aria-hidden")).toBe("true");
     expect(dot.getAttribute("role")).toBeNull();
@@ -303,13 +306,15 @@ describe("CL-05: machine identity visual rules", () => {
   });
 
   test("CL-05: a non-decorative MachineDot is an image named by machine and colour", () => {
-    render(<MachineDot colorToken="teal" machineName="Machine A" decorative={false} />);
+    renderInAppCommandScope(
+      <MachineDot colorToken="teal" machineName="Machine A" decorative={false} />,
+    );
     const dot = screen.getByRole("img", { name: "Machine A (Teal)" });
     expect(dot.getAttribute("aria-hidden")).toBeNull();
   });
 
   test("CL-05: a compact MachineBadge keeps the machine name in a screen-reader-only element", () => {
-    render(<MachineBadge colorToken="rose" machineName="Machine B" compact />);
+    renderInAppCommandScope(<MachineBadge colorToken="rose" machineName="Machine B" compact />);
     const badge = screen.getByTestId("machine-badge");
     const name = within(badge).getByText("Machine B");
     expect(name.className).toContain("sr-only");
@@ -317,7 +322,9 @@ describe("CL-05: machine identity visual rules", () => {
   });
 
   test("CL-05: an unknown colour token renders the neutral fallback without rewriting the token", () => {
-    render(<MachineDot colorToken="plum-2030" machineName="Future" decorative={false} />);
+    renderInAppCommandScope(
+      <MachineDot colorToken="plum-2030" machineName="Future" decorative={false} />,
+    );
     const dot = screen.getByRole("img", { name: "Future (Unknown colour)" });
     expect(dot.getAttribute("data-machine-color")).toBe("plum-2030");
     expect(dot.className).toContain("border-dashed");
@@ -326,7 +333,7 @@ describe("CL-05: machine identity visual rules", () => {
 
   test("CL-05: an environment row is named by environment, machine and activity", () => {
     const machine = machineView();
-    render(
+    renderInAppCommandScope(
       <RemoteEnvironmentItem
         machine={machine}
         environment={firstEnvironment(machine)}
@@ -340,7 +347,9 @@ describe("CL-05: machine identity visual rules", () => {
   test("another machine's build pipeline and auto-merge rows carry their markers", () => {
     const machine = machineView();
     const plain = firstEnvironment(machine);
-    const { rerender } = render(<RemoteEnvironmentItem machine={machine} environment={plain} />);
+    const { rerender } = renderInAppCommandScope(
+      <RemoteEnvironmentItem machine={machine} environment={plain} />,
+    );
     const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
     expect(row.querySelector("svg.lucide-pipe") === null).toBe(true);
     expect(within(row).queryByTestId("environment-auto-merge-icon") === null).toBe(true);
@@ -360,7 +369,7 @@ describe("CL-05: machine identity visual rules", () => {
   test("another machine's merged PR shows the merged icon, as the machine's own row does", () => {
     const machine = machineView();
     const plain = firstEnvironment(machine);
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <RemoteEnvironmentItem machine={machine} environment={{ ...plain, prState: "open" }} />,
     );
     expect(screen.queryByRole("img", { name: "Merged" }) === null).toBe(true);
@@ -386,7 +395,9 @@ describe("CL-05: machine identity visual rules", () => {
       prHasMergeConflicts: false,
       prMergeability: "clean",
     };
-    const { rerender } = render(<RemoteEnvironmentItem machine={machine} environment={ready} />);
+    const { rerender } = renderInAppCommandScope(
+      <RemoteEnvironmentItem machine={machine} environment={ready} />,
+    );
     const row = screen.getByRole("button", { name: /^feature, on Machine A, Working/ });
     const name = within(row).getByText("feature");
     expect(name.classList).not.toContain("text-shimmer");
@@ -428,7 +439,9 @@ describe("CL-05: machine identity visual rules", () => {
           test(`remote ${environmentType} ${status} on ${transport} machine maps ${activity} to its marker`, () => {
             const machine = machineView({ transport });
             const environment = { ...firstEnvironment(machine), environmentType, status, activity };
-            render(<RemoteEnvironmentItem machine={machine} environment={environment} />);
+            renderInAppCommandScope(
+              <RemoteEnvironmentItem machine={machine} environment={environment} />,
+            );
             const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
             const marker = within(row).getByTestId("environment-status-marker");
             const active =
@@ -465,7 +478,7 @@ describe("CL-05: machine identity visual rules", () => {
         environmentType: "containerized" as const,
         ...(state === "deleting" ? { deleting: true } : { status: state }),
       };
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <RemoteEnvironmentItem machine={machine} environment={environment} />,
       );
       const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
@@ -604,7 +617,9 @@ describe("CL-05: machine identity visual rules", () => {
     });
     try {
       const machine = machineView();
-      render(<RemoteEnvironmentItem machine={machine} environment={firstEnvironment(machine)} />);
+      renderInAppCommandScope(
+        <RemoteEnvironmentItem machine={machine} environment={firstEnvironment(machine)} />,
+      );
       const badge = await screen.findByTestId("environment-change-badge");
       expect(badge.textContent).toContain("+12");
       expect(badge.textContent).toContain("3");
@@ -633,7 +648,9 @@ describe("CL-05: machine identity visual rules", () => {
       transport: "unreachable",
       freshness: "stale",
     });
-    render(<FederatedActivityList machines={[machine]} renderBoundRow={() => null} />);
+    renderInAppCommandScope(
+      <FederatedActivityList machines={[machine]} renderBoundRow={() => null} />,
+    );
     const row = screen.getByTestId("federated-environment-row");
     expect(row.className).toContain("opacity-60");
     const label = within(row).getAllByRole("button")[0]!.getAttribute("aria-label") ?? "";
@@ -1233,7 +1250,7 @@ describe("OP-06/CR-03: opening another machine's environment", () => {
 describe("SH-03: SSH prompts", () => {
   test("SH-03: a passphrase prompt answers its own prompt ID with the typed value", async () => {
     const fake = installTwoMachines();
-    render(<SshPromptDialog />);
+    renderInAppCommandScope(<SshPromptDialog />);
     act(() =>
       fake.emit("ssh-auth-prompt", {
         promptId: "prompt-1",
@@ -1255,7 +1272,7 @@ describe("SH-03: SSH prompts", () => {
 
   test("SH-03: cancelling a prompt answers null exactly once", async () => {
     const fake = installTwoMachines();
-    render(<SshPromptDialog />);
+    renderInAppCommandScope(<SshPromptDialog />);
     act(() =>
       fake.emit("ssh-auth-prompt", {
         promptId: "prompt-2",
@@ -1444,7 +1461,7 @@ describe("command handover dialog edge cases", () => {
       },
     });
     fake.connections.handOverCommand.mockRejectedValueOnce(new Error("temporary failure"));
-    render(<CommandHandoverDialog />);
+    renderInAppCommandScope(<CommandHandoverDialog />);
     act(() =>
       requestCommandHandover({
         name: MACHINE_B.name,
@@ -1489,7 +1506,7 @@ describe("command handover dialog edge cases", () => {
       },
       repairs: ["forget-source-on-target", "allow-source-on-target"],
     } as never);
-    render(<CommandHandoverDialog />);
+    renderInAppCommandScope(<CommandHandoverDialog />);
     act(() =>
       requestCommandHandover({
         name: MACHINE_B.name,
@@ -1518,7 +1535,7 @@ describe("command handover dialog edge cases", () => {
         targetNodeIds: [MACHINE_A.backendId!],
       },
     } as never);
-    render(<CommandHandoverDialog />);
+    renderInAppCommandScope(<CommandHandoverDialog />);
     act(() =>
       requestCommandHandover({
         name: MACHINE_B.name,
@@ -1558,7 +1575,7 @@ describe("command handover dialog edge cases", () => {
       fake.connections.handOverCommand.mockRejectedValueOnce(
         new Error(COMMAND_HANDOVER_PREVIEW_CHANGED),
       );
-      render(<CommandHandoverDialog />);
+      renderInAppCommandScope(<CommandHandoverDialog />);
       act(() =>
         requestCommandHandover({
           name: MACHINE_B.name,
@@ -1604,7 +1621,7 @@ describe("command handover dialog edge cases", () => {
           targetNodeIds: [MACHINE_A.backendId!],
         },
       });
-      render(<CommandHandoverDialog />);
+      renderInAppCommandScope(<CommandHandoverDialog />);
       act(() =>
         requestCommandHandover({
           name: MACHINE_B.name,
@@ -1632,7 +1649,7 @@ describe("command handover dialog edge cases", () => {
     window.orkestrator!.connections!.previewCommandHandover = async () => ({
       kind: "already-command-node",
     });
-    render(<CommandHandoverDialog />);
+    renderInAppCommandScope(<CommandHandoverDialog />);
     act(() =>
       requestCommandHandover({
         name: MACHINE_B.name,
@@ -1656,7 +1673,7 @@ describe("command handover dialog edge cases", () => {
         self: { ...original.preview.self, reachable: false },
       },
     });
-    render(<CommandHandoverDialog />);
+    renderInAppCommandScope(<CommandHandoverDialog />);
     act(() =>
       requestCommandHandover({
         name: MACHINE_B.name,

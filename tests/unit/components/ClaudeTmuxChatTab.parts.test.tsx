@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 
@@ -894,7 +895,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -918,7 +919,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -959,7 +960,7 @@ describe("ClaudeTmuxChatTab", () => {
     }));
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1024,7 +1025,7 @@ describe("ClaudeTmuxChatTab", () => {
       busy: false,
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1059,7 +1060,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("attaches pasted clipboard images in the tmux compose bar and submits their paths", async () => {
     mockRunningTmuxStatus();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1097,7 +1098,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("persists tmux composer input under the backend queue interlock key", async () => {
     mockRunningTmuxStatus();
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1125,7 +1126,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("submits a pasted tmux image without text as a single prompt", async () => {
     mockRunningTmuxStatus();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1184,7 +1185,7 @@ describe("ClaudeTmuxChatTab", () => {
       async () => "/tmp/local repo/.orkestrator/clipboard/test image.png",
     );
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab tabId="tab-1" data={{ environmentId: "env-1", isLocal: true }} isActive />,
     );
 
@@ -1222,7 +1223,7 @@ describe("ClaudeTmuxChatTab", () => {
       throw new Error("tmux unavailable");
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1262,7 +1263,7 @@ describe("ClaudeTmuxChatTab", () => {
       busy: false,
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1303,7 +1304,7 @@ describe("ClaudeTmuxChatTab", () => {
       busy: false,
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1333,7 +1334,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("keeps interactive terminal mode disabled until a tmux session is running", async () => {
     seedPane();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1385,7 +1386,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1427,7 +1428,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1519,7 +1520,7 @@ describe("ClaudeTmuxChatTab", () => {
       throw new Error("bridge unavailable");
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1544,7 +1545,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1594,7 +1595,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1685,7 +1686,7 @@ describe("ClaudeTmuxChatTab", () => {
           effortSwitching: false,
           planLocked: false,
         };
-        const { rerender } = render(<TmuxComposeBar {...props} />);
+        const { rerender } = renderInAppCommandScope(<TmuxComposeBar {...props} />);
         const input = screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement;
         const draft = menu === "slash" ? "/com" : "Review @";
         input.focus();
@@ -1729,7 +1730,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    const desktop = render(
+    const desktop = renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1742,7 +1743,7 @@ describe("ClaudeTmuxChatTab", () => {
     desktop.unmount();
     setMobileViewport(true);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1759,7 +1760,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1795,7 +1796,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1857,7 +1858,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1913,7 +1914,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -1968,7 +1969,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2007,7 +2008,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2061,7 +2062,7 @@ describe("ClaudeTmuxChatTab", () => {
       name: "diagram.png",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2090,7 +2091,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2150,7 +2151,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab tabId="tab-1" data={{ environmentId: "env-1", isLocal: true }} isActive />,
     );
 
@@ -2176,7 +2177,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2206,7 +2207,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2239,7 +2240,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2277,7 +2278,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("uses the pre-launch model selection when starting fresh", async () => {
     seedPane();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2325,7 +2326,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2366,7 +2367,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2412,7 +2413,7 @@ describe("ClaudeTmuxChatTab", () => {
         agentSettings: { platforms: { claude: { model: "haiku" } } },
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2443,7 +2444,7 @@ describe("ClaudeTmuxChatTab", () => {
       agentSettings: { platforms: { claude: { model: "haiku" } } },
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2482,7 +2483,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2517,7 +2518,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2545,7 +2546,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("keeps a selected tmux model session-local", async () => {
     seedPane();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2572,7 +2573,7 @@ describe("ClaudeTmuxChatTab", () => {
     cleanup();
     seedPane();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-2"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2586,7 +2587,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("does not write settings when selecting a tmux model", async () => {
     seedPane();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2624,7 +2625,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2675,7 +2676,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2704,7 +2705,7 @@ describe("ClaudeTmuxChatTab", () => {
   test("passes the selected reasoning effort to the tmux launch", async () => {
     seedPane();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2737,7 +2738,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("consumes one-shot model and effort without replaying them after remount", async () => {
     seedPane(undefined, "claude-fable-5-1[1m]", "max");
-    const firstMount = render(
+    const firstMount = renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2776,7 +2777,7 @@ describe("ClaudeTmuxChatTab", () => {
     appCommandStore(claudeTmuxStore).getState().setEffortLevel("env:env-1:tab:tab-1", "low");
     firstMount.unmount();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2800,7 +2801,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
     seedPane(undefined, "claude-newer-opus", "high");
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2866,7 +2867,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
     seedPane(undefined, "claude-fable-5-1[1m]", "max");
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2891,7 +2892,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2927,7 +2928,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -2970,7 +2971,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3018,7 +3019,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3079,7 +3080,7 @@ describe("ClaudeTmuxChatTab", () => {
       fast_mode: null,
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3110,7 +3111,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3164,7 +3165,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
     appCommandStore(claudeTmuxStore).getState().setBusy(stateKey, true);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3203,7 +3204,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3257,7 +3258,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3316,7 +3317,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3372,7 +3373,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3425,7 +3426,7 @@ describe("ClaudeTmuxChatTab", () => {
       ] as ClaudeModel[],
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3477,7 +3478,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3528,7 +3529,7 @@ describe("ClaudeTmuxChatTab", () => {
       stale: false,
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3568,7 +3569,7 @@ describe("ClaudeTmuxChatTab", () => {
       error: "SDK discovery unavailable",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3588,7 +3589,7 @@ describe("ClaudeTmuxChatTab", () => {
     seedPane();
     getClaudeModelCatalogMock.mockRejectedValueOnce(new Error("model catalog unavailable"));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3624,7 +3625,7 @@ describe("ClaudeTmuxChatTab", () => {
     ];
     appCommandStore(agentModelCatalogStore).setState({ claudeModels: sdkModels });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3657,7 +3658,7 @@ describe("ClaudeTmuxChatTab", () => {
       ] as ClaudeModel[],
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3694,7 +3695,7 @@ describe("ClaudeTmuxChatTab", () => {
       ] as ClaudeModel[],
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3740,7 +3741,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3777,7 +3778,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3800,7 +3801,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3870,7 +3871,7 @@ describe("ClaudeTmuxChatTab", () => {
         }),
     );
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3913,7 +3914,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3958,7 +3959,7 @@ describe("ClaudeTmuxChatTab", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -3987,7 +3988,7 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: "session-1",
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4043,7 +4044,7 @@ describe("ClaudeTmuxChatTab", () => {
       ]),
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4119,7 +4120,7 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
       .getState()
       .setObservation("tab-1", generatedObservation(pane, 1));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4180,7 +4181,7 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4211,7 +4212,7 @@ Enter to confirm · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4250,7 +4251,7 @@ Enter to confirm · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4288,7 +4289,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4362,7 +4363,7 @@ Enter to confirm · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4398,7 +4399,7 @@ Enter to confirm · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4437,7 +4438,7 @@ Enter to confirm · ↑/↓ to navigate · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4471,7 +4472,7 @@ Enter to confirm · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4505,7 +4506,7 @@ Enter to confirm · Esc to cancel
       .getState()
       .setObservation("tab-1", generatedObservation(pane, 1));
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4555,7 +4556,7 @@ Enter to confirm · Esc to cancel
     });
     await adoptMockedPaneObservation();
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4685,7 +4686,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4763,7 +4764,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4833,7 +4834,7 @@ Enter to confirm · Esc to cancel
       throw new Error("bridge down");
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4883,7 +4884,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4946,7 +4947,7 @@ Enter to confirm · Esc to cancel
       throw new Error("bridge down");
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -4991,7 +4992,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5062,7 +5063,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5092,7 +5093,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5134,7 +5135,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5165,7 +5166,7 @@ Enter to confirm · Esc to cancel
       throw new Error("bridge down");
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5199,7 +5200,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5247,7 +5248,7 @@ Enter to confirm · Esc to cancel
       throw new Error("bridge down");
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5298,7 +5299,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5349,7 +5350,7 @@ Enter to confirm · Esc to cancel
         receivedAt: new Date().toISOString(),
       });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5412,7 +5413,7 @@ Enter to confirm · Esc to cancel
       opaque: "legacy-secret",
     });
 
-    const rendered = render(
+    const rendered = renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5441,7 +5442,7 @@ Enter to confirm · Esc to cancel
     });
 
     rendered.unmount();
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5472,7 +5473,7 @@ Enter to confirm · Esc to cancel
       throw new Error("bridge down");
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
@@ -5515,7 +5516,7 @@ Enter to confirm · Esc to cancel
       receivedAt: new Date().toISOString(),
     });
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}

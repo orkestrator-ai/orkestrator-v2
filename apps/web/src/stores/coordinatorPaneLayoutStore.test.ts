@@ -9,8 +9,9 @@ import {
   MAX_REMEMBERED_COORDINATOR_LAYOUTS,
   selectCoordinatorPaneLayout,
   selectCoordinatorPaneLayoutReady,
-  useCoordinatorPaneLayoutStore as store,
+  coordinatorPaneLayoutStore,
 } from "./coordinatorPaneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import {
   focusCoordinatorPane,
@@ -98,7 +99,7 @@ beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
   localStorage.removeItem(key);
-  store.getState().reset();
+  appCommandStore(coordinatorPaneLayoutStore).getState().reset();
 });
 
 afterEach(() => {
@@ -114,19 +115,25 @@ describe("against a backend that owns coordinator layouts", () => {
     const server = fakeBackend();
     const layout = single();
     server.remoteSave("p", layout);
-    expect(selectCoordinatorPaneLayoutReady("p")(store.getState())).toBe(false);
-    await store.getState().hydrate("p");
-    expect(selectCoordinatorPaneLayoutReady("p")(store.getState())).toBe(true);
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(layout);
+    expect(
+      selectCoordinatorPaneLayoutReady("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBe(false);
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+    expect(
+      selectCoordinatorPaneLayoutReady("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBe(true);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(layout);
   });
 
   test("saves changes in order, each against the revision the last one returned", async () => {
     const server = fakeBackend();
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     const first = single();
     const second = focusCoordinatorPane(first, first.activePaneId, "side-2");
-    store.getState().setLayout("p", first);
-    store.getState().setLayout("p", second);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", first);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", second);
     await flushPromises();
     expect(server.saves.map((save) => save.expectedRevision)).toEqual([0, 1]);
     expect(server.records.get("p")?.layout).toEqual(second);
@@ -135,35 +142,37 @@ describe("against a backend that owns coordinator layouts", () => {
 
   test("identical layouts are a state and save no-op", async () => {
     const server = fakeBackend();
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     const layout = single();
-    store.getState().setLayout("p", layout);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", layout);
     await flushPromises();
-    const state = store.getState();
-    store.getState().setLayout("p", layout);
+    const state = appCommandStore(coordinatorPaneLayoutStore).getState();
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", layout);
     await flushPromises();
-    expect(store.getState()).toBe(state);
+    expect(appCommandStore(coordinatorPaneLayoutStore).getState()).toBe(state);
     expect(server.saves).toHaveLength(1);
   });
 
   test("another client's save wins a conflict and its layout is adopted", async () => {
     const server = fakeBackend();
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     const remote = focusCoordinatorPane(single(), "x", "side-1");
     server.remoteSave("p", remote);
-    store.getState().setLayout("p", single());
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", single());
     await flushPromises();
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(remote);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(remote);
     // The next local change builds on the revision it adopted.
     const next = single();
-    store.getState().setLayout("p", next);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", next);
     await flushPromises();
     expect(server.records.get("p")).toMatchObject({ revision: 2, layout: next });
   });
 
   test("a change hint refreshes the project; a stale answer cannot roll it back", async () => {
     const server = fakeBackend();
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     const remote = single();
     server.remoteSave("p", remote);
     dispatchResourceChange({
@@ -173,7 +182,9 @@ describe("against a backend that owns coordinator layouts", () => {
       revision: 1,
     });
     await hintDelivered();
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(remote);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(remote);
 
     const newer = single();
     server.records.set("p", { ...server.records.get("p")!, layout: newer, revision: 5 });
@@ -186,20 +197,24 @@ describe("against a backend that owns coordinator layouts", () => {
       });
     hint(2);
     await hintDelivered();
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(newer);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(newer);
 
     // An answer older than the revision already held does not replace it.
     server.records.set("p", { ...server.records.get("p")!, layout: single(), revision: 3 });
     hint(3);
     await hintDelivered();
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(newer);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(newer);
   });
 
   test("this client's own save announced back keeps the same layout object", async () => {
     fakeBackend();
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     const layout = single();
-    store.getState().setLayout("p", layout);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", layout);
     await flushPromises();
     dispatchResourceChange({
       resource: "coordinator-pane-layout",
@@ -208,18 +223,22 @@ describe("against a backend that owns coordinator layouts", () => {
       revision: 1,
     });
     await hintDelivered();
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toBe(layout);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBe(layout);
   });
 
   test("a change the connection dropped is sent by the next resync", async () => {
     const server = fakeBackend();
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     server.failSavesWith(new Error("transport closed"));
     const layout = single();
-    store.getState().setLayout("p", layout);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", layout);
     await flushPromises();
     expect(server.records.has("p")).toBe(false);
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toBe(layout);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBe(layout);
 
     server.failSavesWith(null);
     requestResourceResync();
@@ -238,13 +257,15 @@ describe("against a backend that owns coordinator layouts", () => {
       { projectId: "other-client", layout: browser, updatedAt: 2 },
       { projectId: "removed", layout: browser, updatedAt: 3 },
     ]);
-    await store.getState().hydrate("p");
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(browser);
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(browser);
     expect(server.records.get("other-client")?.layout).toEqual(stored);
     expect(localStorage.getItem(key)).toBeNull();
 
     const saves = server.saves.length;
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     expect(server.saves).toHaveLength(saves);
   });
 
@@ -252,8 +273,10 @@ describe("against a backend that owns coordinator layouts", () => {
     const server = fakeBackend();
     seedBrowserCopy([{ projectId: "p", layout: single(), updatedAt: 1 }]);
     server.failSavesWith(new Error("transport closed"));
-    await store.getState().hydrate("p");
-    expect(selectCoordinatorPaneLayoutReady("p")(store.getState())).toBe(true);
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+    expect(
+      selectCoordinatorPaneLayoutReady("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBe(true);
     expect(localStorage.getItem(key)).not.toBeNull();
   });
 
@@ -267,25 +290,31 @@ describe("against a backend that owns coordinator layouts", () => {
     invokeMock.mockImplementation(async () => {
       throw new Error("transport closed");
     });
-    await store.getState().hydrate("p");
-    store.getState().setLayout("p", edited);
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", edited);
 
     resetClientStateCapabilitiesForTests(capabilities(true));
     invokeMock.mockImplementation(healthy);
-    await store.getState().hydrate("p");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
     await flushPromises();
 
     expect(server.records.get("p")?.layout).toEqual(edited);
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(edited);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(edited);
   });
 
   test("a failed read still lets the page render", async () => {
     invokeMock.mockImplementation(async () => {
       throw new Error("transport closed");
     });
-    await store.getState().hydrate("p");
-    expect(selectCoordinatorPaneLayoutReady("p")(store.getState())).toBe(true);
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toBeUndefined();
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+    expect(
+      selectCoordinatorPaneLayoutReady("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBe(true);
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBeUndefined();
   });
 });
 
@@ -305,16 +334,20 @@ describe("against an older backend", () => {
     split = resizeCoordinatorSplit(split, split.root.id, [65, 35]);
     split = reorderCoordinatorConversations(split, first.activePaneId, 1, 0);
     split = focusCoordinatorPane(split, first.activePaneId, "side-2");
-    await store.getState().hydrate("first");
-    store.getState().setLayout("first", split);
-    store.getState().setLayout("second", first);
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("first");
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("first", split);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("second", first);
     expect(invokeMock).not.toHaveBeenCalledWith("save_coordinator_pane_layout", expect.anything());
 
-    store.getState().reset();
-    await store.getState().hydrate("first");
-    await store.getState().hydrate("second");
-    expect(selectCoordinatorPaneLayout("first")(store.getState())).toEqual(split);
-    expect(selectCoordinatorPaneLayout("second")(store.getState())).toEqual(first);
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("first");
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("second");
+    expect(
+      selectCoordinatorPaneLayout("first")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(split);
+    expect(
+      selectCoordinatorPaneLayout("second")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(first);
   });
 
   test("sanitizes tabs, active IDs and sizes when reading the browser copy", async () => {
@@ -335,8 +368,10 @@ describe("against an older backend", () => {
         },
       },
     ]);
-    await store.getState().hydrate("p");
-    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual({
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
+    expect(
+      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual({
       activePaneId: layout.root.id,
       root: { ...layout.root, conversationIds: ["main"], activeConversationId: "main" },
     });
@@ -375,19 +410,30 @@ describe("against an older backend", () => {
       },
     ]);
     for (const projectId of ["bad", "deep", "x".repeat(201), "bounded"]) {
-      await store.getState().hydrate(projectId);
+      await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate(projectId);
     }
-    expect(selectCoordinatorPaneLayout("bad")(store.getState())).toBeUndefined();
-    expect(selectCoordinatorPaneLayout("deep")(store.getState())).toBeUndefined();
-    expect(selectCoordinatorPaneLayout("x".repeat(201))(store.getState())).toBeUndefined();
-    const root = selectCoordinatorPaneLayout("bounded")(store.getState())!.root;
+    expect(
+      selectCoordinatorPaneLayout("bad")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBeUndefined();
+    expect(
+      selectCoordinatorPaneLayout("deep")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toBeUndefined();
+    expect(
+      selectCoordinatorPaneLayout("x".repeat(201))(
+        appCommandStore(coordinatorPaneLayoutStore).getState(),
+      ),
+    ).toBeUndefined();
+    const root = selectCoordinatorPaneLayout("bounded")(
+      appCommandStore(coordinatorPaneLayoutStore).getState(),
+    )!.root;
     expect(root.kind === "leaf" && root.conversationIds.length).toBe(64);
   });
 
   test("retains the latest projects in the browser copy and uses the latest duplicate", async () => {
     const layout = single();
-    await store.getState().hydrate("seed");
-    for (let index = 0; index < 55; index += 1) store.getState().setLayout(`p-${index}`, layout);
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("seed");
+    for (let index = 0; index < 55; index += 1)
+      appCommandStore(coordinatorPaneLayoutStore).getState().setLayout(`p-${index}`, layout);
     const saved = JSON.parse(localStorage.getItem(key)!).state.layouts as Array<{
       projectId: string;
     }>;
@@ -399,7 +445,9 @@ describe("against an older backend", () => {
       { projectId: "dup", layout },
       { projectId: "dup", layout: second },
     ]);
-    await store.getState().hydrate("dup");
-    expect(selectCoordinatorPaneLayout("dup")(store.getState())).toEqual(second);
+    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("dup");
+    expect(
+      selectCoordinatorPaneLayout("dup")(appCommandStore(coordinatorPaneLayoutStore).getState()),
+    ).toEqual(second);
   });
 });

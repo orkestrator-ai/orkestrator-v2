@@ -4,7 +4,8 @@
  * pause, deferred invalidations and a single critical reconcile on return.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTranscriptUpdate,
@@ -105,7 +106,7 @@ const stateReads = () => getNativeAgentSessionStateUpdateMock.mock.calls.length;
 const realTick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function renderSession(isActive = true) {
-  return renderHook(() =>
+  return renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform: "codex",
       environmentId: "env-1",

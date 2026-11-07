@@ -8,7 +8,8 @@ import {
 import { StorageService } from "../../../../backend/src/core/storage";
 import { schedulerStatus } from "../../../../backend/src/core/commands-registry-scheduled-jobs";
 import { afterAll, afterEach, describe, expect, mock, test, spyOn, setSystemTime } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import {
   schedulerPausedMessage,
@@ -153,7 +154,7 @@ afterAll(() => {
 
 describe("SchedulesSettings", () => {
   test("lists each schedule's next fire, owner, state and last outcome", async () => {
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     const rows = await screen.findAllByTestId("schedule-row");
     expect(rows).toHaveLength(2);
     const [wake, nightly] = rows as [HTMLElement, HTMLElement];
@@ -186,7 +187,7 @@ describe("SchedulesSettings", () => {
       },
     });
     schedules = [timer, failed];
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     const [row] = await screen.findAllByTestId("schedule-row");
     const badge = within(row!).getByTestId("schedule-account-switch-permission");
     expect(badge.textContent).toBe("May switch Claude accounts when it fires");
@@ -240,7 +241,7 @@ describe("SchedulesSettings", () => {
           job={{ action, lastFire: { ...lastFire, finishedAt }, timeZone: "UTC" }}
         />
       );
-      const { rerender } = render(view(lastFire.finishedAt));
+      const { rerender } = renderInAppCommandScope(view(lastFire.finishedAt));
       expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
         "until",
       );
@@ -292,7 +293,7 @@ describe("SchedulesSettings", () => {
       attempts: 1,
     };
     const fired = Date.parse("2099-10-25T12:00:00.000Z");
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <AccountSwitchPermissionBadge
         job={{ action, lastFire, timeZone: "UTC" }}
         now={fired + 60_000}
@@ -316,7 +317,7 @@ describe("SchedulesSettings", () => {
 
   test("says when this backend does not fire the schedules it lists", async () => {
     scheduler = { firing: false, reason: "writer-lease-lost" };
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     const notice = await screen.findByTestId("scheduler-paused");
     expect(notice.textContent).toBe(schedulerPausedMessage("writer-lease-lost"));
     expect(notice.getAttribute("role")).toBe("status");
@@ -324,7 +325,7 @@ describe("SchedulesSettings", () => {
 
   test("a lease lost while the view is open shows on its next read, and only with schedules", async () => {
     scheduler = { firing: true };
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     expectDomAbsent(screen.queryByTestId("scheduler-paused"), "scheduler notice while firing");
 
@@ -354,7 +355,7 @@ describe("SchedulesSettings", () => {
     });
     try {
       scheduler = schedulerStatus(lease);
-      const view = render(<SchedulesSettings />);
+      const view = renderInAppCommandScope(<SchedulesSettings />);
       await screen.findAllByTestId("schedule-row");
       expectDomAbsent(screen.queryByTestId("scheduler-paused"), "held writer");
       await writeFile(
@@ -370,7 +371,7 @@ describe("SchedulesSettings", () => {
         schedulerPausedMessage("writer-lease-lost"),
       );
       view.unmount();
-      render(<SchedulesSettings />);
+      renderInAppCommandScope(<SchedulesSettings />);
       expect((await screen.findByTestId("scheduler-paused")).textContent).toBe(
         schedulerPausedMessage("writer-lease-lost"),
       );
@@ -382,7 +383,7 @@ describe("SchedulesSettings", () => {
   });
 
   test("a backend that predates the field shows no notice", async () => {
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     expectDomAbsent(
       screen.queryByTestId("scheduler-paused"),
@@ -391,7 +392,7 @@ describe("SchedulesSettings", () => {
   });
 
   test("run now, pause and resume go to the backend and reload the list", async () => {
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     fireEvent.click(screen.getByRole("button", { name: "Run Wake the coordinator now" }));
     await waitFor(() => expect(runScheduledJob).toHaveBeenCalledWith("sch_wake"));
@@ -403,7 +404,7 @@ describe("SchedulesSettings", () => {
   });
 
   test("creates a one-shot mail schedule and previews its fire time", async () => {
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
     const dialog = await screen.findByRole("dialog");
@@ -424,7 +425,7 @@ describe("SchedulesSettings", () => {
   });
 
   test("an invalid cron expression is reported in the preview", async () => {
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
     const dialog = await screen.findByRole("dialog");
@@ -437,7 +438,7 @@ describe("SchedulesSettings", () => {
   });
 
   test("editing another owner's schedule keeps its action and only sends what changed", async () => {
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     fireEvent.click(screen.getByRole("button", { name: "Edit Wake the coordinator" }));
     const dialog = await screen.findByRole("dialog");
@@ -452,7 +453,7 @@ describe("SchedulesSettings", () => {
   });
 
   test("history lists fires newest first with their errors", async () => {
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     const rows = await screen.findAllByTestId("schedule-row");
     fireEvent.click(within(rows[1]!).getByRole("button", { name: "History" }));
     const history = await screen.findByTestId("schedule-history");
@@ -481,7 +482,7 @@ for (const action of [
     test(`operator ${action.kind} ${edit} edit preserves unrepresented action fields`, async () => {
       const original = job({ owner: { kind: "operator" }, ownerKey: "operator", action });
       schedules = [original];
-      render(<SchedulesSettings />);
+      renderInAppCommandScope(<SchedulesSettings />);
       await screen.findAllByTestId("schedule-row");
       fireEvent.click(screen.getByRole("button", { name: "Edit Wake the coordinator" }));
       const dialog = await screen.findByRole("dialog");
@@ -556,7 +557,7 @@ describe("graph schedules", () => {
 
   test("creates a graph schedule that uses the saved launch defaults", async () => {
     installGraphBackend();
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
     const dialog = await screen.findByRole("dialog");
@@ -584,7 +585,7 @@ describe("graph schedules", () => {
 
   test("pins roles and parameters when saved defaults are turned off", async () => {
     installGraphBackend();
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");
     fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
     const dialog = await screen.findByRole("dialog");
@@ -630,7 +631,7 @@ describe("graph schedules", () => {
         action: { kind: "graph", request },
       }),
     ];
-    render(<SchedulesSettings />);
+    renderInAppCommandScope(<SchedulesSettings />);
     const [row] = await screen.findAllByTestId("schedule-row");
     expect(row!.textContent).toContain("Run graph nightly-review in p1");
     fireEvent.click(screen.getByRole("button", { name: "Edit Wake the coordinator" }));

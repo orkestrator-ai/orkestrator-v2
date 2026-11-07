@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { filesPanelStore, uiStore } from "@/stores";
 const filesState = appCommandStore(filesPanelStore).getState();
 const uiState = appCommandStore(uiStore).getState();
@@ -32,7 +33,7 @@ test.each([false, true])(
       appCommandStore(filesPanelStore)
         .getState()
         .openPullRequest("target", { owner: "owner", repo: "repo", number: 1 });
-    render(
+    renderInAppCommandScope(
       <main>
         <nav>Files shell</nav>
         <FilesPanelPullRequests targetId="target" />

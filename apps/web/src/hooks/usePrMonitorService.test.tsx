@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   PR_MONITOR_CHANGED_EVENT,
@@ -73,7 +74,7 @@ afterAll(() => {
 
 describe("usePrMonitorService sound notifications", () => {
   test("plays the merge cue once for a deduplicated merged transition", async () => {
-    const observer = renderHook(() => usePrMonitorService());
+    const observer = renderHookInAppCommandScope(() => usePrMonitorService());
     await waitFor(() => expect(handlers.has(PR_MONITOR_CHANGED_EVENT)).toBe(true));
 
     const event: PrMonitorEvent = {
@@ -151,7 +152,7 @@ async function mountRevisioned(revision: number, entries: PrMonitorEnvironmentSt
     callOrder.push("snapshot");
     return { entries, generation: GENERATION, revision };
   });
-  const observer = renderHook(() => usePrMonitorService());
+  const observer = renderHookInAppCommandScope(() => usePrMonitorService());
   await waitFor(() =>
     expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("current"),
   );
@@ -269,7 +270,7 @@ describe("usePrMonitorService revision-aware recovery", () => {
     getPrMonitorState.mockImplementation(async () => {
       throw new Error("Unknown backend command: get_pr_monitor_state");
     });
-    const observer = renderHook(() => usePrMonitorService());
+    const observer = renderHookInAppCommandScope(() => usePrMonitorService());
     await waitFor(() =>
       expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("unsupported"),
     );

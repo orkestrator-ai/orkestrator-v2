@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
 
@@ -10,7 +10,12 @@ import { WindowScope } from "@/lib/node-scope/window-scope";
 import { projectStore } from "@/stores/projectStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
-import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInNodeScope,
+  renderInAppCommandScope,
+} from "@/test/render-in-node-scope";
 import * as openWorkspace from "@/lib/federation/open-workspace";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
 import { appCommandStore } from "@/test/app-command-store";
@@ -53,7 +58,7 @@ function leafStatus(controllers: string[]) {
 }
 
 function renderGate() {
-  render(
+  renderInAppCommandScope(
     <LeafModeCoordinatorGate projectId="leaf-project">
       <div data-testid="coordinator-chat">chat</div>
     </LeafModeCoordinatorGate>,
@@ -80,7 +85,7 @@ describe("LM-04 coordinator conversations in leaf mode", () => {
         suspendedSubordinateCount: 1,
       },
     });
-    render(
+    renderInAppCommandScope(
       <LeafModeCoordinatorGate>
         <div data-testid="coordinator-chat">chat</div>
       </LeafModeCoordinatorGate>,
@@ -105,7 +110,7 @@ describe("LM-04 coordinator conversations in leaf mode", () => {
         suspendedSubordinateCount: 0,
       },
     });
-    render(
+    renderInAppCommandScope(
       <LeafModeCoordinatorGate>
         <div data-testid="coordinator-chat">chat</div>
       </LeafModeCoordinatorGate>,
@@ -218,7 +223,7 @@ describe("0410 leaf-mode gate edge cases", () => {
     cleanup();
 
     // Another project on the same node still shows it.
-    render(
+    renderInAppCommandScope(
       <LeafModeCoordinatorGate projectId="other-project">
         <div data-testid="coordinator-chat">chat</div>
       </LeafModeCoordinatorGate>,

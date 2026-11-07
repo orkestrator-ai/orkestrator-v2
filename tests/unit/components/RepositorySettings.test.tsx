@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realProjectIconImage from "@/lib/project-icon-image";
 
 const realProjectIconImageSnapshot = { ...realProjectIconImage };
@@ -251,7 +252,7 @@ function renderSettings({
   const handleOpenChange = onOpenChange ?? mock(() => {});
 
   return {
-    ...render(
+    ...renderInAppCommandScope(
       <RepositorySettings
         project={resolvedProject}
         open={true}

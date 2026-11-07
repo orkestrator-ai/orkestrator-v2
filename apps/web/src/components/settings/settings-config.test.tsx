@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as backend from "@/lib/backend";
 import { configStore } from "@/stores/configStore";
 import { MachineConfigProvider, useSettingsConfig } from "./settings-config";
@@ -34,7 +35,7 @@ afterEach(() => {
 test("implicit workspace config uses the window store without an independent read", () => {
   appCommandStore(configStore).setState({ config: config("workspace") });
   const read = spyOn(backend, "getConfig");
-  render(
+  renderInAppCommandScope(
     <MachineConfigProvider machine={undefined}>
       <Child />
     </MachineConfigProvider>,
@@ -50,7 +51,7 @@ for (const machine of ["other"]) {
     const read = spyOn(backend, "getConfig").mockImplementation(async (target) =>
       config(target === undefined ? "leaf-refreshed" : "selected"),
     );
-    render(
+    renderInAppCommandScope(
       <MachineConfigProvider machine={machine}>
         <Child />
       </MachineConfigProvider>,
@@ -80,7 +81,7 @@ test("shows loading and a retryable read error, then renders recovered settings"
         }),
     )
     .mockResolvedValue(config("recovered"));
-  render(
+  renderInAppCommandScope(
     <MachineConfigProvider machine="other">
       <Child />
     </MachineConfigProvider>,
@@ -103,7 +104,7 @@ test("changing target cancels late reads and does not expose the previous config
         }),
     )
     .mockResolvedValue(config("second"));
-  const view = render(
+  const view = renderInAppCommandScope(
     <MachineConfigProvider machine="first">
       <Child />
     </MachineConfigProvider>,

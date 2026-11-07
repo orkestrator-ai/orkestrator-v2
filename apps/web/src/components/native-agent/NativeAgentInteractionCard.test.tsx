@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionResolution,
@@ -51,7 +52,9 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: "session-1",
       revision: 2,
     }));
-    render(<NativeAgentInteractionCard interaction={interaction(true)} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={interaction(true)} onResolve={onResolve} />,
+    );
 
     const input = screen.getByLabelText("Access token response") as HTMLInputElement;
     expect(input.type).toBe("password");
@@ -69,7 +72,7 @@ describe("NativeAgentInteractionCard", () => {
   });
 
   test("uses a multiline field for non-secret free text", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={interaction(false)}
         onResolve={async () => ({
@@ -100,7 +103,9 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: request.sessionId,
       revision: 2,
     }));
-    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={request} onResolve={onResolve} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "TypeScript" }));
     fireEvent.change(screen.getByLabelText("Language response"), {
@@ -122,7 +127,7 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: "session-1",
       revision: 2,
     }));
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={{
           ...interaction(false),
@@ -207,7 +212,9 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: request.sessionId,
       revision: 2,
     }));
-    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={request} onResolve={onResolve} />,
+    );
     const field = screen.getByLabelText("Value") as HTMLInputElement;
     expect(field.tagName).toBe("INPUT");
     expect(field.type).toBe(type);
@@ -248,19 +255,23 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: resolution.sessionId,
       revision: 2,
     }));
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />,
     );
     fireEvent.change(screen.getByLabelText("Access token response"), {
       target: { value: "remember me" },
     });
     view.unmount();
-    render(<NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />,
+    );
     expect((screen.getByLabelText("Access token response") as HTMLTextAreaElement).value).toBe(
       "remember me",
     );
     cleanup();
-    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={request} onResolve={onResolve} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Approve for session" }));
     await waitFor(() =>
       expect(onResolve.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -295,7 +306,7 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: "session-1",
       revision: 2,
     }));
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={base}
         onResolve={onResolve}
@@ -306,7 +317,7 @@ describe("NativeAgentInteractionCard", () => {
     expect(screen.queryByRole("button", { name: "Approve and remember…" }) === null).toBe(true);
     cleanup();
 
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={{
           ...base,
@@ -345,7 +356,7 @@ describe("NativeAgentInteractionCard", () => {
   });
 
   test("explains why a request can't be remembered", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={{
           ...interaction(false),
@@ -418,7 +429,9 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: resolution.sessionId,
       revision: 2,
     }));
-    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={request} onResolve={onResolve} />,
+    );
 
     expect(screen.getByText("allow registry.example")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Approve with network policy" }));
@@ -433,7 +446,7 @@ describe("NativeAgentInteractionCard", () => {
   });
 
   test("fails closed when an approval has no actionable details", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={{
           ...interaction(false),
@@ -478,7 +491,7 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: "session-1",
       revision: 2,
     });
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={permission({
           kind: "mcp-server",
@@ -494,7 +507,7 @@ describe("NativeAgentInteractionCard", () => {
     expect(line.querySelector("b") === null).toBe(true);
     view.unmount();
 
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={permission({ kind: "mcp-server", name: "linear", scope: "brand-new" })}
         onResolve={onResolve}
@@ -505,7 +518,9 @@ describe("NativeAgentInteractionCard", () => {
     );
     cleanup();
 
-    render(<NativeAgentInteractionCard interaction={permission()} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={permission()} onResolve={onResolve} />,
+    );
     expect(screen.queryByTestId("interaction-source") === null).toBe(true);
     expect(screen.getByText("Tool: mcp__linear__create_issue")).toBeTruthy();
   });
@@ -539,7 +554,7 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: "session-1",
       revision: 2,
     }));
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={command}
         onResolve={onResolve}
@@ -552,7 +567,7 @@ describe("NativeAgentInteractionCard", () => {
     expect(screen.getByRole("button", { name: "Approve and remember…" })).toBeTruthy();
     view.unmount();
 
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={{ ...command, humanRequired: true }}
         onResolve={onResolve}
@@ -593,7 +608,7 @@ describe("NativeAgentInteractionCard", () => {
       revision: 2,
     });
     const tag = (extra: Partial<AgentInteractionRequest>) => {
-      const view = render(
+      const view = renderInAppCommandScope(
         <NativeAgentInteractionCard interaction={permission(extra)} onResolve={onResolve} />,
       );
       const element = screen.queryByTestId("interaction-tool-hint");
@@ -636,7 +651,7 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: resolution.sessionId,
       revision: 2,
     }));
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={request}
         planContent="# Implementation\n\nDo the work."
@@ -647,7 +662,9 @@ describe("NativeAgentInteractionCard", () => {
     const feedback = screen.getByLabelText("Plan revision feedback") as HTMLTextAreaElement;
     fireEvent.change(feedback, { target: { value: "Add rollback steps" } });
     view.unmount();
-    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={request} onResolve={onResolve} />,
+    );
     expect((screen.getByLabelText("Plan revision feedback") as HTMLTextAreaElement).value).toBe(
       "Add rollback steps",
     );
@@ -666,7 +683,9 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: resolution.sessionId,
       revision: 2,
     }));
-    render(<NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />,
+    );
     const field = screen.getByLabelText("Access token response");
     // Nothing typed yet: the answer is required, so the chord does nothing.
     fireEvent.keyDown(field, { key: "Enter", metaKey: true });
@@ -702,7 +721,9 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: resolution.sessionId,
       revision: 2,
     }));
-    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentInteractionCard interaction={request} onResolve={onResolve} />,
+    );
     fireEvent.keyDown(screen.getByRole("button", { name: "Approve" }), {
       key: "Enter",
       metaKey: true,
@@ -722,7 +743,7 @@ describe("NativeAgentInteractionCard", () => {
   });
 
   test("shows unavailable plan copy as description without a plan disclosure", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={{
           ...interaction(false),
@@ -784,7 +805,7 @@ describe("NativeAgentInteractionCard countdown pause", () => {
       sessionId: "session-1",
       revision: 2,
     }));
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={approval({ available: true })}
         onResolve={async () => ({
@@ -803,7 +824,7 @@ describe("NativeAgentInteractionCard countdown pause", () => {
   });
 
   test("an approval whose provider limit is the countdown cannot be paused", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentInteractionCard
         interaction={approval({ available: false, reason: "no-extension" })}
         onResolve={async () => ({

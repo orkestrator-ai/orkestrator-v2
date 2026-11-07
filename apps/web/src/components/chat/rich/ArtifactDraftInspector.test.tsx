@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import {
   TRANSCRIPT_ARTIFACT_COMMANDS,
@@ -137,7 +138,7 @@ function withScope(children: ReactNode, scope: RichTranscriptScope | null = SCOP
 }
 
 function renderTool(toolName: string, extra: Partial<Parameters<typeof ToolPart>[0]> = {}) {
-  return render(
+  return renderInAppCommandScope(
     withScope(
       <ToolPart
         expansionKey={`tool-${toolName}`}
@@ -190,7 +191,9 @@ describe("Inspect draft action", () => {
     expect(screen.queryByRole("button", { name: "Inspect draft" }) === null).toBe(true);
     cleanup();
     // Outside a conversation scope there is nothing to inspect.
-    render(withScope(<ToolPart expansionKey="x" toolName="create_artifact" />, null));
+    renderInAppCommandScope(
+      withScope(<ToolPart expansionKey="x" toolName="create_artifact" />, null),
+    );
     expect(screen.queryByRole("button", { name: "Inspect draft" }) === null).toBe(true);
   });
 

@@ -1,14 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  renderHook,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { useBoundMachineView } from "@/components/federation/useMachineViews";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { activityRows } from "@/lib/federation/aggregate";
@@ -219,7 +211,7 @@ test("bound machine activity order rehydrates from the active build store", asyn
   const idle = { ...build, id: "idle", order: 1 };
   appCommandStore(environmentStore).setState({ environments: [idle, build] });
   appCommandStore(projectStore).setState({ projects: [project] });
-  const { result, unmount } = renderHook(() => useBoundMachineView(), {
+  const { result, unmount } = renderHookInAppCommandScope(() => useBoundMachineView(), {
     wrapper: FederationProvider,
   });
   await waitFor(() => expect(result.current).not.toBeNull());
@@ -230,7 +222,9 @@ test("bound machine activity order rehydrates from the active build store", asyn
   );
   expect(ids()).toEqual(["idle", "build"]);
   unmount();
-  const restored = renderHook(() => useBoundMachineView(), { wrapper: FederationProvider });
+  const restored = renderHookInAppCommandScope(() => useBoundMachineView(), {
+    wrapper: FederationProvider,
+  });
   await waitFor(() => expect(restored.result.current).not.toBeNull());
   expect(
     activityRows([restored.result.current!]).map((row) => row.environment.ref.environmentId),
@@ -243,7 +237,7 @@ test("this machine's merged environments sort below unmerged ones in the merged 
   const open = { ...environment, id: "open", prState: "open", order: 1 } as Environment;
   appCommandStore(environmentStore).setState({ environments: [merged, open] });
   appCommandStore(projectStore).setState({ projects: [project] });
-  const { result, unmount } = renderHook(() => useBoundMachineView(), {
+  const { result, unmount } = renderHookInAppCommandScope(() => useBoundMachineView(), {
     wrapper: FederationProvider,
   });
   await waitFor(() => expect(result.current).not.toBeNull());

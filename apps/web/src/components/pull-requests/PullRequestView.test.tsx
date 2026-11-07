@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GitHubPullRequestDetail } from "@orkestrator/protocol/github-pull-requests";
 import { uiStore } from "@/stores/uiStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
@@ -28,7 +29,7 @@ function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: 
       branchDeleted: !detail.isCrossRepository,
     }),
   });
-  return render(
+  return renderInAppCommandScope(
     <PullRequestView
       pullRequest={prRef}
       layout="sidebar"
@@ -105,7 +106,7 @@ describe("PullRequestView", () => {
           ? Promise.reject(new Error("GitHub authentication failed. Check the GitHub credentials."))
           : makeDetail(),
     });
-    render(<PullRequestView pullRequest={prRef} layout="page" />);
+    renderInAppCommandScope(<PullRequestView pullRequest={prRef} layout="page" />);
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText(/Settings → Version control/)).toBeTruthy();
     fail = false;
@@ -241,7 +242,7 @@ test("the label picker sends one change from a stale detail without replacing ot
       return detail.labels;
     },
   });
-  render(<PullRequestView pullRequest={prRef} layout="page" />);
+  renderInAppCommandScope(<PullRequestView pullRequest={prRef} layout="page" />);
   await screen.findByText("feat: add usage history tab");
   fireEvent.pointerDown(screen.getByRole("button", { name: "Edit labels" }), {
     button: 0,

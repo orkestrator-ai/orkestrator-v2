@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { invoke } from "@/lib/native/backend";
 import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
@@ -8,9 +8,14 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { bindSettingsParent } from "@/lib/portal/command-node-config";
-import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInNodeScope,
+  renderInAppCommandScope,
+} from "@/test/render-in-node-scope";
 import type { GlobalConfig } from "@/types";
-import { configStore, useConfigStore } from "@/stores/configStore";
+import { configStore, type ConfigState } from "@/stores/configStore";
 import {
   favoriteModelKey,
   mergeReorderedFavoriteModels,
@@ -55,7 +60,7 @@ function renderHook(): { current: HookValue } {
     });
     return null;
   }
-  render(<Probe />);
+  renderInAppCommandScope(<Probe />);
   return ref;
 }
 
@@ -301,8 +306,8 @@ describe("useAgentModelFavorites", () => {
   test("serializes rapid reorders and ignores an older response", async () => {
     const claude = { platform: "claude" as const, modelId: "claude-opus" };
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
-    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const firstWrite = deferred<ConfigState["config"]>();
+    const secondWrite = deferred<ConfigState["config"]>();
     appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
@@ -352,8 +357,8 @@ describe("useAgentModelFavorites", () => {
   test("does not roll back a newer reorder when an older save fails", async () => {
     const claude = { platform: "claude" as const, modelId: "claude-opus" };
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
-    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const firstWrite = deferred<ConfigState["config"]>();
+    const secondWrite = deferred<ConfigState["config"]>();
     appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
@@ -396,8 +401,8 @@ describe("useAgentModelFavorites", () => {
   test("rolls back to the last committed order when the latest save fails", async () => {
     const claude = { platform: "claude" as const, modelId: "claude-opus" };
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
-    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const firstWrite = deferred<ConfigState["config"]>();
+    const secondWrite = deferred<ConfigState["config"]>();
     appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
@@ -438,8 +443,8 @@ describe("useAgentModelFavorites", () => {
   test("rolls back to the pre-queue order when every queued save fails", async () => {
     const claude = { platform: "claude" as const, modelId: "claude-opus" };
     const codex = { platform: "codex" as const, modelId: "gpt-codex" };
-    const firstWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
-    const secondWrite = deferred<ReturnType<typeof useConfigStore.getState>["config"]>();
+    const firstWrite = deferred<ConfigState["config"]>();
+    const secondWrite = deferred<ConfigState["config"]>();
     appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,

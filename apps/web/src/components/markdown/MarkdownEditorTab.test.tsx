@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
 import { MarkdownManager } from "@tiptap/markdown";
@@ -58,7 +59,7 @@ afterAll(() => {
 
 describe("MarkdownEditorTab", () => {
   test("opens line references in raw mode where the source line can be revealed", async () => {
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="README.md"
@@ -80,7 +81,7 @@ describe("MarkdownEditorTab", () => {
   });
 
   test("flushes rendered edits once when a later source navigation switches to raw", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="README.md"
@@ -124,7 +125,7 @@ describe("MarkdownEditorTab", () => {
   });
 
   test("starts rendered and preserves untouched source when entering raw mode", async () => {
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="README.md"
@@ -153,7 +154,7 @@ describe("MarkdownEditorTab", () => {
   });
 
   test("rehydrates rendered mode from the dirty-store Markdown string", async () => {
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="README.md"
@@ -183,7 +184,7 @@ describe("MarkdownEditorTab", () => {
 
   test("saves the current dirty-store content from raw mode", async () => {
     const onSave = mock(async () => true);
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="README.md"
@@ -206,7 +207,7 @@ describe("MarkdownEditorTab", () => {
   });
 
   test("flushes a pending rendered edit before entering raw mode", async () => {
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="README.md"
@@ -238,7 +239,7 @@ describe("MarkdownEditorTab", () => {
     const table = "| Name | Value |\n| --- | --- |\n| one | two |";
     seedMarkdown(table);
 
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="TABLE.md"
@@ -266,7 +267,7 @@ describe("MarkdownEditorTab", () => {
     ].join("\n");
     seedMarkdown(markdown);
 
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="SKILL.md"
@@ -286,7 +287,7 @@ describe("MarkdownEditorTab", () => {
   test("preserves frontmatter when a rendered edit switches to Raw mode", async () => {
     const markdown = "---\ntitle: Example\n---\n\nOriginal body";
     seedMarkdown(markdown);
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="SKILL.md"
@@ -317,7 +318,7 @@ describe("MarkdownEditorTab", () => {
     const markdown = "---\ntitle: Example\n---\n\nOriginal body";
     const onSave = mock(async () => true);
     seedMarkdown(markdown);
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="SKILL.md"
@@ -357,7 +358,7 @@ describe("MarkdownEditorTab", () => {
   test("renders and preserves delimiter blocks that are not frontmatter", async () => {
     const markdown = "Intro\n\n---\n\ntitle: x\n\n---\n\nBody";
     seedMarkdown(markdown);
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="RULES.md"
@@ -393,7 +394,7 @@ describe("MarkdownEditorTab", () => {
     const unsupported = "Paragraph\n\n[^1]: footnote";
     seedMarkdown(unsupported);
 
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="FOOTNOTES.md"
@@ -415,7 +416,7 @@ describe("MarkdownEditorTab", () => {
   test("allows Rendered mode after unsupported syntax is removed in raw mode", async () => {
     const unsupported = "Paragraph\n\n[^1]: footnote";
     seedMarkdown(unsupported);
-    render(
+    renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="FOOTNOTES.md"
@@ -454,7 +455,7 @@ describe("MarkdownEditorTab", () => {
     } as typeof MarkdownManager.prototype.parse;
 
     try {
-      render(
+      renderInAppCommandScope(
         <MarkdownEditorTab
           tabId={TAB_ID}
           filePath="README.md"
@@ -482,7 +483,7 @@ describe("MarkdownEditorTab", () => {
   });
 
   test("shows saving state and disables pointer interaction while inactive", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MarkdownEditorTab
         tabId={TAB_ID}
         filePath="README.md"

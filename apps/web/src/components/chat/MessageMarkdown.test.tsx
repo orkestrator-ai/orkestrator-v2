@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect } from "react";
 import remarkBreaks from "remark-breaks";
 import type { PluggableList } from "unified";
@@ -24,7 +25,7 @@ import { appCommandStore } from "@/test/app-command-store";
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 function renderInline(content: string) {
-  return render(<InlineMessageMarkdown content={content} />).container;
+  return renderInAppCommandScope(<InlineMessageMarkdown content={content} />).container;
 }
 
 describe("InlineMessageMarkdown", () => {
@@ -126,7 +127,9 @@ describe("InlineMessageMarkdown", () => {
   });
 
   test("merges the caller's class names onto the wrapper", () => {
-    const { container } = render(<InlineMessageMarkdown content="plain" className="truncate" />);
+    const { container } = renderInAppCommandScope(
+      <InlineMessageMarkdown content="plain" className="truncate" />,
+    );
     const wrapper = container.querySelector("span");
 
     expect(wrapper?.className).toContain("truncate");
@@ -147,7 +150,7 @@ describe("MessageMarkdown remarkPlugins override", () => {
     { live: true, richPartId: "rich-part" },
   ])("replaces default plugins in mode %j, including on updates", (mode) => {
     const content = "~~literal~~\nnext\n\n> [!NOTE]\n> body\n\n| a | b |\n| - | - |\n| c | d |";
-    const { container, rerender } = render(
+    const { container, rerender } = renderInAppCommandScope(
       <MessageMarkdown
         content={content}
         enableBreaks={false}
@@ -186,7 +189,7 @@ describe("MessageMarkdown remarkPlugins override", () => {
 
   test("accepts an empty override and restores defaults when it is removed", () => {
     const content = "~~literal~~\nnext";
-    const { container, rerender } = render(
+    const { container, rerender } = renderInAppCommandScope(
       <MessageMarkdown content={content} remarkPlugins={NO_PLUGINS} />,
     );
     expect(container.querySelector("br, del") === null).toBe(true);
@@ -210,7 +213,7 @@ describe("MessageMarkdown code styling", () => {
   // zero-specificity `:where()` selector the typography plugin generates, which
   // is why both halves are pinned rather than the string as a whole.
   test("tints inline code and resets the code inside a fenced block", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MessageMarkdown content={"Run `bun test` first.\n\n```ts\nconst x = 1;\n```"} />,
     );
     const wrapper = container.firstElementChild as HTMLElement;
@@ -243,7 +246,7 @@ describe("MessageMarkdown parser budgets", () => {
   test("bounds block content before it reaches react-markdown", () => {
     const source = `${"x".repeat(MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS)}UNPARSED_BLOCK_TAIL`;
     const bounded = markdownRenderSource(source, MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS);
-    const { container } = render(<MessageMarkdown content={source} />);
+    const { container } = renderInAppCommandScope(<MessageMarkdown content={source} />);
 
     expect(bounded.source).toHaveLength(MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS);
     expect(bounded.source).not.toContain("UNPARSED_BLOCK_TAIL");
@@ -255,7 +258,7 @@ describe("MessageMarkdown parser budgets", () => {
 
   test("gives inline Markdown its own smaller parser budget", () => {
     const source = `${"x".repeat(MAX_INLINE_MARKDOWN_RENDER_CHARACTERS)}UNPARSED_INLINE_TAIL`;
-    const { container } = render(<InlineMessageMarkdown content={source} />);
+    const { container } = renderInAppCommandScope(<InlineMessageMarkdown content={source} />);
 
     expect(container.textContent).not.toContain("UNPARSED_INLINE_TAIL");
     expect(container.querySelector('[data-markdown-truncated="true"]')?.textContent).toContain(
@@ -285,7 +288,7 @@ describe("MessageMarkdown links", () => {
   }
 
   test("uses the inline-code blue without its chip or monospace styling", () => {
-    render(<MessageMarkdown content="Open [the file](src/App.tsx)." />);
+    renderInAppCommandScope(<MessageMarkdown content="Open [the file](src/App.tsx)." />);
 
     const link = screen.getByRole("link", { name: "the file" });
     expect(link.className).toContain("text-blue-300");
@@ -295,7 +298,7 @@ describe("MessageMarkdown links", () => {
   });
 
   test("retains the default URL safety filter for unsafe protocols", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MessageMarkdown content="Do not open [this](javascript:alert(1))." />,
     );
 
@@ -303,7 +306,9 @@ describe("MessageMarkdown links", () => {
   });
 
   test("does not mistake a numeric JavaScript URL payload for a source line", () => {
-    const { container } = render(<MessageMarkdown content="Do not open [this](javascript:10)." />);
+    const { container } = renderInAppCommandScope(
+      <MessageMarkdown content="Do not open [this](javascript:10)." />,
+    );
 
     expect(container.querySelector("a")?.getAttribute("href")).toBe("");
   });
@@ -316,7 +321,7 @@ describe("MessageMarkdown links", () => {
     ["a UNC file URL", "file://server/share/App.tsx", "//server/share/App.tsx"],
   ])("opens %s through the files-panel tab action", (_label, href, expectedPath) => {
     const openFile = mock((_path: string) => undefined);
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <RegisterFileTab openFile={openFile} />
         <MessageMarkdown content={`[Open file](${href})`} />
@@ -336,7 +341,7 @@ describe("MessageMarkdown links", () => {
     ["src/App.tsx#L21C6", "src/App.tsx", { lineNumber: 21, columnNumber: 6 }],
   ])("opens the source location in %s", (href, expectedPath, expectedOptions) => {
     const openFile = mock((_path: string, _options?: CreateFileTabOptions) => undefined);
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <RegisterFileTab openFile={openFile} />
         <MessageMarkdown content={`[Open source](${href})`} />
@@ -350,7 +355,7 @@ describe("MessageMarkdown links", () => {
 
   test("shows feedback instead of sending a file path to the browser without a tab action", () => {
     invokeMock.mockClear();
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <MessageMarkdown content="[Open file](src/App.tsx)" />
       </TerminalProvider>,
@@ -368,7 +373,7 @@ describe("MessageMarkdown links", () => {
   test("keeps HTTP links on the browser action when a file-tab action is registered", () => {
     invokeMock.mockClear();
     const openFile = mock((_path: string) => undefined);
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <RegisterFileTab openFile={openFile} />
         <MessageMarkdown content="[Open docs](https://example.com/docs)" />
@@ -395,7 +400,7 @@ describe("MessageMarkdown pull request links", () => {
   test("opens a pull request link with the surrounding opener on its matching view", () => {
     invokeMock.mockClear();
     const open = mock((_ref: unknown, _view?: unknown) => undefined);
-    render(
+    renderInAppCommandScope(
       <PullRequestOpenerProvider open={open}>
         <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42/files)" />
       </PullRequestOpenerProvider>,
@@ -413,7 +418,7 @@ describe("MessageMarkdown pull request links", () => {
   test("Cmd-click keeps a pull request link on the browser action", () => {
     invokeMock.mockClear();
     const open = mock((_ref: unknown, _view?: unknown) => undefined);
-    render(
+    renderInAppCommandScope(
       <PullRequestOpenerProvider open={open}>
         <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />
       </PullRequestOpenerProvider>,
@@ -436,7 +441,9 @@ describe("MessageMarkdown pull request links", () => {
       selectedEnvironmentId: "env-1",
       selectedProjectId: "project-1",
     });
-    render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+    renderInAppCommandScope(
+      <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />,
+    );
 
     fireEvent.click(screen.getByRole("link", { name: "PR" }));
 
@@ -462,7 +469,9 @@ describe("MessageMarkdown pull request links", () => {
         projectBoardTab,
       });
       appCommandStore(projectPullRequestsStore).setState({ projects: {} });
-      render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+      renderInAppCommandScope(
+        <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />,
+      );
 
       fireEvent.click(screen.getByRole("link", { name: "PR" }));
 
@@ -482,7 +491,9 @@ describe("MessageMarkdown pull request links", () => {
 
   test("falls back to the browser when nothing is selected to show the pull request", () => {
     invokeMock.mockClear();
-    render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+    renderInAppCommandScope(
+      <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />,
+    );
 
     fireEvent.click(screen.getByRole("link", { name: "PR" }));
 

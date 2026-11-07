@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { useEffect, type HTMLAttributes } from "react";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import Markdown, { type Components } from "react-markdown";
 import { setHighlightBackend } from "@/lib/chat/highlighter/client";
 import {
@@ -92,10 +93,10 @@ test(
   "a live streaming render matches a full render at every update",
   () => {
     setHighlightBackend(null);
-    const live = render(
+    const live = renderInAppCommandScope(
       <MessageMarkdown content="" richPartId="part-1" live components={RICH_COMPONENTS} />,
     );
-    const full = render(
+    const full = renderInAppCommandScope(
       <MessageMarkdown content="" richPartId="part-1" components={RICH_COMPONENTS} />,
     );
     // The fence is open, then closed, part-way through; the table is partial.
@@ -114,7 +115,7 @@ test(
       );
       // Live chrome (a streaming fence's state) is the only allowed difference,
       // so compare the same `live` flag through one pass over the whole text.
-      const fresh = render(<FullRender content={content} />);
+      const fresh = renderInAppCommandScope(<FullRender content={content} />);
       // `MessageMarkdown`'s own wrapper is the one element the reference lacks.
       expect(semanticChildren(live.container.firstElementChild!)).toBe(
         semanticChildren(fresh.container),
@@ -163,7 +164,9 @@ test("finished blocks do not render again while the message streams", () => {
   // The last boundary is only safe once the line after it has ended, so the
   // block before the one still arriving is not yet known to be finished.
   const prefix = "Keep one.\n\nKeep two.\n\nAlmost.\n\n";
-  const view = render(<MessageMarkdown content={`${prefix}Still`} live components={components} />);
+  const view = renderInAppCommandScope(
+    <MessageMarkdown content={`${prefix}Still`} live components={components} />,
+  );
   const finished = view.container.querySelector("p");
   for (const tail of ["Still a", "Still arriving", "Still arriving now"]) {
     view.rerender(<MessageMarkdown content={`${prefix}${tail}`} live components={components} />);
@@ -179,7 +182,9 @@ test("finished blocks do not render again while the message streams", () => {
 test("the final render updates the streamed blocks in place, without remounting", () => {
   const { components, mounts } = countingParagraphs();
   const streamed = "One.\n\nTwo.\n\nThree.\n\nFour";
-  const view = render(<MessageMarkdown content={streamed} live components={components} />);
+  const view = renderInAppCommandScope(
+    <MessageMarkdown content={streamed} live components={components} />,
+  );
   const paragraphs = Array.from(view.container.querySelectorAll("p"));
   expect(paragraphs).toHaveLength(4);
   const mounted = mounts();
@@ -195,7 +200,9 @@ test("a new component map renders every block with it", () => {
   const first = countingParagraphs();
   const second = countingParagraphs();
   const content = "One.\n\nTwo.\n\nThree";
-  const view = render(<MessageMarkdown content={content} live components={first.components} />);
+  const view = renderInAppCommandScope(
+    <MessageMarkdown content={content} live components={first.components} />,
+  );
   view.rerender(<MessageMarkdown content={content} live components={second.components} />);
   expect(second.renders.get("One.")).toBe(1);
 });

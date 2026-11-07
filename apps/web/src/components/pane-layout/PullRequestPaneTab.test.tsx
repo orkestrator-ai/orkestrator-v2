@@ -1,6 +1,7 @@
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   installBackend,
@@ -46,7 +47,7 @@ test("a pull request linked from a main-area pull request opens in the right-han
     },
     "env",
   );
-  render(
+  renderInAppCommandScope(
     <TooltipProvider>
       <PullRequestPaneTab
         tabId="pr-tab"
@@ -87,7 +88,7 @@ test("an inaccessible recognized PR falls back to its original URL only once", a
   });
   const url = "https://github.com/acme/private/pull/9/files";
   await openPullRequestUrl(url);
-  const { rerender } = render(
+  const { rerender } = renderInAppCommandScope(
     <TooltipProvider>
       <FilesPanelPullRequests targetId="env" />
     </TooltipProvider>,
@@ -125,7 +126,7 @@ test("reopening after failure waits for the pending new load and preserves a ter
     sourceTabId: "terminal",
     openExternal: async () => {},
   })({ button: 0, ctrlKey: true, shiftKey: false, metaKey: false } as MouseEvent, url);
-  render(
+  renderInAppCommandScope(
     <TooltipProvider>
       <FilesPanelPullRequests targetId="env" />
     </TooltipProvider>,

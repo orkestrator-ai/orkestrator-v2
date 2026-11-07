@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import {
   FIXTURE_BACKEND_INSTANCE_ID,
@@ -86,7 +87,7 @@ function TabHarness({ isActive }: { isActive: boolean }) {
 }
 
 function renderTab(isActive = true) {
-  return render(<TabHarness isActive={isActive} />);
+  return renderInAppCommandScope(<TabHarness isActive={isActive} />);
 }
 
 interface Backend {
@@ -1349,7 +1350,7 @@ describe("service browser tabs", () => {
       });
       const pending: Array<(snapshot: ReturnType<typeof fixturePreviewSnapshot>) => void> = [];
       backend.snapshot = () => new Promise((done) => pending.push(done));
-      render(
+      renderInAppCommandScope(
         <StrictMode>
           <TabHarness isActive />
         </StrictMode>,

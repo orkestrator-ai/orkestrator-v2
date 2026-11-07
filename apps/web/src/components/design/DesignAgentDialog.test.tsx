@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, jest, mock, test, type Mock } from "bun:test";
 import { useEffect, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignContextReference,
@@ -152,7 +153,7 @@ async function renderDialog(props: {
 }) {
   const onOpenChange = props.onOpenChange ?? mock();
   await act(async () => {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <RegisterCreateTab>
           <DesignAgentDialog

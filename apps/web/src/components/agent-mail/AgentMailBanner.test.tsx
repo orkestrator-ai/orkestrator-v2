@@ -1,6 +1,7 @@
 import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   AgentMailMailboxSnapshot,
   AgentMailMessageSummary,
@@ -120,7 +121,7 @@ describe("AgentMailBanner", () => {
     "a platform hold explains %s mail and prevents delivery until released",
     (placement) => {
       install(placement, { policy: placement === "stored" ? "off" : "idle" });
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentMailBanner
           environmentId="env-1"
           tabId="tab-1"
@@ -153,7 +154,7 @@ describe("AgentMailBanner", () => {
       ...message("pending-inject"),
       body: "hello",
     });
-    const view = render(
+    const view = renderInAppCommandScope(
       <AgentMailBanner
         environmentId="env-1"
         tabId="tab-1"
@@ -188,7 +189,7 @@ describe("AgentMailBanner", () => {
     ["inject-held", "loop-budget-exhausted", "bg-yellow-300"],
   ] as const)("uses the expected tone for %s", (placement, placementReason, color) => {
     install(placement, { placementReason });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen.getByRole("region", { name: "Agent mail" }).querySelector(`.${color}`),
     ).toBeTruthy();
@@ -215,7 +216,7 @@ describe("AgentMailBanner", () => {
     } as unknown as typeof ResizeObserver;
     try {
       // The zero-layout happy-dom anchor is measured as an overlay; fold it explicitly.
-      render(
+      renderInAppCommandScope(
         <FloatingNoticeLayer>
           <AgentMailBanner environmentId="env-1" tabId="tab-1" />
         </FloatingNoticeLayer>,
@@ -239,7 +240,7 @@ describe("AgentMailBanner", () => {
 
   test("surfaces pull-only pending delivery in the recipient tab", () => {
     install("stored", { policy: "off" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · pull only")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "View" }));
@@ -258,7 +259,7 @@ describe("AgentMailBanner", () => {
       ...message("injected"),
       body: "hello",
     });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() => expect(deliver).toHaveBeenCalledTimes(3));
     expect(deliver.mock.calls.map((call) => call[2])).toEqual([
@@ -279,7 +280,7 @@ describe("AgentMailBanner", () => {
     const refreshMailbox = mock(async () => undefined);
     const refreshSummary = mock(async () => undefined);
     appCommandStore(agentMailStore).setState({ refreshMailbox, refreshSummary });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     await waitFor(() => expect(refreshMailbox).toHaveBeenCalled());
     const mailboxCalls = refreshMailbox.mock.calls.length;
     const summaryCalls = refreshSummary.mock.calls.length;
@@ -303,7 +304,7 @@ describe("AgentMailBanner", () => {
       ...message("injected"),
       body: "hello",
     });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message waiting · delivers when this agent is idle")).toBeTruthy();
     expect(screen.queryByText(/pull only/) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
@@ -316,7 +317,7 @@ describe("AgentMailBanner", () => {
   test("says mail for a tab with no agent is waiting, and offers no delivery it cannot make", () => {
     for (const policy of ["off", "idle"] as const) {
       install("stored", { placementReason: "recipient-cannot-inject", policy, noAgent: true });
-      const view = render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      const view = renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
       expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
       expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
@@ -328,7 +329,7 @@ describe("AgentMailBanner", () => {
     install("stored", { noAgent: true });
     const snapshot = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!;
     snapshot.messages[0]!.trust = "external";
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
     expect(screen.queryByText(/send a first message|and deliver/) === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
@@ -344,7 +345,7 @@ describe("AgentMailBanner", () => {
         { ...message("injected"), id: "delivered" },
         { ...message("expired", "sender-deleted"), id: "expired" },
       );
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · pull only")).toBeTruthy();
   });
 
@@ -353,7 +354,7 @@ describe("AgentMailBanner", () => {
     const messages = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!.messages;
     messages[0]!.trust = "external";
     messages.push({ ...message("stored"), id: "cross", trust: "cross-project" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     const text = screen.getByText(/^2 messages in inbox · Mail from another project/);
     expect(text.classList.contains("truncate")).toBe(false);
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
@@ -364,7 +365,7 @@ describe("AgentMailBanner", () => {
     install("stored", { policy: "off" });
     appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!.descriptor.mutedInbound =
       true;
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen.getByText("1 message in inbox · Incoming mail is muted for this tab."),
     ).toBeTruthy();
@@ -377,14 +378,14 @@ describe("AgentMailBanner", () => {
       .getState()
       .mailboxes.get(mailboxId)!
       .messages.push({ ...message("stored"), id: "external", trust: "external" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · pull only · 1 can't be delivered")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
   });
 
   test("explains that a delegation report waits for the worker turn", () => {
     install("inject-held", { placementReason: COORDINATOR_DELEGATION_HOLD_REASON });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen
         .getByText("Worker report waiting · delivers when the worker turn ends")
@@ -398,13 +399,13 @@ describe("AgentMailBanner", () => {
     install("stored", { policy: "off" });
     const refreshSummary = mock(async () => undefined);
     appCommandStore(agentMailStore).setState({ refreshSummary });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     await waitFor(() => expect(refreshSummary).toHaveBeenCalledTimes(1));
   });
 
   test("surfaces failed and loop-paused delivery actions", () => {
     install("inject_failed", { placementReason: "rejected" });
-    const view = render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    const view = renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("Delivery failed: rejected")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
@@ -426,13 +427,13 @@ describe("AgentMailBanner", () => {
   ] as const)
     test(`explains ${placementReason} delivery`, () => {
       install(placement, { placementReason });
-      render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
       expect(screen.getByText(text)).toBeTruthy();
     });
 
   test("explains a compose draft hold", () => {
     install("pending-inject", { presence: "draft", policy: "idle" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("Delivery waiting: you have unsent text in the composer")).toBeTruthy();
   });
 });

@@ -31,7 +31,14 @@ import type {
   NodeInvokeOptions,
   Unlisten,
 } from "@orkestrator/protocol/node-client";
-import { render, type RenderOptions, type RenderResult } from "@testing-library/react";
+import {
+  render,
+  renderHook,
+  type RenderHookOptions,
+  type RenderHookResult,
+  type RenderOptions,
+  type RenderResult,
+} from "@testing-library/react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope, NodeScopeRole } from "@/lib/node-scope/node-scope";
@@ -247,29 +254,60 @@ export interface RenderInAppCommandScopeOptions extends Omit<RenderOptions, "wra
 
 /**
  * Renders UI under providers for the app's own window scope and command scope
- * (plan item 3003): the same instances the deprecated statics, the
- * `@/lib/backend` named exports and the window `listen` reach. For component
- * suites that seed stores through the statics and mock `@/lib/backend`: the
- * component reads its scope from a provider, as it does in the app, so its
- * hooks no longer fall back (and can retire the shim), while the suite's seeds
- * and mocks still apply. Nothing is disposed here; reset the app's scope with
+ * (plan item 3003): the same instances `appCommandStore(def)`
+ * (`@/test/app-command-store`), the `@/lib/backend` named exports and the
+ * window `listen` reach. For component suites that seed stores with
+ * `appCommandStore(def)` and mock `@/lib/backend`: the component reads its
+ * scope from a provider, as it does in the app, while the suite's seeds and
+ * mocks still apply. A store hook outside any provider throws in tests (plan
+ * item 3018). Nothing is disposed here; reset the app's scope with
  * `resetWindowScopeForTests()` as the suite already does.
  */
 export function renderInAppCommandScope(
   ui: ReactElement,
   { wrapper: Inner, ...renderOptions }: RenderInAppCommandScopeOptions = {},
 ): RenderInNodeScopeResult {
+  const { windowScope, scope, wrapper } = appCommandScopeWrapper(Inner);
+  const result = render(ui, { ...renderOptions, wrapper });
+  return Object.assign(result, { scope, windowScope, client: scope.client });
+}
+
+export interface RenderHookInAppCommandScopeOptions<Props> extends Omit<
+  RenderHookOptions<Props>,
+  "wrapper"
+> {
+  /** The suite's own wrapper, rendered inside the scope providers. */
+  wrapper?: ComponentType<{ children: ReactNode }>;
+}
+
+/** `renderHook` under the app's window scope and command scope, as `renderInAppCommandScope`. */
+export function renderHookInAppCommandScope<Result, Props>(
+  callback: (props: Props) => Result,
+  { wrapper: Inner, ...options }: RenderHookInAppCommandScopeOptions<Props> = {},
+): RenderHookResult<Result, Props> & { scope: NodeScope; windowScope: WindowScope } {
+  const { windowScope, scope, wrapper } = appCommandScopeWrapper(Inner);
+  const result = renderHook(callback, { ...options, wrapper });
+  return Object.assign(result, { scope, windowScope });
+}
+
+function appCommandScopeWrapper(Inner?: ComponentType<{ children: ReactNode }>) {
   const windowScope = getWindowScope();
   const scope = windowScope.commandScope();
-  const result = render(ui, {
-    ...renderOptions,
-    wrapper: ({ children }) => (
-      <WindowScopeProvider windowScope={windowScope}>
-        <NodeScopeProvider scope={scope}>
-          {Inner ? <Inner>{children}</Inner> : children}
-        </NodeScopeProvider>
-      </WindowScopeProvider>
-    ),
-  });
-  return Object.assign(result, { scope, windowScope, client: scope.client });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <WindowScopeProvider windowScope={windowScope}>
+      <NodeScopeProvider scope={scope}>
+        {Inner ? <Inner>{children}</Inner> : children}
+      </NodeScopeProvider>
+    </WindowScopeProvider>
+  );
+  return { windowScope, scope, wrapper };
+}
+
+/**
+ * The app's window scope and command scope as providers around `children`,
+ * for renders that do not go through testing-library (`renderToStaticMarkup`).
+ */
+export function InAppCommandScope({ children }: { children: ReactNode }) {
+  const { wrapper: Wrapper } = appCommandScopeWrapper();
+  return <Wrapper>{children}</Wrapper>;
 }

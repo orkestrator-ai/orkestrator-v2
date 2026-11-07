@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTranscriptUpdate,
@@ -129,7 +130,7 @@ describe("useNativeAgentSession model selection IPC", () => {
   for (const explicit of [false, true]) {
     test(`forwards selection provenance and inherited substitution (explicit=${explicit})`, async () => {
       const onModelSubstituted = mock(() => undefined);
-      renderHook(() =>
+      renderHookInAppCommandScope(() =>
         useNativeAgentSession<TestMessage>({
           platform: "opencode",
           environmentId: "env-1",

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { EnvironmentProcessGroup } from "@/lib/backend";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -172,7 +173,7 @@ describe("SystemUsageIndicator", () => {
   });
 
   test("renders rounded CPU, RAM, GPU and disk readings", async () => {
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
 
     await waitFor(() =>
       expect(screen.getByLabelText("Central processing unit (CPU) usage: 12%")).toBeTruthy(),
@@ -187,7 +188,7 @@ describe("SystemUsageIndicator", () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_system_usage" ? usageSnapshot({ diskPercent: 98.4 }) : undefined,
     );
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
 
     const disk = await screen.findByLabelText("Disk storage usage: 98%, almost full");
     expect(disk.dataset.nearFull).toBe("true");
@@ -200,7 +201,7 @@ describe("SystemUsageIndicator", () => {
   test("shows unavailable readings until a snapshot arrives", async () => {
     nativeInvokeMock.mockImplementation(async () => undefined);
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
 
     await waitFor(() => expect(screen.getByTestId("system-usage-indicator")).toBeTruthy());
     expect(screen.getAllByRole("img").map((metric) => metric.textContent)).toEqual([
@@ -220,7 +221,7 @@ describe("SystemUsageIndicator", () => {
       throw new Error("backend unavailable");
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(calls).toBe(1));
     await waitFor(() =>
       expect(screen.getByLabelText("Central processing unit (CPU) usage: 10%")).toBeTruthy(),
@@ -247,7 +248,7 @@ describe("SystemUsageIndicator", () => {
       if (calls === 2) throw new Error("backend unavailable");
       return hung;
     });
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() =>
       expect(screen.getByLabelText("Central processing unit (CPU) usage: 10%")).toBeTruthy(),
     );
@@ -279,7 +280,7 @@ describe("SystemUsageIndicator", () => {
       if (failing) throw new Error("backend unavailable");
       return processSnapshot();
     });
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
 
     expect(await screen.findByText("Couldn't read processes")).toBeTruthy();
@@ -302,7 +303,7 @@ describe("SystemUsageIndicator", () => {
           unsupported ? "Unknown backend command: get_environment_process_usage" : "offline",
         );
       });
-      render(<SystemUsageIndicator />);
+      renderInAppCommandScope(<SystemUsageIndicator />);
       openPanel();
       expect(await screen.findByText("Couldn't read processes")).toBeTruthy();
       fireEvent.click(
@@ -322,7 +323,7 @@ describe("SystemUsageIndicator", () => {
       if (command === "get_environment_process_usage") return new Promise(() => {});
       return undefined;
     });
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
 
     expect(await screen.findByText("Loading processes…")).toBeTruthy();
@@ -339,7 +340,7 @@ describe("SystemUsageIndicator", () => {
       if (failing) throw new Error("backend unavailable");
       return usageSnapshot();
     });
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
 
     const panel = await screen.findByLabelText("System usage");
@@ -351,7 +352,7 @@ describe("SystemUsageIndicator", () => {
   });
 
   test("opens a process panel from the meters and groups rows by environment", async () => {
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
 
     expect(isPopoverOpen()).toBe(false);
@@ -421,7 +422,7 @@ describe("SystemUsageIndicator", () => {
       return undefined;
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
     const section = await waitFor(() => screen.getByLabelText("busy-box processes"));
     const totals = within(section).getByRole("group", {
@@ -446,7 +447,7 @@ describe("SystemUsageIndicator", () => {
   });
 
   test("paints environment names and totals in the PR-button blue at process metric size", async () => {
-    render(
+    renderInAppCommandScope(
       <>
         <Button aria-label="Create PR">PR</Button>
         <SystemUsageIndicator />
@@ -469,7 +470,7 @@ describe("SystemUsageIndicator", () => {
   });
 
   test("repeats host CPU, RAM, GPU and disk readings under the process panel title", async () => {
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
     expect(screen.queryByRole("region", { name: "System usage" }) === null).toBe(true);
 
@@ -500,7 +501,7 @@ describe("SystemUsageIndicator", () => {
   });
 
   test("closes from a second click, the backdrop, Escape, and the header button", async () => {
-    const { container } = render(<SystemUsageIndicator />);
+    const { container } = renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
     const trigger = screen.getByRole("button", { name: "Open environment process usage" });
 
@@ -564,7 +565,7 @@ describe("SystemUsageIndicator", () => {
       });
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
     expect(processCalls).toBe(0);
 
@@ -596,7 +597,7 @@ describe("SystemUsageIndicator", () => {
       return processSnapshot();
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
     expect(processCalls).toBe(1);
@@ -651,7 +652,7 @@ describe("SystemUsageIndicator", () => {
       return undefined;
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
     const row = screen.getByText("node").closest("li");
@@ -675,7 +676,7 @@ describe("SystemUsageIndicator", () => {
       return undefined;
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
     expect(screen.queryByRole("status") === null).toBe(true);
@@ -707,7 +708,7 @@ describe("SystemUsageIndicator", () => {
       readProcesses = async () => {
         throw new Error("connect ECONNREFUSED /private/host/path");
       };
-      render(<SystemUsageIndicator />);
+      renderInAppCommandScope(<SystemUsageIndicator />);
       openPanel();
       await waitFor(() => expect(screen.getByText(FAILURE)).toBeTruthy());
       expect(screen.queryByText("Loading processes…") === null).toBe(true);
@@ -728,7 +729,7 @@ describe("SystemUsageIndicator", () => {
           release = resolve;
         });
       };
-      render(<SystemUsageIndicator />);
+      renderInAppCommandScope(<SystemUsageIndicator />);
       openPanel();
       await advance(USAGE_READ_TIMEOUT_MS - 1);
       expect(screen.getByText("Loading processes…")).toBeTruthy();
@@ -755,14 +756,14 @@ describe("SystemUsageIndicator", () => {
       readProcesses = async () => {
         throw new Error("Unknown backend command: get_environment_process_usage");
       };
-      render(<SystemUsageIndicator />);
+      renderInAppCommandScope(<SystemUsageIndicator />);
       openPanel();
       await waitFor(() => expect(screen.getByText(FAILURE)).toBeTruthy());
     });
 
     test("an earlier sample stays across failures with no failure message, and refreshes on recovery", async () => {
       readProcesses = async () => processSnapshot();
-      render(<SystemUsageIndicator />);
+      renderInAppCommandScope(<SystemUsageIndicator />);
       openPanel();
       await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
 
@@ -791,7 +792,7 @@ describe("SystemUsageIndicator", () => {
       return usageSnapshot({ cpuPercent: 10, ramPercent: 20 });
     });
 
-    const { unmount } = render(<SystemUsageIndicator />);
+    const { unmount } = renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(calls).toBe(1));
     const scheduled = () =>
       reads.coordinator.getDiagnostics().entries.filter((entry) => entry.timerDueAt !== null)
@@ -822,7 +823,7 @@ describe("SystemUsageIndicator", () => {
       return undefined;
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() => expect(screen.getByText("No running environment processes")).toBeTruthy());
   });
@@ -843,7 +844,7 @@ describe("SystemUsageIndicator", () => {
       });
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
 
     openPanel();
@@ -874,7 +875,7 @@ describe("SystemUsageIndicator", () => {
       });
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
 
     openPanel();
@@ -915,7 +916,7 @@ describe("SystemUsageIndicator", () => {
       return processSnapshot({ environments });
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() => expect(listedEnvironmentNames()).toEqual(["busy-box", "quiet-box"]));
 
@@ -948,7 +949,7 @@ describe("SystemUsageIndicator", () => {
       return processSnapshot({ environments });
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() =>
       expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]),
@@ -1029,7 +1030,7 @@ describe("SystemUsageIndicator", () => {
       return undefined;
     });
 
-    render(
+    renderInAppCommandScope(
       <StrictMode>
         <SystemUsageIndicator />
       </StrictMode>,
@@ -1060,7 +1061,7 @@ describe("SystemUsageIndicator", () => {
       return undefined;
     });
 
-    render(<SystemUsageIndicator />);
+    renderInAppCommandScope(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
     openPanel();
     await waitFor(() => expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy());

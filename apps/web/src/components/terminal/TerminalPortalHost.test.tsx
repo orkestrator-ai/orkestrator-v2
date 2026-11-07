@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useSyncExternalStore } from "react";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realPersistentTerminal from "./PersistentTerminal";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import { configStore } from "@/stores/configStore";
@@ -231,7 +232,7 @@ describe("TerminalPortalHost", () => {
       activeEnvironmentId: null,
     }));
 
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+    renderInAppCommandScope(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
 
     await waitFor(() => {
       expect(createTerminalMock).toHaveBeenCalledWith(
@@ -249,7 +250,7 @@ describe("TerminalPortalHost", () => {
   test("mounts an existing terminal when its pane host registers later", async () => {
     terminalStorePaneHosts = new Map();
 
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+    renderInAppCommandScope(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
     expect(lastPersistentTerminalProps).toBeUndefined();
     expect(paneHost.childElementCount).toBe(0);
 
@@ -290,7 +291,7 @@ describe("TerminalPortalHost", () => {
       return { environments };
     });
 
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+    renderInAppCommandScope(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
 
     await waitFor(() => {
       expect(lastPersistentTerminalProps?.isReviewTab).toBe(true);
@@ -316,7 +317,9 @@ describe("TerminalPortalHost", () => {
         return { environments };
       });
 
-      render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+      renderInAppCommandScope(
+        <TerminalPortalHost environmentId="env-1" containerId="container-1" />,
+      );
 
       await waitFor(() => {
         expect(lastPersistentTerminalProps?.tabType).toBe(tabType);

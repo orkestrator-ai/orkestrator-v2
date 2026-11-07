@@ -1,5 +1,6 @@
 import { afterAll, describe, test, expect, beforeEach, mock } from "bun:test";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectStore } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 import { createMockProject } from "../utils/testFactories";
@@ -125,7 +126,7 @@ describe("useProjects", () => {
   });
 
   test("returns initial state", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     // Wait for initial load to complete
     await waitFor(() => {
@@ -146,7 +147,7 @@ describe("useProjects", () => {
     ];
     mockGetProjects.mockImplementation(() => Promise.resolve(mockProjects));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.projects).toHaveLength(1);
@@ -157,7 +158,7 @@ describe("useProjects", () => {
   });
 
   test("addProject adds a project successfully", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -179,7 +180,7 @@ describe("useProjects", () => {
   });
 
   test("forwards clone-only intent to the backend and stores the resulting project", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     await act(async () => {
       await result.current.addProject("https://github.com/acme/api.git", "/code/api", true);
@@ -196,7 +197,7 @@ describe("useProjects", () => {
     const expectedError = new Error("Failed to add");
     mockAddProject.mockImplementation(() => Promise.reject(expectedError));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -229,7 +230,7 @@ describe("useProjects", () => {
         }),
     );
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     let creation!: Promise<Project>;
@@ -262,7 +263,7 @@ describe("useProjects", () => {
 
   test("createProjectFromScratch preserves Error failures and reports them", async () => {
     mockCreateProjectFromScratch.mockRejectedValue(new Error("GitHub authentication failed"));
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     let thrownError: Error | undefined;
@@ -286,7 +287,7 @@ describe("useProjects", () => {
 
   test("createProjectFromScratch normalizes non-Error failures", async () => {
     mockCreateProjectFromScratch.mockRejectedValue({ reason: "unavailable" });
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     let thrownError: Error | undefined;
@@ -322,7 +323,7 @@ describe("useProjects", () => {
     // Don't auto-load projects on this test
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     // Wait for mount load to complete
     await waitFor(() => {
@@ -356,7 +357,7 @@ describe("useProjects", () => {
 
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -392,7 +393,7 @@ describe("useProjects", () => {
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
     mockUpdateProject.mockImplementation(() => Promise.resolve(updatedProject));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     let updated: Project | undefined;
@@ -416,7 +417,7 @@ describe("useProjects", () => {
     const original = createMockProject({ id: "project-1", icon: "data:image/png;base64,YQ==" });
     const { icon: _icon, ...cleared } = original;
     mockGetProjects.mockResolvedValue([original]);
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     const update = Promise.withResolvers<Project>();
     const snapshot = Promise.withResolvers<Project[]>();
@@ -458,7 +459,7 @@ describe("useProjects", () => {
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
     mockUpdateProject.mockImplementation(() => Promise.resolve(updatedProject));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -484,7 +485,7 @@ describe("useProjects", () => {
     mockGetProjects.mockImplementation(() => Promise.resolve([existingProject]));
     mockUpdateProject.mockImplementation(() => Promise.reject(new Error("Update failed")));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     let thrownError: Error | undefined;
@@ -516,7 +517,7 @@ describe("useProjects", () => {
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     mockReorderProjects.mockImplementation(() => Promise.resolve(confirmed));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -534,7 +535,7 @@ describe("useProjects", () => {
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     mockReorderProjects.mockImplementation(() => Promise.reject(new Error("Reorder failed")));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
 
@@ -568,7 +569,7 @@ describe("useProjects", () => {
       return Promise.resolve(confirmed);
     });
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     const intent = { kind: "move", activeId: "second", overId: "first" } as const;
@@ -601,7 +602,7 @@ describe("useProjects", () => {
     mockGetProjects.mockImplementation(() => Promise.resolve([alpha, zulu]));
     mockArrangeProjectsByIntent.mockClear();
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -620,7 +621,7 @@ describe("useProjects", () => {
       Promise.reject(new Error("Arrange failed")),
     );
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
 
@@ -652,7 +653,7 @@ describe("useProjects", () => {
       Promise.reject(new Error("Arrange failed")),
     );
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     // A folder-free arrangement is a plain reorder — the most common sidebar
@@ -673,7 +674,7 @@ describe("useProjects", () => {
   });
 
   test("validateGitUrl returns true for valid URL", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -691,7 +692,7 @@ describe("useProjects", () => {
   test("validateGitUrl returns false for invalid URL", async () => {
     mockValidateGitUrl.mockImplementation(() => Promise.resolve(false));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -708,7 +709,7 @@ describe("useProjects", () => {
   test("validateGitUrl returns false on error", async () => {
     mockValidateGitUrl.mockImplementation(() => Promise.reject(new Error("Network error")));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -737,7 +738,7 @@ describe("useProjects", () => {
 
     mockGetProjects.mockImplementation(() => Promise.resolve([project]));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -748,7 +749,7 @@ describe("useProjects", () => {
   });
 
   test("getProjectById returns undefined for non-existent project", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -770,7 +771,7 @@ describe("useProjects", () => {
     // Start with no projects
     mockGetProjects.mockImplementation(() => Promise.resolve([]));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -793,7 +794,7 @@ describe("useProjects", () => {
   test("handles load error gracefully", async () => {
     mockGetProjects.mockImplementation(() => Promise.reject(new Error("Network error")));
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -812,8 +813,8 @@ describe("useProjects", () => {
         }),
     );
 
-    const first = renderHook(() => useProjects());
-    const second = renderHook(() => useProjects());
+    const first = renderHookInAppCommandScope(() => useProjects());
+    const second = renderHookInAppCommandScope(() => useProjects());
 
     expect(mockGetProjects).toHaveBeenCalledTimes(1);
     expect(first.result.current.isLoading).toBe(true);
@@ -837,8 +838,8 @@ describe("useProjects", () => {
         }),
     );
 
-    const first = renderHook(() => useProjects());
-    const second = renderHook(() => useProjects());
+    const first = renderHookInAppCommandScope(() => useProjects());
+    const second = renderHookInAppCommandScope(() => useProjects());
 
     expect(mockGetProjects).toHaveBeenCalledTimes(1);
 
@@ -861,7 +862,7 @@ describe("useProjects", () => {
         }),
     );
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await act(async () => {
       await result.current.addProject("git@github.com:test/new.git");
@@ -884,7 +885,7 @@ describe("useProjects", () => {
         }),
     );
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await act(async () => {
       await result.current.createProjectFromScratch("/repos/scratch-repo");
@@ -907,7 +908,7 @@ describe("useProjects", () => {
         }),
     );
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
 
     await act(async () => {
       await result.current.createProjectFromScratch("/repos/scratch-repo");
@@ -928,7 +929,7 @@ describe("useProjects", () => {
       () => new Promise<Project[]>((resolve) => resolvers.push(resolve)),
     );
 
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     expect(mockGetProjects).toHaveBeenCalledTimes(1);
 
     act(() => {
@@ -960,7 +961,7 @@ describe("useProjects", () => {
   });
 
   test("reloads projects when a project resource change is announced", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
     mockGetProjects.mockImplementation(() =>
@@ -981,7 +982,7 @@ describe("useProjects", () => {
   });
 
   test("reloads projects after reconnect or revision-gap recovery", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
     mockGetProjects.mockImplementation(() =>
@@ -1000,7 +1001,7 @@ describe("useProjects", () => {
   });
 
   test("ignores manifest and irrelevant selective resync requests", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
 
@@ -1017,7 +1018,7 @@ describe("useProjects", () => {
   });
 
   test("reloads projects for a relevant selective explicit resync request", async () => {
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
     mockGetProjects.mockResolvedValue([
@@ -1034,7 +1035,7 @@ describe("useProjects", () => {
   });
 
   test("unsubscribes project change and recovery listeners on unmount", async () => {
-    const hook = renderHook(() => useProjects());
+    const hook = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
     hook.unmount();

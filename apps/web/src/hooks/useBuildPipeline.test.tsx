@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
@@ -143,7 +144,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("starts from a Kanban snapshot and leaves build-tab creation to the backend", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     let pipelineId: string | undefined;
     await act(async () => {
@@ -173,7 +174,7 @@ describe("useBuildPipeline", () => {
       value: { isolatedViewState: true },
     });
     try {
-      const { result } = renderHook(() => useBuildPipeline());
+      const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
       await act(async () => {
         await result.current.startBuild(task, "local");
@@ -201,7 +202,7 @@ describe("useBuildPipeline", () => {
       }),
     );
     try {
-      const { result } = renderHook(() => useBuildPipeline());
+      const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
       await act(async () => {
         await result.current.startBuild(task, "local");
@@ -233,7 +234,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("converts Linear and GitHub issues into backend-owned task snapshots", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
     await act(async () => {
       await result.current.startBuildFromLinearIssue(
         {
@@ -302,7 +303,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("preserves supported Linear metadata and both comment attribution forms", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuildFromLinearIssue(
@@ -358,7 +359,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("can omit Linear discussion while retaining issue metadata in build context", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuildFromLinearIssue(
@@ -387,7 +388,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("omits optional Linear context when it is unavailable", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuildFromLinearIssue(
@@ -413,7 +414,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("preserves supported GitHub dates and both comment attribution forms", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuildFromGitHubIssue(
@@ -466,7 +467,7 @@ describe("useBuildPipeline", () => {
 
   test("returns undefined without creating renderer state when the backend rejects start", async () => {
     startBuildPipelineMock.mockRejectedValueOnce(new Error("backend unavailable"));
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     let pipelineId: string | undefined;
     await act(async () => {
@@ -479,7 +480,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("forwards the launcher's per-step configuration verbatim", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuild(task, "local", "codex", { steps });
@@ -491,7 +492,7 @@ describe("useBuildPipeline", () => {
 
   test("older backend: the build step's harness outranks an agent override", async () => {
     olderBackend();
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       // Both supplied, and they disagree on purpose.
@@ -503,7 +504,7 @@ describe("useBuildPipeline", () => {
 
   test("older backend: an agent override wins when no step configuration was chosen", async () => {
     olderBackend();
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuild(task, "local", "opencode");
@@ -519,7 +520,7 @@ describe("useBuildPipeline", () => {
 
   test("older backend: an agent override wins when the step map pins no build harness", async () => {
     olderBackend();
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     // The backend accepts a sparse step map, so the launcher's build step can
     // legitimately be absent while other steps are pinned. The override then
@@ -562,7 +563,7 @@ describe("useBuildPipeline", () => {
         },
       },
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuild(task, "local");
@@ -601,7 +602,7 @@ describe("useBuildPipeline", () => {
     });
 
     try {
-      const { result } = renderHook(() => useBuildPipeline());
+      const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
       await act(async () => {
         await result.current.startBuild(task, "local");
       });
@@ -636,7 +637,7 @@ describe("useBuildPipeline", () => {
         },
       },
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuild(task, "local");
@@ -670,7 +671,7 @@ describe("useBuildPipeline", () => {
         },
       },
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuild(task, "local", undefined, {
@@ -705,7 +706,7 @@ describe("useBuildPipeline", () => {
         },
       },
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local");
@@ -726,7 +727,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("a GitHub issue build carries the same per-step configuration", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local", "claude", {
@@ -740,7 +741,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("the Linear entry point carries per-step launcher configuration", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     // The defaulted fourth argument preserves the existing three-argument API
     // shape while allowing the Linear launcher to configure every stage.
@@ -754,7 +755,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("sends only the launch's explicit choices, leaving defaults to the backend", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuild(task, "local");
@@ -772,7 +773,7 @@ describe("useBuildPipeline", () => {
     startBuildPipelineMock.mockImplementationOnce(async () => {
       throw new Error("The selected pipeline environment does not belong to this project");
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     let pipelineId: string | undefined;
     await act(async () => {
@@ -784,7 +785,7 @@ describe("useBuildPipeline", () => {
   });
 
   test("announces the start and names the reason a start failed", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.startBuild(task, "local");
@@ -818,7 +819,7 @@ describe("useBuildPipeline", () => {
       projectId: "project-nav",
       environmentId: "env-nav",
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.navigateToPipeline(pipeline);
@@ -890,7 +891,7 @@ describe("useBuildPipeline", () => {
       hydration: new Map(),
       activeEnvironmentId: null,
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.navigateToPipeline({
@@ -921,7 +922,7 @@ describe("useBuildPipeline", () => {
     const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.setActiveEnvironment("env-hydrated");
     paneStore.beginHydration("env-hydrated");
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     let navigation!: Promise<void>;
     act(() => {
@@ -984,7 +985,7 @@ describe("useBuildPipeline navigation", () => {
       projectId: "project-1",
     });
     appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.navigateToBuild(task);
@@ -995,7 +996,7 @@ describe("useBuildPipeline navigation", () => {
   });
 
   test("does nothing when the task has no pipeline in the store", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.navigateToBuild(task);
@@ -1007,7 +1008,7 @@ describe("useBuildPipeline navigation", () => {
   });
 
   test("ignores a pipeline that has no environment yet", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.navigateToPipeline({
@@ -1021,7 +1022,7 @@ describe("useBuildPipeline navigation", () => {
   });
 
   test("does not create a containerized pipeline tab in the renderer", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.navigateToPipeline({
@@ -1037,7 +1038,7 @@ describe("useBuildPipeline navigation", () => {
   });
 
   test("navigates legacy pipeline references without inventing layout metadata", async () => {
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 
     await act(async () => {
       await result.current.navigateToPipeline({
@@ -1058,7 +1059,7 @@ describe("useBuildPipeline navigation", () => {
       hydration: new Map([["env-stalled", "pending"]]),
       activeEnvironmentId: null,
     });
-    const { result } = renderHook(() => useBuildPipeline());
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
     await act(async () => {
       await result.current.navigateToPipeline({
         id: "pipeline-stalled",

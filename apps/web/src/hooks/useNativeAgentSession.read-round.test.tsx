@@ -4,7 +4,8 @@
  * request once the backend offers it and the view holds both tokens.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentDiscoveryUpdate,
   NativeAgentLiveUpdate,
@@ -161,7 +162,7 @@ function changeFor(revision: number, cause?: string) {
 }
 
 async function settledSession() {
-  const view = renderHook(() =>
+  const view = renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform: "claude",
       environmentId: "env-1",

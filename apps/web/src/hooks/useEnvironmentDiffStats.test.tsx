@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { DIFF_STATS_CHANGED_EVENT } from "@orkestrator/protocol/diff-stats";
 import * as backend from "@/lib/backend";
@@ -42,7 +43,7 @@ describe("useEnvironmentDiffStats", () => {
     snapshotSpy
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -100,7 +101,7 @@ describe("useEnvironmentDiffStats", () => {
     snapshotSpy
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -132,7 +133,7 @@ describe("useEnvironmentDiffStats", () => {
         return unlisteners[callbacks.size - 1]!;
       },
     );
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -166,7 +167,7 @@ describe("useEnvironmentDiffStats revision-aware recovery", () => {
   test("an older buffered change never overwrites the newer snapshot", async () => {
     const snapshot = deferred<unknown>();
     snapshotSpy.mockImplementationOnce(() => snapshot.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -184,7 +185,7 @@ describe("useEnvironmentDiffStats revision-aware recovery", () => {
 
   test("an untracked environment's removal does not resurrect from a late change", async () => {
     snapshotSpy.mockResolvedValue({ entries: [change("env-1", 1)], generation, revision: 1 });
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -207,7 +208,7 @@ describe("useEnvironmentDiffStats revision-aware recovery", () => {
 
   test("a revision gap triggers one conditional read from the contiguous position", async () => {
     snapshotSpy.mockResolvedValueOnce({ entries: [], generation, revision: 3 });
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });

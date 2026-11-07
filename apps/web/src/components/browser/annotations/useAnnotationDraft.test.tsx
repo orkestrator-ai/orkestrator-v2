@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useLayoutEffect, useRef } from "react";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { FIXTURE_TIME } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import {
   FakeWebAnnotationBackend,
@@ -14,7 +15,7 @@ let bus: ReturnType<typeof installFakeOrkestrator>;
 const SETTLE = { timeout: DRAFT_AUTOSAVE_MS * 3 };
 
 function renderDraft(editorId = "editor-1") {
-  return renderHook(
+  return renderHookInAppCommandScope(
     ({ editorId }: { editorId: string }) =>
       useAnnotationDraft({
         environmentId: "env-1",
@@ -123,7 +124,7 @@ describe("useAnnotationDraft", () => {
     // passive effects; React then flushes the identity effect at the start of
     // the keystroke's own render. A layout effect lands in exactly that
     // window, deterministically.
-    const { result } = renderHook(() => {
+    const { result } = renderHookInAppCommandScope(() => {
       const draft = useAnnotationDraft({
         environmentId: "env-1",
         editorId: "editor-1",

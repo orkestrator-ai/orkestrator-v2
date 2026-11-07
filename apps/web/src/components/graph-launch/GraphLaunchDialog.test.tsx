@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   GraphLaunchOptions,
   GraphLaunchProviderOption,
@@ -193,7 +194,7 @@ function seedStores() {
 function renderDialog(props: Partial<Parameters<typeof GraphLaunchDialog>[0]> = {}) {
   const onLaunched = mock(() => undefined);
   const onOpenChange = mock(() => undefined);
-  render(
+  renderInAppCommandScope(
     <GraphLaunchDialog
       open
       onOpenChange={onOpenChange}

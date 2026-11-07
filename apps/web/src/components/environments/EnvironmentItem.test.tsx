@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
 import { agentActivityStore } from "@/stores/agentActivityStore";
@@ -74,7 +75,9 @@ function seedPipeline(
 }
 
 function renderItem(environment: Environment = environmentFixture()) {
-  return render(<EnvironmentItem environment={environment} isSelected={false} {...callbacks} />);
+  return renderInAppCommandScope(
+    <EnvironmentItem environment={environment} isSelected={false} {...callbacks} />,
+  );
 }
 
 function expectWorking(halo: HTMLElement) {
@@ -475,7 +478,7 @@ describe("EnvironmentItem delete shortcut", () => {
         />
       );
     }
-    render(<Selection />);
+    renderInAppCommandScope(<Selection />);
     const field = document.createElement("textarea");
     const fieldKeys = mock(() => undefined);
     field.addEventListener("keydown", fieldKeys);

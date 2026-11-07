@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { BROWSER_PREVIEW_CAPTURE_EVENT } from "@orkestrator/protocol/browser-preview";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { imageRedactor } from "@/lib/web-annotations/redaction";
@@ -60,7 +61,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("creates a note without any agent session and never writes native drafts", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const comment = await startAndCapture();
     await waitFor(() => expect(document.activeElement).toBe(comment));
     expect(capture.mocks.startCapture).toHaveBeenCalledWith({
@@ -103,7 +104,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("an empty editor keeps only an unpublished draft", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await startAndCapture();
     fireEvent.click(screen.getByRole("button", { name: "Save note" }));
     expect(await screen.findByText(/Add a comment to publish this note/)).toBeTruthy();
@@ -113,7 +114,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("save and add another re-enters selection only after the backend receipt", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const comment = await startAndCapture();
     fireEvent.change(comment, { target: { value: "First note" } });
     const hold = backend.hold("web_annotation_create");
@@ -141,7 +142,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("a lost create response is recovered from the receipt, not created twice", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const comment = await startAndCapture();
     fireEvent.change(comment, { target: { value: "Keep me" } });
     backend.fail("web_annotation_create", new Error("socket closed"), { afterCommit: true });
@@ -166,7 +167,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("a capacity error keeps the note and capture with Retry and Discard", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const comment = await startAndCapture();
     fireEvent.change(comment, { target: { value: "Too big" } });
     backend.fail(
@@ -183,10 +184,10 @@ describe("annotation panel authoring", () => {
   test("resumes a pending capture after remount and shows its local expiry", async () => {
     seedPending(capture.spool, { captureId: "cap-resume", label: "heading “Plans”" });
     seedPending(capture.spool, { captureId: "cap-other-env", environmentId: "env-2" });
-    const first = render(<AnnotationHarness />);
+    const first = renderInAppCommandScope(<AnnotationHarness />);
     await flush();
     first.unmount();
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const resume = await screen.findByRole("button", {
       name: "Continue unsaved capture of heading “Plans”",
     });
@@ -201,7 +202,7 @@ describe("annotation panel authoring", () => {
   test("redaction replaces the spooled image before anything is uploaded", async () => {
     const redacted = "data:image/png;base64,UkVEQUNURUQ=";
     imageRedactor.redact = mock(async () => redacted);
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const comment = await startAndCapture();
     fireEvent.click(screen.getByRole("button", { name: "Redact image…" }));
     fireEvent.click(screen.getByRole("button", { name: "Add box" }));
@@ -227,7 +228,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("Exclude image saves text evidence only", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const comment = await startAndCapture();
     fireEvent.click(screen.getByRole("button", { name: "Exclude image" }));
     await waitFor(() =>
@@ -249,7 +250,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("Escape cancels selection without touching saved work; Done keeps the pending capture", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: "Add note" }));
     const cancel = await screen.findByRole("button", { name: "Cancel selection" });
     fireEvent.keyDown(cancel, { key: "Escape" });
@@ -268,7 +269,7 @@ describe("annotation panel authoring", () => {
     bus.restore();
     bus = installFakeOrkestrator();
     backend.seed({ id: "annotation-a", title: "Cramped save button" });
-    render(<AnnotationHarness previewAttached={false} />);
+    renderInAppCommandScope(<AnnotationHarness previewAttached={false} />);
     expect(
       await screen.findByText(/Capturing page targets needs the Orkestrator desktop app/),
     ).toBeTruthy();
@@ -284,7 +285,7 @@ describe("annotation panel authoring", () => {
 
   test("draws pins for open notes on this page and clears them when the panel closes", async () => {
     backend.seed({ id: "annotation-a", title: "Pinned" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await waitFor(() => expect(capture.mocks.showPins).toHaveBeenCalled());
     const input = capture.mocks.showPins.mock.calls.at(-1)![0] as {
       tabId: string;
@@ -304,7 +305,7 @@ describe("annotation panel authoring", () => {
   });
 
   test("closing the panel is not undone while a capture is still pending", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await startAndCapture();
     fireEvent.click(screen.getByRole("button", { name: "Close annotations" }));
     await waitFor(() => expect(panelState()?.open).toBe(false));
@@ -330,7 +331,7 @@ describe("annotation panel authoring", () => {
   test("reselecting after a reply replaces against the thread's current revision", async () => {
     backend.seed({ id: "annotation-a", title: "Header spacing" });
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-a" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const reply = await screen.findByRole("textbox", { name: "Reply to Header spacing" });
     fireEvent.change(reply, { target: { value: "Also on mobile" } });
     fireEvent.click(screen.getByRole("button", { name: "Save reply" }));
@@ -361,7 +362,7 @@ describe("annotation panel authoring", () => {
   test("the toolbar control shows the open-note count and closes back to itself", async () => {
     backend.seed({ id: "annotation-a" });
     backend.seed({ id: "annotation-b" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const button = await screen.findByRole("button", { name: "Annotations, 2 open on this page" });
     fireEvent.click(screen.getByRole("button", { name: "Close annotations" }));
     await waitFor(() => expect(panelState()?.open).toBe(false));

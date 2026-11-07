@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import type {
   AgentMailConversation,
@@ -246,7 +247,7 @@ afterAll(() => {
 describe("AgentMailButton", () => {
   test("renders nothing when messaging is disabled", () => {
     setMessagingEnabled(false);
-    render(<AgentMailButton />);
+    renderInAppCommandScope(<AgentMailButton />);
     expect(screen.queryByRole("button", { name: /Agent messages/ }) === null).toBe(true);
   });
 
@@ -258,7 +259,7 @@ describe("AgentMailButton", () => {
         ["env-2\0tab-2", { ...summaryEntry({ failedInjectCount: 1 }), mailboxId: "env-2\0tab-2" }],
       ]),
     });
-    render(<AgentMailButton />);
+    renderInAppCommandScope(<AgentMailButton />);
     fireEvent.click(screen.getByRole("button", { name: "Agent messages, 3 need you" }));
     expect(appCommandStore(agentMailStore).getState().panel).toEqual({});
   });
@@ -267,7 +268,7 @@ describe("AgentMailButton", () => {
     appCommandStore(agentMailStore).setState({
       summary: new Map([[AGENT_1, summaryEntry({ attentionCount: 0 })]]),
     });
-    render(<AgentMailButton />);
+    renderInAppCommandScope(<AgentMailButton />);
     expect(screen.getByRole("button", { name: "Agent messages" })).toBeTruthy();
   });
 });
@@ -280,7 +281,7 @@ describe("AgentMailPanel", () => {
       ...conversation([agent1, user], limit === 50 ? [latest] : [older, latest]),
       total: 2,
     }));
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     await waitFor(() =>
       expect(markAgentMailConversationSeen).toHaveBeenCalledWith(AGENT_1, "user", ["latest"]),
@@ -295,7 +296,7 @@ describe("AgentMailPanel", () => {
   });
 
   test("retains a pair's subject and body across back navigation and closing", async () => {
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     fireEvent.change(await screen.findByPlaceholderText("Message Claude 1"), {
       target: { value: "Draft body" },
@@ -329,7 +330,7 @@ describe("AgentMailPanel", () => {
       throw new Error("Mailbox offline");
     });
     appCommandStore(agentMailStore).setState({ refreshMailbox: refresh });
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1"));
     expect((await screen.findByRole("alert")).textContent).toContain("Mailbox offline");
     fireEvent.click(screen.getByRole("button", { name: "Retry mailbox" }));
@@ -362,7 +363,7 @@ describe("AgentMailPanel", () => {
         offset: 200,
         limit: 200,
       }));
-      render(<AgentMailPanel />);
+      renderInAppCommandScope(<AgentMailPanel />);
       act(() => appCommandStore(agentMailStore).getState().openPanel({}));
       fireEvent.click(await screen.findByRole("button", { name: "New" }));
       fireEvent.change(screen.getByLabelText("Filter agents"), { target: { value: "Last agent" } });
@@ -410,7 +411,7 @@ describe("AgentMailPanel", () => {
         ],
       ),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => appCommandStore(agentMailStore).getState().openPanel({}));
 
     const row = await screen.findByTestId("agent-mail-conversation-row");
@@ -462,7 +463,7 @@ describe("AgentMailPanel", () => {
         ],
       }));
       getAgentMailConversation.mockImplementation(async () => thread);
-      render(<AgentMailPanel />);
+      renderInAppCommandScope(<AgentMailPanel />);
       act(() => appCommandStore(agentMailStore).getState().openPanel({}));
       const row = await screen.findByTestId("agent-mail-conversation-row");
       expect(row.textContent).toContain(expected);
@@ -476,7 +477,7 @@ describe("AgentMailPanel", () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation([agent1, user], [mail("stored", { body: "unseen" })]),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(await screen.findByText("unseen")).toBeTruthy();
     await waitFor(() =>
@@ -493,7 +494,7 @@ describe("AgentMailPanel", () => {
         throw new Error("response lost");
       })
       .mockImplementationOnce(async () => mail("stored"));
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
 
     const body = await screen.findByPlaceholderText("Message Claude 1");
@@ -527,7 +528,7 @@ describe("AgentMailPanel", () => {
     sendAgentMail.mockImplementationOnce(async () =>
       mail("bounced", { placementReason: "recipient-muted" }),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     const body = await screen.findByPlaceholderText("Message Claude 1");
     fireEvent.change(body, { target: { value: "hello" } });
@@ -555,7 +556,7 @@ describe("AgentMailPanel", () => {
         ],
       ),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() =>
       appCommandStore(agentMailStore)
         .getState()
@@ -577,7 +578,7 @@ describe("AgentMailPanel", () => {
         ],
       ]),
     });
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1"));
     await waitFor(() => expect(listAgentMailConversations).toHaveBeenCalledWith(AGENT_1));
     fireEvent.change(screen.getByLabelText("Automatic delivery policy"), {
@@ -598,7 +599,7 @@ describe("AgentMailPanel", () => {
   });
 
   test("starts a new conversation from the recipient picker", async () => {
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => appCommandStore(agentMailStore).getState().openPanel({}));
     fireEvent.click(await screen.findByRole("button", { name: "New" }));
     fireEvent.click(await screen.findByText("Codex 2"));
@@ -623,7 +624,7 @@ describe("AgentMailPanel", () => {
           ],
         ),
       );
-      render(<AgentMailPanel />);
+      renderInAppCommandScope(<AgentMailPanel />);
       act(() =>
         appCommandStore(agentMailStore)
           .getState()
@@ -646,7 +647,7 @@ describe("AgentMailPanel", () => {
         ],
       ),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(await screen.findByText("[Image: tracker]")).toBeTruthy();
     expect(document.body.querySelector("[data-testid=agent-mail-panel] img") === null).toBe(true);
@@ -662,7 +663,7 @@ describe("pull request links in mail", () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation([agent1, user], [mail("stored", { userSeenAt: "seen", body })]),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     return screen.findByRole("link", { name: "the PR" });
   }
@@ -706,7 +707,7 @@ describe("conversation Deliver now actions", () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation([agent1, user], [mail("pending-inject", { id: "waiting-message" })]),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     fireEvent.click(await screen.findByRole("button", { name: "Deliver now" }));
   }
@@ -823,7 +824,7 @@ describe("AgentMailBanner actions", () => {
     discardAgentMailInject.mockImplementationOnce(async () => {
       throw new Error("discard failed");
     });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect((await screen.findByRole("alert")).textContent).toContain("retry failed");
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
@@ -832,7 +833,7 @@ describe("AgentMailBanner actions", () => {
 
   test("Deliver now releases one message without touching the tab's policy", async () => {
     installBanner("pending-inject", { presence: "idle" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
       expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
@@ -850,7 +851,7 @@ describe("AgentMailBanner actions", () => {
       { ...summary, id: "message-2" },
       { ...summary, id: "external", trust: "external" },
     );
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() => expect(deliverAgentMailNow).toHaveBeenCalledTimes(2));
     expect(deliverAgentMailNow.mock.calls.map((call) => call[2])).toEqual([
@@ -865,7 +866,7 @@ describe("AgentMailBanner actions", () => {
     deliverAgentMailNow.mockImplementationOnce(async () => {
       throw new Error("This thread has reached its reply limit.");
     });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     expect((await screen.findByRole("alert")).textContent).toContain("reply limit");
     expect(toastError).toHaveBeenCalled();
@@ -873,7 +874,7 @@ describe("AgentMailBanner actions", () => {
 
   test("Deliver now asks a busy recipient to take the message mid-turn", async () => {
     installBanner("pending-inject", { presence: "working" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
       expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
@@ -886,7 +887,7 @@ describe("AgentMailBanner actions", () => {
     deliverAgentMailNow.mockImplementationOnce(async () =>
       mail("pending-inject", { id: "message-1", placementReason: "steer-unsupported" }),
     );
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
       expect(toastInfo).toHaveBeenCalledWith("This agent can't take messages mid-turn", {
@@ -897,7 +898,7 @@ describe("AgentMailBanner actions", () => {
 
   test("names oversized mail on the banner", () => {
     installBanner("pending-inject", { presence: "working", reason: "steer-too-large" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen.getByText(
         "Message too large for mid-turn delivery · delivers in full when the turn ends",
@@ -907,7 +908,7 @@ describe("AgentMailBanner actions", () => {
 
   test("names a refused steer on the banner itself", () => {
     installBanner("pending-inject", { presence: "working", reason: "steer-refused" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen.getByText("Couldn't deliver into the running turn · delivers when the turn ends"),
     ).toBeTruthy();

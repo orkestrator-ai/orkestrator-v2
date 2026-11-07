@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { screen, cleanup, fireEvent } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { CommentText } from "@/components/kanban/KanbanTaskDialog";
 import { uiStore } from "@/stores/uiStore";
 import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
@@ -30,20 +31,22 @@ describe("CommentText", () => {
   });
 
   test("renders plain text without links", () => {
-    render(<CommentText text="Build started" />);
+    renderInAppCommandScope(<CommentText text="Build started" />);
     expect(screen.getByText("Build started")).toBeTruthy();
     expect(screen.queryByRole("button") === null).toBe(true);
   });
 
   test("renders a single URL as a clickable button", () => {
-    render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
+    renderInAppCommandScope(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
     const button = screen.getByRole("button");
     expect(button).toBeTruthy();
     expect(button.textContent).toBe("https://github.com/org/repo/pull/42");
   });
 
   test("renders text before and after URL", () => {
-    const { container } = render(<CommentText text="See https://example.com for details" />);
+    const { container } = renderInAppCommandScope(
+      <CommentText text="See https://example.com for details" />,
+    );
     const spans = container.querySelectorAll("span");
     expect(spans[0]!.textContent).toBe("See ");
     expect(screen.getByRole("button").textContent).toBe("https://example.com");
@@ -51,7 +54,9 @@ describe("CommentText", () => {
   });
 
   test("renders multiple URLs correctly", () => {
-    render(<CommentText text="Link1: https://a.com and link2: https://b.com end" />);
+    renderInAppCommandScope(
+      <CommentText text="Link1: https://a.com and link2: https://b.com end" />,
+    );
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(2);
     expect(buttons[0]!.textContent).toBe("https://a.com");
@@ -59,32 +64,32 @@ describe("CommentText", () => {
   });
 
   test("handles URL at start of text", () => {
-    render(<CommentText text="https://example.com is a link" />);
+    renderInAppCommandScope(<CommentText text="https://example.com is a link" />);
     const button = screen.getByRole("button");
     expect(button.textContent).toBe("https://example.com");
   });
 
   test("handles URL at end of text", () => {
-    render(<CommentText text="Visit https://example.com" />);
+    renderInAppCommandScope(<CommentText text="Visit https://example.com" />);
     const button = screen.getByRole("button");
     expect(button.textContent).toBe("https://example.com");
   });
 
   test("handles text that is only a URL", () => {
-    render(<CommentText text="https://example.com" />);
+    renderInAppCommandScope(<CommentText text="https://example.com" />);
     const button = screen.getByRole("button");
     expect(button.textContent).toBe("https://example.com");
   });
 
   test("calls openInBrowser when URL is clicked", () => {
-    render(<CommentText text="Click https://example.com here" />);
+    renderInAppCommandScope(<CommentText text="Click https://example.com here" />);
     const button = screen.getByRole("button");
     fireEvent.click(button);
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://example.com");
   });
 
   test("opens a pull request link in the right-hand PR pane, leaving the view alone", () => {
-    render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
+    renderInAppCommandScope(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
     fireEvent.click(screen.getByRole("button"));
     expect(mockOpenInBrowser).not.toHaveBeenCalled();
     const panel = filesPanelTestState();
@@ -97,20 +102,20 @@ describe("CommentText", () => {
   });
 
   test("Cmd-click keeps a pull request link on GitHub", () => {
-    render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
+    renderInAppCommandScope(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
     fireEvent.click(screen.getByRole("button"), { metaKey: true });
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/org/repo/pull/42");
     expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("handles http (non-https) URLs", () => {
-    render(<CommentText text="Link: http://insecure.com test" />);
+    renderInAppCommandScope(<CommentText text="Link: http://insecure.com test" />);
     const button = screen.getByRole("button");
     expect(button.textContent).toBe("http://insecure.com");
   });
 
   test("renders text without URLs as plain text (no spans)", () => {
-    const { container } = render(<CommentText text="No links here" />);
+    const { container } = renderInAppCommandScope(<CommentText text="No links here" />);
     // When there are no URLs, CommentText returns plain text (no wrapping elements)
     expect(container.textContent).toBe("No links here");
     expect(container.querySelectorAll("button")).toHaveLength(0);

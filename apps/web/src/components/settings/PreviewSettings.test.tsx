@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { fixturePreviewCapabilities } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -70,7 +71,7 @@ describe("preview settings loading", () => {
       get_preview_settings: () => ({ stored: storedSettings, effective: storedSettings }),
       get_preview_diagnostics: () => diagnostics,
     });
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     expect(
       await screen.findByText(/Could not load preview settings: Preview services are unavailable/),
     ).toBeTruthy();
@@ -92,7 +93,7 @@ describe("preview settings loading", () => {
       },
       get_preview_diagnostics: () => diagnostics,
     });
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     expect(
       await screen.findByText(/Could not load preview settings: Settings are unavailable/),
     ).toBeTruthy();
@@ -115,7 +116,7 @@ describe("preview settings loading", () => {
       invoke_on_node: (args) => ({ outcome: "ok", result: answers[args.command as string] }),
     });
     try {
-      render(
+      renderInAppCommandScope(
         <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
           <PreviewSettings />
         </AccountMachineProvider>,
@@ -162,7 +163,7 @@ test("a same-site preview domain warning is shown beside the publication status"
     }),
   });
   try {
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     expect((await screen.findByRole("alert")).textContent).toContain(warning);
     expect(screen.getByText(/Listening on 127.0.0.1:8443/)).toBeTruthy();
   } finally {
@@ -179,7 +180,7 @@ test("no warning is shown when the backend reports none", async () => {
     get_preview_diagnostics: () => diagnostics,
   });
   try {
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     await screen.findByText("Private preview publication is disabled.");
     expectDomAbsent(screen.queryByRole("alert"), "same-site warning");
   } finally {

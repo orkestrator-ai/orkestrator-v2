@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { environmentStore, filesPanelStore, projectStore, uiStore } from "@/stores";
 import { TerminalProvider } from "@/contexts/TerminalContext";
@@ -68,7 +69,7 @@ afterAll(() => {
 });
 
 test("two board file opens wait for home creation and retain their order", async () => {
-  render(
+  renderInAppCommandScope(
     <TerminalProvider>
       <FilesPanel />
     </TerminalProvider>,
@@ -137,7 +138,7 @@ test("shows delayed announcements and a container's remote freshness without hid
     ]),
   });
   try {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -176,7 +177,7 @@ test("shows delayed announcements and a container's remote freshness without hid
 });
 
 test("a failed board file open strips Electron's invoke prefix from its toast", async () => {
-  render(
+  renderInAppCommandScope(
     <TerminalProvider>
       <FilesPanel />
     </TerminalProvider>,
@@ -214,7 +215,7 @@ for (const fails of [false, true]) {
     } as Environment;
     appCommandStore(environmentStore).setState({ environments: [environment] });
     appCommandStore(uiStore).setState({ selectedEnvironmentId: environment.id });
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,

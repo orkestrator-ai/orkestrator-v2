@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
@@ -212,7 +213,7 @@ describe("LinearTicketsView", () => {
   });
 
   function renderLinearTicketsView() {
-    return render(
+    return renderInAppCommandScope(
       <LinearTicketsViewContent
         projectId="project-1"
         buildPipeline={{

@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, expect, type Mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { environmentStore, useEnvironmentStore } from "@/stores";
@@ -55,7 +56,7 @@ test("turning auto-merge on persists it and mirrors the backend's answer", async
       ? environment({ autoMerge: (args as { enabled: boolean }).enabled })
       : undefined,
   );
-  render(<Harness />);
+  renderInAppCommandScope(<Harness />);
   const button = screen.getByRole("button", { name: "Auto-merge" });
   expect(button.getAttribute("aria-pressed")).toBe("false");
 
@@ -84,7 +85,7 @@ test("a failed save leaves the switch where it was", async () => {
   invokeMock.mockImplementation(async () => {
     throw new Error("backend offline");
   });
-  render(<Harness />);
+  renderInAppCommandScope(<Harness />);
   const button = screen.getByRole("button", { name: "Auto-merge" });
 
   await act(async () => {

@@ -1051,7 +1051,7 @@ beforeEach(() => {
   currentEnvironment = { ...selectedEnvironment };
   currentCheckSummary = null;
   currentUseRealPullRequest = false;
-  realStoresSnapshot.useEnvironmentStore.setState({
+  appCommandStore(realStoresSnapshot.environmentStore).setState({
     environments: [],
     isLoading: false,
     error: null,
@@ -5998,7 +5998,7 @@ describe("ActionBar pull request actions", () => {
 
   test("renders live monitor-store updates through the real pull request hook", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    realStoresSnapshot.useEnvironmentStore.setState({
+    appCommandStore(realStoresSnapshot.environmentStore).setState({
       environments: [currentEnvironment],
       isLoading: false,
       error: null,
@@ -6059,7 +6059,7 @@ describe("ActionBar pull request actions", () => {
 
   test("marks the View PR action while the monitor mirror is stale, and clears it when current", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    realStoresSnapshot.useEnvironmentStore.setState({
+    appCommandStore(realStoresSnapshot.environmentStore).setState({
       environments: [currentEnvironment],
       isLoading: false,
       error: null,
@@ -6119,7 +6119,7 @@ describe("ActionBar pull request actions", () => {
     "shows the last successful observation and %s freshness in the View PR tooltip",
     async (syncStatus, detail) => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
-      realStoresSnapshot.useEnvironmentStore.setState({
+      appCommandStore(realStoresSnapshot.environmentStore).setState({
         environments: [currentEnvironment],
         isLoading: false,
         error: null,
@@ -7177,7 +7177,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       const target = { ...selectedEnvironment, id: "env-target", prState: "open" as const };
       currentOtherEnvironments = [target];
       currentEnvironment = target;
-      realStoresSnapshot.useUIStore.setState({
+      appCommandStore(realStoresSnapshot.uiStore).setState({
         selectedEnvironmentId: "env-original",
         selectedProjectId: target.projectId,
       });
@@ -7188,7 +7188,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
             <EnvironmentItem
               environment={target}
               isSelected={false}
-              onSelect={(id) => realStoresSnapshot.useUIStore.getState().selectEnvironment(id)}
+              onSelect={(id) =>
+                appCommandStore(realStoresSnapshot.uiStore).getState().selectEnvironment(id)
+              }
               onDelete={() => {}}
               onStart={() => {}}
               onStop={() => {}}
@@ -7199,7 +7201,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
         );
         fireEvent.contextMenu(screen.getByText(target.name));
         fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
-        expect(realStoresSnapshot.useUIStore.getState().selectedEnvironmentId).toBe(target.id);
+        expect(appCommandStore(realStoresSnapshot.uiStore).getState().selectedEnvironmentId).toBe(
+          target.id,
+        );
         expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
           "Merge Pull Request",
         );

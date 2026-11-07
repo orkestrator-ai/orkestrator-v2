@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   DesignExportPreview,
   DesignExportReceipt,
@@ -97,7 +98,7 @@ const controller = { exportSave, settleEdits, refresh } as unknown as DesignCanv
 
 function renderDialog(current: DesignProjection) {
   const props = { open: true, onOpenChange: () => {}, controller, api };
-  const view = render(<DesignExportDialog {...props} projection={current} />);
+  const view = renderInAppCommandScope(<DesignExportDialog {...props} projection={current} />);
   return {
     ...view,
     update: (next: DesignProjection) =>
@@ -206,7 +207,7 @@ describe("DesignExportDialog", () => {
   test("retains the committed revision while a new preview loads or fails, but resets on reopen", async () => {
     exportPreview.mockResolvedValue(preview());
     const props = { onOpenChange: () => {}, controller, api, projection: projection() };
-    const view = render(<DesignExportDialog {...props} open />);
+    const view = renderInAppCommandScope(<DesignExportDialog {...props} open />);
     await screen.findByText("Exports committed revision 7.");
     const next = deferred<DesignExportPreview>();
     exportPreview.mockReturnValue(next.promise);
@@ -238,7 +239,7 @@ describe("DesignExportDialog", () => {
     try {
       opener.focus();
       const props = { onOpenChange: () => {}, controller, api, projection: projection() };
-      const view = render(<DesignExportDialog {...props} open />);
+      const view = renderInAppCommandScope(<DesignExportDialog {...props} open />);
       await screen.findByText("Exports committed revision 7.");
       expect(document.activeElement).not.toBe(opener);
       view.rerender(<DesignExportDialog {...props} open={false} />);

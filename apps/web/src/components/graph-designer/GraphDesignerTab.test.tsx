@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { graphTemplateExportText } from "@orkestrator/protocol/graphs/library";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
@@ -115,7 +116,7 @@ function persisted(): GraphDesignerTabData | undefined {
 
 function renderTab(data: GraphDesignerTabData = {}) {
   seedStores(data);
-  return render(
+  return renderInAppCommandScope(
     <div style={{ width: 1600, height: 1000, position: "relative" }}>
       <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={data} isActive />
     </div>,

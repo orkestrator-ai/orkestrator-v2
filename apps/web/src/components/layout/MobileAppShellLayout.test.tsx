@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createPortal } from "react-dom";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
@@ -56,7 +57,7 @@ function renderLayout(
     children: <div>Workspace</div>,
     ...overrides,
   };
-  const result = render(<MobileAppShellLayout {...props} />);
+  const result = renderInAppCommandScope(<MobileAppShellLayout {...props} />);
   if (!options.keepInitialDrawerOpen && props.initialSidebarOpen !== false) {
     const dialog = screen.getByRole("dialog", { name: "Projects and environments" });
     const closeButton = dialog.querySelector<HTMLButtonElement>(

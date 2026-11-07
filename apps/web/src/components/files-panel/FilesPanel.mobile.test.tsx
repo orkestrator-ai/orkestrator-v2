@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect, type ReactNode } from "react";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { filesPanelStore } from "@/stores";
@@ -43,7 +44,7 @@ function renderWithFileTabs(
   children: ReactNode,
   createFileTab: (path: string, options?: CreateFileTabOptions) => void,
 ) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <FileTabRegistrar createFileTab={createFileTab} />
       {children}
@@ -52,7 +53,7 @@ function renderWithFileTabs(
 }
 
 function renderWithoutFileTabs(children: ReactNode) {
-  return render(<TerminalProvider>{children}</TerminalProvider>);
+  return renderInAppCommandScope(<TerminalProvider>{children}</TerminalProvider>);
 }
 
 beforeEach(() => {

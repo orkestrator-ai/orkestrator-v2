@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { act, renderHook } from "@testing-library/react";
+import { act } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { agentActivityStore } from "@/stores/agentActivityStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
@@ -59,7 +60,7 @@ describe("backend-owned activity projection", () => {
         },
       ] as never,
     });
-    const first = renderHook(() => useGlobalActivityMonitor());
+    const first = renderHookInAppCommandScope(() => useGlobalActivityMonitor());
     await act(async () => undefined);
     expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
@@ -79,7 +80,7 @@ describe("backend-owned activity projection", () => {
       "env-a": "working",
     });
 
-    const second = renderHook(() => useGlobalActivityMonitor());
+    const second = renderHookInAppCommandScope(() => useGlobalActivityMonitor());
     await act(async () => undefined);
     expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-b": "waiting",
@@ -97,7 +98,7 @@ describe("backend-owned activity projection", () => {
         },
       ] as never,
     });
-    const observer = renderHook(() => useGlobalActivityMonitor());
+    const observer = renderHookInAppCommandScope(() => useGlobalActivityMonitor());
     await act(async () => undefined);
     expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",

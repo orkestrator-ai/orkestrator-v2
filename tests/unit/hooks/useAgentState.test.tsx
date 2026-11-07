@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { agentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
@@ -38,7 +39,7 @@ describe("useAgentState", () => {
   test("subscribes per container, accepts known states, and cleans up", async () => {
     const unlisten = mock(() => undefined);
     const callbacks = captureListeners(unlisten);
-    const { rerender, unmount } = renderHook(
+    const { rerender, unmount } = renderHookInAppCommandScope(
       ({ containerId }) => useAgentState(containerId, "tab-1"),
       { initialProps: { containerId: "container-1" as string | null } },
     );
@@ -63,7 +64,7 @@ describe("useAgentState", () => {
   test("hydrates a late-mounted tab without a second connected event", async () => {
     const callbacks = captureListeners();
     invokeMock.mockResolvedValue({ state: "working", occurredAt: "2026-10-14T10:00:00.000Z" });
-    renderHook(() => useAgentState("container-1", "tab-1"));
+    renderHookInAppCommandScope(() => useAgentState("container-1", "tab-1"));
     await waitFor(() =>
       expect(appCommandStore(agentActivityStore).getState().getTabState("tab-1")).toBe("working"),
     );
@@ -81,7 +82,7 @@ describe("useAgentState", () => {
         ? { state: "waiting", occurredAt: "2026-10-14T10:00:00.000Z" }
         : undefined,
     );
-    renderHook(() => useAgentState("container-1", "tab-1"));
+    renderHookInAppCommandScope(() => useAgentState("container-1", "tab-1"));
     await waitFor(() => expect(callbacks.has(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(true));
 
     await act(async () => {
@@ -101,7 +102,7 @@ describe("useAgentState", () => {
           answer = resolve;
         }),
     );
-    renderHook(() => useAgentState("container-1", "tab-1"));
+    renderHookInAppCommandScope(() => useAgentState("container-1", "tab-1"));
     await waitFor(() => expect(callbacks.has(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(true));
 
     await act(async () => {
@@ -128,7 +129,7 @@ describe("useAgentState", () => {
           resolvers.push(resolve);
         }),
     );
-    const { unmount } = renderHook(() => useAgentState("container-1", "tab-1"));
+    const { unmount } = renderHookInAppCommandScope(() => useAgentState("container-1", "tab-1"));
     unmount();
     await act(async () => {
       resolvers[0]?.(unlisten);

@@ -5,7 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act as reactAct } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GraphHumanWait, GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -46,7 +47,7 @@ function calls(command: string) {
 }
 
 function renderTab() {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <div style={{ width: 1400, height: 900, position: "relative" }}>
         <GraphRunTab

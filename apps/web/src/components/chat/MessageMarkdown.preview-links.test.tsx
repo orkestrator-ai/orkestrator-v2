@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import {
   TERMINAL_BROWSER_TAB_REQUEST_EVENT,
@@ -44,7 +45,7 @@ describe("agent loopback links", () => {
 
   function renderLink(href: string, source = true) {
     const link = <MarkdownLink href={href}>dev server</MarkdownLink>;
-    render(
+    renderInAppCommandScope(
       source ? (
         <PreviewLinkSourceContext.Provider value={{ environmentId: "env-a", tabId: "agent-1" }}>
           {link}

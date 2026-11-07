@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { render } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { compile } from "@orkestrator/protocol/graphs/compile";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
@@ -78,6 +78,6 @@ export function renderWithGraphEditor(
     }, [draft]);
     return <GraphEditorContext.Provider value={value}>{ui(draft)}</GraphEditorContext.Provider>;
   }
-  const view = render(<Host />);
+  const view = renderInAppCommandScope(<Host />);
   return { ...view, harness };
 }

@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef, type BackendId } from "@orkestrator/protocol/federation";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { uiStore } from "@/stores/uiStore";
@@ -20,7 +21,7 @@ afterEach(() => {
 
 test("does not adopt or record before projects have actually loaded", () => {
   useMachineViewStore.getState().setProjectKeyCollapsed(key("p"), true);
-  const { rerender } = renderHook(
+  const { rerender } = renderHookInAppCommandScope(
     ({ items, loaded }) => useBoundCollapseSync(machine, items, loaded),
     {
       initialProps: { items: [] as Project[], loaded: false },
@@ -38,7 +39,7 @@ test("first binding adopts remote collapsed and explicitly expanded choices and 
   view.setProjectKeyCollapsed(key("expanded"), false);
   view.setFolderKeyCollapsed(sidebarFolderKey(machine, "work"), true);
   appCommandStore(uiStore).setState({ collapsedProjects: ["expanded"] });
-  renderHook(() =>
+  renderHookInAppCommandScope(() =>
     useBoundCollapseSync(machine, [...projects, { id: "expanded" } as Project], true),
   );
   expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["p"]);
@@ -47,9 +48,12 @@ test("first binding adopts remote collapsed and explicitly expanded choices and 
 
 test("projects appearing later adopt once and bound edits remain recorded", () => {
   useMachineViewStore.getState().setProjectKeyCollapsed(key("p"), true);
-  const { rerender } = renderHook(({ items }) => useBoundCollapseSync(machine, items, true), {
-    initialProps: { items: [] as Project[] },
-  });
+  const { rerender } = renderHookInAppCommandScope(
+    ({ items }) => useBoundCollapseSync(machine, items, true),
+    {
+      initialProps: { items: [] as Project[] },
+    },
+  );
   rerender({ items: projects });
   act(() => appCommandStore(uiStore).getState().setProjectCollapsed("p", false));
   rerender({ items: [...projects] });
@@ -58,10 +62,12 @@ test("projects appearing later adopt once and bound edits remain recorded", () =
 });
 
 test("remount preserves choices and leaves new empty projects eligible for defaults", () => {
-  const first = renderHook(() => useBoundCollapseSync(machine, projects, true));
+  const first = renderHookInAppCommandScope(() => useBoundCollapseSync(machine, projects, true));
   act(() => appCommandStore(uiStore).getState().setProjectCollapsed("p", false));
   first.unmount();
-  renderHook(() => useBoundCollapseSync(machine, [...projects, { id: "new" } as Project], true));
+  renderHookInAppCommandScope(() =>
+    useBoundCollapseSync(machine, [...projects, { id: "new" } as Project], true),
+  );
   act(() => appCommandStore(uiStore).getState().collapseEmptyProjects(["p", "new"], new Set()));
   expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["new"]);
   expect(useMachineViewStore.getState().collapsedProjectKeys).toContain(key("new"));
@@ -72,9 +78,12 @@ test("returning to a prior binding adopts its choices rather than the machine ju
   const view = useMachineViewStore.getState();
   view.setProjectKeyCollapsed(key("p"), true);
   view.setProjectKeyCollapsed(projectKey(projectRef(other, "p")), false);
-  const { rerender } = renderHook(({ backend }) => useBoundCollapseSync(backend, projects, true), {
-    initialProps: { backend: machine },
-  });
+  const { rerender } = renderHookInAppCommandScope(
+    ({ backend }) => useBoundCollapseSync(backend, projects, true),
+    {
+      initialProps: { backend: machine },
+    },
+  );
   expect(appCommandStore(uiStore).getState().collapsedProjects).toContain("p");
   rerender({ backend: other });
   expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("p");

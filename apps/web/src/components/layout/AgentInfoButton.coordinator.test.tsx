@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { configStore } from "@/stores/configStore";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -154,7 +155,7 @@ describe("AgentInfoButton coordinator conversations", () => {
       .getState()
       .setProjection(SESSION_KEY, coordinatorProjection());
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     expect(screen.getByText("Claude Native")).toBeTruthy();
@@ -190,7 +191,7 @@ describe("AgentInfoButton coordinator conversations", () => {
     delete projection.contextUsage!.account;
     appCommandStore(nativeAgentProjectionStore).getState().setProjection(SESSION_KEY, projection);
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     const quota = within(await screen.findByRole("region", { name: "Account usage" }));
@@ -209,7 +210,7 @@ describe("AgentInfoButton coordinator conversations", () => {
     ];
     projection.turn = { phase: "running" };
     appCommandStore(nativeAgentProjectionStore).getState().setProjection(SESSION_KEY, projection);
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
     expect(await screen.findByText("Weekly limit")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Daily tokens" })).toBeTruthy();
@@ -248,7 +249,7 @@ describe("AgentInfoButton coordinator conversations", () => {
       .getState()
       .setProjection(SESSION_KEY, coordinatorProjection());
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     const quota = within(screen.getByRole("region", { name: "Account usage" }));
@@ -268,7 +269,7 @@ describe("AgentInfoButton coordinator conversations", () => {
     const tab = coordinatorTab();
     tab.nativeAgentData!.environmentId = "environment-1";
 
-    render(<AgentInfoButton activeTab={tab} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     open();
 
     await waitFor(() =>
@@ -290,7 +291,7 @@ describe("AgentInfoButton coordinator conversations", () => {
     appCommandStore(nativeAgentProjectionStore).getState().setProjection(SESSION_KEY, projection);
     const tab = coordinatorTab();
     tab.nativeAgentData!.platform = "opencode";
-    const view = render(<AgentInfoButton activeTab={tab} />);
+    const view = renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     open();
     expect(screen.queryByRole("button", { name: "Undo turn" })).toBe(null);
     expect(screen.queryByRole("button", { name: "Redo turn" })).toBe(null);
@@ -319,7 +320,7 @@ describe("AgentInfoButton coordinator conversations", () => {
       .getState()
       .setProjection(SESSION_KEY, coordinatorProjection());
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Compact" })).toBeTruthy());

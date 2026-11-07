@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useEffect } from "react";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -112,7 +113,7 @@ describe("useRevealMachineProject", () => {
   });
 
   function renderHarness() {
-    return render(
+    return renderInAppCommandScope(
       <FederationProvider>
         <Harness />
       </FederationProvider>,
@@ -156,7 +157,7 @@ describe("useRevealMachineProject", () => {
   });
 
   test("this window's own selections are recorded as recent and end the highlight", async () => {
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <FederationEffects />
       </FederationProvider>,

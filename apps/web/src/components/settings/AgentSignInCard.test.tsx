@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   NativeAgentAuthState,
@@ -98,7 +99,7 @@ describe("AgentSignInCard", () => {
     AGENT_PLATFORMS.flatMap((platform) => states.map((state) => [platform, state] as const)),
   )("%s shows the %s fixture without a session", async (platform, state) => {
     statuses[platform] = fixture(platform, state);
-    render(<AgentSignInCard platform={platform} />);
+    renderInAppCommandScope(<AgentSignInCard platform={platform} />);
     const card = screen.getByRole("region", { name: new RegExp(`sign-in$`) });
     expect(await within(card).findByText(STATE_LABELS[state])).toBeTruthy();
     expect(calls).toContainEqual({ command: "get_agent_sign_in_status", args: { platform } });
@@ -119,7 +120,7 @@ describe("AgentSignInCard", () => {
 
   test("Claude signs the active account in again from the card", async () => {
     statuses.claude = fixture("claude", "signed-out");
-    render(<AgentSignInCard platform="claude" />);
+    renderInAppCommandScope(<AgentSignInCard platform="claude" />);
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
     await waitFor(() =>
       expect(calls).toContainEqual({
@@ -148,7 +149,7 @@ describe("AgentSignInCard", () => {
       return { outcome: "ok", result };
     });
     routed = portal;
-    render(
+    renderInAppCommandScope(
       <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
         <AgentSignInCard platform="claude" />
       </AccountMachineProvider>,
@@ -168,7 +169,7 @@ describe("AgentSignInCard", () => {
 
   test("shows no login end when the account reports none", async () => {
     statuses.cursor = fixture("cursor", "signed-in");
-    const { container } = render(<AgentSignInCard platform="cursor" />);
+    const { container } = renderInAppCommandScope(<AgentSignInCard platform="cursor" />);
     expect(await screen.findByText("cursor@example.test · pro")).toBeTruthy();
     expect(container.querySelector("[data-sign-in-expiry]") === null).toBe(true);
   });
@@ -184,7 +185,7 @@ describe("AgentSignInCard", () => {
   ])("shows the account's login end %o under its label", async (expiry, tone, text) => {
     const signedIn = fixture("cursor", "signed-in");
     statuses.cursor = { ...signedIn, account: { ...signedIn.account!, ...expiry } };
-    const { container } = render(<AgentSignInCard platform="cursor" />);
+    const { container } = renderInAppCommandScope(<AgentSignInCard platform="cursor" />);
     expect(await screen.findByText("cursor@example.test · pro")).toBeTruthy();
     const line = container.querySelector("[data-sign-in-expiry]");
     expect(line?.getAttribute("data-sign-in-expiry")).toBe(tone);
@@ -193,7 +194,7 @@ describe("AgentSignInCard", () => {
 
   test("names the terminal command for Grok and Pi", async () => {
     statuses.grok = fixture("grok", "signed-out");
-    render(<AgentSignInCard platform="grok" />);
+    renderInAppCommandScope(<AgentSignInCard platform="grok" />);
     expect(await screen.findByText("grok login")).toBeTruthy();
   });
 
@@ -207,7 +208,7 @@ describe("AgentSignInCard", () => {
       signIn: { kind: "terminal", hint: HINTS.opencode },
       signOut: false,
     };
-    render(<AgentSignInCard platform="opencode" />);
+    renderInAppCommandScope(<AgentSignInCard platform="opencode" />);
     const list = await screen.findByRole("list", { name: "OpenCode signed-in providers" });
     expect(within(list).getByText("anthropic · oauth")).toBeTruthy();
     expect(within(list).getByText("openai · api-key")).toBeTruthy();
@@ -215,7 +216,7 @@ describe("AgentSignInCard", () => {
 
   test("wraps the platform's own sign-in controls and re-reads on demand", async () => {
     statuses.cursor = fixture("cursor", "signed-out");
-    render(
+    renderInAppCommandScope(
       <AgentSignInCard platform="cursor">
         <button type="button">Sign in with Cursor</button>
       </AgentSignInCard>,
@@ -230,7 +231,7 @@ describe("AgentSignInCard", () => {
 
   test("shows a failed read instead of a state", async () => {
     failRead = true;
-    render(<AgentSignInCard platform="codex" />);
+    renderInAppCommandScope(<AgentSignInCard platform="codex" />);
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Could not read the sign-in state",
     );

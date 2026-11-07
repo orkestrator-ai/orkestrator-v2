@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { usePullRequest } from "./usePullRequest";
@@ -44,7 +45,7 @@ afterEach(() => {
 describe("usePullRequest subscriptions", () => {
   test("does not re-render for a change to another environment", () => {
     let renders = 0;
-    const { result } = renderHook(() => {
+    const { result } = renderHookInAppCommandScope(() => {
       renders += 1;
       return usePullRequest({ environmentId: "environment-1" });
     });
@@ -73,7 +74,7 @@ describe("usePullRequest subscriptions", () => {
   });
 
   test("returns empty PR fields without an environment", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
     expect(result.current.prUrl).toBeNull();
     expect(result.current.prState).toBeNull();
     expect(result.current.hasMergeConflicts).toBeNull();

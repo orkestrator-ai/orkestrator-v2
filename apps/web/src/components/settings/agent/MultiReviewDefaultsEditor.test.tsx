@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import * as realAgentModelPicker from "@/components/chat/AgentModelPicker";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
@@ -110,7 +111,7 @@ function SettingsHarness({
 describe("MultiReviewDefaultsEditor Fast defaults", () => {
   test("toggles auto-fix and retains it when changing the reviewer count", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness canInherit={false} onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness canInherit={false} onChange={onChange} />);
     const checkbox = screen.getByRole("checkbox", { name: "Auto-address findings" });
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(checkbox);
@@ -128,7 +129,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
   test("toggles auto-PR and retains it when changing the reviewer count", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness canInherit={false} onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness canInherit={false} onChange={onChange} />);
     const checkbox = screen.getByRole("checkbox", { name: "Auto-PR" });
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(checkbox);
@@ -144,7 +145,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
   test("shows the edited tier instead of an inherited auto-fix value", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewDefaultsEditor
         tier={{}}
         onChange={onChange}
@@ -163,7 +164,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
   test("says build pipelines use the same reviewer count", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness canInherit={false} onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness canInherit={false} onChange={onChange} />);
 
     expect(
       screen.getByText(
@@ -174,7 +175,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
   test("labels and clears a repository override as inheritance while retaining parent Fast", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness canInherit onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness canInherit onChange={onChange} />);
 
     expect(screen.getByTestId("multi-review-default-0 speed-inherit-label").textContent).toBe(
       "Inherit",
@@ -210,7 +211,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
   test("writes Fast onto the selected reviewer only", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness canInherit onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness canInherit onChange={onChange} />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -272,7 +273,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
       );
     }
 
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     // Reviewer 2 follows Review until it stores something of its own. Writing a
     // speed there must not drop the model and reasoning level it was showing.
     fireEvent.click(
@@ -295,7 +296,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
   });
 
   test("labels the root-tier reset as the provider default", () => {
-    render(<SettingsHarness canInherit={false} onChange={() => {}} />);
+    renderInAppCommandScope(<SettingsHarness canInherit={false} onChange={() => {}} />);
 
     expect(screen.getByTestId("multi-review-default-0 speed-inherit-label").textContent).toBe(
       "Provider default",
@@ -326,7 +327,7 @@ describe("MultiReviewDefaultsEditor focus", () => {
       );
     }
 
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     fireEvent.change(screen.getByRole("combobox", { name: "Reviewer 3 focus" }), {
       target: { value: "preset:mine" },
     });

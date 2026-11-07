@@ -168,7 +168,7 @@ class LeftoverTracker {
     }
   }
 
-  /** Counts subscriptions to `store` (a hook's statics or a scope's instance). */
+  /** Counts subscriptions to `store` (a scope's instance). */
   trackStore(name: string, store: { subscribe: Subscribe }): void {
     const subscribe = store.subscribe;
     store.subscribe = ((listener: Parameters<Subscribe>[0]) => {

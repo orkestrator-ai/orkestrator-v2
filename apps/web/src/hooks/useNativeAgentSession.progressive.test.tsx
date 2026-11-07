@@ -7,7 +7,8 @@
  * never on the text barrier.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentControlUpdate,
   NativeAgentDiscoveryUpdate,
@@ -343,7 +344,7 @@ function stateSnapshot(
 }
 
 function renderSession(isActive = true) {
-  return renderHook(
+  return renderHookInAppCommandScope(
     ({ isActive }) =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
@@ -474,7 +475,7 @@ describe("useNativeAgentSession progressive view", () => {
 
   describe("while the owner holds sending", () => {
     const renderHeld = (sendingHeld: boolean, initialProviderSessionId?: string) =>
-      renderHook(
+      renderHookInAppCommandScope(
         ({ sendingHeld }) =>
           useNativeAgentSession<TestMessage>({
             platform: "codex",
@@ -971,7 +972,7 @@ describe("useNativeAgentSession progressive view", () => {
     stateUpdates = [() => stateSnapshot("state-1")];
 
     const seen: boolean[] = [];
-    const { result } = renderHook(() => {
+    const { result } = renderHookInAppCommandScope(() => {
       const session = useNativeAgentSession<TestMessage>({
         platform: "codex",
         environmentId: "env-1",
@@ -1027,7 +1028,7 @@ describe("useNativeAgentSession progressive view", () => {
   });
 
   test("clears transcriptRefreshing for an inactive tab that never read", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
         environmentId: "env-1",
@@ -3208,7 +3209,7 @@ test("revised-row overflow while inactive keeps held history on screen and re-re
   const tail = [message("live-a"), message("live-b")];
   transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
   stateUpdates = [() => stateSnapshot("state-1")];
-  const session = renderHook(
+  const session = renderHookInAppCommandScope(
     ({ active }) =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
@@ -3893,7 +3894,7 @@ describe("direct cursors a bounded view names", () => {
         historyEpoch: "epoch-1",
       }),
     ];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useNativeAgentSession<TestMessage>({
         platform: "opencode",
         environmentId: "env-1",

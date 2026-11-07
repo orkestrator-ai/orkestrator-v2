@@ -2,7 +2,8 @@ import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import * as realDndCore from "@dnd-kit/core";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { ComponentProps } from "react";
 import { ticketContentFromSections } from "@orkestrator/protocol/ticket-sections";
@@ -86,7 +87,7 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
 }
 
 function renderCard(task: KanbanTask, props: Partial<ComponentProps<typeof KanbanCard>> = {}) {
-  return render(
+  return renderInAppCommandScope(
     <DndContext>
       <KanbanCard task={task} onClick={() => {}} {...props} />
     </DndContext>,

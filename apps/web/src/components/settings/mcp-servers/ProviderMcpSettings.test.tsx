@@ -1,7 +1,8 @@
 import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { StrictMode, Suspense } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import {
   MCP_MANAGEMENT_CHANGED_EVENT,
@@ -206,7 +207,7 @@ describe("ProviderMcpSettings", () => {
         return baseHandlers.list_mcp_management_targets();
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("Targets unavailable")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("docs")).toBeTruthy();
@@ -227,14 +228,14 @@ describe("ProviderMcpSettings", () => {
         return snapshot({ target: fresh });
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs")).toBeTruthy();
     expect(lists).toBeGreaterThanOrEqual(2);
   });
 
   test("lists servers by source with status text, and links to Control MCP separately", async () => {
     install(baseHandlers);
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs")).toBeTruthy();
     expect(screen.getByText("In use")).toBeTruthy();
     expect(screen.getByText("~/.claude.json")).toBeTruthy();
@@ -260,7 +261,7 @@ describe("ProviderMcpSettings", () => {
           freshness: "incomplete",
         }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText(/Could not be read/)).toBeTruthy();
     expect(screen.getByText(/cannot be listed until it is repaired/)).toBeTruthy();
     expectDomAbsent(screen.queryByText("No servers."), "empty-source text");
@@ -272,7 +273,7 @@ describe("ProviderMcpSettings", () => {
         throw new Error("Unknown backend command: list_mcp_management_targets");
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText(/does not support managing MCP servers/)).toBeTruthy();
   });
 
@@ -286,7 +287,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), {
@@ -347,7 +348,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     expect(await screen.findByText("Value saved")).toBeTruthy();
     expect(screen.getByText("(retained value)")).toBeTruthy();
@@ -380,7 +381,7 @@ describe("ProviderMcpSettings", () => {
         return { valid: true, fieldErrors: [], preview };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     await screen.findByText("Value saved");
     fireEvent.click(screen.getByRole("button", { name: "Replace" }));
@@ -436,7 +437,7 @@ describe("ProviderMcpSettings", () => {
       },
     });
     requestMcpServerSettings({ provider: "codex" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     await screen.findByLabelText("URL");
     fireEvent.click(screen.getByRole("button", { name: "Command (stdio)" }));
@@ -483,7 +484,7 @@ describe("ProviderMcpSettings", () => {
         preview: null,
       }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "remote" } });
     fireEvent.click(screen.getByRole("button", { name: "HTTP" }));
@@ -507,7 +508,7 @@ describe("ProviderMcpSettings", () => {
         );
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -532,7 +533,7 @@ describe("ProviderMcpSettings", () => {
         },
       }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     expect(
       await screen.findByText(
@@ -562,7 +563,7 @@ describe("ProviderMcpSettings", () => {
       },
     });
     requestMcpServerSettings({ provider: "pi", environmentId: "e1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await waitFor(() => expect(snapshots).toContain("mcp1~pi~env~e1~x"));
   });
 
@@ -592,7 +593,7 @@ describe("ProviderMcpSettings", () => {
       return null;
     }
     requestMcpServerSettings({ provider: "pi", environmentId: "e1" });
-    render(
+    renderInAppCommandScope(
       <StrictMode>
         <Suspense fallback={null}>
           <ProviderMcpSettings />
@@ -607,7 +608,7 @@ describe("ProviderMcpSettings", () => {
     // Taken once mounted: a later plain open starts from the backend user.
     cleanup();
     snapshots.length = 0;
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await waitFor(() => expect(snapshots).toContain(target.targetId));
   });
 
@@ -629,7 +630,7 @@ describe("ProviderMcpSettings", () => {
       },
     });
     requestMcpServerSettings({ provider: "pi", environmentId: "e1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs-e1")).toBeTruthy();
 
     act(() => requestMcpServerSettings({ provider: "pi", environmentId: "e2" }));
@@ -668,7 +669,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: true, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await reviewNewServer();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(TRANSPORT_FAILURE)).toBeTruthy();
@@ -702,7 +703,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: true, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
     expect(await screen.findByText(TRANSPORT_FAILURE)).toBeTruthy();
@@ -730,7 +731,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await reviewNewServer();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Another change is in progress.")).toBeTruthy();
@@ -751,7 +752,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Another change is in progress.")).toBeTruthy();
@@ -769,7 +770,7 @@ describe("ProviderMcpSettings", () => {
         return snapshot();
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
 
@@ -792,7 +793,7 @@ describe("ProviderMcpSettings", () => {
         });
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs")).toBeTruthy();
 
     // The change event arrives on a stream that survived; its re-read fails.
@@ -834,7 +835,7 @@ describe("ProviderMcpSettings", () => {
         return { valid: true, fieldErrors: [], preview };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -869,7 +870,7 @@ describe("ProviderMcpSettings", () => {
         return { valid: true, fieldErrors: [], preview };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     await screen.findByText("Value saved");
     fireEvent.click(screen.getByRole("button", { name: "Replace" }));
@@ -955,7 +956,7 @@ describe("ProviderMcpSettings on another machine", () => {
       throw new Error(`Unexpected command ${command}`);
     });
 
-    render(
+    renderInAppCommandScope(
       <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
         <ProviderMcpSettings />
       </AccountMachineProvider>,

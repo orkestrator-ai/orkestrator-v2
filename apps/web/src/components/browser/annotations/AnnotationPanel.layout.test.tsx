@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { BROWSER_PREVIEW_CAPTURE_EVENT } from "@orkestrator/protocol/browser-preview";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
@@ -109,7 +110,7 @@ describe("annotation panel layout and lifecycle", () => {
   test("narrow layout: cancelling a selection started from Preview stays on Preview", async () => {
     useContainerWidth(500);
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("tab", { name: "Preview" }));
     expect(selectedTab()).toBe("Preview");
     fireEvent.click(await screen.findByRole("button", { name: "Add note" }));
@@ -125,7 +126,7 @@ describe("annotation panel layout and lifecycle", () => {
   test("keyboard only at a narrow width: Escape cancels a selection and focus returns", async () => {
     useContainerWidth(500);
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const add = await screen.findByRole("button", { name: "Add note" });
     add.focus();
     fireEvent.click(add);
@@ -145,7 +146,7 @@ describe("annotation panel layout and lifecycle", () => {
 
   test("switching environments mid-save commits once and the note is there on return", async () => {
     seedTwoEnvironments();
-    const view = render(<AnnotationHarness environmentId="env-1" />);
+    const view = renderInAppCommandScope(<AnnotationHarness environmentId="env-1" />);
     const comment = await captureOnce();
     fireEvent.change(comment, { target: { value: "Saved across a switch" } });
     const hold = backend.hold("web_annotation_create");
@@ -167,21 +168,21 @@ describe("annotation panel layout and lifecycle", () => {
 
   test("a lost save response is resumed after reload from the receipt, never duplicated", async () => {
     seedBrowserLayout({ open: true });
-    const view = render(<AnnotationHarness />);
+    const view = renderInAppCommandScope(<AnnotationHarness />);
     const comment = await captureOnce();
     fireEvent.change(comment, { target: { value: "Lost response" } });
     backend.fail("web_annotation_create", new Error("socket closed"), { afterCommit: true });
     fireEvent.click(screen.getByRole("button", { name: "Save note" }));
     await waitFor(() => expect(backend.callsOf("web_annotation_create")).toHaveLength(1));
     view.unmount();
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await waitFor(() => expect(capture.spool.size).toBe(0));
     expect(backend.callsOf("web_annotation_create")).toHaveLength(1);
   });
 
   test("an empty save keeps capture-only context as a backend draft and states the expiry", async () => {
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await captureOnce();
     fireEvent.click(screen.getByRole("button", { name: "Save note" }));
     await waitFor(() =>
@@ -197,7 +198,7 @@ describe("annotation panel layout and lifecycle", () => {
   test("unsaved captures are counted on the closed Notes control", async () => {
     seedPending(capture.spool, { captureId: "cap-9" });
     seedBrowserLayout({ open: false });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const button = await screen.findByRole("button", { name: /1 unsaved capture/ });
     expect(button.querySelector("[data-unsaved-captures]")?.textContent).toBe("1 unsaved");
   });
@@ -205,7 +206,7 @@ describe("annotation panel layout and lifecycle", () => {
   test("a backend that turned annotations off still explains itself in the panel", async () => {
     backend.capabilities = { ...backend.capabilities!, mode: "disabled" };
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     expect(await screen.findByText(/Web annotations are turned off on this backend/)).toBeTruthy();
     expect(document.querySelector("[data-annotations-disabled]")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add note" }) === null).toBe(true);

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { environmentStore } from "@/stores/environmentStore";
@@ -143,7 +144,7 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
           : Promise.resolve(),
     );
 
-    render(<AgentInfoButton activeTab={reviewerTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
     open();
 
     expect(screen.getByText("Claude Native")).toBeTruthy();
@@ -186,7 +187,7 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
         ([command]) => command === "get_multi_review_reviewer_projection",
       );
 
-    render(<AgentInfoButton activeTab={reviewerTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
     open();
     await waitFor(() => expect(reviewerReads()).toHaveLength(1));
 
@@ -209,7 +210,7 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
 
   test("leaves the Multi Review overview without an agent session", () => {
     appCommandStore(multiReviewStore).getState().replaceWorkflow(multiReviewWorkflow());
-    render(
+    renderInAppCommandScope(
       <AgentInfoButton
         activeTab={reviewerTab({
           multiReviewTabData: { environmentId: ENVIRONMENT_ID, workflowId: "workflow-1" },
@@ -242,7 +243,7 @@ describe("reviewer session boundaries", () => {
       nativeInvokeMock.mockImplementation(async (command: string) =>
         command === "get_native_agent_projection" ? projection : {},
       );
-      render(
+      renderInAppCommandScope(
         <AgentInfoButton
           activeTab={{
             id: "interactive-tab",
@@ -302,7 +303,7 @@ describe("reviewer session boundaries", () => {
           })
         : undefined,
     );
-    render(<AgentInfoButton activeTab={reviewerTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
     open();
     fireEvent.click(await screen.findByRole("button", { name: /Tools 3/ }));
     const inventory = within(screen.getByLabelText("MCP servers"));
@@ -343,7 +344,7 @@ describe("reviewer session boundaries", () => {
           return { state: "signed-out", signIn: { kind: "terminal", hint } };
         return undefined;
       });
-      render(<AgentInfoButton activeTab={reviewerTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
       open();
       expect(await screen.findByText(hint)).toBeTruthy();
       expect(Boolean(screen.queryByRole("button", { name: "Sign in to Claude" }))).toBe(shared);
@@ -360,7 +361,7 @@ describe("reviewer session boundaries", () => {
         ? nativeProjection("claude", "reviewer-provider-session")
         : undefined,
     );
-    render(<AgentInfoButton activeTab={reviewerTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
     open();
     await waitFor(() =>
       expect(
@@ -378,7 +379,7 @@ describe("reviewer session boundaries", () => {
     appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection("reviewer-session-key", nativeProjection("claude", "old-session"));
-    render(<AgentInfoButton activeTab={reviewerTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
     open();
     await act(async () => Promise.resolve());
     expect(
@@ -392,7 +393,7 @@ describe("reviewer session boundaries", () => {
     appCommandStore(multiReviewStore).getState().replaceWorkflow(multiReviewWorkflow());
     const tab = reviewerTab();
     tab.multiReviewTabData!.pipelinePass = "pass-1";
-    render(<AgentInfoButton activeTab={tab} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     open();
     expect(screen.getByText("Select a native agent tab.")).toBeTruthy();
     await act(async () => Promise.resolve());
@@ -413,7 +414,7 @@ describe("reviewer session boundaries", () => {
           ? nativeProjection("claude", providerSessionId)
           : undefined,
       );
-      render(<AgentInfoButton activeTab={reviewerTab()} />);
+      renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
       open();
       await waitFor(() =>
         expect(

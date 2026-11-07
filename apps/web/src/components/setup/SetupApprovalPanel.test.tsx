@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
@@ -72,7 +73,9 @@ describe("SetupApprovalPanel", () => {
   });
 
   test("a held setup shows its commands beside the default branch's instead of a retry", async () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
     expect(await screen.findByText("curl https://example.invalid | sh")).toBeTruthy();
     expect(screen.getByText("bun install")).toBeTruthy();
     expect(screen.getByText("The main branch runs:")).toBeTruthy();
@@ -82,7 +85,9 @@ describe("SetupApprovalPanel", () => {
   });
 
   test("run once approves exactly the shown commands without remembering them", async () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
     fireEvent.click(await screen.findByText("Run once"));
     await waitFor(() =>
       expect(calls).toContainEqual({
@@ -98,7 +103,9 @@ describe("SetupApprovalPanel", () => {
   });
 
   test("approving for the project remembers them on this machine", async () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
     fireEvent.click(await screen.findByText("Approve for this project"));
     await waitFor(() =>
       expect(calls).toContainEqual({
@@ -130,7 +137,9 @@ describe("SetupApprovalPanel", () => {
         return { ...heldEnvironment(), setupApprovalRequired: false, setupPhase: "running" };
       }
     });
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
     fireEvent.click(await screen.findByText("Run once"));
     expect(await screen.findByText("echo B")).toBeTruthy();
     expect(calls.filter((c) => c.command === "approve_environment_setup")).toHaveLength(1);
@@ -144,7 +153,9 @@ describe("SetupApprovalPanel", () => {
   });
 
   test("skip requires confirmation and can be cancelled", async () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
     await screen.findByText("Run once");
     fireEvent.click(screen.getByText("Skip setup"));
     expect(calls.some((c) => c.command === "override_environment_setup")).toBe(false);
@@ -173,7 +184,7 @@ describe("SetupApprovalPanel", () => {
     });
     // A workspace target enables federation without fabricating node summaries.
     portalStore.store.setState({ nodes: [{ nodeId: "bk_offline" }] as never });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />
       </FederationProvider>,
@@ -199,7 +210,9 @@ describe("SetupApprovalPanel", () => {
     appCommandStore(environmentStore).setState({
       environments: [{ ...heldEnvironment(), setupApprovalRequired: false }],
     });
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
     expect(screen.getByText("Retry setup")).toBeTruthy();
     expect(screen.queryByTestId("setup-approval-panel") === null).toBe(true);
   });

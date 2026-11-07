@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import * as realHooks from "@/hooks";
@@ -157,7 +158,7 @@ describe("native chat scroll wiring", () => {
   test.each(["claude", "codex", "opencode", "cursor", "grok"] as const)(
     "%s native passes its environmentId to the shared Virtuoso scroll hook",
     (platform) => {
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={`tab-${platform}`}
           data={{
@@ -181,7 +182,7 @@ describe("native chat scroll wiring", () => {
   );
 
   test("Claude tmux passes its environmentId to the Virtuoso scroll hook", () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab tabId="tab-tmux" data={{ environmentId: "env-tmux" }} isActive={false} />,
     );
 
@@ -200,7 +201,7 @@ describe("native chat scroll wiring", () => {
     appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[buildPipeline.id, buildPipeline]]),
     });
-    render(
+    renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: "pipeline-1", taskId: "task-1" }}
         isActive={false}
@@ -221,7 +222,7 @@ describe("native chat scroll wiring", () => {
     });
 
     // Pinned to the tail there is nothing to return to, so no affordance.
-    const view = render(
+    const view = renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
         isActive
@@ -231,7 +232,7 @@ describe("native chat scroll wiring", () => {
 
     cleanup();
     isAtBottom = false;
-    const scrolled = render(
+    const scrolled = renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
         isActive
@@ -250,7 +251,7 @@ describe("native chat scroll wiring", () => {
     });
     isAtBottom = false;
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
         isActive

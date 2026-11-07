@@ -7,7 +7,8 @@
  * totals with a slow full recomputation after every step.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentMessagePage,
   NativeAgentProjectionUpdate,
@@ -234,7 +235,7 @@ function historyPage(
 }
 
 function renderSession(isActive = true) {
-  return renderHook(
+  return renderHookInAppCommandScope(
     (props: { isActive: boolean }) =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",

@@ -5,7 +5,8 @@
  * rich block components.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createRef, type ReactNode } from "react";
 import * as realVirtuoso from "react-virtuoso";
 import { setHighlightBackend } from "@/lib/chat/highlighter/client";
@@ -126,7 +127,7 @@ function list(messages: NativeMessageType[]) {
 describe("block identity and view state", () => {
   test("prepended history and inserted source parts keep a disclosure's identity and state", () => {
     const target = textMessage("m-target", [{ content: DETAILS, sourcePartId: "part-b" }]);
-    const { rerender } = render(list([target]));
+    const { rerender } = renderInAppCommandScope(list([target]));
     const toggle = screen.getByRole("button", { name: /Release notes/ });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -171,7 +172,7 @@ describe("block identity and view state", () => {
     const message = textMessage("m-theme", [
       { content: `${DETAILS}\n\n\`\`\`ts\nconst x = 1;\n\`\`\``, sourcePartId: "p" },
     ]);
-    const first = render(list([message]));
+    const first = renderInAppCommandScope(list([message]));
     fireEvent.click(screen.getByRole("button", { name: /Release notes/ }));
     act(() => document.documentElement.classList.add("dark"));
     // Theme invalidates rendering work, not view state.
@@ -180,7 +181,7 @@ describe("block identity and view state", () => {
       screen.getByRole("button", { name: /Release notes/ }).getAttribute("aria-expanded"),
     ).toBe("true");
     first.unmount();
-    render(list([message]));
+    renderInAppCommandScope(list([message]));
     expect(
       screen.getByRole("button", { name: /Release notes/ }).getAttribute("aria-expanded"),
     ).toBe("true");
@@ -191,7 +192,7 @@ describe("streaming stability", () => {
   test("a selection in a completed code line and the focused toolbar button survive appends", async () => {
     const base = "Intro paragraph.\n\n```ts\nconst done = 1;\nconst partial";
     const message = (content: string) => textMessage("m-stream", [{ content, sourcePartId: "p" }]);
-    const view = render(list([message(base)]));
+    const view = renderInAppCommandScope(list([message(base)]));
     await waitFor(() => expect(screen.getAllByText("const done = 1;").length).toBeGreaterThan(0));
     const lineText = screen
       .getAllByText("const done = 1;")
@@ -265,7 +266,7 @@ function press(key: "Enter" | " " | "Escape") {
 
 describe("keyboard-only toolbars", () => {
   test("code block: wrap toggles, the viewer opens, Escape closes it and focus returns", async () => {
-    render(
+    renderInAppCommandScope(
       list([textMessage("m-code", [{ content: "```ts\nconst x = 1;\n```", sourcePartId: "p" }])]),
     );
     act(() => (document.body as HTMLElement).focus());
@@ -288,7 +289,9 @@ describe("keyboard-only toolbars", () => {
 
   test("table: expand opens a dialog, Escape returns focus, copy works", async () => {
     const table = ["| Name | Value |", "| --- | --- |", "| alpha | 1 |"].join("\n");
-    render(list([textMessage("m-table", [{ content: table, sourcePartId: "p" }])]));
+    renderInAppCommandScope(
+      list([textMessage("m-table", [{ content: table, sourcePartId: "p" }])]),
+    );
     act(() => (document.body as HTMLElement).focus());
     // The scroll region itself is reachable, so wide tables scroll by keyboard.
     tabTo("Table contents, scroll horizontally");
@@ -304,7 +307,7 @@ describe("keyboard-only toolbars", () => {
   });
 
   test("diagram: show source toggles, the expanded dialog opens and closes by keyboard", async () => {
-    render(
+    renderInAppCommandScope(
       list([
         textMessage("m-diagram", [
           { content: "```mermaid\nflowchart TD\n  A --> B\n```", sourcePartId: "p" },
@@ -332,7 +335,7 @@ describe("keyboard-only toolbars", () => {
   // MermaidBlock's expanded dialog has no DialogTrigger, so Radix alone would
   // return focus to <body>; `useDialogFocusReturn()` restores the opener.
   test("diagram: focus returns to Expand diagram after the dialog closes", async () => {
-    render(
+    renderInAppCommandScope(
       list([
         textMessage("m-diagram", [
           { content: "```mermaid\nflowchart TD\n  A --> B\n```", sourcePartId: "p" },

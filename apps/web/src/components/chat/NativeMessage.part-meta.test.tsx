@@ -8,7 +8,8 @@
  * produced them.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
@@ -22,7 +23,7 @@ function renderParts(
   options: { resolveModelLabel?: (modelId: string) => string } = {},
 ) {
   messageCounter += 1;
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <NativeMessage
         message={{

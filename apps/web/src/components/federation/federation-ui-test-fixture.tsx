@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -12,7 +12,7 @@ import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { FederationProvider } from "./FederationProvider";
 
 export function renderWithFederation(node: ReactNode) {
-  return render(<FederationProvider>{node}</FederationProvider>);
+  return renderInAppCommandScope(<FederationProvider>{node}</FederationProvider>);
 }
 
 export function machineView(overrides: Partial<MachineView> = {}): MachineView {

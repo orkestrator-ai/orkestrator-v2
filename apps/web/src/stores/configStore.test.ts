@@ -253,7 +253,7 @@ describe("configStore per node scope", () => {
     }
   });
 
-  test("the deprecated statics reach the app's command scope", () => {
+  test("the app command scope keeps its own instance", () => {
     const app = getWindowScope().commandScope();
     appCommandStore(configStore).getState().setConfig(nodeConfig("command"));
     expect(app.store(configStore).getState().config.global.terminalScrollback).toBe(5_000);

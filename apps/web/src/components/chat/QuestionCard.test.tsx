@@ -1,6 +1,7 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { promptDraftStore } from "@/stores/promptDraftStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { QuestionCard, type QuestionCardQuestion } from "./QuestionCard";
@@ -17,7 +18,7 @@ function renderCard(
   props: Partial<React.ComponentProps<typeof QuestionCard>> = {},
 ) {
   const onSubmit = mock(async () => true);
-  render(
+  renderInAppCommandScope(
     <QuestionCard
       agentLabel="Test"
       title="Agent needs your input"
@@ -274,7 +275,7 @@ describe("QuestionCard custom-answer overrides", () => {
   });
 
   test("renders nothing when handed an empty question list", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -652,7 +653,7 @@ describe("QuestionCard multi-question navigation", () => {
   });
 
   test("tracks the answered count and flags a complete card", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -702,7 +703,7 @@ describe("QuestionCard multi-question navigation", () => {
       { id: "two", question: "Two?", header: "Two", options: [{ label: "2a" }] },
     ];
     const secondOrder = [firstOrder[1]!, firstOrder[0]!];
-    const rendered = render(
+    const rendered = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -780,7 +781,7 @@ describe("QuestionCard draft persistence", () => {
      * environments; the pending request rehydrates, so half-entered answers
      * must too. This is the whole point of the prompt-draft store.
      */
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -799,7 +800,7 @@ describe("QuestionCard draft persistence", () => {
 
     unmount();
 
-    render(
+    renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -821,7 +822,7 @@ describe("QuestionCard draft persistence", () => {
   test("clearing the draft key resets a remounted card", () => {
     // This is what the owning store does when the request resolves; a future
     // request reusing the id must start blank.
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -835,7 +836,7 @@ describe("QuestionCard draft persistence", () => {
 
     appCommandStore(promptDraftStore).getState().clearDraft(DRAFT_KEY);
 
-    render(
+    renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -850,7 +851,7 @@ describe("QuestionCard draft persistence", () => {
   test("without a draftKey the card keeps plain component state", () => {
     // Callers without a durable pending request (e.g. the tmux TUI selection
     // prompt) must not write into the shared draft store.
-    render(
+    renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -869,7 +870,7 @@ describe("QuestionCard secret handling", () => {
       { id: "token", question: "Token?", secret: true, allowCustomAnswer: true },
     ];
     const onSubmit = mock(async () => false);
-    const first = render(
+    const first = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Secret required"
@@ -897,7 +898,7 @@ describe("QuestionCard secret handling", () => {
   test("never renders a committed secret value or puts it in an accessible label", async () => {
     const secret = "highly-distinct-secret-value";
     const onSubmit = mock(() => true);
-    const rendered = render(
+    const rendered = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Secret required"

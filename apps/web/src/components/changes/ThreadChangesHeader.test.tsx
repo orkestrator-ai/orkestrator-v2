@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ChangeHistoryEntry, ChangeProjection } from "@orkestrator/protocol/change-resources";
 import type { LineCount } from "@orkestrator/protocol/change-measurements";
 import { invoke } from "@/lib/native/backend";
@@ -139,7 +140,7 @@ describe("ThreadChangesHeader", () => {
       pages: new Map(),
     });
     const onOpenDiff = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <ThreadChangesHeader
         environmentId={ENV}
         logicalSessionKey={SESSION}
@@ -173,7 +174,9 @@ describe("ThreadChangesHeader", () => {
       ]),
       pages: new Map(),
     });
-    render(<ThreadChangesHeader environmentId={ENV} logicalSessionKey={SESSION} turnActive />);
+    renderInAppCommandScope(
+      <ThreadChangesHeader environmentId={ENV} logicalSessionKey={SESSION} turnActive />,
+    );
     const tag = await screen.findByTestId("change-state-tag");
     expect(tag.textContent).toContain("Live");
     expect(tag.getAttribute("data-change-state")).toBe("live");
@@ -184,7 +187,7 @@ describe("ThreadChangesHeader", () => {
 
   test("renders nothing when the thread has no segment yet", async () => {
     installBackend({ thread: null, projections: new Map(), pages: new Map() });
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <ThreadChangesHeader environmentId={ENV} logicalSessionKey={SESSION} turnActive={false} />,
     );
     await waitFor(() =>
@@ -200,7 +203,7 @@ describe("ThreadChangesHeader", () => {
   test("re-reads the thread segment when a turn ends", async () => {
     const backend: Backend = { thread: null, projections: new Map(), pages: new Map() };
     installBackend(backend);
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <ThreadChangesHeader environmentId={ENV} logicalSessionKey={SESSION} turnActive />,
     );
     await waitFor(() =>
@@ -274,7 +277,7 @@ describe("ThreadChangesHeader", () => {
       ]),
     });
     const onOpenDiff = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <ThreadChangesHeader
         environmentId={ENV}
         logicalSessionKey={SESSION}

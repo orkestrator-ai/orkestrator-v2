@@ -10,7 +10,8 @@
  * past the file-size guideline.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentDiscoveryUpdate,
   NativeAgentSessionStateUpdate,
@@ -137,7 +138,7 @@ function stateSnapshot(token: string) {
 /** Renders the hook, counting renders and every in-flight flag value seen. */
 function renderCountedSession() {
   const seen = { renders: 0, refreshing: [] as boolean[], stateRefreshing: [] as boolean[] };
-  const rendered = renderHook(() => {
+  const rendered = renderHookInAppCommandScope(() => {
     const session = useNativeAgentSession<TestMessage>({
       platform: "codex",
       environmentId: identity.environmentId,

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { webAnnotationRequestMarker } from "@orkestrator/protocol/web-annotations";
 import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
@@ -59,7 +60,9 @@ describe("web annotation request chip", () => {
 
   test("links a browser-originated turn to its thread without copying text into a draft", async () => {
     const content = `${webAnnotationRequestMarker("req-abc", "implement", 1)}\n\nBrief body`;
-    render(<NativeMessage message={userMessage(content)} assistantLabel="Claude" />);
+    renderInAppCommandScope(
+      <NativeMessage message={userMessage(content)} assistantLabel="Claude" />,
+    );
     expect(screen.getByText(/Web annotation request · change request · 1 note/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open annotation" }));
     await waitFor(() => {
@@ -80,7 +83,7 @@ describe("web annotation request chip", () => {
       { id: "a", text: "button#save", comment: "Too cramped", source: "browser" },
     ]);
     const message = normalizeNativeMessage(userMessage(legacy));
-    render(<NativeMessage message={message} assistantLabel="Claude" />);
+    renderInAppCommandScope(<NativeMessage message={message} assistantLabel="Claude" />);
     expect(screen.queryByRole("button", { name: "Open annotation" }) === null).toBe(true);
     const card = screen.getByTestId("transcript-reference-part");
     expect(card.textContent).toContain("button#save");
@@ -89,7 +92,9 @@ describe("web annotation request chip", () => {
 
   test("a marker-like line that is not the first line is not a request link", () => {
     const content = `Hello\n${webAnnotationRequestMarker("req-abc", "discuss", 1)}`;
-    render(<NativeMessage message={userMessage(content)} assistantLabel="Claude" />);
+    renderInAppCommandScope(
+      <NativeMessage message={userMessage(content)} assistantLabel="Claude" />,
+    );
     expect(screen.queryByRole("button", { name: "Open annotation" }) === null).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { prMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
@@ -93,7 +94,7 @@ describe("usePullRequest", () => {
   });
 
   test("returns initial state with no environment", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     expect(result.current.prUrl).toBeNull();
     expect(result.current.isDetecting).toBe(false);
@@ -114,7 +115,9 @@ describe("usePullRequest", () => {
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.prUrl).toBe("https://github.com/test/repo/pull/123");
   });
@@ -125,7 +128,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       appCommandStore(environmentStore)
@@ -159,7 +164,9 @@ describe("usePullRequest", () => {
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR({ external: true });
@@ -186,7 +193,9 @@ describe("usePullRequest", () => {
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -209,7 +218,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -230,7 +241,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -251,7 +264,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -271,7 +286,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR({ external: true });
@@ -294,7 +311,9 @@ describe("usePullRequest", () => {
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -310,7 +329,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -336,7 +357,9 @@ describe("usePullRequest", () => {
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR({ external: true });
@@ -359,7 +382,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => result.current.viewPR({ external: true }));
     expect(result.current.error).toBe("browser unavailable");
@@ -382,7 +407,9 @@ describe("usePullRequest", () => {
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.prUrl).toBe("https://github.com/test/repo/pull/123");
 
@@ -407,7 +434,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.resetPR();
@@ -418,7 +447,7 @@ describe("usePullRequest", () => {
   });
 
   test("resetPR does nothing when no environmentId", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     await act(async () => {
       await result.current.resetPR();
@@ -432,7 +461,9 @@ describe("usePullRequest", () => {
       states: new Map([["env-1", monitorState("env-1", { checkInProgress: true })]]),
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.isDetecting).toBe(true);
   });
@@ -449,7 +480,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.checkSummary).toBeNull();
 
@@ -468,13 +501,17 @@ describe("usePullRequest", () => {
   });
 
   test("isDetecting is false for an unmonitored environment", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.isDetecting).toBe(false);
   });
 
   test("setModeCreatePending requests backend create-pending monitoring", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeCreatePending();
@@ -484,7 +521,9 @@ describe("usePullRequest", () => {
   });
 
   test("setModeMergePending requests backend merge-pending monitoring", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeMergePending();
@@ -494,7 +533,9 @@ describe("usePullRequest", () => {
   });
 
   test("arms the backend-owned post-completion PR refresh", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     let armedAt: string | null | undefined;
     await act(async () => {
@@ -506,7 +547,7 @@ describe("usePullRequest", () => {
   });
 
   test("arm refresh is a null no-op without an environment", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     let armedAt: string | null | undefined;
     await act(async () => {
@@ -519,13 +560,17 @@ describe("usePullRequest", () => {
 
   test("arm refresh propagates backend rejection to its caller", async () => {
     mockArmPrRefreshAfterAgentCompletion.mockRejectedValueOnce(new Error("arm rejected"));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await expect(result.current.armRefreshAfterAgentCompletion()).rejects.toThrow("arm rejected");
   });
 
   test("disarms the exact backend-owned refresh token", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.disarmRefreshAfterAgentCompletion("armed-at-1");
@@ -535,7 +580,7 @@ describe("usePullRequest", () => {
   });
 
   test("disarm refresh is a no-op without an environment", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     await act(async () => {
       await result.current.disarmRefreshAfterAgentCompletion("armed-at-1");
@@ -546,7 +591,9 @@ describe("usePullRequest", () => {
 
   test("disarm refresh propagates backend rejection to its caller", async () => {
     mockDisarmPrRefreshAfterAgentCompletion.mockRejectedValueOnce(new Error("disarm rejected"));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await expect(result.current.disarmRefreshAfterAgentCompletion("armed-at-1")).rejects.toThrow(
       "disarm rejected",
@@ -555,7 +602,9 @@ describe("usePullRequest", () => {
 
   test("a failed mode request is swallowed rather than thrown into the caller", async () => {
     mockPrMonitorWatch.mockImplementation(() => Promise.reject(new Error("backend offline")));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeMergePending();
@@ -566,7 +615,9 @@ describe("usePullRequest", () => {
 
   test("a failed create-pending request is contained by the hook", async () => {
     mockPrMonitorWatch.mockRejectedValueOnce(new Error("backend offline"));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeCreatePending();
@@ -576,7 +627,7 @@ describe("usePullRequest", () => {
   });
 
   test("setModeCreatePending does nothing when no environmentId", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     act(() => {
       result.current.setModeCreatePending();
@@ -586,7 +637,7 @@ describe("usePullRequest", () => {
   });
 
   test("setModeMergePending does nothing when no environmentId", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     act(() => {
       result.current.setModeMergePending();

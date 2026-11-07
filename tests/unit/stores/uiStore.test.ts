@@ -14,7 +14,7 @@ import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 // The window's chrome (sidebar, width, sort, zoom) is `uiChromeStore`, one per
 // window and persisted under the window key; a node's selection, collapsed
 // projects and recents are the scoped `uiStore`, persisted under the node's
-// key (plan item 3006). `useUIStore`'s statics are the app command scope's.
+// key (plan item 3006). The suite seeds the app command scope's store (`appCommandStore(uiStore)`).
 const WINDOW_KEY = windowStorageKey("ui-storage");
 const NODE_KEY = desktopConnectionStorageKey("ui-project-storage", COMMAND_STORAGE_NODE);
 const windows: WindowScope[] = [];

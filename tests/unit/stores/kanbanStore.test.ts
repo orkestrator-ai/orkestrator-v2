@@ -74,7 +74,7 @@ mock.module("@/lib/backend", () => ({
 const { kanbanStore, findTaskForEnvironment } =
   (await import("../../../apps/web/src/stores/kanbanStore.ts?kanban-store-test")) as typeof import("../../../apps/web/src/stores/kanbanStore");
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
-// The statics seed the app command scope's stores; the lookup reads that scope.
+// The suite seeds the app command scope's stores; the lookup reads that scope.
 import { appCommandScope } from "@/lib/node-scope-slots";
 import type { KanbanTask } from "@/lib/backend";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";

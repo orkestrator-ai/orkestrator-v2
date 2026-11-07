@@ -19,22 +19,15 @@
  * arbitrary sleep.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  renderHook,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope, renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import { createSessionKey } from "@/lib/utils";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import { configStore, useConfigStore } from "@/stores/configStore";
+import { configStore, type ConfigState } from "@/stores/configStore";
 import { mockToastError as toastError } from "../../../../tests/mocks/sonner";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -208,7 +201,7 @@ function captureDraftSaveTimers() {
 }
 
 let saveTimers: ReturnType<typeof captureDraftSaveTimers> | undefined;
-let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
+let configSnapshot: ConfigState["config"];
 
 beforeEach(() => {
   cleanup();
@@ -399,7 +392,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
           attachments: [file, image],
         }),
       });
-      const hook = renderHook(() =>
+      const hook = renderHookInAppCommandScope(() =>
         useNativeComposeDraftPersistence(
           platform,
           environmentId,
@@ -436,7 +429,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
           metadata: { platform, fastMode: false, mode: "build" },
         }),
       });
-      const hook = renderHook(() =>
+      const hook = renderHookInAppCommandScope(() =>
         useNativeComposeDraftPersistence(
           "agent-native",
           environmentId,
@@ -471,7 +464,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
           metadata: { platform, fastMode: false, mode: "build" },
         }),
       });
-      const hook = renderHook(() =>
+      const hook = renderHookInAppCommandScope(() =>
         useNativeComposeDraftPersistence(
           platform,
           environmentId,
@@ -500,7 +493,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         attachments: [image],
       }),
     });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "cursor",
         environmentId,
@@ -526,7 +519,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     const fallbackKey = composeDraftKey("agent-native", environmentId, sessionKey);
     const fallback = deferred<StoredDraft>();
     serveDrafts({ [key]: null, [fallbackKey]: fallback.promise });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "grok",
         environmentId,
@@ -573,7 +566,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     saveComposeDraft
       .mockRejectedValueOnce(new Error("Compose draft revision conflict"))
       .mockResolvedValueOnce({ ...stored, revision: 3 });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "cursor",
         environmentId,
@@ -611,7 +604,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         metadata: { platform: "gpt-9" },
       }),
     });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "agent-native",
         environmentId,
@@ -641,7 +634,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         attachments: [file, image],
       }),
     });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "claude-tmux",
         environmentId,
@@ -709,7 +702,7 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   }
 
   function renderComposer(tabId: string, onSend = mock((..._args: unknown[]) => undefined)) {
-    const view = render(
+    const view = renderInAppCommandScope(
       <UnassignedNativeAgentComposer
         tabId={tabId}
         environmentId={environmentId}

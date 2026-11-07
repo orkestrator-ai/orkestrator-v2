@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { exactCount, type ChangeMeasurement } from "@orkestrator/protocol/change-measurements";
 import {
   environmentChangeResourceKey,
@@ -251,7 +252,7 @@ describe("DiffViewerTab historical targets", () => {
         ]),
       ]);
 
-    render(<DiffViewerTab target={historical} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
 
     expect(await screen.findByText("+new")).toBeTruthy();
     expect(screen.getByText("-old")).toBeTruthy();
@@ -287,7 +288,7 @@ describe("DiffViewerTab historical targets", () => {
         },
       );
 
-    render(<DiffViewerTab target={historical} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
 
     await screen.findByText("+x");
     expect(screen.getByText("src/old.ts renamed to src/new.ts")).toBeTruthy();
@@ -307,7 +308,7 @@ describe("DiffViewerTab historical targets", () => {
       identityId: "diff-h",
     });
 
-    render(<DiffViewerTab target={historical} filePath="src/app.ts" isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={historical} filePath="src/app.ts" isActive />);
 
     expect(await screen.findByText("This diff is no longer available")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
@@ -322,7 +323,7 @@ describe("DiffViewerTab historical targets", () => {
       identityId: "diff-h",
     });
 
-    render(<DiffViewerTab target={historical} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
 
     expect(await screen.findByText("This diff could not be found")).toBeTruthy();
   });
@@ -335,7 +336,7 @@ describe("DiffViewerTab historical targets", () => {
       return diffBody(fileIdentity("diff-h"), [fileBody("src/app.ts", [line("add", "back")])]);
     };
 
-    render(<DiffViewerTab target={historical} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
 
     expect(await screen.findByText("gateway offline")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -360,7 +361,7 @@ describe("DiffViewerTab historical targets", () => {
             nextCursor: "1",
           });
 
-    render(<DiffViewerTab target={{ ...historical, title: "Turn 3" }} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={{ ...historical, title: "Turn 3" }} isActive />);
 
     expect(await screen.findByText("+first")).toBeTruthy();
     expect(screen.getByRole("region", { name: "a.ts" })).toBeTruthy();
@@ -394,7 +395,7 @@ describe("DiffViewerTab historical targets", () => {
         }),
       });
 
-    render(<DiffViewerTab target={{ ...historical, title: "Turn 3" }} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={{ ...historical, title: "Turn 3" }} isActive />);
 
     expect(await screen.findByText("+first")).toBeTruthy();
     expect(screen.getByTestId("diff-viewer-files-capped").textContent).toBe(
@@ -421,7 +422,7 @@ describe("DiffViewerTab historical targets", () => {
           ]);
     };
 
-    render(<DiffViewerTab target={historical} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
 
     expect(await screen.findByText("+indented-new")).toBeTruthy();
     expect(screen.getByTestId("diff-viewer-counts").textContent).toBe("+7 -2");
@@ -447,7 +448,7 @@ describe("DiffViewerTab historical targets", () => {
         fileBody("src/app.ts", [line("remove", "old"), line("add", "new")]),
       ]);
 
-    const { container } = render(<DiffViewerTab target={historical} isActive />);
+    const { container } = renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
 
     await screen.findByText("+new");
     const sideBySide = screen.getByRole("button", { name: "Side by side" });
@@ -465,7 +466,7 @@ describe("DiffViewerTab historical targets", () => {
     handlers.changes_get_diff = () =>
       diffBody(fileIdentity("diff-h"), [fileBody("src/app.ts", [line("add", "kept")])]);
 
-    render(<DiffViewerTab target={historical} isActive={false} />);
+    renderInAppCommandScope(<DiffViewerTab target={historical} isActive={false} />);
 
     expect(await screen.findByText("+kept")).toBeTruthy();
     expect(screen.getByTestId("diff-viewer").className).toContain("opacity-0");
@@ -501,7 +502,9 @@ describe("DiffViewerTab live targets", () => {
     liveHandlers();
     const onSwitchToFileView = mock(() => {});
 
-    render(<DiffViewerTab target={live} isActive onSwitchToFileView={onSwitchToFileView} />);
+    renderInAppCommandScope(
+      <DiffViewerTab target={live} isActive onSwitchToFileView={onSwitchToFileView} />,
+    );
 
     expect(await screen.findByText("+body of diff-live-1")).toBeTruthy();
     expect(calls("changes_resolve_live_detail")).toEqual([
@@ -522,7 +525,7 @@ describe("DiffViewerTab live targets", () => {
 
   test("reconnect and returning from an inactive environment resolve missed same-count edits", async () => {
     liveHandlers();
-    const view = render(<DiffViewerTab target={live} isActive />);
+    const view = renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+body of diff-live-1");
     act(() => appCommandStore(changeProjectionStore).getState().resync());
     await screen.findByText("+body of diff-live-2");
@@ -536,13 +539,13 @@ describe("DiffViewerTab live targets", () => {
     handlers.changes_resolve_live_detail = () => {
       throw new Error("unknown command");
     };
-    render(<DiffViewerTab target={live} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     expect(await screen.findByText(/This host does not support change diffs/)).toBeTruthy();
   });
 
   test("re-resolves when the content generation names this file, and only then", async () => {
     liveHandlers();
-    render(<DiffViewerTab target={live} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+body of diff-live-1");
 
     // Another file changed: nothing to do.
@@ -582,7 +585,7 @@ describe("DiffViewerTab live targets", () => {
 
   test("ignores invalidations of another resource", async () => {
     liveHandlers();
-    render(<DiffViewerTab target={live} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+body of diff-live-1");
 
     act(() => {
@@ -596,7 +599,7 @@ describe("DiffViewerTab live targets", () => {
 
   test("reloads on request", async () => {
     liveHandlers();
-    render(<DiffViewerTab target={live} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     await screen.findByText("+body of diff-live-1");
 
     fireEvent.click(screen.getByRole("button", { name: "Reload diff" }));
@@ -615,7 +618,7 @@ describe("DiffViewerTab live targets", () => {
     handlers.changes_get_diff = () =>
       diffBody(fileIdentity("diff-fresh"), [fileBody("src/app.ts", [line("add", "fresh")])]);
 
-    render(
+    renderInAppCommandScope(
       <DiffViewerTab
         target={{ ...live, path: undefined, pathId: "p:src/app.ts", rowId: "m-0:3", revision: 4 }}
         isActive
@@ -635,7 +638,7 @@ describe("DiffViewerTab live targets", () => {
       error: { code: "stale-revision", reasonKey: "changes.error.stale-revision" },
     });
 
-    render(
+    renderInAppCommandScope(
       <DiffViewerTab
         target={{
           kind: "live",
@@ -668,7 +671,7 @@ describe("DiffViewerTab live targets", () => {
     handlers.changes_get_diff = () =>
       diffBody(fileIdentity("diff-ok"), [fileBody("src/app.ts", [line("add", "ok")])]);
 
-    render(<DiffViewerTab target={live} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
 
     expect(await screen.findByText("Diff unavailable")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -688,7 +691,7 @@ describe("DiffViewerTab live targets", () => {
         fileBody("src/app.ts", [line("add", String(args?.diffIdentityId))]),
       ]);
 
-    render(<DiffViewerTab target={live} isActive />);
+    renderInAppCommandScope(<DiffViewerTab target={live} isActive />);
     await waitFor(() => expect(calls("changes_resolve_live_detail")).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "Reload diff" }));
 
@@ -713,7 +716,7 @@ describe("DiffViewerTab on a mobile viewport", () => {
         fileBody("src/components/Button.tsx", [line("add", "button")], { status: "added" }),
       ]);
 
-    const { container } = render(<DiffViewerTab target={historical} isActive />);
+    const { container } = renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
 
     await screen.findByText("+button");
     expect(screen.queryByRole("button", { name: "Side by side" }) === null).toBe(true);
@@ -731,7 +734,7 @@ describe("DiffViewerTab on a mobile viewport", () => {
     handlers.changes_get_diff = () =>
       diffBody(fileIdentity("diff-h"), [fileBody("src/app.ts", [line("add", "x")])]);
 
-    const { container } = render(<DiffViewerTab target={historical} isActive />);
+    const { container } = renderInAppCommandScope(<DiffViewerTab target={historical} isActive />);
     await screen.findByText("+x");
     expect(container.querySelector("pre")).not.toBeNull();
 

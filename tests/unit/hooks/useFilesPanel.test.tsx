@@ -1,6 +1,7 @@
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { configStore } from "../../../apps/web/src/stores/configStore";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
@@ -324,7 +325,7 @@ describe("useFilesPanel", () => {
     setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
@@ -349,7 +350,7 @@ describe("useFilesPanel", () => {
     setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456", true);
@@ -370,7 +371,7 @@ describe("useFilesPanel", () => {
     mockGetFileTree.mockImplementation(() => Promise.resolve(tree));
     mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
@@ -396,7 +397,7 @@ describe("useFilesPanel", () => {
     setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
 
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
@@ -420,7 +421,7 @@ describe("useFilesPanel", () => {
     mockGetGitStatus.mockImplementation(() => Promise.resolve([{ ...change }]));
     mockGetFileTree.mockImplementation(() => Promise.resolve(JSON.parse(JSON.stringify(tree))));
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     await waitFor(() => {
       expect(appCommandStore(filesPanelStore).getState().changes).toHaveLength(1);
       expect(appCommandStore(filesPanelStore).getState().fileTree).toHaveLength(1);
@@ -485,7 +486,7 @@ describe("useFilesPanel", () => {
         value: nextTree,
       });
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     await waitFor(() => {
       expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
       expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(tree);
@@ -535,7 +536,7 @@ describe("useFilesPanel", () => {
     setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
 
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "abc123def456", true);
@@ -555,7 +556,7 @@ describe("useFilesPanel", () => {
     setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
     mockGetLocalFileTree.mockImplementation(() => Promise.resolve(tree));
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
@@ -580,7 +581,7 @@ describe("useFilesPanel", () => {
     setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "trunk", true);
@@ -603,7 +604,7 @@ describe("useFilesPanel", () => {
       Promise.resolve(comparisonRef === "release" ? [releaseChange] : [change]),
     );
 
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
       expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
@@ -647,7 +648,7 @@ describe("useFilesPanel", () => {
       fileTree: tree,
     });
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     expect(result.current.isAvailable).toBe(false);
     expect(appCommandStore(filesPanelStore).getState().changes).toEqual([]);
@@ -659,7 +660,7 @@ describe("useFilesPanel", () => {
   test("manual loads clear their snapshots without calling the backend when unavailable", async () => {
     resetStores();
     appCommandStore(filesPanelStore).setState({ changes: [change], fileTree: tree });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await Promise.all([result.current.loadChanges(), result.current.loadFileTree()]);
@@ -689,7 +690,7 @@ describe("useFilesPanel", () => {
         }),
     );
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let firstLoad: Promise<void>;
     let secondLoad: Promise<void>;
@@ -726,7 +727,7 @@ describe("useFilesPanel", () => {
           resolveTree = resolve;
         }),
     );
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let firstLoad: Promise<void>;
     let secondLoad: Promise<void>;
@@ -755,7 +756,7 @@ describe("useFilesPanel", () => {
     resetStores(environment);
     mockGetGitStatus.mockImplementation(() => Promise.reject(new Error("git failed")));
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     act(() => appCommandStore(filesPanelStore).setState({ changes: [change] }));
 
     await act(async () => {
@@ -777,7 +778,7 @@ describe("useFilesPanel", () => {
     resetStores(environment);
     mockGetGitStatus.mockImplementation(() => Promise.reject(new Error("git failed")));
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     act(() => appCommandStore(filesPanelStore).setState({ changes: [change] }));
 
     await act(async () => {
@@ -799,7 +800,7 @@ describe("useFilesPanel", () => {
     resetStores(environment);
     mockGetLocalFileTree.mockImplementation(() => Promise.reject(new Error("tree failed")));
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     act(() => appCommandStore(filesPanelStore).setState({ fileTree: tree }));
 
     await act(async () => {
@@ -821,7 +822,7 @@ describe("useFilesPanel", () => {
     resetStores(environment);
     mockGetLocalFileTree.mockImplementation(() => Promise.reject(new Error("tree failed")));
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     act(() => appCommandStore(filesPanelStore).setState({ fileTree: tree }));
 
     await act(async () => {
@@ -874,7 +875,7 @@ describe("useFilesPanel", () => {
         : Promise.resolve(secondTree),
     );
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetGitStatus).toHaveBeenCalledWith("container-a", "develop", true);
@@ -937,7 +938,7 @@ describe("useFilesPanel", () => {
         : Promise.resolve(freshTree);
     });
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     let preMutationRefresh: Promise<unknown>;
     act(() => {
       preMutationRefresh = Promise.all([
@@ -999,7 +1000,7 @@ describe("useFilesPanel", () => {
         }),
     );
 
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     let mutation: Promise<void>;
     act(() => {
       mutation = result.current.deleteFile("src", { target: "folder" });
@@ -1061,7 +1062,7 @@ describe("useFilesPanel", () => {
     });
     resetStores(environment);
     setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     await waitFor(() =>
       expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(advanced),
     );
@@ -1108,7 +1109,7 @@ describe("useFilesPanel", () => {
       createdFromCommit: "abc123def456",
     });
     resetStores(environment);
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.revertFile("src/App.tsx");
@@ -1129,7 +1130,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.deleteFile("src/App.tsx");
@@ -1150,7 +1151,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(containerEnvironment);
-    const { result, unmount } = renderHook(() => useFilesPanel());
+    const { result, unmount } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.revertFile("src/App.tsx");
@@ -1166,7 +1167,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(localEnvironment);
-    const localHook = renderHook(() => useFilesPanel());
+    const localHook = renderHookInAppCommandScope(() => useFilesPanel());
     await act(async () => {
       await localHook.result.current.deleteFile("src/App.tsx");
     });
@@ -1182,7 +1183,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(containerEnvironment);
-    const containerHook = renderHook(() => useFilesPanel());
+    const containerHook = renderHookInAppCommandScope(() => useFilesPanel());
     mockMoveContainerFile.mockResolvedValueOnce("App.tsx");
     await act(async () => {
       await containerHook.result.current.moveFile("src/App.tsx", ".");
@@ -1202,7 +1203,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(localEnvironment);
-    const localHook = renderHook(() => useFilesPanel());
+    const localHook = renderHookInAppCommandScope(() => useFilesPanel());
     await act(async () => {
       await localHook.result.current.moveFile("src/App.tsx", "archive");
     });
@@ -1220,7 +1221,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(containerEnvironment);
-    const containerHook = renderHook(() => useFilesPanel());
+    const containerHook = renderHookInAppCommandScope(() => useFilesPanel());
     mockCreateContainerFolder.mockResolvedValueOnce("src/hooks");
     await act(async () => {
       await expect(containerHook.result.current.createFolder("src", "hooks")).resolves.toBe(
@@ -1242,7 +1243,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(localEnvironment);
-    const localHook = renderHook(() => useFilesPanel());
+    const localHook = renderHookInAppCommandScope(() => useFilesPanel());
     await act(async () => {
       await localHook.result.current.createFolder(".", "docs");
     });
@@ -1260,7 +1261,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(containerEnvironment);
-    const containerHook = renderHook(() => useFilesPanel());
+    const containerHook = renderHookInAppCommandScope(() => useFilesPanel());
     await act(async () => {
       await expect(
         containerHook.result.current.renameFile("src/App.tsx", "Main.tsx"),
@@ -1285,7 +1286,7 @@ describe("useFilesPanel", () => {
       status: "stopped",
     });
     resetStores(localEnvironment);
-    const localHook = renderHook(() => useFilesPanel());
+    const localHook = renderHookInAppCommandScope(() => useFilesPanel());
     await act(async () => {
       await localHook.result.current.renameFile("README.md", "readme.md");
     });
@@ -1310,7 +1311,7 @@ describe("useFilesPanel", () => {
           rejectRename = reject;
         }),
     );
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let mutation: Promise<string>;
     act(() => {
@@ -1345,7 +1346,7 @@ describe("useFilesPanel", () => {
           rejectCreate = reject;
         }),
     );
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let mutation: Promise<string>;
     act(() => {
@@ -1380,7 +1381,7 @@ describe("useFilesPanel", () => {
           rejectMove = reject;
         }),
     );
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let mutation: Promise<void>;
     act(() => {
@@ -1436,7 +1437,7 @@ describe("useFilesPanel", () => {
         ],
       ]),
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await expect(result.current.moveFile("src/App.tsx", "archive")).rejects.toThrow(
       "Close the file's editor tab before moving it",
@@ -1485,7 +1486,7 @@ describe("useFilesPanel", () => {
         ],
       ]),
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await expect(result.current.renameFile("src/App.tsx", "Main.tsx")).rejects.toThrow(
@@ -1515,7 +1516,7 @@ describe("useFilesPanel", () => {
           rejectDelete = reject;
         }),
     );
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let mutation: Promise<void>;
     act(() => {
@@ -1543,7 +1544,7 @@ describe("useFilesPanel", () => {
     });
     resetStores(environment);
     mockRevertLocalFile.mockRejectedValue(new Error("revert failed"));
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await expect(result.current.revertFile("src/App.tsx")).rejects.toThrow("revert failed");
@@ -1556,7 +1557,7 @@ describe("useFilesPanel", () => {
 
   test("rejects mutations when the selected environment is unavailable", async () => {
     resetStores();
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await expect(result.current.revertFile("src/App.tsx")).rejects.toThrow(
       "The selected environment is not available",
@@ -1588,7 +1589,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.deleteFile(["src/App.tsx", "README.md"]);
@@ -1623,7 +1624,7 @@ describe("useFilesPanel", () => {
     });
     resetStores(environment);
     appCommandStore(filesPanelStore).setState({ expandedFolders: ["src", "docs"] });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.deleteFile(["src"], { target: "folder" });
@@ -1683,7 +1684,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await expect(
       result.current.moveFile(["src/notes.txt", "lib/notes.txt"], "archive"),
@@ -1706,7 +1707,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await expect(
       result.current.moveFile(["src/notes.txt", "archive/notes.txt"], "archive"),
@@ -1729,7 +1730,7 @@ describe("useFilesPanel", () => {
         ? Promise.reject(new Error("permission denied"))
         : Promise.resolve(filePath),
     );
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let caught: unknown;
     await act(async () => {
@@ -1771,7 +1772,7 @@ describe("useFilesPanel", () => {
         ? Promise.reject(new Error("destination in use"))
         : Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
     );
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let caught: unknown;
     await act(async () => {
@@ -1801,7 +1802,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.deleteFile([]);
@@ -1867,7 +1868,7 @@ describe("useFilesPanel", () => {
         ],
       ]),
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await expect(
       result.current.moveFile(["src/App.tsx", "src/main.ts"], "archive"),
@@ -1896,7 +1897,7 @@ describe("useFilesPanel", () => {
         .mockImplementationOnce(() => Promise.resolve([]))
         .mockImplementationOnce(() => Promise.resolve([change]));
 
-      const { unmount } = renderHook(() => useFilesPanel());
+      const { unmount } = renderHookInAppCommandScope(() => useFilesPanel());
 
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
@@ -1946,7 +1947,7 @@ describe("useFilesPanel", () => {
         .mockImplementationOnce(() => Promise.resolve([]))
         .mockImplementationOnce(() => Promise.resolve(refreshedTree));
 
-      renderHook(() => useFilesPanel());
+      renderHookInAppCommandScope(() => useFilesPanel());
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
         expect(mockGetFileTree).toHaveBeenCalledTimes(1);

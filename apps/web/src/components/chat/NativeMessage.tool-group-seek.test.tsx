@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useImperativeHandle } from "react";
 import type { Ref } from "react";
 import * as realVirtuoso from "react-virtuoso";
@@ -34,7 +35,7 @@ test("an open virtualized group seeks the named member and detaches its listener
     content: `step ${index}`,
     toolState: "success",
   }));
-  const { container, unmount } = render(
+  const { container, unmount } = renderInAppCommandScope(
     <TerminalProvider>
       <NativeMessage
         agentExpansionScope="seek-component"

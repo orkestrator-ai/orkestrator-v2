@@ -1,6 +1,7 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { fileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
 import {
@@ -63,7 +64,7 @@ describe("useFileSave", () => {
   test("writes current container content and marks it saved", async () => {
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     appCommandStore(fileDirtyStore).getState().setContent("tab", "updated");
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "README.md",
@@ -94,7 +95,7 @@ describe("useFileSave", () => {
     // An agent changed the file; the tab remounted and read it back.
     appCommandStore(fileDirtyStore).getState().observeDiskContent("tab", "agent's version");
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "README.md",
@@ -116,7 +117,7 @@ describe("useFileSave", () => {
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     appCommandStore(fileDirtyStore).getState().setContent("tab", "mine");
     const reload = mock(() => undefined);
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "notes.md",
@@ -156,7 +157,7 @@ describe("useFileSave", () => {
 
   test("flushes a Unicode override through the local save path", async () => {
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "notes.md",
@@ -179,7 +180,7 @@ describe("useFileSave", () => {
 
   test("encodes empty and chunk-spanning UTF-8 content", async () => {
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "large.md",
@@ -201,21 +202,21 @@ describe("useFileSave", () => {
   });
 
   test("rejects saves with missing environment identifiers or content", async () => {
-    const local = renderHook(() =>
+    const local = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "local",
         filePath: "README.md",
         isLocalEnvironment: true,
       }),
     );
-    const container = renderHook(() =>
+    const container = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "container",
         filePath: "README.md",
         isLocalEnvironment: false,
       }),
     );
-    const noContent = renderHook(() =>
+    const noContent = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "empty",
         filePath: "README.md",
@@ -236,7 +237,7 @@ describe("useFileSave", () => {
     writeContainerFileMock.mockRejectedValueOnce(new Error("disk unavailable"));
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     appCommandStore(fileDirtyStore).getState().setContent("tab", "updated");
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "README.md",
@@ -266,7 +267,7 @@ describe("useFileSave", () => {
     writeContainerFileMock.mockImplementationOnce(() => write.promise);
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     appCommandStore(fileDirtyStore).getState().setContent("tab", "captured-for-save");
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "README.md",
@@ -302,7 +303,7 @@ describe("useFileSave", () => {
     writeContainerFileMock.mockImplementationOnce(() => write.promise);
     appCommandStore(fileDirtyStore).getState().setOriginalContent("tab", "original");
     appCommandStore(fileDirtyStore).getState().setContent("tab", "saving");
-    const { result, unmount } = renderHook(() =>
+    const { result, unmount } = renderHookInAppCommandScope(() =>
       useFileSave({
         tabId: "tab",
         filePath: "README.md",

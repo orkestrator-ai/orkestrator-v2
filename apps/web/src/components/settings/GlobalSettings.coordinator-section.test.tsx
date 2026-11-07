@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as backend from "@/lib/backend";
 import { GLOBAL_SETTINGS_SECTIONS, onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { configStore } from "@/stores/configStore";
@@ -22,7 +23,7 @@ afterEach(() => {
 });
 
 function mount(section: string) {
-  return render(
+  return renderInAppCommandScope(
     <AccountMachineProvider value={{ machine: null, name: "Local" }}>
       <MachineConfigProvider machine={null}>
         <GlobalSettings activeSection={section} />

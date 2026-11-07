@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   WORKTREE_SNAPSHOT_CHANGED_EVENT,
@@ -142,7 +143,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
   test("an announced revision restores quiet polling without explicit refresh", async () => {
     const { clock, coordinator } = installFakeReadCoordinator();
     coordinator.setDataSaving(true);
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     await act(() => clock.advance(60_000));
     const before = listSpy.mock.calls.length;
@@ -157,7 +158,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
   });
 
   test("an announced list revision re-reads the list once, even with identical counts", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     expect(listSpy).toHaveBeenCalledTimes(1);
 
@@ -181,7 +182,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
 
   test("a tree revision re-reads only the tree on the all-files tab", async () => {
     appCommandStore(filesPanelStore).setState({ activeTab: "all-files" });
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     expect(treeSpy).toHaveBeenCalledTimes(1);
     const listReads = listSpy.mock.calls.length;
@@ -217,7 +218,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
       value: { children: [], truncated: false },
     });
     spies.push(subtreeSpy);
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     const originalTree = appCommandStore(filesPanelStore).getState().fileTree;
     const reads = subtreeSpy.mock.calls.length;
@@ -240,7 +241,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
   });
 
   test("a retargeted lineage is re-read even at a lower revision", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     targetGeneration = 2;
     listRevision = 1;
@@ -250,7 +251,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
   });
 
   test("a hidden document leaves announced reads to the coordinator's return", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
     listRevision = 2;
@@ -260,7 +261,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
   });
 
   test("a manual refresh asks the backend for a post-click observation", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     await act(async () => {
       await result.current.refresh();
@@ -270,14 +271,14 @@ describe("useFilesPanel worktree snapshot revisions", () => {
 
   test("a legacy backend (no stamps, no revisions command) keeps polling only", async () => {
     legacy = true;
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     expect(appCommandStore(worktreeSnapshotStore).getState().syncStatus).toBe("unsupported");
     expect(listSpy).toHaveBeenCalledTimes(1);
   });
 
   test("an unchanged read with the same stamp does not rewrite the store", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     const before = appCommandStore(filesPanelStore).getState().changes;
     listSpy.mockImplementation(async () => ({
@@ -342,7 +343,7 @@ describe("useFilesPanel persisted diff baselines", () => {
   test("baseline advances and explicit clears retarget status reads and revert actions", async () => {
     const revert = spyOn(backend, "revertLocalFile").mockResolvedValue("");
     spies.push(revert);
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     expect(paths()).toEqual(["own.txt", "upstream.txt"]);
     update({ diffBaseline: { createdFromCommit: created, commit: advanced } });
@@ -363,19 +364,19 @@ describe("useFilesPanel persisted diff baselines", () => {
   });
 
   test("returning from an inactive environment and remounting recover the persisted selection", async () => {
-    const first = renderHook(() => useFilesPanel());
+    const first = renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: null }));
     first.unmount();
     update({ diffBaseline: { createdFromCommit: created, commit: advanced } });
     act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" }));
-    const returned = renderHook(() => useFilesPanel());
+    const returned = renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     expect(paths()).toEqual(["own.txt"]);
     expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(advanced);
     returned.unmount();
     resetReadCoordinatorForTests();
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     expect(listSpy.mock.calls.at(-1)?.[1]).toBe(advanced);
     expect(paths()).toEqual(["own.txt"]);
@@ -383,7 +384,7 @@ describe("useFilesPanel persisted diff baselines", () => {
 
   test("a baseline for another checkout is ignored", async () => {
     update({ diffBaseline: { createdFromCommit: "c".repeat(40), commit: advanced } });
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await flush();
     expect(listSpy.mock.calls.at(-1)?.[1]).toBe(created);
     expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(created);

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { mcpFailure, type McpEnvironmentOverlayState } from "@orkestrator/protocol/mcp-management";
 
@@ -53,7 +54,7 @@ async function renderOverlay(state: McpEnvironmentOverlayState | undefined, extr
     ),
   );
   requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-  render(<ProviderMcpSettings />);
+  renderInAppCommandScope(<ProviderMcpSettings />);
   return await screen.findByLabelText("This environment: this environment's changes");
 }
 
@@ -201,7 +202,7 @@ describe("environment overlay states", () => {
       }),
     });
     requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const reapply = (await screen.findByRole("button", {
       name: "Reapply this environment's changes",
     })) as HTMLButtonElement;
@@ -326,7 +327,7 @@ describe("where a container's servers run", () => {
       })),
     );
     requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const warnings = await screen.findByRole("list", { name: "Warnings for docs" });
     expect(within(warnings).getByText(/does not exist in this container/)).toBeTruthy();
   });
@@ -334,7 +335,7 @@ describe("where a container's servers run", () => {
   test("the URL field says where it connects from, and why sign-in is not offered", async () => {
     install(containerHandlers(() => ({ sources: [environmentSource()] })));
     requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     expect(screen.getByText(/It runs on container of env-a when/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "HTTP" }));
@@ -353,7 +354,7 @@ describe("where a container's servers run", () => {
       }),
     );
     requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -382,7 +383,7 @@ describe("where a container's servers run", () => {
       ),
     );
     requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     const saveTo = screen.getByRole("combobox", { name: "Save to" });
     expect(saveTo.textContent).toContain("Choose where to save");
@@ -430,7 +431,7 @@ test("a corrupt record exposes reset recovery and rehydrates the writable source
     ),
   );
   requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-  const mounted = render(<ProviderMcpSettings />);
+  const mounted = renderInAppCommandScope(<ProviderMcpSettings />);
   expect(await screen.findByText("Saved changes could not be read")).toBeTruthy();
   const reset = screen.getByRole("button", { name: /Reset to inherited/ }) as HTMLButtonElement;
   expect(reset.disabled).toBe(false);
@@ -444,7 +445,7 @@ test("a corrupt record exposes reset recovery and rehydrates the writable source
   );
   mounted.unmount();
   requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-  render(<ProviderMcpSettings />);
+  renderInAppCommandScope(<ProviderMcpSettings />);
   expect(await screen.findByRole("button", { name: /Refresh from backend user/ })).toBeTruthy();
   expectDomAbsent(
     screen.queryByRole("button", { name: /Reset to inherited/ }),
@@ -486,7 +487,7 @@ test("a source blocked during review disables both saves and preserves the draft
     onClose: () => {},
     onReload: () => {},
   };
-  const mounted = render(<McpServerEditor {...props} />);
+  const mounted = renderInAppCommandScope(<McpServerEditor {...props} />);
   fireEvent.change(screen.getByLabelText("Name"), {
     target: { value: "files" },
   });

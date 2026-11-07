@@ -4,7 +4,8 @@
  * committed body on demand and reports a stored transcript it cannot read.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
@@ -160,7 +161,7 @@ function renderTab() {
       }}
     />
   );
-  const view = render(element(true));
+  const view = renderInAppCommandScope(element(true));
   fireEvent.click(screen.getByRole("tab", { name: /^Verify,/ }));
   return { rerender: (isActive = true) => view.rerender(element(isActive)) };
 }
@@ -319,7 +320,7 @@ describe("BuildChatTab referenced transcripts", () => {
         composer={false}
       />
     );
-    const view = render(element(true, true));
+    const view = renderInAppCommandScope(element(true, true));
     expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({
       transcripts: true,
       prioritySessionKey: "build-key",
@@ -448,7 +449,7 @@ test("graph activation reads retain the merged row through singleton trimming an
       ownsGlobalShortcuts={false}
     />
   );
-  const view = render(element);
+  const view = renderInAppCommandScope(element);
   const original = screen.getByTestId("transcript-row");
   expect(original.getAttribute("data-row-id")).toBe("a");
   expect(original.textContent).toContain("3");
@@ -499,7 +500,7 @@ test("pipeline row aliases survive acceptance revealing and hiding a document", 
       />
     );
   };
-  const view = render(element(false));
+  const view = renderInAppCommandScope(element(false));
   const original = screen.getByTestId("transcript-row");
   expect(original.getAttribute("data-row-id")).toBe("a");
   view.rerender(element(true));

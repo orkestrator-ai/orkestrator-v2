@@ -1,5 +1,6 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
-import { act, cleanup, render, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { Profiler } from "react";
 import type { Environment, EnvironmentType } from "../../../apps/web/src/types";
 import {
@@ -182,7 +183,7 @@ function itemElement(env: Environment, options: RenderOptions = {}) {
 }
 
 function renderItem(env: Environment, options: RenderOptions = {}) {
-  return render(itemElement(env, options));
+  return renderInAppCommandScope(itemElement(env, options));
 }
 
 function getRowMarker(container: HTMLElement) {
@@ -296,7 +297,7 @@ test("shows authoritative unseen and failed agent-mail badges", () => {
 test("only reacts to its own resolved activity state", () => {
   const environment = makeEnvironment();
   const onRender = mock(() => undefined);
-  render(
+  renderInAppCommandScope(
     <Profiler id="environment-row" onRender={onRender}>
       {itemElement(environment)}
     </Profiler>,
@@ -963,7 +964,7 @@ describe("EnvironmentItem menu actions and selection", () => {
   test("disables container lifecycle actions while Docker is unavailable", () => {
     const onStart = mock(() => {});
     const onRestart = mock(() => {});
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         {itemElement(makeEnvironment({ status: "running" }), { onStart, onRestart })}
       </DockerAvailabilityProvider>,
@@ -1219,7 +1220,7 @@ describe("EnvironmentItem mobile actions menu", () => {
     // dnd-kit drag activation and Radix's context-menu long-press both hang off
     // pointerdown on an ancestor; the trigger must not start either.
     const ancestorPointerDown = mock(() => {});
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <div onPointerDown={ancestorPointerDown}>{itemElement(makeEnvironment())}</div>,
     );
 
@@ -1427,7 +1428,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
   test("disables Fork container when Docker is unavailable", async () => {
     const onFork = mock((_environmentId: string, _environmentType: EnvironmentType) => {});
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         {itemElement(makeEnvironment(), { onFork })}
       </DockerAvailabilityProvider>,
@@ -1627,7 +1628,7 @@ describe("live-spec sidebar probe", () => {
           agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
         },
       ]);
-    render(
+    renderInAppCommandScope(
       <>
         {itemElement(makeEnvironment({ id: "env-working", name: "probe-working" }))}
         {itemElement(makeEnvironment({ id: "env-waiting", name: "probe-waiting" }))}
@@ -1662,7 +1663,7 @@ describe("live-spec sidebar probe", () => {
           agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
         },
       ]);
-    render(
+    renderInAppCommandScope(
       <>
         <span id="pane-title">probe-working</span>
         {itemElement(makeEnvironment({ id: "env-working", name: "probe-working" }))}

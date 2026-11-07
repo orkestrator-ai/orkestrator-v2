@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
@@ -33,7 +34,7 @@ function renderShippedPullRequest() {
     selectedProjectId: "project-1",
     selectedEnvironmentId: "pipeline-env",
   });
-  render(
+  renderInAppCommandScope(
     <PipelinePullRequestView
       environmentId="pipeline-env"
       shipped
@@ -77,14 +78,14 @@ test("failed checks take precedence over simultaneous pending checks", () => {
   const checks = { total: 4, passed: 2, pending: 1 };
   expect(pipelineCheckState(checks)).toBe("failing");
   expect(pipelineCheckSummary(checks)).toBe("2 of 4 checks passed · 1 failing · 1 pending");
-  const { container } = render(<PipelinePullRequestChecks checks={checks} />);
+  const { container } = renderInAppCommandScope(<PipelinePullRequestChecks checks={checks} />);
   expect(container.querySelector('[data-pr-checks="failing"]')?.textContent).toContain(
     "CI failing",
   );
 });
 
 test("zero checks and unknown checks have explicit labels", () => {
-  const { rerender, container } = render(
+  const { rerender, container } = renderInAppCommandScope(
     <PipelinePullRequestChecks checks={{ total: 0, passed: 0, pending: 0 }} />,
   );
   expect(screen.getByText("No CI checks")).toBeTruthy();
@@ -95,7 +96,7 @@ test("zero checks and unknown checks have explicit labels", () => {
 });
 
 test.each(["merged", "closed"] as const)("labels a %s PR alongside its CI summary", (state) => {
-  render(
+  renderInAppCommandScope(
     <PipelinePullRequestView
       environmentId="test-pr-environment"
       shipped

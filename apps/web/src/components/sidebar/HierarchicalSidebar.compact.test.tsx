@@ -7,8 +7,8 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { requestAppShortcut } from "@/lib/app-shortcuts";
-import { agentMailStore, useAgentMailStore } from "@/stores/agentMailStore";
-import { configStore, useConfigStore } from "@/stores/configStore";
+import { agentMailStore, type AgentMailState } from "@/stores/agentMailStore";
+import { configStore, type ConfigState } from "@/stores/configStore";
 import { coordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -370,12 +370,12 @@ describe("status on an icon", () => {
           ...appCommandStore(configStore).getState().config.global,
           agentMessaging: { enabled: true },
         },
-      } as ReturnType<typeof useConfigStore.getState>["config"],
+      } as ConfigState["config"],
     });
     appCommandStore(agentMailStore).setState({
       summary: new Map([
         ["mailbox", { projectId: "local", unreadCount: 12, failedInjectCount: 0 }],
-      ]) as unknown as ReturnType<typeof useAgentMailStore.getState>["summary"],
+      ]) as unknown as AgentMailState["summary"],
     });
     renderSidebar();
     const [icon] = await findCompactIcons(1);

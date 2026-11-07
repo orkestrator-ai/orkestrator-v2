@@ -3,7 +3,8 @@
  * session's own key owns them, and their cards resolve in that conversation.
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import { invoke } from "@/lib/native/backend";
 import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
@@ -138,7 +139,7 @@ describe("published artifacts in a build-pipeline stage transcript", () => {
         publications: [workflowPublicationView(workflowArtifactRef("art_other0001", "Not mine"))],
       },
     ]);
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BuildChatTab
         isActive
         data={{

@@ -1,6 +1,7 @@
 import { DESIGN_KEYBOARD_SHORTCUTS, KEYBOARD_SHORTCUT_GROUPS } from "@/lib/keyboard-shortcuts";
 import { afterEach, beforeEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignElement } from "@orkestrator/protocol/design-canvas";
 import type { DesignOperationDescriptor } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
@@ -56,7 +57,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("undo and redo follow authoritative availability and submit own-scope operations", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const undo = await screen.findByRole("button", { name: "Undo design change" });
@@ -80,7 +81,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("shortcuts route to design undo only for the owning pane and never from text fields", async () => {
-    render(
+    renderInAppCommandScope(
       <>
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />
         <DesignCanvasTab
@@ -124,7 +125,7 @@ describe("DesignCanvasTab", () => {
     });
     window.addEventListener("keydown", appZoomReset);
     try {
-      render(
+      renderInAppCommandScope(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       const title = await screen.findByRole("button", { name: "Move frame A" });
@@ -162,7 +163,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("the shared catalog matches design help, zoom, move and resize handlers", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const title = await screen.findByRole("button", { name: "Move frame A" });
@@ -206,7 +207,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("selecting a frame title outlines the frame and Delete removes it", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const title = await screen.findByRole("button", { name: "Move frame A" });
@@ -248,7 +249,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("Backspace deletes the selected frame; Escape and the canvas background deselect it", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const title = await screen.findByRole("button", { name: "Move frame B" });
@@ -294,7 +295,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("focusing another title or a Layers row cannot delete the previously selected frame", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const titleA = await screen.findByRole("button", { name: "Move frame A" });
@@ -321,7 +322,7 @@ describe("DesignCanvasTab", () => {
         (operation.op === "hitTest" ? hit.promise : Promise.resolve(undefined)) as Promise<never>,
     );
     try {
-      render(
+      renderInAppCommandScope(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       const titleB = await screen.findByRole("button", { name: "Move frame B" });
@@ -359,7 +360,7 @@ describe("DesignCanvasTab", () => {
         Promise.resolve(operation.op === "hitTest" ? element : undefined) as Promise<never>,
     );
     try {
-      render(
+      renderInAppCommandScope(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       const title = await screen.findByRole("button", { name: "Move frame A" });
@@ -404,7 +405,7 @@ describe("DesignCanvasTab", () => {
       return Promise.resolve(undefined) as Promise<never>;
     });
     try {
-      render(
+      renderInAppCommandScope(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       const titleA = await screen.findByRole("button", { name: "Move frame A" });
@@ -504,7 +505,7 @@ describe("DesignCanvasTab", () => {
           }) as Promise<never>;
         return Promise.resolve(undefined) as Promise<never>;
       });
-      render(
+      renderInAppCommandScope(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       await screen.findByRole("button", { name: "Move frame A" });
@@ -727,7 +728,7 @@ describe("DesignCanvasTab", () => {
       return Promise.resolve(undefined) as Promise<never>;
     });
     try {
-      render(
+      renderInAppCommandScope(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       const titleA = await screen.findByRole("button", { name: "Move frame A" });
@@ -759,7 +760,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("Delete removes the frame without confirmation, and non-editable canvases ignore it", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const title = await screen.findByRole("button", { name: "Move frame A" });
@@ -794,7 +795,7 @@ describe("DesignCanvasTab", () => {
     const gate = deferred();
     backend.executeBarrier = (descriptor) =>
       descriptor.input.kind === "delete_frame" ? gate.promise : Promise.resolve();
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const title = await screen.findByRole("button", { name: "Move frame A" });
@@ -814,7 +815,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("two views of one canvas share one projection", async () => {
-    render(
+    renderInAppCommandScope(
       <>
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />
         <DesignCanvasTab
@@ -833,7 +834,7 @@ describe("DesignCanvasTab", () => {
   test("an edit finishing while the tab is unmounted appears on return", async () => {
     const gate = deferred();
     backend.executeBarrier = () => gate.promise;
-    const first = render(
+    const first = renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const undo = await screen.findByRole("button", { name: "Undo design change" });
@@ -845,7 +846,7 @@ describe("DesignCanvasTab", () => {
       gate.resolve();
     });
     await waitFor(() => expect(backend.revision).toBe(2));
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     expect(await screen.findByText("Revision 2")).toBeTruthy();
@@ -853,7 +854,7 @@ describe("DesignCanvasTab", () => {
 
   test("a deleted canvas shows a recoverable deleted state even without a deletion hint", async () => {
     backend.deleted = true;
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     expect(await screen.findByText(/was deleted/)).toBeTruthy();
@@ -862,7 +863,7 @@ describe("DesignCanvasTab", () => {
   });
 
   test("workspace persistence and repository export are labelled separately", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     expect(await screen.findByText("Saved in workspace")).toBeTruthy();
@@ -885,7 +886,7 @@ describe("DesignCanvasTab", () => {
       unobserve() {}
       disconnect() {}
     } as unknown as typeof ResizeObserver;
-    render(
+    renderInAppCommandScope(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
     const toolbar = await screen.findByRole("toolbar", { name: "Design tools" });
@@ -939,7 +940,7 @@ describe("DesignCanvasTab", () => {
           ) as Promise<never>,
       );
       try {
-        render(
+        renderInAppCommandScope(
           <DesignCanvasTab
             canvasId={canvasId}
             environmentId="env-1"
@@ -1005,7 +1006,7 @@ describe("DesignCanvasTab", () => {
         Promise.resolve(operation.op === "hitTest" ? element : undefined) as Promise<never>,
     );
     try {
-      render(
+      renderInAppCommandScope(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       await screen.findByRole("button", { name: "Move frame A" });

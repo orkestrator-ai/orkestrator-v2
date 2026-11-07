@@ -3,7 +3,8 @@
  * with it the whole agent tab (WEB-2's narrower subscriptions).
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionProjection,
   NativeAgentSessionStateUpdate,
@@ -105,7 +106,7 @@ afterAll(() => {
 
 function renderCountedSession() {
   const seen = { renders: 0 };
-  const rendered = renderHook(() => {
+  const rendered = renderHookInAppCommandScope(() => {
     seen.renders += 1;
     return useNativeAgentSession<TestMessage>({
       platform: "codex",

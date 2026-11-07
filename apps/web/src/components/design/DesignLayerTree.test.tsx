@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   DesignFrame,
   DesignHierarchyPage,
@@ -110,7 +111,7 @@ function setup(overrides: Partial<DesignLayerTreeProps> = {}) {
     ...callbacks,
     ...overrides,
   };
-  const view = render(<DesignLayerTree {...props} />);
+  const view = renderInAppCommandScope(<DesignLayerTree {...props} />);
   const rerender = (next: Partial<DesignLayerTreeProps>) => {
     Object.assign(props, next);
     view.rerender(<DesignLayerTree {...props} />);

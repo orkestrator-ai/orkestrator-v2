@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as backend from "@/lib/backend";
@@ -40,7 +41,7 @@ describe("SoundsSettings", () => {
       }),
     );
 
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent stopped sound" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
@@ -65,7 +66,7 @@ describe("SoundsSettings", () => {
       }),
     );
 
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent stopped sound" }));
     fireEvent.click(screen.getByRole("switch", { name: "Pull request merged sound" }));
 
@@ -95,7 +96,7 @@ describe("SoundsSettings", () => {
     const getConfig = spyOn(backend, "getConfig").mockResolvedValue(authoritative);
     const report = spyOn(toast, "error").mockImplementation(() => "toast-id");
 
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent stopped sound" }));
 
     await waitFor(() => expect(getConfig).toHaveBeenCalledTimes(1));
@@ -124,7 +125,7 @@ describe("SoundsSettings", () => {
       structuredClone(originalConfig),
     );
 
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent stopped sound" }));
     fireEvent.click(screen.getByRole("switch", { name: "Pull request merged sound" }));
     first.reject(new Error("first save failed"));
@@ -157,7 +158,7 @@ describe("SoundsSettings", () => {
     const getConfig = spyOn(backend, "getConfig").mockRejectedValue(new Error("read failed"));
     const report = spyOn(toast, "error").mockImplementation(() => "toast-id");
 
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent stopped sound" }));
 
     await waitFor(() => expect(getConfig).toHaveBeenCalledTimes(1));
@@ -185,7 +186,7 @@ describe("SoundsSettings", () => {
       });
     const play = spyOn(notificationSounds, "playNotificationSound").mockResolvedValue(true);
 
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Preview Agent stopped" }));
     fireEvent.click(screen.getByRole("button", { name: "Preview Pull request merged" }));
     fireEvent.click(screen.getByRole("button", { name: "Preview Coordinator report" }));
@@ -234,7 +235,7 @@ describe("question alerts", () => {
 
   test("the question cue and the desktop notification save independently", async () => {
     const update = saving();
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent question sound" }));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update.mock.calls[0]?.[0]).toMatchObject({
@@ -255,7 +256,7 @@ describe("question alerts", () => {
 
   test("a browser that has not decided is asked from the Allow button", async () => {
     permission = "default";
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     expect(screen.getByText(/not been allowed to show notifications yet/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Allow notifications" }));
     await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
@@ -279,7 +280,7 @@ describe("question alerts", () => {
         },
       });
     const update = saving();
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     fireEvent.click(screen.getByRole("switch", { name: "Agent questions desktop notification" }));
     await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
@@ -288,7 +289,7 @@ describe("question alerts", () => {
 
   test("explains a blocked browser", () => {
     permission = "denied";
-    render(<SoundsSettings />);
+    renderInAppCommandScope(<SoundsSettings />);
     expect(screen.getByText(/has blocked notifications/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Allow notifications" }) === null).toBe(true);
   });
@@ -325,7 +326,7 @@ for (const machine of ["other"]) {
         }),
     );
     try {
-      render(
+      renderInAppCommandScope(
         <AccountMachineProvider value={{ machine, name: "Selected" }}>
           <MachineConfigProvider machine={machine}>
             <SoundsSettings />

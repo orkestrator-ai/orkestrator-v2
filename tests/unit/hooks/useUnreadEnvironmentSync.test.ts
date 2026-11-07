@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, renderHook } from "@testing-library/react";
+import { act } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
 import { environmentStore } from "@/stores/environmentStore";
 import { uiStore } from "@/stores/uiStore";
@@ -54,7 +55,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
 
     expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false, null);
@@ -70,7 +71,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
 
     expect(setEnvironmentUnreadMock).not.toHaveBeenCalled();
@@ -86,7 +87,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
 
     expect(setEnvironmentUnreadMock).not.toHaveBeenCalled();
@@ -105,7 +106,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
     await act(async () => {
       appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" });
@@ -121,7 +122,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
     expect(setEnvironmentUnreadMock).not.toHaveBeenCalled();
 
@@ -141,7 +142,7 @@ describe("useUnreadEnvironmentSync", () => {
     });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
 
     expect(setEnvironmentUnreadMock).not.toHaveBeenCalled();
@@ -157,7 +158,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
       await Promise.resolve();
     });
 
@@ -175,7 +176,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
 
     expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false, lastActivityAt);
@@ -197,7 +198,7 @@ describe("useUnreadEnvironmentSync", () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
     await act(async () => {
-      renderHook(() => useUnreadEnvironmentSync());
+      renderHookInAppCommandScope(() => useUnreadEnvironmentSync());
     });
 
     // The user navigates away before newer work completes. The original clear

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { pullRequestsStore, usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { AUTO_EXPAND_FILE_LIMIT, PullRequestCodeTab } from "./PullRequestCodeTab";
@@ -39,7 +40,7 @@ describe("PullRequestCodeTab", () => {
       set_github_pull_request_file_viewed: () => pending.promise,
       get_github_pull_request_files: () => makeFiles(),
     });
-    render(<ConnectedCodeTab />);
+    renderInAppCommandScope(<ConnectedCodeTab />);
 
     expect(screen.getByTestId("pull-request-diff")).toBeTruthy();
     const checkbox = screen.getByRole("checkbox", { name: "Viewed src/app.ts" });
@@ -68,7 +69,7 @@ describe("PullRequestCodeTab", () => {
         [key, makeFiles({ files: [makeFile({ patchAvailable: false, hunks: [] })] })],
       ]),
     });
-    render(<ConnectedCodeTab />);
+    renderInAppCommandScope(<ConnectedCodeTab />);
     expect(screen.getByText(/Diff not available here/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /View on GitHub/ })).toBeTruthy();
   });
@@ -80,7 +81,7 @@ describe("PullRequestCodeTab", () => {
     appCommandStore(pullRequestsStore).setState({
       files: new Map([[key, makeFiles({ files: many })]]),
     });
-    render(<ConnectedCodeTab />);
+    renderInAppCommandScope(<ConnectedCodeTab />);
     expect(screen.queryByTestId("pull-request-diff") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Expand all files" }));
     expect(screen.getAllByTestId("pull-request-diff")).toHaveLength(many.length);

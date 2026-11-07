@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realBackend from "@/lib/backend";
-import { claudeTmuxStore, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { claudeTmuxStore } from "@/stores/claudeTmuxStore";
 import type { PersistedPromptQueue } from "@/types";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -37,7 +37,7 @@ const queueKey = `claude-tmux\u0000${sessionKey}`;
 
 function setTmuxProjection(messages: TestQueuedMessage[]): void {
   (
-    useClaudeTmuxStore as unknown as {
+    appCommandStore(claudeTmuxStore) as unknown as {
       setState: (partial: { messageQueue: Map<string, TestQueuedMessage[]> }) => void;
     }
   ).setState({ messageQueue: new Map([[sessionKey, messages]]) });

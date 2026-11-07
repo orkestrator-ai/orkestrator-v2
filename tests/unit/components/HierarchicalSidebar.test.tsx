@@ -15,6 +15,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createElement, type ComponentProps } from "react";
 import type { CollisionDetection, DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
@@ -24,7 +25,7 @@ import { claudeOptionsStore, configStore, environmentStore, projectStore, uiStor
 import type { Environment, Project } from "@/types";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
-// Suites seed through the statics, which are the app command scope's stores.
+// Suites seed the app command scope's stores (appCommandStore) and render under it.
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import {
@@ -237,7 +238,7 @@ describe("HierarchicalSidebar", () => {
     useMachineViewStore.getState().setGrouping("project");
     let view: ReturnType<typeof render> | undefined;
     try {
-      view = render(
+      view = renderInAppCommandScope(
         <FederationProvider>
           <HierarchicalSidebar />
         </FederationProvider>,
@@ -310,7 +311,7 @@ describe("HierarchicalSidebar", () => {
     useMachineViewStore.getState().setGrouping("repository");
     let view: ReturnType<typeof render> | undefined;
     try {
-      view = render(
+      view = renderInAppCommandScope(
         <FederationProvider>
           <HierarchicalSidebar />
         </FederationProvider>,
@@ -377,7 +378,7 @@ describe("HierarchicalSidebar", () => {
       useMachineViewStore.getState().setGrouping(mode);
       let view: ReturnType<typeof render> | undefined;
       try {
-        view = render(
+        view = renderInAppCommandScope(
           <FederationProvider>
             <HierarchicalSidebar />
           </FederationProvider>,
@@ -571,7 +572,7 @@ describe("HierarchicalSidebar", () => {
       },
     } as Window["orkestrator"];
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       expect(await screen.findByRole("button", { name: "Connected server: Local" })).toBeTruthy();
     } finally {
       cleanup();
@@ -582,14 +583,14 @@ describe("HierarchicalSidebar", () => {
   test("renders a local project icon outside federation", () => {
     const icon = "data:image/png;base64,YQ==";
     projectsValue = [{ ...project, icon }];
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     const row = screen.getByRole("button", { name: /^Project One/ });
     expect(within(row).getByTestId("project-icon").getAttribute("src")).toBe(icon);
     expect(within(row).queryByTestId("machine-home-icon") === null).toBe(true);
   });
 
   test("shows a project and environment search bar under the host switcher", () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     expect(screen.getByRole("button", { name: "Search projects and environments" })).toBeTruthy();
   });
 
@@ -611,7 +612,7 @@ describe("HierarchicalSidebar", () => {
       collapsedProjectFolders: ["Work"],
     });
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     expect(screen.queryByRole("button", { name: /^Project One/i }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Search projects and environments" }));
@@ -644,7 +645,7 @@ describe("HierarchicalSidebar", () => {
       collapsedProjectFolders: ["Work"],
     });
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     expect(screen.queryByRole("button", { name: "Needs Start" }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Search projects and environments" }));
@@ -660,7 +661,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("offers project and activity sorting next to refresh and persists the selection", async () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
     expect(await screen.findByRole("menuitemradio", { name: "By project" })).toBeTruthy();
@@ -687,7 +688,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-22T10:00:00.000Z",
       },
     ];
-    const view = render(<HierarchicalSidebar />);
+    const view = renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
     await screen.findByRole("menuitemradio", { name: "By project" });
@@ -696,7 +697,7 @@ describe("HierarchicalSidebar", () => {
     view.unmount();
 
     useUIChromeStore.getState().setEnvironmentSortMode("activity");
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By activity" }));
     expect(
       (await screen.findByRole("menuitemradio", { name: "Priority order" })).getAttribute(
@@ -737,7 +738,7 @@ describe("HierarchicalSidebar", () => {
     ];
     useUIChromeStore.getState().setEnvironmentSortMode("activity");
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     expect(screen.getByRole("button", { name: "Create environment" })).toBeTruthy();
     const rows = Array.from(
@@ -757,7 +758,7 @@ describe("HierarchicalSidebar", () => {
     environmentsValue = [createdEnvironment];
     useUIChromeStore.getState().setEnvironmentSortMode("activity");
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     expect(screen.getByTestId("sidebar-list-content").className).toBe("pb-2");
     expect(screen.getByTestId("activity-controls-bar").className).toContain("h-10");
@@ -768,7 +769,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("keeps outer vertical padding for project, empty, and loading states", () => {
-    const view = render(<HierarchicalSidebar />);
+    const view = renderInAppCommandScope(<HierarchicalSidebar />);
     expect(screen.getByTestId("sidebar-list-content").className).toBe("py-2");
 
     projectsValue = [];
@@ -811,7 +812,7 @@ describe("HierarchicalSidebar", () => {
     ];
     useUIChromeStore.setState({ environmentSortMode: "activity" });
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     expect(screen.getByLabelText("3 environments")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
@@ -840,7 +841,7 @@ describe("HierarchicalSidebar", () => {
     ];
     useUIChromeStore.setState({ environmentSortMode: "activity" });
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     expect(screen.getByLabelText("New completed activity")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
@@ -865,7 +866,7 @@ describe("HierarchicalSidebar", () => {
       },
     ];
     useUIChromeStore.getState().setEnvironmentSortMode("activity");
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Settings environment/ }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Settings" }));
@@ -888,7 +889,7 @@ describe("HierarchicalSidebar", () => {
       },
     ];
     useUIChromeStore.getState().setEnvironmentSortMode("activity");
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Fork local" }));
@@ -916,7 +917,7 @@ describe("HierarchicalSidebar", () => {
     forkEnvironmentMock.mockRejectedValueOnce(new Error("published to a remote"));
     useUIChromeStore.getState().setEnvironmentSortMode("activity");
     const logs = captureLogs();
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Fork local" }));
@@ -973,7 +974,7 @@ describe("HierarchicalSidebar", () => {
       },
     ];
     useUIChromeStore.getState().setEnvironmentSortMode("activity");
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Fork local" }));
@@ -1162,7 +1163,7 @@ describe("HierarchicalSidebar", () => {
       ];
       useUIChromeStore.getState().setEnvironmentSortMode("activity");
 
-      const view = render(<HierarchicalSidebar />);
+      const view = renderInAppCommandScope(<HierarchicalSidebar />);
       const list = screen.getByTestId("activity-environment-list");
       expect(animationCalls.size).toBe(0);
 
@@ -1245,7 +1246,7 @@ describe("HierarchicalSidebar", () => {
         { ...createdEnvironment, id: "env-c", lastActivityAt: "2026-07-23T10:00:00.000Z" },
       ];
       useUIChromeStore.getState().setEnvironmentSortMode("activity");
-      const view = render(<HierarchicalSidebar />);
+      const view = renderInAppCommandScope(<HierarchicalSidebar />);
 
       // The first row grows, moving later rows without changing their indices.
       rowHeights.set("env-a", 80);
@@ -1318,7 +1319,7 @@ describe("HierarchicalSidebar", () => {
         { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
       ];
       useUIChromeStore.getState().setEnvironmentSortMode("activity");
-      const view = render(<HierarchicalSidebar />);
+      const view = renderInAppCommandScope(<HierarchicalSidebar />);
 
       environmentsValue = environmentsValue.map((environment) =>
         environment.id === "env-b"
@@ -1373,7 +1374,7 @@ describe("HierarchicalSidebar", () => {
         { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
       ];
       useUIChromeStore.getState().setEnvironmentSortMode("activity");
-      const view = render(<HierarchicalSidebar />);
+      const view = renderInAppCommandScope(<HierarchicalSidebar />);
 
       environmentsValue = [
         ...environmentsValue,
@@ -1522,7 +1523,7 @@ describe("HierarchicalSidebar", () => {
     useUIChromeStore.setState({ environmentSortMode: "activity" });
     appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-newest" });
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     fireEvent.click(screen.getByRole("button", { name: /Oldest environment/ }), { shiftKey: true });
 
     expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
@@ -1536,7 +1537,7 @@ describe("HierarchicalSidebar", () => {
     const reload = mock(() => undefined);
     window.location.reload = reload as unknown as typeof window.location.reload;
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     const refreshButton = screen.getByRole("button", {
       name: "Refresh projects, environments, tabs, and layout",
@@ -1553,13 +1554,13 @@ describe("HierarchicalSidebar", () => {
   test("renders distinct loading and empty project states", () => {
     projectsValue = [];
     projectsLoadingValue = true;
-    const loadingView = render(<HierarchicalSidebar />);
+    const loadingView = renderInAppCommandScope(<HierarchicalSidebar />);
     expect(screen.getByText("Loading projects...")).toBeTruthy();
     expect(screen.queryByText("No projects yet") === null).toBe(true);
 
     loadingView.unmount();
     projectsLoadingValue = false;
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     expect(screen.getByText("No projects yet")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
   });
@@ -1570,7 +1571,7 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-2", name: "Environment Two" },
     ];
     appCommandStore(uiStore).setState({ selectedEnvironmentIds: ["env-1", "env-2"] });
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.keyDown(window, { key: "Enter" });
     expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-1", "env-2"]);
@@ -1580,7 +1581,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("propagates initial prompt image attachments into launch options", async () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
 
@@ -1633,7 +1634,7 @@ describe("HierarchicalSidebar", () => {
       source: "host-cli",
       available: false,
     });
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
     fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
@@ -1654,7 +1655,7 @@ describe("HierarchicalSidebar", () => {
         }),
     );
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
     await screen.findByText(/^Create Ork \(Environment\)/);
@@ -1692,7 +1693,7 @@ describe("HierarchicalSidebar", () => {
           resolveCreate = resolve;
         }),
     );
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
     const createButton = await screen.findByRole("button", { name: "Create Environment" });
@@ -1713,7 +1714,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("persists prompt naming intent before auto-starting", async () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
     const prompt = await screen.findByLabelText(/Initial Prompt/i);
@@ -1747,7 +1748,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Create environment"));
       fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
 
@@ -1772,7 +1773,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("clears and restores the create target when the dialog is cancelled and reopened", async () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
     await screen.findByText(/^Create Ork \(Environment\)/);
@@ -1801,7 +1802,7 @@ describe("HierarchicalSidebar", () => {
   test("opens the create dialog when a machine section asks for this window's machine", async () => {
     portalStore.store.setState({ selfId: "bk_here" as never });
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       act(() =>
         openMachineWorkspace({
           connectionId: "bk_here",
@@ -1831,7 +1832,7 @@ describe("HierarchicalSidebar", () => {
       appCommandStore(configStore).setState({ hasLoaded: false });
       askForCreate("project-1");
       try {
-        render(<NodeWorkspaceHost />);
+        renderInAppCommandScope(<NodeWorkspaceHost />);
         // Its defaults come from config, so the dialog waits for it.
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
@@ -1859,7 +1860,7 @@ describe("HierarchicalSidebar", () => {
           </DockerAvailabilityProvider>
         );
         try {
-          const view = render(sidebar(false));
+          const view = renderInAppCommandScope(sidebar(false));
           act(() => {
             const config = appCommandStore(configStore).getState().config;
             appCommandStore(configStore)
@@ -1934,7 +1935,7 @@ describe("HierarchicalSidebar", () => {
       appCommandStore(projectStore).setState({ hasLoaded: false });
       askForCreate(project.id);
       try {
-        const view = render(<NodeWorkspaceHost />);
+        const view = renderInAppCommandScope(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         projectsValue = [project];
         projectsLoadingValue = true;
@@ -1953,7 +1954,7 @@ describe("HierarchicalSidebar", () => {
       projectsValue = [];
       askForCreate(project.id);
       try {
-        const view = render(<NodeWorkspaceHost />);
+        const view = renderInAppCommandScope(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         // A later project refresh must not revive an already discarded request.
         projectsValue = [project];
@@ -1970,7 +1971,7 @@ describe("HierarchicalSidebar", () => {
       appCommandStore(configStore).setState({ hasLoaded: false, isLoading: true });
       askForCreate(project.id);
       try {
-        const view = render(<NodeWorkspaceHost />);
+        const view = renderInAppCommandScope(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         act(() => {
           appCommandStore(configStore).getState().setError("Config could not be loaded");
@@ -1998,7 +1999,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Create environment"));
       fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
 
@@ -2031,7 +2032,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Create environment"));
       const prompt = await screen.findByLabelText(/Initial Prompt/i);
       fireEvent.change(prompt, { target: { value: "Rename after startup" } });
@@ -2073,7 +2074,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentId: null,
     });
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     const header = getProjectHeader(screen.getByRole("button", { name: /^Project One/i }));
     expect(header.className).toContain("from-selected");
@@ -2087,7 +2088,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentId: "env-1",
     });
 
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     const header = getProjectHeader(screen.getByRole("button", { name: /^Project One/i }));
     expect(header.className).not.toContain("from-selected");
@@ -2098,7 +2099,7 @@ describe("HierarchicalSidebar", () => {
     // The periodic safety net is owned by resource-sync's own timer, which
     // raises a resync; the sidebar's list-sync hook no longer runs a second
     // interval of its own.
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalled());
     loadEnvironmentsMock.mockClear();
 
@@ -2115,7 +2116,7 @@ describe("HierarchicalSidebar", () => {
 
   test("refreshes environments when another client announces a change", async () => {
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalled());
       loadEnvironmentsMock.mockClear();
 
@@ -2139,7 +2140,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("auto-collapses projects that have no environments after initial loading", async () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     await waitFor(() => {
       expect(appCommandStore(uiStore).getState().collapsedProjects).toContain("project-1");
@@ -2148,7 +2149,7 @@ describe("HierarchicalSidebar", () => {
 
   test("reloads project environments after the environment store is reset", async () => {
     environmentsValue = [{ ...createdEnvironment, id: "env-1" }];
-    const view = render(<HierarchicalSidebar />);
+    const view = renderInAppCommandScope(<HierarchicalSidebar />);
     await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1"));
     loadEnvironmentsMock.mockClear();
 
@@ -2167,7 +2168,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       await waitFor(() => {
         expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1");
@@ -2208,7 +2209,7 @@ describe("HierarchicalSidebar", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-1",
     });
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Environment Three" }), { shiftKey: true });
     expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
@@ -2234,7 +2235,7 @@ describe("HierarchicalSidebar", () => {
     document.body.appendChild(input);
     try {
       input.focus();
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Mobile Environment" }));
 
@@ -2251,7 +2252,7 @@ describe("HierarchicalSidebar", () => {
     document.body.appendChild(input);
     try {
       input.focus();
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Desktop Environment" }));
 
@@ -2280,7 +2281,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByRole("button", { name: "Local Environment" }));
       await waitFor(() =>
         expect(logs.records()).toContainEqual(
@@ -2320,7 +2321,7 @@ describe("HierarchicalSidebar", () => {
         status: "creating",
       },
     ];
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Ready Local" }));
     fireEvent.click(screen.getByRole("button", { name: "Creating Local" }));
@@ -2335,7 +2336,7 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-stopped", name: "Stopped", order: 1, status: "stopped" },
     ];
     appCommandStore(uiStore).setState({ selectedEnvironmentIds: ["env-running", "env-stopped"] });
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Stop selected"));
     await waitFor(() => expect(stopEnvironmentMock).toHaveBeenCalledWith("env-running"));
@@ -2370,7 +2371,7 @@ describe("HierarchicalSidebar", () => {
         selectedProjectId: "project-1",
         selectedEnvironmentId: "env-failed-cleanup",
       });
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(screen.getByRole("button", { name: /^Failed Cleanup/ }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Retry delete" }));
@@ -2397,7 +2398,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentId: "env-failed-cleanup",
       selectedEnvironmentIds: ["env-failed-cleanup"],
     });
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Delete selected"));
     fireEvent.click(await screen.findByRole("button", { name: "Delete All" }));
@@ -2428,7 +2429,7 @@ describe("HierarchicalSidebar", () => {
       },
     ];
     appCommandStore(environmentStore).getState().setEnvironments(environmentsValue);
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByRole("button", { name: /^In Flight/ }), { metaKey: true });
     expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
@@ -2468,7 +2469,7 @@ describe("HierarchicalSidebar", () => {
         <HierarchicalSidebar />
       </DockerAvailabilityProvider>
     );
-    const view = render(renderSidebar(true));
+    const view = renderInAppCommandScope(renderSidebar(true));
 
     view.rerender(renderSidebar(false));
 
@@ -2502,7 +2503,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Stop selected"));
       await waitFor(() =>
         expect(logs.records()).toContainEqual(
@@ -2556,7 +2557,7 @@ describe("HierarchicalSidebar", () => {
     addProjectMock.mockImplementationOnce(async () => {
       throw new Error("repository already exists");
     });
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Add project"));
     fireEvent.change(await screen.findByLabelText(/Git URL/i), {
@@ -2578,7 +2579,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("creates a scratch project through the add project dialog", async () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Add project"));
     fireEvent.mouseDown(await screen.findByRole("tab", { name: "Create new" }), { button: 0 });
@@ -2599,7 +2600,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.click(screen.getByTitle("Add project"));
       fireEvent.mouseDown(await screen.findByRole("tab", { name: "Create new" }), { button: 0 });
@@ -2627,7 +2628,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("opens repository settings from the project context menu", async () => {
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     const projectButton = screen.getByRole("button", { name: /^Project One/i });
 
     fireEvent.contextMenu(projectButton);
@@ -2658,7 +2659,7 @@ describe("HierarchicalSidebar", () => {
 
   test("deletes a project through its confirmation dialog", async () => {
     environmentsValue = [{ ...createdEnvironment, id: "env-1", name: "Environment One" }];
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
@@ -2678,7 +2679,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
       fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
@@ -2709,7 +2710,7 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-1", order: 0 },
       { ...createdEnvironment, id: "env-2", order: 1 },
     ];
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
 
     act(() => {
       currentDndContextProps().onDragStart?.({ active: { id: "project-1" } } as DragStartEvent);
@@ -2759,7 +2760,7 @@ describe("HierarchicalSidebar", () => {
     const logs = captureLogs();
 
     try {
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
       act(() => {
         currentDndContextProps().onDragStart?.({ active: { id: "project-1" } } as DragStartEvent);
       });
@@ -2874,7 +2875,7 @@ describe("HierarchicalSidebar", () => {
   test("project teardown fences activation and deletes a home admitted before teardown", async () => {
     const { ensureProjectHomeInStore } = await import("@/hooks/useFilesPanel");
     const { useProjectHomeActivation } = await import("@/hooks/useProjectHomeActivation");
-    const { renderHook } = await import("@testing-library/react");
+    const { renderHookInAppCommandScope } = await import("@/test/render-in-node-scope");
     let resolve!: (home: Environment) => void;
     ensureProjectHomeMock.mockImplementationOnce(
       () =>
@@ -2888,7 +2889,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentId: createdEnvironment.id,
     });
     const pending = ensureProjectHomeInStore(project.id);
-    renderHook(() => useProjectHomeActivation());
+    renderHookInAppCommandScope(() => useProjectHomeActivation());
     const deleting = deleteProjectAndEnvironments(
       project.id,
       [createdEnvironment],
@@ -2936,7 +2937,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentId: home.id,
       projectBoardTab: "home",
     });
-    const view = render(<HierarchicalSidebar />);
+    const view = renderInAppCommandScope(<HierarchicalSidebar />);
     expect(screen.queryByText("project-home") === null).toBe(true);
     const projectButton = screen.getByRole("button", { name: /Project One 1/ });
     expect(projectButton.getAttribute("aria-current")).toBe("page");
@@ -2971,7 +2972,7 @@ describe("HierarchicalSidebar", () => {
   test("search excludes hidden homes and project deletion still includes them", async () => {
     const home = { ...createdEnvironment, id: "home", name: "project-home", projectHome: true };
     environmentsValue = [home, createdEnvironment];
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     fireEvent.click(screen.getByRole("button", { name: "Search projects and environments" }));
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "project-home" } });
     expect(screen.queryByRole("option") === null).toBe(true);
@@ -2988,7 +2989,7 @@ describe("HierarchicalSidebar", () => {
 
   test("project row and Open Board reset Home for both same and different projects", () => {
     projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
-    render(<HierarchicalSidebar />);
+    renderInAppCommandScope(<HierarchicalSidebar />);
     for (const name of ["Project One", "Project Two"]) {
       act(() => appCommandStore(uiStore).setState({ projectBoardTab: "home" }));
       const row = screen.getByRole("button", { name });
@@ -3113,7 +3114,7 @@ describe("HierarchicalSidebar", () => {
 
     test("files a project into a newly named folder from its context menu", async () => {
       projectsValue = [project, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
@@ -3133,7 +3134,7 @@ describe("HierarchicalSidebar", () => {
 
     test("offers an existing folder and adds the project to it rather than making a second one", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(screen.getByRole("button", { name: /^Project Two/i }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
@@ -3154,7 +3155,7 @@ describe("HierarchicalSidebar", () => {
 
     test("renders a folder around its members and nothing around the rest", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       const folderHeader = await screen.findByTitle("Collapse folder Work");
       expect(folderHeader.getAttribute("aria-expanded")).toBe("true");
@@ -3166,7 +3167,7 @@ describe("HierarchicalSidebar", () => {
 
     test("clicking the folder name contracts it, hiding its contents, and expands it again", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.click(await screen.findByTitle("Collapse folder Work"));
 
@@ -3186,7 +3187,7 @@ describe("HierarchicalSidebar", () => {
 
     test("the folder chevron toggles collapse without the drag handle intercepting the key", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       // The name is also the drag handle: dnd-kit's keyboard sensor owns Enter
       // and Space there, so the chevron is the only control a keyboard user can
@@ -3201,7 +3202,7 @@ describe("HierarchicalSidebar", () => {
 
     test("dropping a project on a folder header moves it into that folder", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       act(() => {
         currentDndContextProps().onDragStart?.({
@@ -3225,7 +3226,7 @@ describe("HierarchicalSidebar", () => {
 
     test("dragging the folder itself moves the whole group without changing membership", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       act(() => {
         currentDndContextProps().onDragStart?.({
@@ -3249,7 +3250,7 @@ describe("HierarchicalSidebar", () => {
 
     test("only a foldered project offers to leave its folder", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(screen.getByRole("button", { name: /^Project Two/i }));
       expect(await screen.findByRole("menuitem", { name: "Add to Folder" })).toBeTruthy();
@@ -3272,7 +3273,7 @@ describe("HierarchicalSidebar", () => {
         { ...project, folder: "Work" },
         { ...secondProject, folder: "Work" },
       ];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Remove Folder" }));
@@ -3291,7 +3292,7 @@ describe("HierarchicalSidebar", () => {
         { ...secondProject, id: "project-alpha", name: "alpha", folder: "Work", order: 1 },
         { ...project, id: "project-outside", name: "Outside", order: 2 },
       ];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
@@ -3310,7 +3311,7 @@ describe("HierarchicalSidebar", () => {
         { ...secondProject, id: "project-alpha", name: "Alpha", folder: "Work", order: 1 },
       ];
       appCommandStore(uiStore).setState({ collapsedProjectFolders: ["Work"] });
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       expect(screen.queryByRole("button", { name: /^Zulu/i }) === null).toBe(true);
       fireEvent.contextMenu(await screen.findByTitle("Expand folder Work"));
@@ -3335,7 +3336,7 @@ describe("HierarchicalSidebar", () => {
       const logs = captureLogs();
 
       try {
-        render(<HierarchicalSidebar />);
+        renderInAppCommandScope(<HierarchicalSidebar />);
         fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
         fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
 
@@ -3361,7 +3362,7 @@ describe("HierarchicalSidebar", () => {
         { ...project, folder: "Work" },
         { ...secondProject, folder: "Work" },
       ];
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
@@ -3385,7 +3386,7 @@ describe("HierarchicalSidebar", () => {
         { ...secondProject, folder: "Work" },
       ];
       appCommandStore(uiStore).setState({ collapsedProjectFolders: ["Work"] });
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Expand folder Work"));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
@@ -3430,7 +3431,7 @@ describe("HierarchicalSidebar", () => {
         collapsedProjectFolders: ["Work"],
         selectedEnvironmentId: "env-1",
       });
-      render(<HierarchicalSidebar />);
+      renderInAppCommandScope(<HierarchicalSidebar />);
 
       // "Environment One" lives inside the collapsed folder and is not on
       // screen, so the range anchored on it cannot run through it.

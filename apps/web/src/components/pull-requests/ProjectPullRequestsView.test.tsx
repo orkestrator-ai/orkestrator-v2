@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider, useTerminalContext } from "@/contexts/TerminalContext";
 import {
   mergePersistedProjectPullRequests,
@@ -50,7 +51,7 @@ afterEach(() => {
 });
 
 test("project host opens, focuses, closes and restores tabs across projects", async () => {
-  const { rerender } = render(<ProjectPullRequestsView projectId="project" />);
+  const { rerender } = renderInAppCommandScope(<ProjectPullRequestsView projectId="project" />);
   act(() => appCommandStore(projectPullRequestsStore).getState().openPullRequest("project", prRef));
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "Pull requests" }));
@@ -112,7 +113,7 @@ test("sidebar keeps targets separate, restores tabs, and expands only after main
   createTab.mockClear();
   createTab.mockReturnValue(false);
   appCommandStore(filesPanelStore).getState().openPullRequest("env-a", prRef, "code");
-  const { rerender } = render(
+  const { rerender } = renderInAppCommandScope(
     <TerminalProvider>
       <RegisterTabs />
       <Panel targetId="env-a" />
@@ -165,7 +166,7 @@ test("project list and nested links use the side pane without changing the proje
     get_github_pull_request: () =>
       makeDetail({ body: "See [linked PR](https://github.com/acme/api/pull/7)" }),
   });
-  render(<ProjectPullRequestsView projectId="project" />);
+  renderInAppCommandScope(<ProjectPullRequestsView projectId="project" />);
   fireEvent.click(await screen.findByText("Pull request 42"));
   expect(appCommandStore(filesPanelStore).getState().pullRequestTabs.env?.[0]?.ref).toEqual(prRef);
   expect(
@@ -182,7 +183,7 @@ test("project list and nested links use the side pane without changing the proje
 });
 
 test("explicit main-area action opens the PR selected in the side pane", async () => {
-  render(<ProjectPullRequestsView projectId="project" />);
+  renderInAppCommandScope(<ProjectPullRequestsView projectId="project" />);
   fireEvent.click(await screen.findByText("Pull request 42"));
   fireEvent.click(await screen.findByRole("button", { name: "Open pane PR in main area" }));
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();

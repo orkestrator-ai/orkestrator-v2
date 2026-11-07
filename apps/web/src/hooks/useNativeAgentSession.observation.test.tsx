@@ -7,7 +7,8 @@
  * for the view, and any gap in the announcement stamps, reads immediately.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTranscriptUpdate,
@@ -126,7 +127,7 @@ afterAll(() => {
 const stateReads = () => getNativeAgentSessionStateUpdateMock.mock.calls.length;
 
 async function settledSession() {
-  const view = renderHook(() =>
+  const view = renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform,
       environmentId: "env-1",

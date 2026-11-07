@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { mcpFailure, type McpRuntimeApplyEntry } from "@orkestrator/protocol/mcp-management";
 
@@ -43,7 +44,7 @@ function runtime(
 
 describe("apply status", () => {
   test("a partial outcome summarises mixed sessions and lists each one", () => {
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -67,7 +68,7 @@ describe("apply status", () => {
   });
 
   test("a session that moved on to a later save says so, and affected environments are named", () => {
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -110,7 +111,7 @@ describe("apply status", () => {
     expect(omittedText(2, { failed: 1, "restart-required": 1 })).toBe(
       "…and 2 more: 1 failed, 1 need attention",
     );
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -130,7 +131,7 @@ describe("apply status", () => {
   });
 
   test("an operation whose unlisted sessions are all tracked does not claim any were dropped", () => {
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -149,7 +150,7 @@ describe("apply status", () => {
   });
 
   test("loaded is not presented as connected: health points at the live panel", () => {
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -164,7 +165,7 @@ describe("apply status", () => {
   });
 
   test("pending next turn does not claim the server is loaded or applied", () => {
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -185,7 +186,7 @@ describe("apply status", () => {
 
   test("retry apply re-applies the saved operation and never re-saves", async () => {
     install({ apply_mcp_configuration: () => operation() });
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -204,7 +205,7 @@ describe("apply status", () => {
   test.each(["superseded-external", "superseded-local"] as const)(
     "a runtime cancelled as %s offers no retry, only how to save it again",
     (cancelReason) => {
-      render(
+      renderInAppCommandScope(
         <McpApplyStatus
           operations={[
             operation({
@@ -230,7 +231,7 @@ describe("apply status", () => {
   );
 
   test("any other cancellation keeps Retry and shows no hint", () => {
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -251,7 +252,7 @@ describe("apply status", () => {
 
   test("cancel apply cancels the queued operation, keeping what was saved", async () => {
     install({ cancel_mcp_apply: () => operation() });
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -273,7 +274,7 @@ describe("apply status", () => {
         throw mcpFailure("apply-failed", { correlationId: "corr-apply" });
       },
     });
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({ apply: { state: "failed", runtimes: [runtime("a", "failed")], omitted: 0 } }),
@@ -289,7 +290,7 @@ describe("apply status", () => {
 describe("actions for sessions past the listed page", () => {
   test("a queued session that is only counted still offers Cancel apply", async () => {
     install({ cancel_mcp_apply: () => operation() });
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -313,7 +314,7 @@ describe("actions for sessions past the listed page", () => {
     "a %s session that is only counted still offers Retry apply",
     async (state) => {
       install({ apply_mcp_configuration: () => operation() });
-      render(
+      renderInAppCommandScope(
         <McpApplyStatus
           operations={[
             operation({
@@ -336,7 +337,7 @@ describe("actions for sessions past the listed page", () => {
   );
 
   test("a listed superseded session withholds Retry for counted failures too", () => {
-    render(
+    renderInAppCommandScope(
       <McpApplyStatus
         operations={[
           operation({
@@ -366,7 +367,7 @@ describe("catalog states", () => {
       ...baseHandlers,
       get_mcp_management_snapshot: () => snapshot({ sources: [], definitions: [], effective: {} }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText(/No configuration files were found/)).toBeTruthy();
   });
 
@@ -375,7 +376,7 @@ describe("catalog states", () => {
       ...baseHandlers,
       get_mcp_management_snapshot: () => snapshot({ definitions: [], effective: {} }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("No servers.")).toBeTruthy();
     expect((screen.getByRole("button", { name: /Add server/ }) as HTMLButtonElement).disabled).toBe(
       false,
@@ -418,7 +419,7 @@ describe("catalog states", () => {
         }),
     });
     requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByRole("note")).toBeTruthy();
     expect(screen.getByText(/The container is stopped. Start it/)).toBeTruthy();
     expect(screen.getByText(/Not reachable/)).toBeTruthy();
@@ -443,7 +444,7 @@ describe("catalog states", () => {
           ],
         }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByRole("listitem", { name: "docs, In use" })).toBeTruthy();
     expect(screen.getByText("Turned on in this project by the override in Project.")).toBeTruthy();
     expect(
@@ -461,7 +462,7 @@ describe("catalog states", () => {
       get_mcp_management_snapshot: () =>
         snapshot({ sources: [{ ...snapshot().sources[0]!, note: accountNote }] }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const source = await screen.findByRole("region", { name: "Backend user" });
     const header = within(source).getByText(accountNote);
     expect(header.closest("header")).toBeTruthy();
@@ -475,7 +476,7 @@ describe("catalog states", () => {
         snapshot({ definitions: [definition(), definition({ entryId: "e2", name: "other" })] }),
     });
     requestMcpServerSettings({ provider: "claude", serverName: "docs" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const row = await screen.findByRole("listitem", { name: "docs, In use" });
     expect(row.className).toContain("bg-blue-500/10");
     expect(screen.getByRole("listitem", { name: "other, In use" }).className).not.toContain(
@@ -533,7 +534,7 @@ describe("catalog states", () => {
       serverScope: "project",
       logicalSessionKey: "e1:tab-1",
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const note = await screen.findByRole("note", { name: "Server from the live session" });
     expect(note.textContent).toContain("highlighted row in Project (this worktree)");
     expect(note.textContent).toContain("Another row has the same name");
@@ -590,7 +591,7 @@ describe("catalog states", () => {
         serverName: "plugin:docs:search",
         serverScope: "plugin",
       });
-      render(<ProviderMcpSettings />);
+      renderInAppCommandScope(<ProviderMcpSettings />);
       const note = await screen.findByRole("note", { name: "Server from the live session" });
       expect(note.textContent).toContain("highlighted row in Plugin docs");
       expect(note.textContent).toContain("Plugin servers are read-only here");
@@ -622,7 +623,7 @@ describe("catalog states", () => {
   test("a live row with no saved entry says where it may come from", async () => {
     install(baseHandlers);
     requestMcpServerSettings({ provider: "claude", serverName: "from-plugin-team" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const note = await screen.findByRole("note", { name: "Server from the live session" });
     expect(note.textContent).toContain("No saved server named from-plugin-team");
     expectDomAbsent(
@@ -645,7 +646,7 @@ describe("catalog states", () => {
           operations: [operation({ entryName: longName })],
         }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const name = await screen.findByText(longName, { selector: "span.font-mono.text-sm" });
     expect(name.className).toContain("break-all");
     // The row's text column can shrink below its content.
@@ -719,7 +720,7 @@ describe("rollout gate", () => {
 
   test("writes switched off: Add is disabled and the reason is shown", async () => {
     installGated({ write: writeReason });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const add = (await screen.findByRole("button", { name: /Add server/ })) as HTMLButtonElement;
     expect(add.disabled).toBe(true);
     expect(add.getAttribute("title")).toBe(writeReason);
@@ -731,7 +732,7 @@ describe("rollout gate", () => {
       { apply: applyReason },
       { validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }) },
     );
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText(applyReason)).toBeTruthy();
     // Recent changes: retry is not offered, cancelling queued work still is.
     expectDomAbsent(screen.queryByRole("button", { name: "Retry apply" }), "retry apply");
@@ -752,7 +753,7 @@ describe("rollout gate", () => {
       ...baseHandlers,
       validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     install({
       ...baseHandlers,

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { projectStore } from "@/stores/projectStore";
 import { mockToastError } from "../../../../tests/mocks/sonner";
@@ -34,7 +35,7 @@ test.each(["add", "create"] as const)(
     );
     addProject.mockRejectedValueOnce(failure);
     createProjectFromScratch.mockRejectedValueOnce(failure);
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     await act(async () => {
       const request =

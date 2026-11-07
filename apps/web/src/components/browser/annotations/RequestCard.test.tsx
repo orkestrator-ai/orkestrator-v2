@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   WEB_ANNOTATION_BLOCKED_REASON_LABELS,
   WEB_ANNOTATION_REQUEST_STATE_LABELS,
@@ -70,7 +71,7 @@ describe("request cards", () => {
 
   test("a queued hold explains the draft and offers Open chat / Choose another session", async () => {
     seedWithRequest("queued");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(
       within(article).getByText(WEB_ANNOTATION_BLOCKED_REASON_LABELS["compose-draft"]),
@@ -88,7 +89,7 @@ describe("request cards", () => {
 
   test("unconfirmed delivery retries with the same id and warns before discarding", async () => {
     seedWithRequest("unconfirmed");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(within(article).getByText(WEB_ANNOTATION_REQUEST_STATE_LABELS.unconfirmed)).toBeTruthy();
     fireEvent.click(within(article).getByRole("button", { name: "Retry delivery" }));
@@ -102,7 +103,7 @@ describe("request cards", () => {
 
   test("discarding unconfirmed delivery requires acknowledging that work may have run", async () => {
     seedWithRequest("unconfirmed");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     fireEvent.click(within(article).getByRole("button", { name: "Discard" }));
     expect(within(article).getByText(/may already have run this request/)).toBeTruthy();
@@ -118,13 +119,13 @@ describe("request cards", () => {
   test("Stop is explicit and sends the expected request revision; closing the panel does not stop", async () => {
     const request = seedWithRequest("running");
     const revision = request.revision;
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await card();
     fireEvent.click(screen.getByRole("button", { name: "Close annotations" }));
     expect(backend.callsOf("web_annotation_request_cancel")).toHaveLength(0);
     cleanup();
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-1" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const reopened = await card();
     fireEvent.click(within(reopened).getByRole("button", { name: "Stop" }));
     await waitFor(() =>
@@ -140,7 +141,7 @@ describe("request cards", () => {
 
   test("needs-input deep-links to the chat to answer", async () => {
     seedWithRequest("needs-input");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     fireEvent.click(within(article).getByRole("button", { name: "Answer in chat" }));
     const layout = appCommandStore(paneLayoutStore).getState().environments.get("env-1")!;
@@ -156,7 +157,7 @@ describe("request cards", () => {
         truncated: false,
       },
     });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(await within(article).findByText("Added 8px padding to the Save button.")).toBeTruthy();
     expect(within(article).getByRole("button", { name: "Open full conversation" })).toBeTruthy();
@@ -183,7 +184,7 @@ describe("request cards", () => {
     seedWithRequest("awaiting-review");
     // A new note was added after dispatch.
     backend.annotations.get("annotation-1")!.contentRevision = 2;
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(within(article).getByText(/used an older version of the note/)).toBeTruthy();
     fireEvent.click(within(article).getByRole("button", { name: "Accept and resolve" }));
@@ -195,7 +196,7 @@ describe("request cards", () => {
 
   test("failed requests keep their reason and offer another attempt", async () => {
     seedWithRequest("failed");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const article = await card();
     expect(within(article).getByText("The provider rejected the prompt.")).toBeTruthy();
     fireEvent.click(within(article).getByRole("button", { name: "Try again" }));

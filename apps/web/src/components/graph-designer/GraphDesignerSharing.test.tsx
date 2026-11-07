@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
@@ -92,7 +93,7 @@ afterEach(() => {
 
 describe("GraphDesignerTab sharing", () => {
   test("counts project templates needing review and opens the review panel", async () => {
-    render(
+    renderInAppCommandScope(
       <div style={{ width: 1600, height: 1000, position: "relative" }}>
         <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={{}} isActive />
       </div>,
@@ -114,7 +115,7 @@ describe("GraphDesignerTab sharing", () => {
   });
 
   test("Share needs a template; Import bundle opens the two-step import", async () => {
-    render(
+    renderInAppCommandScope(
       <div style={{ width: 1600, height: 1000, position: "relative" }}>
         <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={{}} isActive />
       </div>,

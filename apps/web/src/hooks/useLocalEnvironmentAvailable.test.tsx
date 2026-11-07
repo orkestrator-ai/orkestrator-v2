@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectStore } from "@/stores/projectStore";
 import { useLocalEnvironmentAvailable } from "./useLocalEnvironmentAvailable";
 import type { Project } from "@/types";
@@ -32,13 +33,13 @@ describe("useLocalEnvironmentAvailable", () => {
 
   test("reports availability from the project's local checkout", () => {
     appCommandStore(projectStore).setState({ projects: [makeProject()] });
-    render(<Probe projectId="project-1" />);
+    renderInAppCommandScope(<Probe projectId="project-1" />);
     expect(readAvailable()).toBe("true");
   });
 
   test("reports unavailable for a known project with no checkout", () => {
     appCommandStore(projectStore).setState({ projects: [makeProject({ localPath: null })] });
-    render(<Probe projectId="project-1" />);
+    renderInAppCommandScope(<Probe projectId="project-1" />);
     expect(readAvailable()).toBe("false");
   });
 
@@ -47,7 +48,7 @@ describe("useLocalEnvironmentAvailable", () => {
     // store, so a project the list has not caught up with yet is "not loaded",
     // not "no checkout". Answering false here lets a launcher rewrite the
     // user's local default to containerized, and nothing rewrites it back.
-    render(<Probe projectId="project-1" />);
+    renderInAppCommandScope(<Probe projectId="project-1" />);
     expect(readAvailable()).toBe("true");
 
     act(() => {
@@ -57,7 +58,7 @@ describe("useLocalEnvironmentAvailable", () => {
   });
 
   test("treats a missing project id as available", () => {
-    render(<Probe projectId={undefined} />);
+    renderInAppCommandScope(<Probe projectId={undefined} />);
     expect(readAvailable()).toBe("true");
   });
 });

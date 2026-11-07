@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -224,7 +225,7 @@ test("a repository group names each member by its machine in its colour and summ
     ],
   });
   await act(async () => {
-    render(
+    renderInAppCommandScope(
       <MergedProjectList
         machines={[first, second]}
         shownIds={new Set(["a", "b"])}
@@ -566,7 +567,7 @@ test("a repository with one visible environment uses singular summary labels and
     ],
   ]);
   await act(async () => {
-    render(
+    renderInAppCommandScope(
       <MergedProjectList
         machines={[machine]}
         shownIds={new Set([machine.connectionId])}
@@ -601,7 +602,7 @@ test("repositories are separated by a rule, but projects are not", async () => {
   const renderList = async (mode: "project" | "repository") => {
     let result!: ReturnType<typeof render>;
     await act(async () => {
-      result = render(
+      result = renderInAppCommandScope(
         <MergedProjectList
           machines={[first, second]}
           shownIds={new Set(["a", "b"])}
@@ -643,7 +644,7 @@ for (const { hints, ruledRepositories } of [
     });
     machine.environmentsByProject = new Map();
     await act(async () => {
-      render(
+      renderInAppCommandScope(
         <MergedProjectList
           machines={[machine]}
           shownIds={new Set([machine.connectionId])}

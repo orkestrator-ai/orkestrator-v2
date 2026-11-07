@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { WEB_ANNOTATION_CONFLICT } from "@orkestrator/protocol/web-annotations";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
@@ -83,7 +84,7 @@ describe("request composer", () => {
         planModeScope: "session",
       },
     ];
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: "Discuss…" }));
     const composer = await screen.findByRole("region", { name: "Ask an agent" });
     const codex = await within(composer).findByRole("radio", { name: /Codex build/ });
@@ -130,7 +131,7 @@ describe("request composer", () => {
         planModeScope: "session",
       },
     ];
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: "Discuss…" }));
     const composer = await screen.findByRole("region", { name: "Ask an agent" });
     fireEvent.click(await within(composer).findByRole("radio", { name: /Codex/ }));
@@ -149,7 +150,7 @@ describe("request composer", () => {
 
   test("with no read-only session the advisory label stands", async () => {
     backend.destinations = [{ ...backend.destinations[0]!, planMode: false }];
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const composer = await openComposer("Discuss…");
     expect(
       (
@@ -165,7 +166,7 @@ describe("request composer", () => {
   test("previews exactly which agent receives which instruction and evidence", async () => {
     backend.destinations = [{ ...backend.destinations[0]!, holds: ["compose-draft"] }];
     const composer = await (async () => {
-      render(<AnnotationHarness />);
+      renderInAppCommandScope(<AnnotationHarness />);
       return openComposer("Discuss…");
     })();
     expect(
@@ -197,7 +198,7 @@ describe("request composer", () => {
   });
 
   test("the remembered destination is shown but never sends by itself", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const composer = await openComposer();
     await waitFor(() => expect(backend.callsOf("web_annotation_update")).toHaveLength(1));
     expect(backend.callsOf("web_annotation_update")[0]!.args).toMatchObject({
@@ -206,7 +207,7 @@ describe("request composer", () => {
     });
     fireEvent.click(within(composer).getByRole("button", { name: "Cancel" }));
     cleanup();
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: "Discuss…" }));
     expect(await screen.findByRole("button", { name: "Discuss with Claude Code" })).toBeTruthy();
     expect(backend.callsOf("web_annotation_request_prepare")).toHaveLength(0);
@@ -214,7 +215,7 @@ describe("request composer", () => {
   });
 
   test("send retry after a lost response reuses the same request id", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const composer = await openComposer();
     fireEvent.click(
       within(composer).getByRole("button", { name: "Request changes from Claude Code" }),
@@ -238,7 +239,7 @@ describe("request composer", () => {
   });
 
   test("an invalidated preparation names the mismatch and keeps the draft", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const composer = await openComposer();
     const instruction = within(composer).getByRole("textbox", { name: "Overall instruction" });
     fireEvent.change(instruction, { target: { value: "Make it 12px" } });
@@ -268,7 +269,7 @@ describe("request composer", () => {
   });
 
   test("New agent session opens an agent tab without dispatching", async () => {
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const composer = await openComposer();
     fireEvent.click(within(composer).getByRole("button", { name: "New agent session" }));
     const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1");

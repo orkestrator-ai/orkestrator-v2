@@ -1,7 +1,8 @@
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import {
   listenForTerminalBrowserTabRequests,
@@ -233,7 +234,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("attaches, forwards terminal output and input, resizes, and detaches on unmount", async () => {
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
     );
 
@@ -270,7 +271,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       const stopListening = listenForTerminalBrowserTabRequests((request) =>
         requests.push(request),
       );
-      const { unmount } = render(
+      const { unmount } = renderInAppCommandScope(
         <ClaudeTmuxInteractiveTerminal tabId="source-pane" environmentId="source-env" isActive />,
       );
       try {
@@ -333,7 +334,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
 
     try {
-      render(
+      renderInAppCommandScope(
         <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
       );
       await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
@@ -355,7 +356,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("sends Shift+Enter as LF to the tmux input bridge", async () => {
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
     const preventDefault = mock(() => {});
@@ -390,7 +393,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test.each(["metaKey", "ctrlKey"])(
     "yields %s+Shift+/ to the dialog without bridge input",
     async (modifier) => {
-      render(
+      renderInAppCommandScope(
         <>
           <KeyboardShortcutsDialog />
           <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />
@@ -417,7 +420,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   );
 
   test("passes Cmd+W through to the application tab shortcut", async () => {
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
     expect(
@@ -434,7 +439,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
   test("fits without focusing the terminal when activated on mobile", async () => {
     setMobileViewport(true);
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
 
@@ -444,7 +451,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
   test("shows contained mobile keys only while active and forwards canonical sequences", async () => {
     setMobileViewport(true);
-    const view = render(
+    const view = renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal
         tabId="tab-1"
         environmentId={environmentId}
@@ -495,7 +502,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
         }),
     );
 
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalled());
     expect(
@@ -513,7 +522,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("focuses the terminal when it is attached on desktop", async () => {
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
 
@@ -521,7 +532,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("focuses on desktop, but not on mobile, when the tab becomes active again", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal
         tabId="tab-1"
         environmentId={environmentId}
@@ -567,7 +578,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     });
     const preventDefault = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal
         tabId="tab-1"
         environmentId={environmentId}
@@ -606,7 +617,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("does not recreate the tmux session when paste-related props change", async () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal
         tabId="tab-1"
         environmentId={environmentId}
@@ -656,7 +667,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
   test("escapes saved image paths for local environments but not containers", async () => {
     // Local environment (no containerId): path must be shell-escaped.
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal
         tabId="tab-1"
         environmentId={environmentId}
@@ -686,7 +697,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     capturedImagePasteOptions = null;
 
     // Container environment: path is written verbatim (no escaping).
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal
         tabId="tab-2"
         environmentId={environmentId}
@@ -711,7 +722,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <ClaudeTmuxInteractiveTerminal
           tabId="tab-1"
           environmentId={environmentId}
@@ -746,7 +757,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test("cleans up the created session and listener when start fails", async () => {
     startInteractiveTerminalMock.mockRejectedValueOnce(new Error("spawn failed"));
 
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await screen.findByText("Error: spawn failed");
 
@@ -755,7 +768,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("reports a missing environment without creating a terminal session", async () => {
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" isActive />);
+    renderInAppCommandScope(<ClaudeTmuxInteractiveTerminal tabId="tab-1" isActive />);
 
     await screen.findByText("No environment specified for interactive terminal");
     expect(createInteractiveTerminalMock).not.toHaveBeenCalled();
@@ -785,7 +798,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test("reports session creation failures without attempting to start", async () => {
     createInteractiveTerminalMock.mockRejectedValueOnce(new Error("create failed"));
 
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await screen.findByText("Error: create failed");
     expect(startInteractiveTerminalMock).not.toHaveBeenCalled();
@@ -795,7 +810,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test("contains fit failures while keeping the tmux session attached", async () => {
     fitFailure = new Error("fit unavailable");
 
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
     expect(screen.queryByText("Error: fit unavailable") === null).toBe(true);
@@ -807,7 +824,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     resizeInteractiveTerminalMock.mockRejectedValueOnce(new Error("resize unavailable"));
 
     try {
-      render(
+      renderInAppCommandScope(
         <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
       );
 
@@ -831,7 +848,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("coalesces desync notices while terminal recovery is in flight", async () => {
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
 
     const recovery = deferred<void>();
@@ -851,7 +870,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("retries a failed desync recovery and accepts the restored full frame", async () => {
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
+    renderInAppCommandScope(
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+    );
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
 
     startInteractiveTerminalMock.mockRejectedValueOnce(new Error("transient recovery failure"));
@@ -878,7 +899,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     process.on("unhandledRejection", onUnhandled);
 
     try {
-      render(
+      renderInAppCommandScope(
         <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
       );
       await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
@@ -931,7 +952,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       },
     );
 
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
     );
 

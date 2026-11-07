@@ -1,10 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactElement } from "react";
+import { renderToStaticMarkup as renderToStaticMarkupOutsideScope } from "react-dom/server";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { MarkdownBody } from "./pull-request-shared";
 import { remarkGitHubHtml, tokenizeHtml } from "./remark-github-html";
+import { InAppCommandScope } from "@/test/render-in-node-scope";
+
+/** Markdown links read the node's stores, so the markup renders in the app's command scope. */
+function renderToStaticMarkup(node: ReactElement): string {
+  return renderToStaticMarkupOutsideScope(<InAppCommandScope>{node}</InAppCommandScope>);
+}
 
 function render(source: string): string {
   return renderToStaticMarkup(

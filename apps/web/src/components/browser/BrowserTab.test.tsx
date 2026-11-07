@@ -10,7 +10,8 @@ import {
   test,
 } from "bun:test";
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
@@ -250,7 +251,7 @@ describe("BrowserTab", () => {
   });
 
   test("starts with backend-specific guidance and no iframe", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
@@ -260,7 +261,7 @@ describe("BrowserTab", () => {
   });
 
   test("wraps its address onto its own row in narrow panes and clamps horizontal overflow", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
@@ -275,7 +276,7 @@ describe("BrowserTab", () => {
   });
 
   test("focuses and selects the address with Cmd+L or Ctrl+L only while active", () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -391,7 +392,7 @@ describe("BrowserTab", () => {
       ]),
     });
 
-    render(
+    renderInAppCommandScope(
       <>
         <BrowserTab
           tabId="browser-left"
@@ -416,7 +417,7 @@ describe("BrowserTab", () => {
 
   test("focuses the active address bar when Cmd+L comes from its native preview", () => {
     const native = installNativePreview();
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -494,7 +495,7 @@ describe("BrowserTab", () => {
     });
     const native = installNativePreview();
 
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-left"
         environmentId="env-1"
@@ -515,7 +516,7 @@ describe("BrowserTab", () => {
   });
 
   test("normalizes, loads, and persists a submitted backend-local address", async () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
@@ -537,7 +538,9 @@ describe("BrowserTab", () => {
   });
 
   test("keeps invalid addresses in the bar and explains the constraint", () => {
-    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />);
+    renderInAppCommandScope(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
 
     fireEvent.change(screen.getByLabelText("Browser address"), {
       target: { value: "example.com" },
@@ -557,7 +560,7 @@ describe("BrowserTab", () => {
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
     setBrowserTab("http://localhost:3000/");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -588,7 +591,7 @@ describe("BrowserTab", () => {
       };
       setBrowserTab("http://localhost:3000/");
 
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <BrowserTab
           tabId="browser-1"
           environmentId="env-1"
@@ -635,7 +638,7 @@ describe("BrowserTab", () => {
     } as never;
     setBrowserTab("http://localhost:3000/");
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -660,7 +663,7 @@ describe("BrowserTab", () => {
     const backend = new FakeWebAnnotationBackend("env-1").install();
     appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
     try {
-      render(
+      renderInAppCommandScope(
         <BrowserTab
           tabId="browser-1"
           environmentId="env-1"
@@ -691,7 +694,7 @@ describe("BrowserTab", () => {
   test("keeps the notes control explicitly unavailable against an older backend", async () => {
     setBrowserTab("http://localhost:3000/");
     installNativePreview({ capture: createFakeCaptureApi().api });
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -727,7 +730,9 @@ describe("BrowserTab", () => {
     } as unknown as typeof ResizeObserver;
     try {
       const data = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]!.browserData!;
-      render(<BrowserTab tabId="browser-1" environmentId="env-1" data={data} isActive />);
+      renderInAppCommandScope(
+        <BrowserTab tabId="browser-1" environmentId="env-1" data={data} isActive />,
+      );
       const notes = await screen.findByRole("button", { name: "Annotations unavailable" });
       await waitFor(() =>
         expect(notes.getAttribute("title")).toContain("does not support web annotations"),
@@ -750,7 +755,7 @@ describe("BrowserTab", () => {
     new FakeWebAnnotationBackend("env-1").install();
     try {
       const data = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")[0]!.browserData!;
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <BrowserTab tabId="browser-1" environmentId="env-1" data={data} isActive />,
       );
       const panel = await screen.findByRole("complementary", { name: "Page annotations" });
@@ -779,7 +784,7 @@ describe("BrowserTab", () => {
     };
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -814,7 +819,7 @@ describe("BrowserTab", () => {
 
   test("refuses to preview the app's own origin", () => {
     happyDOM.setURL("http://127.0.0.1:5173/");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
@@ -829,7 +834,7 @@ describe("BrowserTab", () => {
 
   test("stays mounted but hidden while another tab is active", () => {
     setBrowserTab("http://localhost:3000/");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -843,7 +848,9 @@ describe("BrowserTab", () => {
   });
 
   test("renders non-Error resolution failures as text", () => {
-    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />);
+    renderInAppCommandScope(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
     Object.defineProperty(window, "orkestratorGateway", {
       configurable: true,
       get() {
@@ -858,7 +865,7 @@ describe("BrowserTab", () => {
   });
 
   test("moves backward and forward through browser history", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
     const address = screen.getByLabelText("Browser address");
@@ -875,7 +882,7 @@ describe("BrowserTab", () => {
   });
 
   test("discards forward history when navigating after moving back", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
     const address = screen.getByLabelText("Browser address");
@@ -895,7 +902,7 @@ describe("BrowserTab", () => {
   });
 
   test("truncates forward history under a StrictMode double render", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <StrictMode>
         <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />
       </StrictMode>,
@@ -927,7 +934,7 @@ describe("BrowserTab", () => {
   test("bounds the history it records and keeps navigating from the newest entry", () => {
     const history = Array.from({ length: 100 }, (_, index) => `http://localhost:${3000 + index}/`);
     setBrowserTab(history[99]!);
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -957,7 +964,7 @@ describe("BrowserTab", () => {
   test("records a navigation from a cursor left behind the newest entry", () => {
     const history = ["http://localhost:3000/", "http://localhost:4000/", "http://localhost:5000/"];
     setBrowserTab(history[0]!);
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -980,7 +987,7 @@ describe("BrowserTab", () => {
   });
 
   test("preserves history and loading state when local persistence echoes back", () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
     const address = screen.getByLabelText("Browser address");
@@ -1008,7 +1015,7 @@ describe("BrowserTab", () => {
   });
 
   test("clears an invalid-address error after a valid navigation", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
     const address = screen.getByLabelText("Browser address");
@@ -1026,7 +1033,7 @@ describe("BrowserTab", () => {
   });
 
   test("clears an invalid-address error after an external address update", () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
     fireEvent.change(screen.getByLabelText("Browser address"), {
@@ -1052,7 +1059,7 @@ describe("BrowserTab", () => {
   });
 
   test("ignores refresh requests while the address is empty", () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1080,7 +1087,7 @@ describe("BrowserTab", () => {
 
   test("reloads once for each refresh request and does not double-load later navigation", async () => {
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1113,7 +1120,7 @@ describe("BrowserTab", () => {
 
   test("rehydrates an externally changed address and resets local history", () => {
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1140,7 +1147,7 @@ describe("BrowserTab", () => {
 
   test("reloads through the toolbar button without duplicating history", () => {
     setBrowserTab("http://localhost:3000/");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1158,7 +1165,7 @@ describe("BrowserTab", () => {
 
   test("resubmitting the current address reloads in place", () => {
     setBrowserTab("http://localhost:3000/");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1179,7 +1186,7 @@ describe("BrowserTab", () => {
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1218,7 +1225,7 @@ describe("BrowserTab", () => {
 
   test("shows a persisted malformed address as an error without loading forever", () => {
     setBrowserTab("not a preview address");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1240,7 +1247,7 @@ describe("BrowserTab", () => {
 
   test("clears loading state when the iframe reports a load", () => {
     setBrowserTab("http://localhost:3000/");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1268,7 +1275,7 @@ describe("BrowserTab", () => {
       ),
     });
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1351,7 +1358,7 @@ describe("BrowserTab", () => {
   test("persists changed direct HTTP native URLs and ignores non-HTTP native URLs", async () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1396,7 +1403,7 @@ describe("BrowserTab", () => {
     };
     const native = installNativePreview();
     setBrowserTab("http://localhost/start");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1419,7 +1426,7 @@ describe("BrowserTab", () => {
 
     view.unmount();
     setBrowserTab("not a preview address");
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1447,7 +1454,7 @@ describe("BrowserTab", () => {
     });
     const native = installNativePreview({ navigate, goBack: rejectedBack });
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1508,7 +1515,7 @@ describe("BrowserTab", () => {
     appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[1]!, "env-1", history, 1);
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1551,7 +1558,7 @@ describe("BrowserTab", () => {
     appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[1]!, "env-1", history, 1);
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1627,7 +1634,7 @@ describe("BrowserTab", () => {
       ),
       goBack: mock(() => pendingBack.promise),
     });
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1702,7 +1709,7 @@ describe("BrowserTab", () => {
       attach: mock(async (input: { url: string }) => previewState({ url: input.url, navigation })),
       navigate: mock(async (_tabId: string, url: string) => previewState({ url, navigation })),
     });
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1763,7 +1770,7 @@ describe("BrowserTab", () => {
     appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[2]!, "env-1", history, 2);
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1829,7 +1836,7 @@ describe("BrowserTab", () => {
     appCommandStore(paneLayoutStore)
       .getState()
       .updateTabBrowserUrl("browser-1", history[0]!, "env-1", history, 0);
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1875,7 +1882,7 @@ describe("BrowserTab", () => {
     );
     const native = installNativePreview({ attach });
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1946,7 +1953,7 @@ describe("BrowserTab", () => {
       .mockRejectedValueOnce("refresh reload failed");
     const native = installNativePreview({ attach, navigate, goForward, reload });
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -1993,7 +2000,7 @@ describe("BrowserTab", () => {
 
   test("hides the native preview when no valid preview host can be rendered", async () => {
     const native = installNativePreview();
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
     await waitFor(() =>
@@ -2026,7 +2033,7 @@ describe("BrowserTab", () => {
     });
     installNativePreview({ setVisible });
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
@@ -2041,7 +2048,7 @@ describe("BrowserTab", () => {
     });
     const native = installNativePreview({ setVisible });
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2063,7 +2070,7 @@ describe("BrowserTab", () => {
   test("synchronizes native bounds and visibility across resize, scroll, overlays, and activation", async () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
-    let view = render(
+    let view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2105,7 +2112,7 @@ describe("BrowserTab", () => {
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
     document.body.append(dialog);
-    view = render(
+    view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2162,7 +2169,7 @@ describe("BrowserTab", () => {
     view.unmount();
     dialog.remove();
 
-    view = render(
+    view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2196,7 +2203,7 @@ describe("BrowserTab", () => {
   test("treats closing overlays hidden by layout and ancestor state as non-blocking", async () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2277,7 +2284,7 @@ describe("BrowserTab", () => {
   test("tracks the painted lifecycle of dialogs, menus, listboxes, and multiple overlays", async () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2394,7 +2401,7 @@ describe("BrowserTab", () => {
     menu.setAttribute("data-state", "open");
 
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <BrowserTab
           tabId="browser-1"
           environmentId="env-1"
@@ -2456,7 +2463,7 @@ describe("BrowserTab", () => {
       .mockRejectedValueOnce(new Error("DevTools failed again"));
     const native = installNativePreview({ attach, openDevTools });
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2513,7 +2520,7 @@ describe("BrowserTab", () => {
     );
     installNativePreview({ attach });
     setBrowserTab("http://localhost:3000/");
-    const view = render(
+    const view = renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2540,7 +2547,7 @@ describe("BrowserTab", () => {
       }),
     });
     setBrowserTab("http://localhost:3000/");
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -2558,7 +2565,7 @@ describe("BrowserTab", () => {
       }),
     });
     setBrowserTab("http://localhost:3000/");
-    render(
+    renderInAppCommandScope(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"

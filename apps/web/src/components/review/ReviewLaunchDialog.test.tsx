@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createContext, useContext } from "react";
 import * as realDialog from "@/components/ui/dialog";
 import * as realSelect from "@/components/ui/select";
@@ -243,13 +244,13 @@ function renderDialog(overrides: Partial<Parameters<typeof ReviewLaunchDialog>[0
     onConfirm,
     ...overrides,
   };
-  return { onConfirm, props, ...render(<ReviewLaunchDialog {...props} />) };
+  return { onConfirm, props, ...renderInAppCommandScope(<ReviewLaunchDialog {...props} />) };
 }
 
 describe("ReviewLaunchDialog", () => {
   test("offers every native provider in one picker and confirms a one-pass review", () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <ReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -588,7 +589,7 @@ describe("ReviewLaunchDialog", () => {
 
   test("changes provider, model, and compatible effort together", () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <ReviewLaunchDialog
         open
         onOpenChange={() => undefined}

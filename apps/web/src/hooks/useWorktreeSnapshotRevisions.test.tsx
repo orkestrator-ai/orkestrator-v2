@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   WORKTREE_SNAPSHOT_CHANGED_EVENT,
@@ -64,7 +65,7 @@ async function flush() {
 
 describe("useWorktreeSnapshotRevisions", () => {
   test("subscribes before hydrating and records the owner generation", async () => {
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: true }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: true }));
     await flush();
 
     expect(order.indexOf(`listen:${WORKTREE_SNAPSHOT_CHANGED_EVENT}`)).toBeLessThan(
@@ -77,7 +78,7 @@ describe("useWorktreeSnapshotRevisions", () => {
   });
 
   test("applies a stamped change, ignores invalid payloads and keeps identical state", async () => {
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: true }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: true }));
     await flush();
     const emit = callbacks.get(WORKTREE_SNAPSHOT_CHANGED_EVENT)!;
 
@@ -104,23 +105,26 @@ describe("useWorktreeSnapshotRevisions", () => {
     snapshotSpy.mockImplementation(async () => {
       throw new Error("Unknown backend command: get_worktree_snapshot_revisions");
     });
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: true }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: true }));
     await flush();
     expect(appCommandStore(worktreeSnapshotStore).getState().syncStatus).toBe("unsupported");
     expect(snapshotSpy).toHaveBeenCalledTimes(1);
   });
 
   test("does nothing while disabled", async () => {
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: false }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: false }));
     await flush();
     expect(listenSpy).not.toHaveBeenCalled();
     expect(snapshotSpy).not.toHaveBeenCalled();
   });
 
   test("an identical rehydrate keeps every entry object", async () => {
-    const { rerender } = renderHook(({ enabled }) => useWorktreeSnapshotRevisions({ enabled }), {
-      initialProps: { enabled: true },
-    });
+    const { rerender } = renderHookInAppCommandScope(
+      ({ enabled }) => useWorktreeSnapshotRevisions({ enabled }),
+      {
+        initialProps: { enabled: true },
+      },
+    );
     await flush();
     const entry = appCommandStore(worktreeSnapshotStore).getState().entries.get("env-1");
     rerender({ enabled: false });

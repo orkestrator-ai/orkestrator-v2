@@ -31,7 +31,7 @@ import * as scrollState from "@/hooks/useVirtuosoScrollState";
 import * as realBackend from "@/lib/backend";
 import * as modelPicker from "@/components/chat/AgentModelPicker";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
-import { configStore, useConfigStore } from "@/stores/configStore";
+import { configStore, type ConfigState } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -481,7 +481,7 @@ const { useNativeAgentSession } = await import("@/hooks/useNativeAgentSession");
 // Favorites and enabled platforms live in the shared config store, which no
 // other hook resets between files. Snapshot it so a test that seeds either one
 // cannot change what a later test's model picker renders.
-let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
+let configSnapshot: ConfigState["config"];
 
 beforeEach(() => {
   configSnapshot = appCommandStore(configStore).getState().config;

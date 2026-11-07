@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, spyOn } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   childBackgroundTasksByParent,
   rowlessBackgroundTaskMessages,
@@ -16,7 +17,7 @@ afterEach(cleanup);
 
 describe("background task details", () => {
   test("a shell task is named for its kind and shows its command, output and exit", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "shell-1",
@@ -41,7 +42,7 @@ describe("background task details", () => {
   });
 
   test("a live task previews the provider's status line, else the tool it last ran", () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "agent-1",
@@ -92,7 +93,7 @@ describe("background task details", () => {
   });
 
   test("a rowless agent shows its prompt, paused time and a restart ending", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "agent-2",
@@ -156,14 +157,14 @@ describe("background task details", () => {
         );
       };
       try {
-        const { rerender, unmount } = render(view("running"));
+        const { rerender, unmount } = renderInAppCommandScope(view("running"));
         expect(screen.getByText("3m 5s")).toBeTruthy();
         rerender(view("paused"));
         expect(screen.getByText("3m 5s")).toBeTruthy();
         rerender(view("completed"));
         expect(screen.getByText("3m 5s")).toBeTruthy();
         unmount();
-        render(view("completed"));
+        renderInAppCommandScope(view("completed"));
         expect(screen.getByText("3m 5s")).toBeTruthy();
       } finally {
         clock.mockRestore();
@@ -190,7 +191,7 @@ describe("background task details", () => {
         },
       },
     };
-    const { rerender } = render(<TaskGroupPart part={base} partKey="progress" />);
+    const { rerender } = renderInAppCommandScope(<TaskGroupPart part={base} partKey="progress" />);
     expect(screen.getByText("Checking links")).toBeTruthy();
     rerender(
       <TaskGroupPart
@@ -251,7 +252,7 @@ describe("background task details", () => {
     };
     expect(rowlessBackgroundTaskMessages(tasks, [message])).toHaveLength(0);
 
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskChildrenContext.Provider value={childBackgroundTasksByParent(tasks)}>
         <NativeMessage platform="claude" message={message} />
       </BackgroundTaskChildrenContext.Provider>,

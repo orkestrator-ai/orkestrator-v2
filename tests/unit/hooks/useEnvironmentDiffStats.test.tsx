@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   DIFF_STATS_CHANGED_EVENT,
   type EnvironmentDiffStatsChange,
@@ -127,7 +128,7 @@ describe("useEnvironmentDiffStats", () => {
       }),
     );
 
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
 
     await waitFor(() => {
       expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(2);
@@ -141,7 +142,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("applies incremental changes announced by the backend", async () => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await flush();
 
     act(() => {
@@ -162,7 +163,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("carries the truncated flag through to the store", async () => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await flush();
 
     act(() => {
@@ -182,7 +183,7 @@ describe("useEnvironmentDiffStats", () => {
         entries: [change("env-1")],
       }),
     );
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() =>
       expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(true),
     );
@@ -218,7 +219,7 @@ describe("useEnvironmentDiffStats", () => {
     ["not an object", "nonsense"],
     ["null", null],
   ])("ignores a malformed change event (%s)", async (_label, payload) => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await flush();
 
     act(() => {
@@ -232,7 +233,7 @@ describe("useEnvironmentDiffStats", () => {
   // The stream has no replay buffer, so anything that happened while this client
   // was disconnected exists only in the snapshot.
   test("re-reads the snapshot when the event stream reconnects", async () => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     mockGetEnvironmentDiffStats.mockImplementation(() =>
@@ -258,7 +259,7 @@ describe("useEnvironmentDiffStats", () => {
   test("replays a newer event over a snapshot that resolves later", async () => {
     const snapshot = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
     mockGetEnvironmentDiffStats.mockImplementation(() => snapshot.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -277,7 +278,7 @@ describe("useEnvironmentDiffStats", () => {
   test("replays a removal over a snapshot that resolves later", async () => {
     const snapshot = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
     mockGetEnvironmentDiffStats.mockImplementation(() => snapshot.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -293,7 +294,7 @@ describe("useEnvironmentDiffStats", () => {
 
   test("serialises overlapping reconnect snapshots and applies the newest last", async () => {
     mockGetEnvironmentDiffStats.mockImplementationOnce(() => Promise.resolve({ entries: [] }));
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     const first = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
@@ -326,7 +327,7 @@ describe("useEnvironmentDiffStats", () => {
         entries: [change("env-1"), change("env-2")],
       }),
     );
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() =>
       expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(2),
     );
@@ -349,7 +350,7 @@ describe("useEnvironmentDiffStats", () => {
     mockGetEnvironmentDiffStats.mockImplementation(() =>
       Promise.resolve({ entries: [change("env-1")] }),
     );
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() =>
       expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(1),
     );
@@ -371,7 +372,7 @@ describe("useEnvironmentDiffStats", () => {
       }),
     );
 
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
     await flush();
 
@@ -391,7 +392,7 @@ describe("useEnvironmentDiffStats", () => {
       }),
     );
 
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
 
     await waitFor(() =>
       expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(true),
@@ -406,7 +407,7 @@ describe("useEnvironmentDiffStats", () => {
       }
       return defaultListen(event, handler);
     });
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(1));
 
     unmount();
@@ -415,7 +416,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("unsubscribes from both streams on unmount", async () => {
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => {
       expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(1);
       expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
@@ -432,7 +433,7 @@ describe("useEnvironmentDiffStats", () => {
   // `listen` resolves asynchronously, so an unmount can land before the
   // subscription exists. It still has to be torn down.
   test("does not leak a listener when unmounted before subscribing resolves", async () => {
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     unmount();
     await flush();
 
@@ -449,7 +450,7 @@ describe("useEnvironmentDiffStats", () => {
         }),
     );
 
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
     unmount();
 

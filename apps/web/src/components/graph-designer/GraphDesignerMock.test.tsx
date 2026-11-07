@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphTemplateDetail } from "@orkestrator/protocol/graphs/library";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
@@ -107,7 +108,7 @@ function renderTab(data: GraphDesignerTabData = {}) {
       ],
     ]),
   });
-  return render(
+  return renderInAppCommandScope(
     <div style={{ width: 1600, height: 1000, position: "relative" }}>
       <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={data} isActive />
     </div>,

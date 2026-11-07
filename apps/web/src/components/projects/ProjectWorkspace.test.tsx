@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectStore, uiStore } from "@/stores";
 import { kanbanStore } from "@/stores/kanbanStore";
 import type { Project } from "@/types";
@@ -14,7 +15,7 @@ test("Home placeholder exposes its panel, loading, error and no-checkout states"
     projects: [{ id: "project", localPath: "/checkout" } as Project],
   });
   const retry = mock(() => {});
-  const view = render(<ProjectWorkspace projectId="project" />);
+  const view = renderInAppCommandScope(<ProjectWorkspace projectId="project" />);
   expect(screen.getByRole("tabpanel").id).toBe("project-panel-home");
   expect(screen.getByText("Opening project home…")).toBeTruthy();
   view.rerender(<ProjectWorkspace projectId="project" homeError="offline" onRetryHome={retry} />);
@@ -34,7 +35,7 @@ test("Notes tab shows the project notes editor in its own panel", () => {
   appCommandStore(projectStore).setState({
     projects: [{ id: "project", name: "Acme" } as Project],
   });
-  render(<ProjectWorkspace projectId="project" />);
+  renderInAppCommandScope(<ProjectWorkspace projectId="project" />);
   expect(screen.getByRole("tabpanel").id).toBe("project-panel-notes");
   expect(screen.getByText("Acme Notes")).toBeTruthy();
   expect(loadNotes).toHaveBeenCalledWith("project");

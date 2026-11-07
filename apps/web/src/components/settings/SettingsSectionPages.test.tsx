@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as backend from "@/lib/backend";
 import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { RepositorySettings } from "./RepositorySettings";
@@ -60,7 +61,7 @@ for (const [section, title, width] of [
   ["previews", "Preview services", "default"],
 ] as const) {
   test(`environment ${section} uses its menu title and ${width} page width`, () => {
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open
         onOpenChange={() => {}}
@@ -74,7 +75,7 @@ for (const [section, title, width] of [
 }
 
 test("repository section navigation uses menu titles and widens Defaults only", () => {
-  render(<RepositorySettings project={project} open onOpenChange={() => {}} />);
+  renderInAppCommandScope(<RepositorySettings project={project} open onOpenChange={() => {}} />);
   expectPage("General", "default");
   fireEvent.click(screen.getByRole("button", { name: "Defaults" }));
   expectPage("Defaults", "wide");
@@ -100,7 +101,7 @@ for (const stored of [undefined, true]) {
     const save = spyOn(backend, "patchRepositorySettings").mockResolvedValue(config);
     const close = mock(() => {});
     try {
-      render(<RepositorySettings project={project} open onOpenChange={close} />);
+      renderInAppCommandScope(<RepositorySettings project={project} open onOpenChange={close} />);
       fireEvent.click(screen.getByRole("button", { name: "Coordinator" }));
       const control = screen.getByRole("switch", {
         name: COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL,

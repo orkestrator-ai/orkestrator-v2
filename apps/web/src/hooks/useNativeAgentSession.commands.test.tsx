@@ -4,7 +4,8 @@
  * dispatch and queue — with a command's argument bytes left alone.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentCommandCatalogueState,
   NativeAgentDiscoveryUpdate,
@@ -198,7 +199,7 @@ function discoverySnapshot(
 }
 
 function renderSession() {
-  return renderHook(() =>
+  return renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform: "codex",
       environmentId: "env-1",

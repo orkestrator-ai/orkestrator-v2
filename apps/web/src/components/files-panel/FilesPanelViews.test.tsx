@@ -1,6 +1,7 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect } from "react";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { filesPanelStore } from "@/stores";
@@ -31,7 +32,7 @@ function RegisterFileTab() {
 }
 
 function renderWithTerminal(children: React.ReactNode) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <RegisterFileTab />
       {children}
@@ -194,7 +195,7 @@ describe("files panel views", () => {
       changes: [change],
     });
     // No RegisterFileTab: the project board has no editor panes of its own.
-    const allFiles = render(
+    const allFiles = renderInAppCommandScope(
       <TerminalProvider>
         <AllFilesView onOpenFile={onOpenFile} />
       </TerminalProvider>,
@@ -203,7 +204,7 @@ describe("files panel views", () => {
     expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx");
     allFiles.unmount();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <ChangesView onOpenFile={onOpenFile} />
       </TerminalProvider>,
@@ -223,7 +224,7 @@ describe("files panel views", () => {
   });
 
   test("ChangedFileItem copies a workspace-relative path for deleted files", async () => {
-    render(<ChangedFileItem change={{ ...change, status: "D" }} />);
+    renderInAppCommandScope(<ChangedFileItem change={{ ...change, status: "D" }} />);
 
     fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
     fireEvent.click(await screen.findByText("Copy path"));
@@ -242,7 +243,7 @@ describe("files panel views", () => {
     });
 
     try {
-      render(<ChangedFileItem change={change} />);
+      renderInAppCommandScope(<ChangedFileItem change={change} />);
 
       fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
       fireEvent.click(await screen.findByText("Copy path"));
@@ -266,7 +267,7 @@ describe("files panel views", () => {
   });
 
   test("FileTreeNode exposes Copy path without optional action callbacks", async () => {
-    render(<FileTreeNode item={fileTree[0]!.children![0]!} depth={1} />);
+    renderInAppCommandScope(<FileTreeNode item={fileTree[0]!.children![0]!} depth={1} />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
     fireEvent.click(await screen.findByText("Copy path"));
@@ -281,7 +282,7 @@ describe("files panel views", () => {
     const onReveal = mock(() => undefined);
     const onRevert = mock(() => undefined);
     const onDelete = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <FileTreeNode
         item={fileTree[0]!}
         depth={0}
@@ -318,12 +319,12 @@ describe("files panel views", () => {
       children: [],
       truncated: true,
     };
-    const view = render(<FileTreeNode item={incomplete} depth={0} />);
+    const view = renderInAppCommandScope(<FileTreeNode item={incomplete} depth={0} />);
     expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "build" }));
     expect(await screen.findByText("Some folder contents are not shown.")).toBeTruthy();
     view.unmount();
-    const remounted = render(<FileTreeNode item={incomplete} depth={0} />);
+    const remounted = renderInAppCommandScope(<FileTreeNode item={incomplete} depth={0} />);
     expect(await screen.findByText("Some folder contents are not shown.")).toBeTruthy();
     remounted.rerender(<FileTreeNode item={{ ...incomplete, truncated: undefined }} depth={0} />);
     expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
@@ -342,7 +343,7 @@ describe("files panel views", () => {
       loadingFolders: ["build"],
       failedFolders: [],
     });
-    render(<FileTreeNode item={incomplete} depth={0} />);
+    renderInAppCommandScope(<FileTreeNode item={incomplete} depth={0} />);
     expect(await screen.findByText("Loading folder…")).toBeTruthy();
     act(() =>
       appCommandStore(filesPanelStore).setState({ loadingFolders: [], failedFolders: ["build"] }),
@@ -691,7 +692,7 @@ describe("files panel views", () => {
     const onCreate = mock(async () => {
       throw new Error("already exists");
     });
-    render(
+    renderInAppCommandScope(
       <CreateFolderDialog
         parentDirectory="src"
         isPending={false}
@@ -713,7 +714,7 @@ describe("files panel views", () => {
     });
     const onCreate = mock(async () => pending);
     const onCancel = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <CreateFolderDialog
         parentDirectory="src"
         isPending
@@ -841,7 +842,7 @@ describe("files panel views", () => {
     const onRename = mock(async () => {
       throw new Error("A file already exists at src/Main.tsx");
     });
-    render(
+    renderInAppCommandScope(
       <RenameFileDialog
         filePath="src/App.tsx"
         isPending={false}
@@ -860,7 +861,7 @@ describe("files panel views", () => {
 
   test("RenameFileDialog rejects path separators without calling rename", async () => {
     const onRename = mock(async () => undefined);
-    render(
+    renderInAppCommandScope(
       <RenameFileDialog
         filePath="src/App.tsx"
         isPending={false}
@@ -877,7 +878,7 @@ describe("files panel views", () => {
 
   test("RenameFileDialog ignores dismissals while renaming is pending", () => {
     const onCancel = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <RenameFileDialog
         filePath="src/App.tsx"
         isPending
@@ -1138,7 +1139,7 @@ describe("files panel views", () => {
   test("FilesPanelHeader switches tabs, reports count, refreshes, and closes", () => {
     const onRefresh = mock(() => undefined);
     appCommandStore(filesPanelStore).setState({ changes: [change] });
-    const { container } = render(<FilesPanelHeader onRefresh={onRefresh} />);
+    const { container } = renderInAppCommandScope(<FilesPanelHeader onRefresh={onRefresh} />);
     expect(screen.getByText("1")).toBeTruthy();
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "All files" }), {

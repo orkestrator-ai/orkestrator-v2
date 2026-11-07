@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useRef, useState } from "react";
 import { AgentLaunchDialog, type AgentLaunchSelection } from "./AgentLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
@@ -141,7 +142,7 @@ function CollapsedTriggerHarness() {
 
 describe("AgentLaunchDialog with real Radix primitives", () => {
   test("keeps the narrow picker accessible and restores trigger focus on close", async () => {
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     const trigger = screen.getByRole("button", { name: "Open PR dialog" });
     trigger.focus();
     fireEvent.click(trigger);
@@ -163,7 +164,7 @@ describe("AgentLaunchDialog with real Radix primitives", () => {
   });
 
   test("keeps the resolve picker accessible and restores trigger focus on close", async () => {
-    render(<Harness kind="resolve-conflicts" />);
+    renderInAppCommandScope(<Harness kind="resolve-conflicts" />);
     const trigger = screen.getByRole("button", { name: "Open resolve dialog" });
     trigger.focus();
     fireEvent.click(trigger);
@@ -185,7 +186,7 @@ describe("AgentLaunchDialog with real Radix primitives", () => {
   });
 
   test("ignores Escape and Cancel while a resolve launch is busy", async () => {
-    render(<Harness kind="resolve-conflicts" busy initiallyOpen />);
+    renderInAppCommandScope(<Harness kind="resolve-conflicts" busy initiallyOpen />);
     const dialog = await screen.findByRole("dialog", { name: "Configure conflict resolution" });
 
     fireEvent.keyDown(dialog, { key: "Escape" });
@@ -197,7 +198,7 @@ describe("AgentLaunchDialog with real Radix primitives", () => {
   });
 
   test("prefers the fallback over a still-connected trigger", async () => {
-    render(<CollapsedTriggerHarness />);
+    renderInAppCommandScope(<CollapsedTriggerHarness />);
     await screen.findByRole("dialog", { name: "Configure pull request" });
 
     // An open modal hides everything outside it from the accessibility tree, so
@@ -213,7 +214,7 @@ describe("AgentLaunchDialog with real Radix primitives", () => {
   });
 
   test("restores focus to a fallback when the original trigger has unmounted", async () => {
-    render(<DisconnectedTriggerHarness />);
+    renderInAppCommandScope(<DisconnectedTriggerHarness />);
     await screen.findByRole("dialog", { name: "Configure pull request" });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

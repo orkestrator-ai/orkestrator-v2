@@ -5,7 +5,7 @@
  * warm or live scope (plan item 5007).
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import {
   toNodeEnvironmentSummary,
   toNodeProjectSummary,
@@ -25,7 +25,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { noteAuthoritativeRead } from "@/lib/node-scope/snapshot-sync";
 import { portalStore } from "@/lib/portal/portal-store";
-import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { Environment, Project } from "@/types";
 import {
   connectionList,
@@ -64,7 +64,7 @@ function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset)
     revealedProject: null,
     recentKeys: [],
   });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,
@@ -180,7 +180,7 @@ for (const mode of ["project", "repository"] as const) {
           </FederationProvider>
         );
       }
-      const view = render(<List loading />);
+      const view = renderInAppCommandScope(<List loading />);
       expect(screen.getByText("Loading projects...")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Add your first project" }) === null).toBe(true);
       view.rerender(<List loading={false} />);
@@ -237,7 +237,7 @@ for (const order of ["priority", "newest", "oldest"] as const) {
         ]),
       ),
     };
-    render(
+    renderInAppCommandScope(
       <FederatedActivityList
         machines={[machine]}
         order={order}

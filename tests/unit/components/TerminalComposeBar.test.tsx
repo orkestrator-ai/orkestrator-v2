@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { mockReadImage } from "../../mocks/clipboard";
 import { mockToastError } from "../../mocks/sonner";
 
@@ -87,7 +88,7 @@ function renderComposeBar(overrides: Partial<ComposeBarProps> = {}) {
   const onSend = mock((..._args: Parameters<ComposeBarProps["onSend"]>) => {});
   const onAddressAll = mock(() => {});
 
-  const result = render(
+  const result = renderInAppCommandScope(
     <ComposeBar
       sessionKey={SESSION_KEY}
       isOpen

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -169,7 +170,7 @@ describe("GitHub picker to project registration", () => {
       const changes: boolean[] = [];
       appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
       try {
-        render(<CloneDialog onOpenChange={(open) => changes.push(open)} />);
+        renderInAppCommandScope(<CloneDialog onOpenChange={(open) => changes.push(open)} />);
         fireEvent.click(screen.getByRole("button", { name: "From GitHub" }));
         await screen.findByRole("list", { name: "organizations" });
         fireEvent.click(screen.getByRole("button", { name: /^acme/ }));
@@ -257,7 +258,7 @@ for (const outcome of ["success", "error"] as const) {
     const error = mockToastError;
     appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
     try {
-      const view = render(<CloneDialog onOpenChange={() => undefined} />);
+      const view = renderInAppCommandScope(<CloneDialog onOpenChange={() => undefined} />);
       fireEvent.click(screen.getByRole("button", { name: "From GitHub" }));
       fireEvent.click(await screen.findByRole("button", { name: /^acme/ }));
       fireEvent.click(await screen.findByRole("button", { name: /^api/ }));

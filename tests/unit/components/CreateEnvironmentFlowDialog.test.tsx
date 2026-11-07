@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
@@ -101,7 +102,7 @@ afterEach(cleanup);
 async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) {
   const created = { id: "env-created" } as Environment;
   const startEnvironment = mock(async () => {});
-  render(
+  renderInAppCommandScope(
     <CreateEnvironmentFlowDialog
       open
       onOpenChange={() => {}}
@@ -184,7 +185,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-impossible-local" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentFlowDialog
           open
@@ -216,7 +217,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-no-host-auth" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -244,7 +245,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-no-github" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -272,7 +273,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-no-pat" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -300,7 +301,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
     const createEnvironment = mock(async () => ({ id: "env-status-error" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -336,7 +337,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(<CreateEnvironmentFlowDialog open {...props} />);
+    const view = renderInAppCommandScope(<CreateEnvironmentFlowDialog open {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
@@ -367,7 +368,9 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(<CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />);
+    const view = renderInAppCommandScope(
+      <CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
@@ -402,7 +405,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         }),
     );
     const createEnvironment = mock(async () => ({ id: "env-unmounted" }) as Environment);
-    const view = render(
+    const view = renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -441,7 +444,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentFlowDialog {...props} />
       </DockerAvailabilityProvider>,
@@ -477,7 +480,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentFlowDialog {...props} />
       </DockerAvailabilityProvider>,
@@ -505,7 +508,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const createEnvironment = mock(async () => ({ id: "env-retry" }) as Environment);
     createEnvironment.mockRejectedValueOnce(new Error("container creation failed"));
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -551,7 +554,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-feature" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -581,7 +584,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   test("starts a description-only feature build through the production wrapper", async () => {
     const createEnvironment = mock(async () => ({ id: "env-feature" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -603,7 +606,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("activates the feature environment so its setup surface mounts", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -638,7 +641,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     getEnvironmentMock.mockResolvedValueOnce(null);
     const logs = captureLogs();
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={() => {}}
@@ -689,7 +692,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     } as Environment);
     const logs = captureLogs();
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={() => {}}
@@ -744,7 +747,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     getEnvironmentMock.mockRejectedValueOnce(hydrationError);
     const logs = captureLogs();
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={() => {}}
@@ -797,7 +800,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       pipelineId: "pipeline-pending",
     });
     const onOpenChange = mock(() => {});
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -849,7 +852,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       available: false,
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -878,7 +881,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     createFeatureBuildMock.mockRejectedValueOnce(new Error("Docker is not running"));
     const onOpenChange = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -898,7 +901,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("skips the credential check for a local feature build", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -922,7 +925,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   test("does not check container GitHub credentials for a local worktree", async () => {
     const createEnvironment = mock(async () => ({ id: "env-local" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1003,7 +1006,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
   test("starts a newly created environment as a backend-owned background task", async () => {
     const startEnvironment = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1032,7 +1035,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         }),
     );
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -1063,7 +1066,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={onOpenChange}
@@ -1103,7 +1106,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       new Error("Initial prompt attachments exceed the 32 MB limit"),
     );
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -1137,7 +1140,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
   test("keeps the selected model and effort as one-shot launch state without changing defaults", async () => {
     const created = { id: "env-selected-options" } as Environment;
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1206,7 +1209,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       );
     }
 
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog") === null).toBe(true);
     act(() => {
@@ -1243,7 +1246,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("does not let a late catalog refresh replace a user-touched agent selection", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1302,7 +1305,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       appCommandStore(configStore).getState().setConfig(config);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1381,7 +1384,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     // means anything for a launch, and leaving one here would hand the next
     // reader a model the user never asked to run.
     const created = { id: "env-agent-off" } as Environment;
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1410,7 +1413,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       startEnvironment: async () => {},
     };
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1441,7 +1444,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1475,7 +1478,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const createEnvironment = mock(async () => {
       throw new Error("must not be called");
     });
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}

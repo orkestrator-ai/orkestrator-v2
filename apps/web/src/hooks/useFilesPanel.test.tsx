@@ -1,6 +1,7 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { environmentStore, filesPanelStore, projectStore, uiStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
@@ -140,7 +141,7 @@ afterAll(() => {
 
 describe("useFilesPanel external file copies", () => {
   test("encodes dropped bytes, targets the selected environment, and refreshes the tree", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     const file = droppedFile("image.bin", [0, 1, 127, 255]);
 
     await act(async () => {
@@ -163,7 +164,7 @@ describe("useFilesPanel external file copies", () => {
   });
 
   test("rejects oversized and excessive drops before reading or sending files", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     const oversized = droppedFile("large.bin", []);
     Object.defineProperty(oversized, "size", { value: MAX_EXTERNAL_FILE_DROP_BYTES + 1 });
 
@@ -183,7 +184,7 @@ describe("useFilesPanel external file copies", () => {
   });
 
   test("copies zero-byte files as regular files", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.copyExternalFiles([droppedFile("empty.txt", [])], ".");
@@ -200,7 +201,7 @@ describe("useFilesPanel external file copies", () => {
       if (fileName === "blocked.txt") throw new Error("already exists");
       return `${directory}/${fileName}`;
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let failure: unknown;
     await act(async () => {
@@ -230,7 +231,7 @@ describe("useFilesPanel external file copies", () => {
 
   test("does not refresh when every copied file fails", async () => {
     copyExternalFileMock.mockRejectedValue(new Error("copy failed"));
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let failure: unknown;
     await act(async () => {
@@ -258,7 +259,7 @@ describe("useFilesPanel external file copies", () => {
 
   test("toasts when the selected environment is unavailable", async () => {
     appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await expect(
       result.current.copyExternalFiles([droppedFile("notes.txt", [1])], "."),
@@ -284,7 +285,7 @@ describe("useFilesPanel on the project root", () => {
 
   test("reads the project's own checkout when no environment is selected", async () => {
     setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     await act(async () => {
       await Promise.resolve();
     });
@@ -299,7 +300,7 @@ describe("useFilesPanel on the project root", () => {
   });
 
   test("drops land in the root checkout through the project home and refresh changes", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.copyExternalFiles([droppedFile("notes.txt", [1])], ".");
@@ -324,7 +325,7 @@ describe("useFilesPanel on the project root", () => {
 
   test("an existing project home is reconciled before mutations", async () => {
     appCommandStore(environmentStore).setState({ environments: [projectHome] });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.copyExternalFiles([droppedFile("a.txt", [1])], "docs");
@@ -352,7 +353,7 @@ describe("useFilesPanel on the project root", () => {
           },
         ],
       });
-      const { result } = renderHook(() => useFilesPanel());
+      const { result } = renderHookInAppCommandScope(() => useFilesPanel());
       let failure: unknown;
       await act(async () => {
         await result.current
@@ -371,7 +372,7 @@ describe("useFilesPanel on the project root", () => {
     ensureProjectHomeEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("The configured local checkout is unavailable");
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let failure: unknown;
     await act(async () => {
@@ -392,7 +393,7 @@ describe("useFilesPanel on the project root", () => {
     appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", name: "Project", localPath: null } as Project],
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     expect(result.current.isAvailable).toBe(false);
   });
 
@@ -457,7 +458,7 @@ describe("useFilesPanel truncated folders", () => {
   }
 
   test("reads an expanded truncated folder once and again after it is collapsed", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
 
     expect(getLocalFileSubtreeMock.mock.calls).toEqual([["/worktree", "skills/release"]]);
@@ -496,7 +497,7 @@ describe("useFilesPanel truncated folders", () => {
     });
     const logs = captureLogs();
     try {
-      renderHook(() => useFilesPanel());
+      renderHookInAppCommandScope(() => useFilesPanel());
       await settle();
       expect(logs.records()).toContainEqual(
         expect.objectContaining({ level: "error", area: "web.files", event: "folder.load-failed" }),
@@ -526,7 +527,7 @@ describe("useFilesPanel truncated folders", () => {
 
   test("silent polling refreshes loaded contents with an unchanged bounded-tree digest", async () => {
     const { clock } = installFakeReadCoordinator();
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
     const originalTree = appCommandStore(filesPanelStore).getState().fileTree;
     getLocalFileSubtreeMock.mockResolvedValueOnce({
@@ -558,7 +559,7 @@ describe("useFilesPanel truncated folders", () => {
             resolveNew = resolve;
           }),
       );
-      const { result } = renderHook(() => useFilesPanel());
+      const { result } = renderHookInAppCommandScope(() => useFilesPanel());
       await settle();
       let complete = false;
       let operation!: Promise<void>;
@@ -596,7 +597,7 @@ describe("useFilesPanel truncated folders", () => {
 
   test("a changed bounded tree reloads existing subtrees and reopening the view reconciles them", async () => {
     const { clock } = installFakeReadCoordinator();
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
     getLocalFileTreeSnapshotMock.mockResolvedValueOnce({
       unchanged: false,
@@ -615,7 +616,7 @@ describe("useFilesPanel truncated folders", () => {
   });
 
   test("collapsing a parent invalidates descendant results and reopening fetches them again", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
     act(() => appCommandStore(filesPanelStore).getState().setFolderExpanded("skills", false));
     expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({});
@@ -626,7 +627,7 @@ describe("useFilesPanel truncated folders", () => {
 
   test("a closed panel reads no folders", async () => {
     setFilesPanelTestState({ isOpen: false });
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
     expect(getLocalFileSubtreeMock).not.toHaveBeenCalled();
   });
@@ -640,7 +641,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 
   async function openPanel(activeTab: "all-files" | "changes" = "all-files") {
     setFilesPanelTestState({ isOpen: true, activeTab });
-    const view = renderHook(() => useFilesPanel());
+    const view = renderHookInAppCommandScope(() => useFilesPanel());
     // The open read stays a direct, immediate load.
     await act(async () => {
       await Promise.resolve();
@@ -789,7 +790,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
   test("a closed panel keeps no periodic demand", async () => {
     const { clock } = installFakeReadCoordinator();
     setFilesPanelTestState({ isOpen: false });
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await act(() => clock.advance(30_000));
     expect(snapshotCalls()).toEqual({ tree: 0, changes: 0 });
     expect(clock.pending).toBe(0);
@@ -902,7 +903,7 @@ test("the board follows a changed checkout and stops reading or mutating when it
   });
   appCommandStore(environmentStore).setState({ environments: [projectHome] });
   setFilesPanelTestState({ isOpen: true });
-  const { result } = renderHook(() => useFilesPanel());
+  const { result } = renderHookInAppCommandScope(() => useFilesPanel());
   await act(async () => {
     await Promise.resolve();
   });

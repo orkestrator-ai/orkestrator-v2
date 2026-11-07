@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import * as federation from "@/components/federation/FederationProvider";
 import { invoke } from "@/lib/native/backend";
@@ -93,7 +94,7 @@ afterEach(() => {
     const wrapper = ({ children }: { children: ReactNode }) => (
       <AccountMachineProvider value={{ machine, name: owner }}>{children}</AccountMachineProvider>
     );
-    const { result } = renderHook(useSettingsModelCatalog, { wrapper });
+    const { result } = renderHookInAppCommandScope(useSettingsModelCatalog, { wrapper });
     await waitFor(() => expect(result.current.catalog.codex[0]?.id).toBe(`${owner}-model-1`));
     expect(result.current.catalogProjectId).toBe(`${owner}-project`);
     expect(result.current.selectedProjectId).toBeNull();

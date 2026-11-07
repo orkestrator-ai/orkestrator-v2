@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { environmentStore } from "@/stores/environmentStore";
 import { agentActivityStore } from "@/stores/agentActivityStore";
@@ -71,7 +72,7 @@ afterEach(() => {
 });
 
 test("pipeline-only changes override waiting and restore it when work ends", () => {
-  const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
+  const { result } = renderHookInAppCommandScope(() => useEnvironmentIdNameSignal("env"));
   expect(result.current).toBe("needs-answer");
   act(() =>
     appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set(["env"]) }),
@@ -82,11 +83,14 @@ test("pipeline-only changes override waiting and restore it when work ends", () 
 });
 
 test("Docker and stopped-container gates suppress waiting; local worktrees stay answerable", () => {
-  const { result, rerender } = renderHook(() => useEnvironmentIdNameSignal("env"), {
-    wrapper: ({ children }) => (
-      <DockerAvailabilityProvider available={false}>{children}</DockerAvailabilityProvider>
-    ),
-  });
+  const { result, rerender } = renderHookInAppCommandScope(
+    () => useEnvironmentIdNameSignal("env"),
+    {
+      wrapper: ({ children }) => (
+        <DockerAvailabilityProvider available={false}>{children}</DockerAvailabilityProvider>
+      ),
+    },
+  );
   expect(result.current).toBe("merge-ready");
   act(() =>
     appCommandStore(environmentStore).setState({
@@ -106,7 +110,7 @@ test("stopped containers suppress signals and live activity updates restore prio
   appCommandStore(prMonitorStore).setState((state) => ({
     states: new Map([["env", { ...state.states.get("env")!, hasMergeConflicts: true }]]),
   }));
-  const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
+  const { result } = renderHookInAppCommandScope(() => useEnvironmentIdNameSignal("env"));
   expect(result.current).toBeNull();
   act(() =>
     appCommandStore(environmentStore).setState({
@@ -140,7 +144,7 @@ for (const signal of ["waiting", "ready", "conflicts"] as const) {
       appCommandStore(prMonitorStore).setState((state) => ({
         states: new Map([["env", { ...state.states.get("env")!, hasMergeConflicts: true }]]),
       }));
-    const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironmentIdNameSignal("env"));
     expect(result.current).toBe(
       signal === "waiting"
         ? "needs-answer"
@@ -161,9 +165,12 @@ for (const signal of ["waiting", "ready", "conflicts"] as const) {
 }
 
 test("missing and unselected environments have no signal", () => {
-  const { result, rerender } = renderHook(({ id }) => useEnvironmentIdNameSignal(id), {
-    initialProps: { id: null as string | null },
-  });
+  const { result, rerender } = renderHookInAppCommandScope(
+    ({ id }) => useEnvironmentIdNameSignal(id),
+    {
+      initialProps: { id: null as string | null },
+    },
+  );
   expect(result.current).toBeNull();
   rerender({ id: "missing" });
   expect(result.current).toBeNull();

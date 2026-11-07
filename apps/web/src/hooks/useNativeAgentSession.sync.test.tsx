@@ -8,7 +8,8 @@
  * decide whether a read is still allowed to install anything.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentMessagePage,
   NativeAgentProjectionUpdate,
@@ -182,7 +183,7 @@ function snapshot(
 }
 
 function renderSession(options: { environmentId?: string; tabId?: string } = {}) {
-  return renderHook(() =>
+  return renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform: "codex",
       environmentId: options.environmentId ?? "env-1",
@@ -1175,7 +1176,7 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
     );
     projectionUpdates = [() => ({ syncVersion: 1, status: "missing" })];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
         environmentId: "env-1",

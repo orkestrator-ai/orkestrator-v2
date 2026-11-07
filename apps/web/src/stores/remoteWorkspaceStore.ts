@@ -97,7 +97,6 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
     open: (nodeId, request) => {
       const openNodes = [...get().openNodes.filter((id) => id !== nodeId), nodeId];
       const requests = {
-        ...get().requests,
         [nodeId]: { seq: nextSeq++, request },
       };
       const selection: NodeSelection = {
@@ -113,6 +112,7 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
       noteNodeSelectionRecents(selection);
     },
     showLocal: () => {
+      set({ requests: {} });
       if (!get().active) return;
       const windowScope = getWindowScope();
       if (!isCommandNodeSelection(windowScope, windowScope.selection.get()))
@@ -143,11 +143,24 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
  */
 export function startRemoteWorkspaceSelectionSync(): () => void {
   const windowScope = getWindowScope();
-  return windowScope.selection.subscribe((selection) => {
+  const sync = (selection: NodeSelection | null) => {
     const state = useRemoteWorkspaceStore.getState();
     const next = activeFor(selection, state.openNodes);
-    if (!sameActive(state.active, next)) useRemoteWorkspaceStore.setState({ active: next });
-  });
+    // Navigation supersedes pending work even when its host has not mounted
+    // yet. Returning to a warm node must not revive a deferred dialog.
+    const requests = Object.fromEntries(
+      Object.entries(state.requests).filter(([nodeId]) => nodeId === selection?.nodeId),
+    );
+    if (
+      !sameActive(state.active, next) ||
+      Object.keys(requests).length !== Object.keys(state.requests).length
+    ) {
+      useRemoteWorkspaceStore.setState({ active: next, requests });
+    }
+  };
+  const stop = windowScope.selection.subscribe(sync);
+  sync(windowScope.selection.get());
+  return stop;
 }
 
 /** Whether another node's environment is the one the central region shows. */

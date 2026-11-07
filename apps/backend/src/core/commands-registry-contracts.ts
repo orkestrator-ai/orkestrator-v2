@@ -224,7 +224,16 @@ export function contractCommandHandler<C extends AnyCommandDef>(
       }
       throw failure;
     }
-    const result = handler(decoded.success, context, invocation);
+    // This registry-wide fence is validated by the container guard, rather
+    // than each command schema. Keep it through tolerant schema decoding so
+    // a stale (or malformed) fence cannot become an unfenced invocation.
+    const guardedArgs = carries(args, "expectedRuntimeGeneration")
+      ? {
+          ...decoded.success,
+          expectedRuntimeGeneration: args.expectedRuntimeGeneration,
+        }
+      : decoded.success;
+    const result = handler(guardedArgs, context, invocation);
     if (!options.validateResults || def.encoded) return result;
     return isPromiseLike(result) ? Promise.resolve(result).then(check) : check(result);
   };

@@ -150,6 +150,42 @@ describe("registry: definitions and names", () => {
 });
 
 describe("parsing: tolerant arguments and must-understand fields", () => {
+  test("the real registry fences an environment mutation after contract decoding", async () => {
+    const commands = createCommandRegistry({ validateContractResults: false });
+    const environment = { id: "environment", containerId: "replacement" };
+    const updates: unknown[] = [];
+    const guardedContext = {
+      storage: {
+        getDataDir: () => "/isolated-contract-test",
+        getEnvironment: async () => environment,
+        updateEnvironment: async (id: string, update: unknown) => {
+          updates.push({ id, update });
+          return environment;
+        },
+      },
+    } as unknown as CommandContext;
+    const mutate = (expectedRuntimeGeneration: unknown) =>
+      commands.get("update_port_mappings")!(
+        { environmentId: environment.id, portMappings: [], expectedRuntimeGeneration },
+        guardedContext,
+      );
+    expect(commands.contracts.has("update_port_mappings")).toBe(true);
+    await expect(mutate(0)).rejects.toMatchObject({
+      name: "ContainerLifecycleError",
+      code: "runtime-changed",
+    });
+    expect(updates).toEqual([]);
+    for (const invalid of [null, "1", -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(mutate(invalid)).rejects.toMatchObject({ code: "invalid-request" });
+    }
+    expect(updates).toEqual([]);
+    await mutate(1);
+    expect(updates).toEqual([{ id: environment.id, update: { portMappings: [] } }]);
+    // Legacy callers that supply no fence still work.
+    await mutate(undefined);
+    expect(updates).toHaveLength(2);
+  });
+
   test("unknown fields are stripped before the handler runs", async () => {
     const { commands, register } = registry();
     let seen: unknown;

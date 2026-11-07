@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { toNodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
@@ -24,7 +24,10 @@ import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coo
 import { environmentStore, projectStore, uiStore, useEnvironmentStore, useUIStore } from "@/stores";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { configStore } from "@/stores/configStore";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import {
+  startRemoteWorkspaceSelectionSync,
+  useRemoteWorkspaceStore,
+} from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
 import { NodeWorkspaceHost } from "./NodeWorkspaceHost";
 import { RemoteProjectGroup } from "./RemoteMachineTree";
@@ -168,6 +171,78 @@ test("opens on the window's request; the selection is the window's own", async (
     projectId: project.id,
     environmentId: environment.id,
   });
+});
+
+for (const delayed of ["mount", "environments", "dialog"] as const) {
+  test(`navigation to another node discards a request delayed by ${delayed}`, async () => {
+    const windowScope = getWindowScope();
+    const other = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: leafId }),
+    });
+    const stop = startRemoteWorkspaceSelectionSync();
+    const pendingEnvironments = Promise.withResolvers<Environment[]>();
+    nativeInvoke.mockImplementation(async (command: string) => {
+      if (command === "get_projects") return [project];
+      if (command === "get_environments") return pendingEnvironments.promise;
+      return undefined;
+    });
+    try {
+      ask({
+        projectId: project.id,
+        ...(delayed === "dialog"
+          ? { createEnvironmentProjectId: project.id }
+          : { environmentId: environment.id, dialog: "environment-settings" as const }),
+      });
+      const host = delayed === "mount" ? null : renderInAppCommandScope(<NodeWorkspaceHost />);
+      if (host) {
+        await waitFor(() => expect(appCommandStore(projectStore).getState().hasLoaded).toBe(true));
+      }
+      const newer = { nodeId: leafId, projectId: "other-project", environmentId: "other-env" };
+      act(() =>
+        other
+          .store(uiStore)
+          .getState()
+          .selectProjectAndEnvironment(newer.projectId, newer.environmentId),
+      );
+      expect(windowScope.selection.get()).toEqual(newer);
+      if (!host) renderInAppCommandScope(<NodeWorkspaceHost />);
+      await act(async () => {
+        pendingEnvironments.resolve([environment]);
+        appCommandStore(configStore).setState({ hasLoaded: true });
+      });
+      await waitFor(() =>
+        expect(appCommandStore(environmentStore).getState().environments).toContainEqual(
+          environment,
+        ),
+      );
+      expect(windowScope.selection.get()).toEqual(newer);
+      expect(useAppDialogStore.getState().request).toBeNull();
+      expect(useRemoteWorkspaceStore.getState().requests[commandNodeId()]).toBeUndefined();
+      // A later return to the warm node does not revive its old dialog.
+      act(() => appCommandStore(uiStore).getState().selectProject(project.id));
+      await settle();
+      expect(useAppDialogStore.getState().request).toBeNull();
+      expect(screen.queryAllByRole("dialog")).toHaveLength(0);
+    } finally {
+      stop();
+    }
+  });
+}
+
+test("a hidden host refuses a retained request before window selection sync runs", async () => {
+  const windowScope = getWindowScope();
+  const other = windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: leafId }) });
+  open({ addProject: true }, <NodeWorkspaceHost />);
+  act(() => other.store(uiStore).getState().selectProject("other-project"));
+  const newer = windowScope.selection.get();
+  // Deliberately leave the request in the store: the host must independently
+  // check current selection at both render and side-effect boundaries.
+  expect(useRemoteWorkspaceStore.getState().requests[commandNodeId()]).toBeDefined();
+  await act(async () => resolveProjects([project]));
+  await waitFor(() => expect(appCommandStore(projectStore).getState().hasLoaded).toBe(true));
+  expect(windowScope.selection.get()).toEqual(newer);
+  expect(screen.queryAllByRole("dialog")).toHaveLength(0);
 });
 
 test("a later request from the window is applied as a sidebar click would", async () => {

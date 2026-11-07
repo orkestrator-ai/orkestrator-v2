@@ -66,6 +66,7 @@ export interface FleetUpdatePassEntry {
 export class FleetUpdatePolicyRunner {
   private current: FleetUpdatePolicy = DEFAULT_FLEET_UPDATE_POLICY;
   private loaded: Promise<void> | null = null;
+  private policyUpdates: Promise<void> = Promise.resolve();
   private unsubscribe: (() => void) | null = null;
   private passTimer: ReturnType<typeof setTimeout> | null = null;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
@@ -113,7 +114,22 @@ export class FleetUpdatePolicyRunner {
     return this.current;
   }
 
-  async setChannel(channel: HostUpdateChannel, enabled: boolean): Promise<FleetUpdatePolicy> {
+  setChannel(channel: HostUpdateChannel, enabled: boolean): Promise<FleetUpdatePolicy> {
+    // Queue the read as well as the write so concurrent clients merge against
+    // the last persisted policy. A failed save leaves that policy unchanged.
+    const update = this.policyUpdates.then(() => this.saveChannel(channel, enabled));
+    // Keep later updates usable after a failure; the caller still sees it.
+    this.policyUpdates = update.then(
+      () => undefined,
+      () => undefined,
+    );
+    return update;
+  }
+
+  private async saveChannel(
+    channel: HostUpdateChannel,
+    enabled: boolean,
+  ): Promise<FleetUpdatePolicy> {
     await this.load();
     const next: FleetUpdatePolicy = {
       version: 1,

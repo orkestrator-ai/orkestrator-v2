@@ -17,7 +17,11 @@ import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { noteNodeSelectionRecents, selectionOnScope } from "@/stores/windowSelectionStore";
+import {
+  noteNodeSelectionRecents,
+  selectionOnScope,
+  useWindowSelection,
+} from "@/stores/windowSelectionStore";
 import { windowScopeOf } from "@/lib/node-scope/window-scope";
 import { uiStore } from "@/stores/uiStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -114,6 +118,8 @@ export function NodeWorkspaceHost() {
   } = useEnvironments(null);
   // The node this host shows: the one the hooks above read.
   const scope = useNodeScope();
+  const selection = useWindowSelection();
+  const shownHere = selectionOnScope(scope, selection) !== null;
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const configLoaded = useConfigStore((state) => state.hasLoaded);
   const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
@@ -178,7 +184,7 @@ export function NodeWorkspaceHost() {
     dockerReady,
   };
   const createReady = dialogHydrated({ createEnvironmentProjectId: "*" }, hydration);
-  const dialogRequest = request && closedSeq < request.seq ? request : null;
+  const dialogRequest = shownHere && request && closedSeq < request.seq ? request : null;
   const showAddProject =
     Boolean(dialogRequest?.addProject) && dialogHydrated({ addProject: true }, hydration);
   const createProjectId = createReady ? (dialogRequest?.createEnvironmentProjectId ?? null) : null;
@@ -197,6 +203,13 @@ export function NodeWorkspaceHost() {
   // Select what was asked for, as the node's own sidebar would.
   useEffect(() => {
     if (!request || appliedSeq.current >= request.seq) return;
+    // Hydration can finish after navigation, while this warm host remains
+    // mounted. Read the current intent again at the side-effect boundary.
+    if (
+      !selectionOnScope(scope) ||
+      useRemoteWorkspaceStore.getState().requests[scope.nodeId]?.seq !== request.seq
+    )
+      return;
     const seq = request.seq;
     const applied = () => {
       appliedSeq.current = seq;
@@ -275,6 +288,7 @@ export function NodeWorkspaceHost() {
     projectsLoading,
     request,
     scope,
+    selection,
     startEnvironment,
   ]);
 

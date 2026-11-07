@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
-import { useRemoteWorkspaceStore } from "./remoteWorkspaceStore";
+import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import { startRemoteWorkspaceSelectionSync, useRemoteWorkspaceStore } from "./remoteWorkspaceStore";
 
 const INITIAL = useRemoteWorkspaceStore.getState();
 
@@ -35,6 +35,28 @@ test("each request is numbered, so the same request twice is applied twice", () 
   const second = useRemoteWorkspaceStore.getState().requests.bk_1!;
   expect(second.request).toEqual(first.request);
   expect(second.seq).toBeGreaterThan(first.seq);
+});
+
+test("opening another node supersedes its predecessor before either host mounts", () => {
+  const store = useRemoteWorkspaceStore.getState();
+  store.open("bk_1", { addProject: true });
+  store.open("bk_2", {});
+  expect(useRemoteWorkspaceStore.getState().requests.bk_1).toBeUndefined();
+  expect(useRemoteWorkspaceStore.getState().openNodes).toEqual(["bk_1", "bk_2"]);
+});
+
+test("direct window navigation invalidates deferred requests even before sync starts", () => {
+  useRemoteWorkspaceStore.getState().open("bk_1", { addProject: true });
+  getWindowScope().select(null);
+  const stop = startRemoteWorkspaceSelectionSync();
+  try {
+    expect(useRemoteWorkspaceStore.getState().requests).toEqual({});
+    useRemoteWorkspaceStore.getState().open("bk_1", { addProject: true });
+    getWindowScope().select(null);
+    expect(useRemoteWorkspaceStore.getState().requests).toEqual({});
+  } finally {
+    stop();
+  }
 });
 
 test("closing a node drops its request and, when it was shown, the window's selection of it", () => {

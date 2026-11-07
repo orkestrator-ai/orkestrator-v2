@@ -133,6 +133,80 @@ afterEach(() => {
 });
 
 describe("FleetUpdatePolicyRunner", () => {
+  for (const disable of [false, true]) {
+    test(`concurrent channel edits merge after persistence (disable: ${disable})`, async () => {
+      const firstSave = Promise.withResolvers<void>();
+      const enteredSave = Promise.withResolvers<void>();
+      const { store, saves } = memoryStore(disable ? stableOn : null);
+      const policy = runner({
+        nodes: fakeNodes([]).api,
+        selfVersion: async () => "2.40.0",
+        store: {
+          load: store.load,
+          async save(next) {
+            if (saves.length === 0) {
+              enteredSave.resolve();
+              await firstSave.promise;
+            }
+            await store.save(next);
+          },
+        },
+      });
+      const stable = policy.setChannel("stable", !disable);
+      await enteredSave.promise;
+      const beta = policy.setChannel("beta", true);
+      // No unpersisted preference is visible while the first save is held.
+      expect(await policy.policy()).toEqual(disable ? stableOn : DEFAULT_FLEET_UPDATE_POLICY);
+      firstSave.resolve();
+      const [first, second] = await Promise.all([stable, beta]);
+      expect(first.channels).toEqual({ stable: !disable, beta: false, unstable: false });
+      const expected: FleetUpdatePolicy = {
+        version: 1,
+        channels: { stable: !disable, beta: true, unstable: false },
+      };
+      expect(second).toEqual(expected);
+      expect(saves).toEqual([first, expected]);
+      expect(await store.load()).toEqual(expected);
+      expect(await policy.policy()).toEqual(expected);
+    });
+  }
+
+  test("a failed save publishes nothing and a queued edit uses the last persisted policy", async () => {
+    const failedSave = Promise.withResolvers<void>();
+    const enteredSave = Promise.withResolvers<void>();
+    const { store, saves } = memoryStore(stableOn);
+    let saveCalls = 0;
+    const policy = runner({
+      nodes: fakeNodes([]).api,
+      selfVersion: async () => "2.40.0",
+      store: {
+        load: store.load,
+        async save(next) {
+          if (++saveCalls === 1) {
+            enteredSave.resolve();
+            await failedSave.promise;
+          }
+          await store.save(next);
+        },
+      },
+    });
+    const disable = policy.setChannel("stable", false);
+    const rejected = disable.catch((error: unknown) => error);
+    await enteredSave.promise;
+    const enable = policy.setChannel("beta", true);
+    expect(await policy.policy()).toEqual(stableOn);
+    failedSave.reject(new Error("save failed"));
+    expect(await rejected).toMatchObject({ message: "save failed" });
+    const expected: FleetUpdatePolicy = {
+      version: 1,
+      channels: { stable: true, beta: true, unstable: false },
+    };
+    expect(await enable).toEqual(expected);
+    expect(saves).toEqual([expected]);
+    expect(await policy.policy()).toEqual(expected);
+    expect(await store.load()).toEqual(expected);
+  });
+
   test("is off by default and touches no node", async () => {
     const leaf = fakeNode(LEAF);
     const policy = runner({

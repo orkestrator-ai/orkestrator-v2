@@ -162,7 +162,7 @@ supported peer already has the newer behaviour.
 | Clients that still send `experimentalCodexRawEventLogging`, the retired Codex raw event logging setting: a workspace client's write is not refused for that key alone, because an older form sends it whatever the machine stores. Nothing reads the key; a direct save stores it as it stores any unknown key, and a stored one stays in `config.json` for a downgrade | `RETIRED_GLOBAL_SETTING_KEYS` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (shared with the row above) | Clients from before the setting's removal (2026-11-05). A downgrade reads the key as before, and a client that finds none falls back to its old default, on, which captures nothing | The floor is at or above the first Stable release without the setting; then remove the set. The stored key is harmless and needs no migration | [logging.md](logging.md) |
 
 | Backends without `get_client_state_capabilities`: coordinator tab groups, upstream-merge declines and notice dismissals stay in the browser's copy, the renderer decides the merge question itself, and the "agent stopped" sound is inferred from `hasUnreadWork` edges | `coordinatorPaneLayoutStore.ts`, `coordinator-upstream-check.ts`, `nativeNoticeDismissalStore.ts`, `useNotificationSoundService.ts` | None (renderer side) | Backends before the client state repository (2026-11-01) | The floor is a release with the capability. The one-time import of browser copies is unmigrated user state, not skew, and goes separately once no supported renderer can hold one | Backend-owned client state ([storage.md](storage.md)) |
-| Preview registry snapshots without `entryServiceId`: the renderer resolves the entry service from `services` with the same protocol rule | `environmentBrowserTarget` (`preview-service-entry.ts`) | None (renderer side) | Backends before `entryServiceId` (2026-11-01) | The floor is a release with `entryServiceId` | Preview services ([browser-previews.md](browser-previews.md)) |
+| Preview registry snapshots without `entryServiceId`: the renderer resolves the entry service from `services` with the same protocol rule | `environmentBrowserTarget` (`preview-service-entry.ts`) | None (renderer side) | Backends before `entryServiceId` (2026-11-01). Mechanical since 2026-11-07 ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)): every backend that advertises `previews` sends it, so only answers through the `previews` client's version-0 adapter lack it (`domain-adapter.renderer.previews.v0`) | The floor is a release with `entryServiceId` | Preview services ([browser-previews.md](browser-previews.md)) |
 | Terminal WebSocket servers whose `ready` frame does not list the `ping` feature: on every return to the page the renderer replaces the terminal socket and reconciles every channel instead of probing it, and never sends such a server a `ping`, which it would close the socket for | `onVisibilityChange` (`apps/web/src/lib/native/terminal-websocket-client.ts`) | None (renderer side) | Backends before the terminal liveness probe (1202 task 3, 2026-11-04) | The floor is a release whose terminal server advertises `ping`; the replacement path itself stays for a probe that goes unanswered | [1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 3 |
 | Terminal WebSocket clients that offer only `orkestrator-terminal.v1`: the server answers each input with its own `operation-result` instead of a cumulative `input-results` frame | `ready`, `operationResult` (`terminal-websocket-server.ts`) | `terminal-websocket.per-input-results` (counts authenticated sockets) | Renderers before input results (1202 task 11, 2026-11-04): a browser tab that outlives the upgrade, or a desktop connected to a newer backend | The floor is at or above the first Stable release whose renderer offers the subprotocol, and the counter is quiet. `operation-result` itself stays for failures and resizes | [1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 11 |
 | Terminal WebSocket servers that select `orkestrator-terminal.v1`: the renderer settles each input from its own `operation-result`, and offers v1 after input results so such a server can select it | `TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS` (`terminal-websocket.ts`); `onMessage` (`terminal-websocket-client.ts`) | None (renderer side) | Backends before input results (1202 task 11, 2026-11-04) | The floor is a release whose terminal server selects the subprotocol; the v1 entry can then leave the offer | [1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 11 |
@@ -213,7 +213,7 @@ Not governed by the window (listed so nobody waits on it):
 | Backends that do not deliver or prune handoffs: the renderer prepends the history, marks the tab consumed and prunes on hydration when `get_agent_handoff_capabilities` says so. Continue in… itself reports that the backend must be updated | `useAgentHandoff.ts`, `AgentNativeTab.controller.tsx`, `pruneUnreferencedAgentHandoffs` (`paneLayoutStore.ts`), `createAgentHandoff` (`lib/agent-handoff.ts`) | `domain-adapter.renderer.native-sessions.v0` (renderer calls through that adapter) | Backends before `create_agent_handoff` (2026-11-01). Mechanical since 2026-11-07 ([7001](../../plans/unified/7001-domain-native-sessions.md)): creating, delivering and pruning are part of `native-sessions` version 1, so only a pre-contract backend is asked `get_agent_handoff_capabilities`, through the client's version-0 adapter | The floor is a release with `get_agent_handoff_capabilities` | Native agents |
 | Renderers before `native-sessions` (pre-contract): the backend keeps `get_native_agent_sync_capabilities` and `get_agent_handoff_capabilities` registered, now as defined commands, although a renderer with the domain never calls them | `commands-registry-native.ts`, `commands-registry-prompts.ts` | None (every renderer in the window is pre-contract and calls them; a renderer with `native-sessions` answers both from the version) | Renderers before `native-sessions` version 1 (2026-11-07, [7001](../../plans/unified/7001-domain-native-sessions.md)) | The floor is at or above the first Stable release that advertises `native-sessions`; then both commands go with the client's version-0 adapter | Native agents |
 | Backends that do not hold a prompt Claude refused for want of a login: the sign-in card asks the user to resend, as it does for any refusal the backend does not hold | `useSignInResendPending.ts` | None (renderer side) | Backends before `get_native_agent_sign_in_resend` (2026-11-01) | The floor is a release with it; the card's wording remains for prompts a backend restart lost | Native agents |
-| Backends whose `transcript_media_open_stream` requires an `environmentId`: a detached transcript's host media, sent with none, is refused with `invalid_input`, and the renderer reads the bounded base64 copy instead | `mediaStreamFailure` (`media-presentation.ts`) treating `invalid_input` as fallback, used by `FilePreview.tsx` | None (renderer side) | Backends before readable-roots streams (batch E-0580, 2026-11-05) | The floor is at or above the first Stable release with readable-roots streams | [5800](../todo/cross-cutting/5800-file-read-streaming-leftovers.md) |
+| Backends whose `transcript_media_open_stream` requires an `environmentId`: a detached transcript's host media, sent with none, is refused with `invalid_input`, and the renderer reads the bounded base64 copy instead | `mediaStreamFailure` (`media-presentation.ts`) treating `invalid_input` as fallback, used by `FilePreview.tsx` | None (renderer side) | Backends before readable-roots streams (batch E-0580, 2026-11-05). Mechanical since 2026-11-07 ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)): every backend that advertises `transcripts` accepts the stream without an `environmentId`, so only a node on the client's version-0 adapter refuses it (`domain-adapter.renderer.transcripts.v0`) | The floor is at or above the first Stable release with readable-roots streams | [5800](../todo/cross-cutting/5800-file-read-streaming-leftovers.md) |
 | Backends without `get_database_stats` or `plan_diagnostics_bundle`: Settings → Debug says the database figures are unavailable, and Export diagnostics says the backend is too old | `DatabaseStorageCard.tsx`, `failureText` (`DiagnosticsExportCard.tsx`) | None (renderer side) | Backends before the release that adds them | The floor reaches the first release with these commands | Logging and diagnostics |
 | Backends that do not report `egressFilter`: the Network section says nothing about the gateway's name checks either way, rather than reading the missing field as an older image | `NameChecks` (`EnvironmentNetworkPolicyStatus.tsx`) | None (renderer side) | Backends before the gateway's name checks (S-0100, 2026-11-05) | The floor is at or above the first Stable release that reports `egressFilter` | Containers |
 | Backends without `list_environment_hydration`: after one "unknown command" the boot batcher reads each environment's prompt queues and Multi Review workflows separately, as before, still within the hydration bound | `EnvironmentHydrationBatcher.sendChunk` (`boot-hydration.ts`) | None (renderer side) | Backends before cold realm boot batching (2026-11-06) | The floor is at or above the first Stable release with `list_environment_hydration` | Federation |
@@ -421,6 +421,16 @@ digest:
 - Schemas are JSON-shaped (the decoded `Type` equals the wire `Encoded`, no
   transformations) and need no Effect services: production sends results as
   handlers return them.
+- A result's model records (an annotation, a preview service, a design
+  snapshot) are described in part until the models converge on protocol
+  schemas ([7010](../../plans/unified/7010-converge-models.md)): a plain
+  `Schema.Struct` would drop every key it does not declare when a client
+  decodes the result. `modelRecord<T>()({ ...fields })`
+  (`contract/model-schema.ts`) validates the declared fields (ids,
+  revisions, states, kinds) and passes every other key through
+  (`Schema.StructWithRest` with a rest of unknown values), typed as the
+  model interface `T`; `opaqueRecord<T>()` declares none. Envelopes and small
+  results are full structs. (7001's `openStruct` is the same idea.)
 
 ### Tolerant reader and critical fields
 
@@ -660,6 +670,37 @@ export const nodeMailClient = domainClient(nodeMail, {
   `async` and its callers expect a rejection, register it with
   `ASYNC_HANDLER` (`commands-registry-async-decode.ts`, a `beforeDecode`
   option), which delivers the same error as a rejected promise.
+  A registrar that must run before decoding (the web annotation rollout
+  gate, its payload ceilings and outcome metrics) passes its own
+  `beforeDecode(run)` wrapper: it sees the raw arguments, and the version
+  check still runs first.
+- **Previews, web annotations, transcript artifacts and design**
+  ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)):
+  `previews` (17 commands), `web-annotations` (37), `design` (35) and the
+  artifact and media part of `transcripts` (16) are defined at version 1
+  (min 1). The web annotation Zod schema map and the design handlers' Zod
+  parses are Effect Schema now, tolerant (`.strict()` became strip); a
+  declared `provenance` on the eight annotation commands that refused it is
+  still refused (an optional `Never` field). The lenient preview and
+  artifact handlers keep their own checks, so their checked arguments are
+  `optionalKey(Unknown)` and their coded errors (`PreviewError:`, the
+  `ArtifactError` JSON) are unchanged; the design v2 handlers decode their
+  fields inside the typed envelope, so a bad field is still `{ ok: false,
+  failure: invalid-input }`. Critical keys: `operationId` on the three
+  preview registry writes, `expectedRevision` on `remove_preview_service`,
+  `serviceId` on `revoke_preview_access`, `containerId` on
+  `transcript_media_open_stream` and `transcript_media_pin`,
+  `expectedResultRevision` on `web_annotation_resolve`, `textOnly` and
+  `retargetOf` on `web_annotation_request_prepare`, and `expectedTabId` on
+  `design_session_resume`. None of these domains was version-gated, so each
+  client's version 1 sends the envelope and decodes results, and version 0
+  is today's call by name, answered as sent; the four capability commands
+  stay registered and are read on every version because they report runtime
+  state (storage, rollout, renderer, surfaces), except what only gated
+  support (the web annotation contract version, design's flags), which
+  version 1 answers itself. The renderer calls them through
+  `lib/node-scope/domains/{previews,transcripts}.ts`,
+  `lib/web-annotations/client.ts` and `lib/design-client.ts`.
 - **Adapter list.** Every domain client is defined under
   `packages/protocol/src/contract/domains/`, one per domain, and listed in
   `DOMAIN_CLIENTS` (`contract/client-adapters.ts`).

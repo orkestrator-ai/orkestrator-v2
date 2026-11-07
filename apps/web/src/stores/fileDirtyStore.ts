@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * Track dirty (unsaved) state for file editor tabs.
@@ -169,8 +169,5 @@ export const fileDirtyStore = defineScopedStore<FileDirtyState>("file-dirty", ()
   },
 }));
 
-/**
- * Reads the nearest node scope's file buffers. The statics are the deprecated
- * command-scope shim; use `scope.store(fileDirtyStore)` instead.
- */
+/** Reads the nearest node scope's file buffers; other code uses `scope.store(fileDirtyStore)`. */
 export const useFileDirtyStore = scopedStoreHook(fileDirtyStore);

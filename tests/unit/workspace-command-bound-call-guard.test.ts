@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { BASELINE_PATH, compareWithBaseline, parseBaseline } from "../source-guards/baseline";
 import { baselineKey, emptyFindings, scanRepository, scanSource } from "../source-guards/scan";
-import { repositoryModules } from "../source-guards/scoped-store-shim";
+import { repositoryModules } from "../source-guards/web-modules";
 import {
   WORKSPACE_EXEMPT_MODULES,
   WORKSPACE_ROOT_MODULES,

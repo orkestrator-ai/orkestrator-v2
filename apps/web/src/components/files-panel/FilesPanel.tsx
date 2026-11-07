@@ -11,7 +11,7 @@ import { uiStore, useFilesPanelStore } from "@/stores";
 import { filesPanelStore, isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { errorText } from "@/components/settings/machines/machine-ui";
 import type { CreateFileTabOptions } from "@/contexts";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -28,7 +28,7 @@ function resolveLocalFilePath(worktreePath: string, filePath: string): string {
 export function FilesPanel() {
   const activeTab = useFilesPanelStore((state) => state.activeTab);
   const targetBranch = useFilesPanelStore((state) => state.targetBranch);
-  const scope = useShimNodeScope(filesPanelStore.name);
+  const scope = useNodeScope();
   const [pendingAction, setPendingAction] = useState<PendingFileAction | null>(null);
   const [diffBaseDialogOpen, setDiffBaseDialogOpen] = useState(false);
 

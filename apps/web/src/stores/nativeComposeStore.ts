@@ -9,7 +9,7 @@ import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * The command a user picked from the `/` menu for this draft.
@@ -415,7 +415,7 @@ export const nativeComposeStore = defineScopedStore<NativeComposeState>(
   }),
 );
 
-/** Reads the nearest node scope's drafts. The statics are the deprecated command-scope shim. */
+/** Reads the nearest node scope's drafts; other code uses `scope.store(nativeComposeStore)`. */
 export const useNativeComposeStore = scopedStoreHook(nativeComposeStore);
 
 type ComposeStoreApi = StoreApi<NativeComposeState>;

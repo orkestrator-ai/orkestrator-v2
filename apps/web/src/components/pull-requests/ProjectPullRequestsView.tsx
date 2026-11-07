@@ -8,7 +8,7 @@ import type {
   GitHubPullRequestRef,
   GitHubPullRequestViewTab,
 } from "@orkestrator/protocol/github-pull-requests";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   projectPullRequestsStore,
   selectProjectPullRequestTabs,
@@ -24,7 +24,7 @@ import { PullRequestView } from "./PullRequestView";
  * requests opened from it, each in its own closable tab.
  */
 export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
-  const scope = useShimNodeScope(projectPullRequestsStore.name);
+  const scope = useNodeScope();
   // This node's files panel target (an in-tree node's own, plan item 5002).
   const targetId = currentFilesPanelTargetId(scope);
   const panePR = useFilesPanelStore((state) =>

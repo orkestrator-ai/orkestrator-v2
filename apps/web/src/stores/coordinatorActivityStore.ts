@@ -10,7 +10,7 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createCoordinatorApi } from "@/lib/backend/coordinator";
 import { subscribeNativeObservationInvalidations } from "@/lib/native-observation-events";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 
 /** Bursts of hints (a dispatch writes its session record more than once) share one read. */
@@ -154,8 +154,8 @@ export const coordinatorActivityStore = defineScopedStore<CoordinatorActivitySto
 );
 
 /**
- * Reads the nearest node scope's activity. Its statics are the deprecated
- * command-scope shim; use `scope.store(coordinatorActivityStore)` instead.
+ * Reads the nearest node scope's activity; other code uses
+ * `scope.store(coordinatorActivityStore)`.
  */
 export const useCoordinatorActivityStore = scopedStoreHook(coordinatorActivityStore);
 

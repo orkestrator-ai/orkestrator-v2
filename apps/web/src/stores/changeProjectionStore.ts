@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type {
   CanonicalToolPresentation,
   ChangeProjection,
@@ -156,7 +156,7 @@ export const changeProjectionStore = defineScopedStore<ChangeProjectionState>(
 );
 
 /**
- * Reads the nearest node scope's projections. The statics are the deprecated
- * command-scope shim; use `scope.store(changeProjectionStore)` instead.
+ * Reads the nearest node scope's projections; other code uses
+ * `scope.store(changeProjectionStore)`.
  */
 export const useChangeProjectionStore = scopedStoreHook(changeProjectionStore);

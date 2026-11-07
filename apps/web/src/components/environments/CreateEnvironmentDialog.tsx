@@ -113,12 +113,8 @@ import {
   openCodeModelDisplayLabel,
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
-import {
-  agentModelCatalogStore,
-  syncCachedAcpModels,
-  useAgentModelCatalogStore,
-} from "@/stores/agentModelCatalogStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -315,7 +311,7 @@ export function CreateEnvironmentDialog({
         ? "containerized"
         : configEnvironmentType;
   // The node whose catalogue this dialog reads and seeds (plan item 3003).
-  const catalogScope = useShimNodeScope(agentModelCatalogStore.name);
+  const catalogScope = useNodeScope();
   const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
   const codexModels = useAgentModelCatalogStore((state) => state.codexModels);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);

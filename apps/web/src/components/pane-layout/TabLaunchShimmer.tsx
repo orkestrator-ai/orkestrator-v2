@@ -1,14 +1,9 @@
 import { useShallow } from "zustand/react/shallow";
 import { focusTabLaunch } from "@/lib/tab-launch";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import { createPaneTabElementId } from "@/types/paneLayout";
-import {
-  tabLaunchStore,
-  useTabLaunchStore,
-  type TabLaunch,
-  type TabLaunchSurface,
-} from "@/stores/tabLaunchStore";
+import { useTabLaunchStore, type TabLaunch, type TabLaunchSurface } from "@/stores/tabLaunchStore";
 import { TAB_STRIP_CLASS, TabShell } from "./TabShell";
 
 const NO_LAUNCHES: readonly TabLaunch[] = [];
@@ -68,7 +63,7 @@ export function TabLaunchPlaceholder({
   launch: TabLaunch;
   isPaneFocused: boolean;
 }) {
-  const launchScope = useShimNodeScope(tabLaunchStore.name);
+  const launchScope = useNodeScope();
   return (
     <TabShell
       id={createPaneTabElementId(environmentId, paneId, launch.tabId)}

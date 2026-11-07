@@ -24,8 +24,7 @@ import { fileTabChangeDiffTarget } from "@/components/terminal/change-diff-targe
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { clearPersistedVirtuosoState } from "@/hooks";
 import { cancelTabLaunchFocus } from "@/lib/tab-launch";
-import { tabLaunchStore } from "@/stores/tabLaunchStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { TabLaunchShimmer, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
 import { DropZoneOverlay } from "./DropZoneOverlay";
@@ -199,7 +198,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   // Pane host for terminal rendering (tab targets are moved here)
   const portalHostRef = useRef<HTMLDivElement>(null);
   const terminalNodeId = useTerminalPortalNodeId();
-  const launchScope = useShimNodeScope(tabLaunchStore.name);
+  const launchScope = useNodeScope();
   const { registerPaneHost, unregisterPaneHost } = useTerminalPortalStore(
     useShallow((state) => ({
       registerPaneHost: state.registerPaneHost,

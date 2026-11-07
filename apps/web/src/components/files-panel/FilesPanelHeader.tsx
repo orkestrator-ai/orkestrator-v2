@@ -8,8 +8,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import { environmentStore, useEnvironmentStore, useFilesPanelStore } from "@/stores";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import type { FilesPanelTab } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
@@ -37,7 +37,7 @@ export function FilesPanelHeader({
   targetId = null,
   onChooseDiffBase,
 }: FilesPanelHeaderProps) {
-  const scope = useShimNodeScope(environmentStore.name);
+  const scope = useNodeScope();
   const hasDiffBaseOverride = useEnvironmentStore((state) =>
     changeEnvironmentId
       ? !!state.environments.find((environment) => environment.id === changeEnvironmentId)

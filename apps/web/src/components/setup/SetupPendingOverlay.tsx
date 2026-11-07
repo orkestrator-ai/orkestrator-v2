@@ -5,7 +5,7 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { Button } from "@/components/ui/button";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
 import { cn } from "@/lib/utils";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { forceResolveSetupRuntime, retrySetupRuntime } from "@/lib/setup-commands";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { SetupApprovalPanel } from "./SetupApprovalPanel";
@@ -47,7 +47,7 @@ export function SetupPendingOverlay({
   // A held setup is recorded as failed; its panel replaces retry, which would
   // only hold it again.
   // The node whose environment this is: the one the selector below reads.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   const approvalRequired = useEnvironmentStore(
     (state) =>
       state.environments.find((environment) => environment.id === environmentId)

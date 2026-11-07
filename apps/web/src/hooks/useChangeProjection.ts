@@ -9,12 +9,8 @@ import {
   subscribeToolPresentation,
   subscribeChangeResource,
 } from "@/lib/changes/subscriptions";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import {
-  changeProjectionStore,
-  toolPresentationKey,
-  useChangeProjectionStore,
-} from "@/stores/changeProjectionStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { toolPresentationKey, useChangeProjectionStore } from "@/stores/changeProjectionStore";
 
 /**
  * The backend's projection for one change resource, kept current by the
@@ -25,7 +21,7 @@ import {
 export function useChangeProjection(
   resourceKey: string | null | undefined,
 ): ChangeProjection | undefined {
-  const nodeScope = useShimNodeScope(changeProjectionStore.name);
+  const nodeScope = useNodeScope();
   useEffect(() => {
     if (!resourceKey) return;
     return subscribeChangeResource(resourceKey, nodeScope);
@@ -73,7 +69,7 @@ export function useToolChangePresentation(
     scope && callId
       ? toolPresentationKey(scope.environmentId, scope.provider, scope.conversationId, callId)
       : null;
-  const nodeScope = useShimNodeScope(changeProjectionStore.name);
+  const nodeScope = useNodeScope();
   useEffect(() => {
     if (!scope || !callId) return;
     const release = subscribeToolPresentation(scope, callId, nodeScope);

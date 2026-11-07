@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import type { WebAnnotationSummary } from "@orkestrator/protocol/web-annotations";
 import {
   NO_WEB_ANNOTATION_FEATURES,
@@ -16,7 +16,6 @@ import {
   EMPTY_WEB_ANNOTATION_CACHE,
   listQueryKey,
   useWebAnnotationStore,
-  webAnnotationStore,
   type ListQuery,
   type ListState,
   type ThreadState,
@@ -29,7 +28,7 @@ import {
  * asset and refresh functions so their reads land where the hooks read.
  */
 export function useWebAnnotationScope(): NodeScope {
-  return useShimNodeScope(webAnnotationStore.name);
+  return useNodeScope();
 }
 
 /** The environment's cache (a stable empty snapshot until the first fetch). */

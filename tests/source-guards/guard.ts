@@ -7,7 +7,6 @@ export const GUARD_IDS = [
   "small-fake-pid",
   "window-orkestrator-direct",
   "direct-transport-import",
-  "scoped-store-shim",
   "lib-backend-command-default",
   "window-orkestrator-portal",
   "workspace-command-bound-call",

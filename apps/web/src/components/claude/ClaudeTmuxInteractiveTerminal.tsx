@@ -8,11 +8,11 @@ import { decodeTerminalOutputPayload, type TerminalOutputPayload } from "@/hooks
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { openLinkExternally } from "@/lib/preview-link-external";
 import { createTerminalLinkActivator } from "@/lib/terminal-links";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
-import { configStore, useConfigStore } from "@/stores";
+import { useConfigStore } from "@/stores";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   DEFAULT_TERMINAL_SCROLLBACK,
@@ -48,7 +48,7 @@ export function ClaudeTmuxInteractiveTerminal({
   const nodeTmux = useClaudeTmuxClient();
   const isMobile = useMediaQuery("(max-width: 767px)");
   // The tab's node: its settings and files panel answer a link click.
-  const linkScope = useShimNodeScope(configStore.name);
+  const linkScope = useNodeScope();
   // Mirrored into a ref so neither the session-creating effect (whose cleanup
   // disposes the terminal and detaches the tmux session) nor the activation
   // effect has to depend on isMobile. Crossing the breakpoint must not tear

@@ -254,26 +254,6 @@ export function inTreeRegion(page: Page, nodeId: string): Locator {
   return page.locator(`[data-testid="in-tree-workspace"][data-node="${nodeId}"]`);
 }
 
-/** What the runtime shim guard saw (plan item 4004), or null when its probe is absent. */
-export async function shimGuard(
-  page: Page,
-): Promise<{ mode: string; uses: unknown[]; mountedLeaves: string[] } | null> {
-  return page.evaluate(() => {
-    const probe = (
-      window as unknown as {
-        orkestratorShimGuard?: {
-          mode: string;
-          uses(): unknown[];
-          mountedLeaves(): string[];
-        };
-      }
-    ).orkestratorShimGuard;
-    return probe
-      ? { mode: probe.mode, uses: probe.uses(), mountedLeaves: probe.mountedLeaves() }
-      : null;
-  });
-}
-
 /**
  * The terminal tab's rendered text for `environmentId` on `nodeId`, read from
  * the renderer's own terminal (the Vite dev module the app runs).

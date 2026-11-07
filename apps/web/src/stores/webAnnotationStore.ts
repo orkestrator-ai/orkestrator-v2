@@ -17,7 +17,7 @@
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type {
   WebAnnotationCapabilities,
   WebAnnotationCapture,
@@ -450,8 +450,8 @@ export const webAnnotationStore = defineScopedStore<WebAnnotationStoreState>(
 );
 
 /**
- * Reads the nearest node scope's annotation caches. The statics are the
- * deprecated command-scope shim; use `scope.store(webAnnotationStore)`.
+ * Reads the nearest node scope's annotation caches; other code uses
+ * `scope.store(webAnnotationStore)`.
  */
 export const useWebAnnotationStore = scopedStoreHook(webAnnotationStore);
 

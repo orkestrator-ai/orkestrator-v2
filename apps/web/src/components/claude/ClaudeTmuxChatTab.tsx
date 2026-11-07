@@ -59,7 +59,7 @@ import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel } from "@/lib/claude-types";
 import { agentModelCatalogStore, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { tmuxQuestionDraftKey } from "@/stores/promptDraftStore";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -191,12 +191,12 @@ export function ClaudeTmuxChatTab({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [interactiveMode, setInteractiveMode] = useState(false);
-  const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
-  const environments = useScopedStoreApi(environmentStore);
+  const modelCatalog = useNodeScope().store(agentModelCatalogStore);
+  const environments = useNodeScope().store(environmentStore);
   // This node's tmux tabs and config (plan item 3010).
-  const tmuxScope = useShimNodeScope(claudeTmuxStore.name);
+  const tmuxScope = useNodeScope();
   const tmuxTabs = tmuxScope.store(claudeTmuxStore);
-  const configs = useScopedStoreApi(configStore);
+  const configs = useNodeScope().store(configStore);
   const sdkModels = useAgentModelCatalogStore(
     (s) => s.claudeModelCatalogs.get(environmentId)?.models ?? s.claudeModels,
   );

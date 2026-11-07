@@ -2,7 +2,7 @@ import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createConfigIntegrationsApi } from "@/lib/backend/config-integrations";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type {
   GitHubIssue,
   GitHubIssueComment,
@@ -580,10 +580,7 @@ export const githubIssuesStore = defineScopedStore<GitHubIssuesState>(
   },
 );
 
-/**
- * Reads the nearest node scope's issues. The statics are the deprecated
- * command-scope shim; use `scope.store(githubIssuesStore)` instead.
- */
+/** Reads the nearest node scope's issues; other code uses `scope.store(githubIssuesStore)`. */
 export const useGitHubIssuesStore = scopedStoreHook(githubIssuesStore);
 
 export { detailKey as githubIssueDetailKey };

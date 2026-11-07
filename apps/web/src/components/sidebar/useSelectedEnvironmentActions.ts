@@ -22,7 +22,7 @@ import {
   releaseSidebarAction,
   useSidebarActionStore,
 } from "@/stores/sidebarActionStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { uiStore, useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
@@ -72,7 +72,7 @@ export function useSelectedEnvironmentActions({
 
   // An environment deleted elsewhere leaves the selection, whichever machine it was on.
   const resolvedCount = selected.length;
-  const ui = useScopedStoreApi(uiStore);
+  const ui = useNodeScope().store(uiStore);
   useEffect(() => {
     if (resolvedCount === selectionIds.length) return;
     const { selectedEnvironmentIds, setMultiSelection } = ui.getState();

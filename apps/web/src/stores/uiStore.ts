@@ -4,7 +4,7 @@ import { projectFolderKey } from "@orkestrator/protocol/project-folders";
 import { scopeNodeIsLeaf } from "@/lib/federation/leaf-node";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { windowScopeOf, type NodeSelection } from "@/lib/node-scope/window-scope";
 import { nodeStorageKey } from "@/lib/persistence-keys";
 import { createUIStateStorage, UI_NODE_PERSISTED_FIELDS } from "@/lib/ui-state-storage";
@@ -346,9 +346,5 @@ export const uiStore = defineScopedStore<UIState>("ui", (scope) => {
   return creator as StateCreator<UIState>;
 });
 
-/**
- * Reads the nearest node scope's UI state. Its statics
- * (`useUIStore.getState()` and so on) are the deprecated command-scope shim;
- * use `scope.store(uiStore)` instead.
- */
+/** Reads the nearest node scope's UI state; other code uses `scope.store(uiStore)`. */
 export const useUIStore = scopedStoreHook(uiStore);

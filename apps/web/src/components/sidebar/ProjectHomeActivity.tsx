@@ -1,7 +1,7 @@
 import { Bell, Loader2 } from "lucide-react";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { projectStore, useProjectStore } from "@/stores/projectStore";
 import { uiStore } from "@/stores/uiStore";
@@ -80,7 +80,7 @@ export function ProjectHomeActivity({
   compact?: boolean;
 }) {
   // The node this home belongs to: the one the selectors below read.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   const projectDeleting = useProjectStore((state) => state.deletingProjects.has(home.projectId));
   const deleting = useEnvironmentStore((state) => state.isDeleting(home.id));
   const activity = useAgentActivityStore((state) =>

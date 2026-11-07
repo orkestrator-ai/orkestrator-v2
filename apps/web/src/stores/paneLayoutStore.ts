@@ -30,7 +30,7 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createTerminalsApi } from "@/lib/backend/terminals";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
@@ -1920,5 +1920,5 @@ export const paneLayoutStore = defineScopedStore<PaneLayoutState>(
   }),
 );
 
-/** Reads the nearest node scope's pane layouts. The statics are the deprecated command-scope shim. */
+/** Reads the nearest node scope's pane layouts; other code uses `scope.store(paneLayoutStore)`. */
 export const usePaneLayoutStore = scopedStoreHook(paneLayoutStore);

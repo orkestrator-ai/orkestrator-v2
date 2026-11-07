@@ -13,7 +13,7 @@ import type { WorkspaceRequest } from "@/lib/federation/workspace-request";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { useConfigStore } from "@/stores/configStore";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -113,7 +113,7 @@ export function NodeWorkspaceHost() {
     updateEnvironment,
   } = useEnvironments(null);
   // The node this host shows: the one the hooks above read.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const configLoaded = useConfigStore((state) => state.hasLoaded);
   const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);

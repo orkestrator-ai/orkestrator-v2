@@ -42,7 +42,7 @@ import {
 import type * as backend from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { previewNodeFor } from "@/lib/native/browser-preview";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { displayUrlFromNativePreview, resolveBrowserAddress } from "@/lib/browser-address";
 import { isWkWebViewClient } from "@/lib/client-platform";
 import {
@@ -71,7 +71,6 @@ import { cn } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import {
   ensurePreviewServiceSync,
   previewServiceStore,
@@ -117,7 +116,7 @@ type Mode = "desktop-tunnel" | "compatibility" | "top-level" | "unsupported";
 
 export function ServiceBrowserTab(props: ServiceBrowserTabProps) {
   const { target } = props;
-  const previewScope = useShimNodeScope(previewServiceStore.name);
+  const previewScope = useNodeScope();
   useEffect(() => ensurePreviewServiceSync(previewScope), [previewScope]);
   if (target.kind === "intent") return <PreviewIntentChooser {...props} target={target} />;
   return <ServicePreview {...props} serviceRef={target.ref} />;
@@ -1120,7 +1119,7 @@ function PreviewIntentChooser({
   const [error, setError] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const [moving, setMoving] = useState(false);
-  const previews = useScopedStoreApi(previewServiceStore);
+  const previews = useNodeScope().store(previewServiceStore);
 
   useEffect(() => {
     let cancelled = false;

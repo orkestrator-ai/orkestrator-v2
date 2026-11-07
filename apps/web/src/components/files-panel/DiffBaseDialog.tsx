@@ -23,7 +23,7 @@ import {
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore, useConfigStore, useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
@@ -132,7 +132,7 @@ export function DiffBaseDialog({ environmentId, open, onOpenChange }: DiffBaseDi
 }
 
 function DiffBaseForm({ environment, onDone }: { environment: Environment; onDone: () => void }) {
-  const scope = useShimNodeScope(environmentStore.name);
+  const scope = useNodeScope();
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;

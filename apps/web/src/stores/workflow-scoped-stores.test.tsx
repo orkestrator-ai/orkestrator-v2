@@ -30,7 +30,7 @@ import {
 } from "@/lib/workflow-resource-handlers";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { ScopedStoreDef } from "@/lib/node-scope/scoped-store";
-import type { ScopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import type { ScopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";

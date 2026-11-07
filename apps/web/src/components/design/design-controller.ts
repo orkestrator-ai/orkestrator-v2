@@ -18,7 +18,7 @@ import {
 } from "@orkestrator/protocol/design-operations";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { appCommandScope, defineScopedSlot, isAppCommandScope } from "@/lib/node-scope-slots";
 import { createUuid } from "@/lib/uuid";
 import { readCoordinatorFor, type ReadSubscription } from "@/lib/read-coordinator";
@@ -1354,7 +1354,7 @@ export function resetDesignControllers(scope: NodeScope = appCommandScope()) {
 
 export function useDesignCanvas(environmentId: string, canvasId: string, active: boolean) {
   // The canvas's node: the nearest node scope (the command scope outside one).
-  const scope = useShimNodeScope(designStore.name);
+  const scope = useNodeScope();
   // Re-resolved on activation: an evicted (disposed) controller is replaced by
   // a fresh one. `active` is deliberately a dependency for that reason.
   // `renewal` re-resolves when the resolved controller was evicted meanwhile.

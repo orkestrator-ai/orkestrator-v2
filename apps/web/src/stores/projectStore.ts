@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { Project } from "@/types";
 
 /** Sort projects by their order field */
@@ -146,9 +146,5 @@ export const projectStore = defineScopedStore<ProjectState>("project", () => (se
   };
 });
 
-/**
- * Reads the nearest node scope's projects. Its statics
- * (`useProjectStore.getState()` and so on) are the deprecated command-scope
- * shim; use `scope.store(projectStore)` instead.
- */
+/** Reads the nearest node scope's projects; other code uses `scope.store(projectStore)`. */
 export const useProjectStore = scopedStoreHook(projectStore);

@@ -24,7 +24,7 @@ import {
 import { settlePullRequestFallback } from "@/lib/pull-request-load-fallback";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { pullRequestsStore, resourceKey, usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { PullRequestCodeTab } from "./PullRequestCodeTab";
 import { PullRequestHeader } from "./PullRequestHeader";
@@ -108,7 +108,7 @@ export function PullRequestView({
   const [visited, setVisited] = useState(() => new Set<GitHubPullRequestViewTab>([initialView]));
   const [timelineOrder, setTimelineOrder] = useState<SortOrder>("newest");
   const { detail, loading, error, reload } = usePullRequestDetail(ref, active);
-  const pullRequests = useScopedStoreApi(pullRequestsStore);
+  const pullRequests = useNodeScope().store(pullRequestsStore);
   useEffect(() => {
     // Activation starts its load in the hook's earlier effect. Read the
     // authoritative snapshot, not this render's possibly cached failure.

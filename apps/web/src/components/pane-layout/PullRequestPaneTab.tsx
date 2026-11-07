@@ -4,7 +4,7 @@ import { PullRequestView } from "@/components/pull-requests";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PullRequestTabData } from "@/types/paneLayout";
@@ -24,7 +24,7 @@ export function PullRequestPaneTab({
   isActive,
 }: PullRequestPaneTabProps) {
   // The environment's node keeps its pane layout (plan item 3013).
-  const paneLayouts = useScopedStoreApi(paneLayoutStore);
+  const paneLayouts = useNodeScope().store(paneLayoutStore);
   const closeTab = useCallback(() => {
     const layout = paneLayouts.getState();
     const owner = layout.findPaneWithTab(tabId, environmentId);
@@ -32,7 +32,7 @@ export function PullRequestPaneTab({
   }, [environmentId, paneLayouts, tabId]);
 
   // The environment's node keeps its files panel tabs.
-  const filesPanel = useScopedStoreApi(filesPanelStore);
+  const filesPanel = useNodeScope().store(filesPanelStore);
   const moveToSidebar = useCallback(() => {
     filesPanel.getState().openPullRequest(environmentId, data.ref, data.view);
     closeTab();

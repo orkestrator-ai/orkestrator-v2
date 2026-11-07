@@ -35,7 +35,7 @@ import {
   type PrMonitorSnapshot,
 } from "@orkestrator/protocol/pr-monitor";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
-import { prMonitorStore, usePrMonitorStore } from "@/stores/prMonitorStore";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { environmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import {
@@ -51,7 +51,7 @@ import type { UnlistenFn } from "@/lib/native/events";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { appCommandScope, listenInScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { onViewSafetyCheck } from "@/lib/resource-sync";
 import { playConfiguredNotificationSound } from "@/lib/notification-sounds";
@@ -107,7 +107,7 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
   const { clock, limits } = options;
   // The node whose monitor this mirrors, read and followed through its own
   // client, and whose environments name the merged branches (plan item 3003).
-  const scope = useShimNodeScope(prMonitorStore.name);
+  const scope = useNodeScope();
 
   useEffect(() => {
     let disposed = false;

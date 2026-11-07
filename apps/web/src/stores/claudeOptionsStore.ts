@@ -1,6 +1,6 @@
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 export type AgentType = "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi";
 
@@ -50,8 +50,7 @@ export const claudeOptionsStore = defineScopedStore<ClaudeOptionsState>(
 );
 
 /**
- * Reads the nearest node scope's launch options. Its statics
- * (`useClaudeOptionsStore.getState()` and so on) are the deprecated
- * command-scope shim; use `scope.store(claudeOptionsStore)` instead.
+ * Reads the nearest node scope's launch options; other code uses
+ * `scope.store(claudeOptionsStore)`.
  */
 export const useClaudeOptionsStore = scopedStoreHook(claudeOptionsStore);

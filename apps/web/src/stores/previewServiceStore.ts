@@ -17,7 +17,7 @@ import { commandTransportAvailable } from "@/lib/node-scope/command-client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot, isAppCommandScope } from "@/lib/node-scope-slots";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 export interface EnvironmentPreviewState {
   snapshot: PreviewRegistrySnapshot | null;
@@ -288,8 +288,8 @@ export const previewServiceStore = defineScopedStore<PreviewServiceStoreState>(
 );
 
 /**
- * Reads the nearest node scope's preview snapshots. The statics are the
- * deprecated command-scope shim; use `scope.store(previewServiceStore)`.
+ * Reads the nearest node scope's preview snapshots; other code uses
+ * `scope.store(previewServiceStore)`.
  */
 export const usePreviewServiceStore = scopedStoreHook(previewServiceStore);
 

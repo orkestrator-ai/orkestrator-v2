@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { nodeStorageKey } from "@/lib/persistence-keys";
 
 /** Environments whose remembered destination is kept (oldest dropped first). */
@@ -67,8 +67,8 @@ export const webAnnotationPreferencesStore = defineScopedStore<WebAnnotationPref
 );
 
 /**
- * Reads the nearest node scope's remembered destinations. The statics are the
- * deprecated command-scope shim; use `scope.store(webAnnotationPreferencesStore)`.
+ * Reads the nearest node scope's remembered destinations; other code uses
+ * `scope.store(webAnnotationPreferencesStore)`.
  */
 export const useWebAnnotationPreferencesStore = scopedStoreHook(webAnnotationPreferencesStore);
 

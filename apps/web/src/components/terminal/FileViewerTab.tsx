@@ -7,7 +7,7 @@ import { backendForScope } from "@/lib/backend/scope-backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { fileDirtyStore, fileSaveBaseline } from "@/stores/fileDirtyStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { useFileSave } from "@/hooks/useFileSave";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
@@ -185,7 +185,7 @@ function LiveImageDiffPreview({
   ]);
   const [image, setImage] = useState<LiveImageState | null>(null);
   // The environment's node: the image is read there (plan item 4007).
-  const imageScope = useShimNodeScope(fileDirtyStore.name);
+  const imageScope = useNodeScope();
   const requestRef = useRef(0);
 
   useEffect(() => {
@@ -320,7 +320,7 @@ export function FileViewerTab({
   } | null>(null);
   const lastDraftFlushRef = useRef<string | null>(null);
   // Dirty file tracking, and the node the buffer's drafts are kept on.
-  const draftScope = useShimNodeScope(fileDirtyStore.name);
+  const draftScope = useNodeScope();
   const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
   const setDirtyContent = useFileDirtyStore((state) => state.setContent);
   const observeDiskContent = useFileDirtyStore((state) => state.observeDiskContent);

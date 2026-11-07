@@ -69,8 +69,8 @@ import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useShallow } from "zustand/react/shallow";
-import { agentModelCatalogStore, syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   nativeComposeDraft,
   nativeComposeStore,
@@ -455,7 +455,7 @@ export function UnassignedNativeAgentComposer({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   // The node this tab's drafts live on: the scope `useNativeComposeStore` reads.
-  const composeScope = useShimNodeScope(nativeComposeStore.name);
+  const composeScope = useNodeScope();
   const composeDrafts = composeScope.store(nativeComposeStore);
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const hasDraft = useNativeComposeStore((state) => state.drafts.has(sessionKey));
@@ -621,7 +621,7 @@ export function UnassignedNativeAgentComposer({
     setModels([]);
   }, [environmentId]);
   // The catalogue it publishes is this node's (plan item 3003).
-  const modelCatalogScope = useShimNodeScope(agentModelCatalogStore.name);
+  const modelCatalogScope = useNodeScope();
   // A normal read remains side-effect free. On the first selection of a
   // bridge-backed platform, however, tell the backend which one the user needs:
   // if its durable list is missing, the backend starts that bridge and seeds the

@@ -8,7 +8,7 @@ import {
   type EnvironmentDiffStatsSnapshot,
 } from "@orkestrator/protocol/diff-stats";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
-import { environmentDiffStore, useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
+import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
 import * as backend from "@/lib/backend";
 import {
   createBoundedHydration,
@@ -22,7 +22,7 @@ import type { UnlistenFn } from "@/lib/native/events";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { appCommandScope, listenInScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { onViewSafetyCheck } from "@/lib/resource-sync";
 
@@ -92,7 +92,7 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
   const { clock, limits } = options;
   // The node whose worktrees these counts are, read and followed through its
   // own client (plan item 3003).
-  const scope = useShimNodeScope(environmentDiffStore.name);
+  const scope = useNodeScope();
 
   useEffect(() => {
     let disposed = false;

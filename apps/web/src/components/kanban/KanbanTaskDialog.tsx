@@ -48,7 +48,7 @@ import { sectionsFromTicketText, type DeliveryPolicy } from "@orkestrator/protoc
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { kanbanStore, useKanbanStore } from "@/stores/kanbanStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
@@ -192,7 +192,7 @@ export function KanbanTaskDialog({
   createForProjectId,
 }: KanbanTaskDialogProps) {
   const nodeBackend = useScopeBackend();
-  const kanban = useScopedStoreApi(kanbanStore);
+  const kanban = useNodeScope().store(kanbanStore);
   const updateTask = useKanbanStore((s) => s.updateTask);
   const updateTaskContent = useKanbanStore((s) => s.updateTaskContent);
   const deleteTask = useKanbanStore((s) => s.deleteTask);

@@ -6,7 +6,7 @@ import * as graphDescribe from "@/lib/backend/graph-describe";
 import { backendApiForScope } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * "Describe a graph" jobs (item 215), one per environment. The backend owns
@@ -140,8 +140,5 @@ export const graphDescribeStore = defineScopedStore<GraphDescribeState>(
   },
 );
 
-/**
- * Reads the nearest node scope's jobs. Its statics are the deprecated
- * command-scope shim; use `scope.store(graphDescribeStore)` instead.
- */
+/** Reads the nearest node scope's jobs; other code uses `scope.store(graphDescribeStore)`. */
 export const useGraphDescribeStore = scopedStoreHook(graphDescribeStore);

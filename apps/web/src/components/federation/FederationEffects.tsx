@@ -12,7 +12,7 @@ import {
 } from "@orkestrator/protocol/federation";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore } from "@/stores/environmentStore";
 import { uiStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
@@ -51,7 +51,7 @@ function FederationEffectsActive() {
  */
 function useRecentSelections(backendId: BackendId | null) {
   // This window's own node, whose selection the UI store holds.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   useEffect(() => {
     if (!backendId) return;
     return scope.store(uiStore).subscribe((state, previous) => {
@@ -95,7 +95,7 @@ function useRecentSelections(backendId: BackendId | null) {
 function useResourceLink(machines: readonly MachineView[]) {
   const handled = useRef(false);
   // This window's own node, which a link to a bound machine opens on.
-  const scope = useShimNodeScope(uiStore.name);
+  const scope = useNodeScope();
   const openPanel = openMachineWorkspace;
   useEffect(() => {
     if (handled.current) return;

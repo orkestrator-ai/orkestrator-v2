@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook, useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
+import { useNodeScope } from "@/lib/node-scope/providers";
 
 /**
  * In-progress user input for blocking agent prompts: multi-question form
@@ -81,7 +82,7 @@ export const promptDraftStore = defineScopedStore<PromptDraftState>(
   }),
 );
 
-/** Reads the nearest node scope's drafts. The statics are the deprecated command-scope shim. */
+/** Reads the nearest node scope's drafts; other code uses `scope.store(promptDraftStore)`. */
 export const usePromptDraftStore = scopedStoreHook(promptDraftStore);
 
 /**
@@ -145,7 +146,7 @@ export function usePromptDraftField<T>(
     value: fallbackValue,
   }));
 
-  const drafts = useScopedStoreApi(promptDraftStore);
+  const drafts = useNodeScope().store(promptDraftStore);
   const stored = usePromptDraftStore((state) =>
     draftKey === undefined ? undefined : state.drafts.get(draftKey)?.[field],
   );

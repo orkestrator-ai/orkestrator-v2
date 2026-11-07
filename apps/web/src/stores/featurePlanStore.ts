@@ -9,7 +9,7 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createKanbanApi } from "@/lib/backend/kanban";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import {
   isTerminalFeaturePlanningPhase,
   type FeaturePlanningKind,
@@ -317,8 +317,5 @@ export const featurePlanStore = defineScopedStore<FeaturePlanState>(
   },
 );
 
-/**
- * Reads the nearest node scope's plans. Its statics are the deprecated
- * command-scope shim; use `scope.store(featurePlanStore)` instead.
- */
+/** Reads the nearest node scope's plans; other code uses `scope.store(featurePlanStore)`. */
 export const useFeaturePlanStore = scopedStoreHook(featurePlanStore);

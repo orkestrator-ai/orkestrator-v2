@@ -11,7 +11,7 @@ import { createAgentMailApi } from "@/lib/backend/agent-mail";
 import { backendApiForScope } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { appCommandScope } from "@/lib/node-scope-slots";
 
 /**
@@ -302,7 +302,7 @@ export const agentMailStore = defineScopedStore<AgentMailState>(
   },
 );
 
-/** Reads the nearest node scope's agent mail. The statics are the deprecated command-scope shim. */
+/** Reads the nearest node scope's agent mail; other code uses `scope.store(agentMailStore)`. */
 export const useAgentMailStore = scopedStoreHook(agentMailStore);
 
 /**

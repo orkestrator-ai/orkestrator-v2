@@ -23,10 +23,10 @@ import type { UnlistenFn } from "@/lib/native/events";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { appCommandScope, listenInScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { onViewSafetyCheck } from "@/lib/resource-sync";
-import { useWorktreeSnapshotStore, worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 
 export interface WorktreeSnapshotRevisionsOptions {
   /** Subscribe only while something shows file lists or trees. */
@@ -92,7 +92,7 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
   const { enabled, clock, limits } = options;
   // The node whose worktrees these are, read and followed through its own
   // client (plan item 3003).
-  const scope = useShimNodeScope(worktreeSnapshotStore.name);
+  const scope = useNodeScope();
 
   useEffect(() => {
     if (!enabled) return;

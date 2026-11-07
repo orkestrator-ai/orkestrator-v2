@@ -25,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { ensurePreviewServiceSync, previewServiceStore } from "@/stores/previewServiceStore";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { SettingsSectionHeader } from "./SettingsPageLayout";
@@ -129,7 +129,7 @@ export function PreviewSettings() {
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const { machine } = useAccountMachine();
-  const previewScope = useShimNodeScope(previewServiceStore.name);
+  const previewScope = useNodeScope();
 
   // Switching machine clears the previous machine's failure before it reloads.
   const [loadedMachine, setLoadedMachine] = useState(machine);

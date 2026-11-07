@@ -5,7 +5,7 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.session");
@@ -480,5 +480,5 @@ export const sessionStore = defineScopedStore<SessionState>("session", (scope) =
   };
 });
 
-/** Reads the nearest node scope's sessions. The statics are the deprecated command-scope shim. */
+/** Reads the nearest node scope's sessions; other code uses `scope.store(sessionStore)`. */
 export const useSessionStore = scopedStoreHook(sessionStore);

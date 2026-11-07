@@ -8,7 +8,7 @@ import * as graphRuns from "@/lib/backend/graph-runs";
 import { backendApiForScope } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * Graph runs as the run view and the runs list see them (item 211).
@@ -325,8 +325,5 @@ export const graphRunStore = defineScopedStore<GraphRunState>(
   },
 );
 
-/**
- * Reads the nearest node scope's runs. Its statics are the deprecated
- * command-scope shim; use `scope.store(graphRunStore)` instead.
- */
+/** Reads the nearest node scope's runs; other code uses `scope.store(graphRunStore)`. */
 export const useGraphRunStore = scopedStoreHook(graphRunStore);

@@ -47,7 +47,7 @@ import {
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   ensurePreviewServiceSync,
   previewServiceStore,
@@ -102,7 +102,7 @@ function ManualBrowserTab({
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
   );
   // The environment's node: its preview registry and its preview addresses.
-  const previewScope = useShimNodeScope(previewServiceStore.name);
+  const previewScope = useNodeScope();
   const resolvePreviewUrl = usePreviewServiceStore((state) => state.resolvePreviewUrl);
   const browserPreviewSupported = (() => {
     try {

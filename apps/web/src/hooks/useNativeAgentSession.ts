@@ -80,7 +80,7 @@ import {
   type NativeAgentProgressiveCacheEntry,
 } from "@/stores/nativeAgentProjectionStore";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { readCoordinatorFor } from "@/lib/read-coordinator";
 import type { StoreApi } from "zustand/vanilla";
 
@@ -566,7 +566,7 @@ export function useNativeAgentSession<TMessage = unknown>({
    * coordinator are that node's, and its retained history reserves from the
    * window's shared transcripts budget under that node.
    */
-  const scope = useShimNodeScope(nativeAgentProjectionStore.name);
+  const scope = useNodeScope();
   const projectionStore = scope.store(nativeAgentProjectionStore);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,

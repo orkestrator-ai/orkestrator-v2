@@ -18,9 +18,8 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createTerminalsApi } from "@/lib/backend/terminals";
 import { createWorkflowsApi } from "@/lib/backend/workflows";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { isAppCommandScope, onReconnectInScope } from "@/lib/node-scope-slots";
-import { terminalSessionStore } from "@/stores/terminalSessionStore";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -282,7 +281,7 @@ export function useTerminal({
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The node this terminal's PTY lives on (plan item 3010).
-  const scope = useShimNodeScope(terminalSessionStore.name);
+  const scope = useNodeScope();
   const api = useMemo(() => terminalBackendForScope(scope), [scope]);
 
   const unlistenRef = useRef<UnlistenFn | null>(null);

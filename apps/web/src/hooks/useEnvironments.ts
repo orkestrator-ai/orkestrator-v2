@@ -32,7 +32,7 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
 import type { ErrorContext } from "@/stores";
@@ -627,7 +627,7 @@ export function applyEnvironmentSetupComplete(
 export function useEnvironmentLifecycleService(): void {
   // The node this service keeps current: the nearest node scope (the command
   // scope where App mounts it).
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   useEffect(() => startEnvironmentCleanupSelectionSync(scope), [scope]);
 
   // No mount-time lifecycle-error pass on purpose: the environment store has no
@@ -761,7 +761,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
   const { listenForRenameEvents = true } = options;
   // The node whose environments this reads: the nearest node scope, which is
   // also the one `useEnvironmentStore` reads below.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
 
   // Data via narrow selectors: this hook is mounted at several call sites, and
   // a selector-less subscription rerendered all of them on every store write.

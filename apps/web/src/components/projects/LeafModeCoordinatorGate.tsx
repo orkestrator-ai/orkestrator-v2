@@ -6,8 +6,7 @@ import { loadProjectsFromBackend } from "@/hooks/useProjects";
 import { repositoryHint } from "@/lib/federation/summaries";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { coordinatorDefersToCommandNode } from "@/lib/federation/window-grouping";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useWindowGrouping } from "@/components/federation/useWindowGrouping";
@@ -138,7 +137,7 @@ export function LeafModeCoordinatorGate({
 }) {
   const status = useStore(portalStore.store, (state) => state.status);
   const portalStatusLoaded = useStore(portalStore.store, (state) => state.loaded);
-  const scope = useShimNodeScope("project");
+  const scope = useNodeScope();
   // Another node in the window's tree is on a leaf; the command node's
   // projects come from the window's command scope.
   const onLeaf = isInTreeLeaf(scope);

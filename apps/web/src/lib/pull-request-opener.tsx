@@ -7,7 +7,7 @@ import {
 import { armPullRequestFallback } from "./pull-request-load-fallback";
 import { openInBrowser } from "@/lib/backend";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { shownNodeScope } from "@/lib/node-scope/shown-scope";
@@ -116,7 +116,7 @@ export async function openPullRequestUrl(
 /** The nearest provider's opener, else `openPullRequestInApp` on the nearest node scope. */
 export function usePullRequestOpener(): PullRequestOpener {
   const provided = useContext(PullRequestOpenerContext);
-  const scope = useShimNodeScope(filesPanelStore.name);
+  const scope = useNodeScope();
   const inScope = useMemo<PullRequestOpener>(
     () => (ref, view) => openPullRequestInApp(ref, view, scope),
     [scope],

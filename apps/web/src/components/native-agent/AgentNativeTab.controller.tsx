@@ -11,7 +11,7 @@ import {
   type SuborkGroupActions,
 } from "@/components/chat/subork-context";
 import { SuborkTranscriptDialog } from "@/components/chat/SuborkTranscriptDialog";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { withSuborkGroupRows, withSuborkRequestText } from "@/lib/chat/subork-messages";
 import {
   createGoalTurnNativeMessage,
@@ -211,7 +211,6 @@ import {
 } from "./native-notice-identity";
 import { multiReviewStore, useMultiReviewStore } from "@/stores/multiReviewStore";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import type { FileCandidate } from "@/types";
 import {
   openWebAnnotationRequest,
@@ -390,14 +389,14 @@ export function SharedNativeAgentController({
   const configuredReasoning = configured.reasoningEffort;
   // Read once per tab, as before: a tab's environment never changes, and the
   // catalog reads the provider stores through getState() without subscribing.
-  const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
+  const modelCatalog = useNodeScope().store(agentModelCatalogStore);
   const speedCatalog = useMemo(
     () => buildReviewModelCatalog(modelCatalog.getState()),
     [modelCatalog],
   );
-  const multiReviews = useScopedStoreApi(multiReviewStore);
+  const multiReviews = useNodeScope().store(multiReviewStore);
   // The node this tab's drafts live on: the scope `useNativeComposeStore` reads.
-  const composeScope = useShimNodeScope(nativeComposeStore.name);
+  const composeScope = useNodeScope();
   const composeDrafts = composeScope.store(nativeComposeStore);
   // The same node's pane layouts (plan item 3013).
   const paneLayouts = composeScope.store(paneLayoutStore);

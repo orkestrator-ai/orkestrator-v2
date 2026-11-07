@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type {
   WorktreeRemoteFreshness,
   WorktreeSnapshotEvent,
@@ -126,7 +126,7 @@ export const worktreeSnapshotStore = defineScopedStore<WorktreeSnapshotStoreStat
 );
 
 /**
- * Reads the nearest node scope's snapshot revisions. Its statics are the
- * deprecated command-scope shim; use `scope.store(worktreeSnapshotStore)` instead.
+ * Reads the nearest node scope's snapshot revisions; other code uses
+ * `scope.store(worktreeSnapshotStore)`.
  */
 export const useWorktreeSnapshotStore = scopedStoreHook(worktreeSnapshotStore);

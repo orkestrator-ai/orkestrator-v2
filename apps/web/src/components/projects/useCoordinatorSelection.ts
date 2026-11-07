@@ -6,7 +6,7 @@ import {
   revealCoordinatorConversation,
   type CoordinatorPaneLayout,
 } from "@/lib/coordinator-pane-layout";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   coordinatorPaneLayoutStore,
   selectCoordinatorPaneLayout,
@@ -37,7 +37,7 @@ export function useCoordinatorSelection({
   const nodeBackend = useScopeBackend();
   const conversationIdsRef = useRef(conversationIds);
   // This node's tab groups (plan item 3011).
-  const paneLayouts = useScopedStoreApi(coordinatorPaneLayoutStore);
+  const paneLayouts = useNodeScope().store(coordinatorPaneLayoutStore);
   /*
    * Tab groups. The layout is stored by the backend per project so every
    * client shows the same groups, and is presentation over the backend's open

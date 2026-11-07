@@ -12,7 +12,7 @@ import { createKanbanApi } from "@/lib/backend/kanban";
 import { createWorkflowsApi } from "@/lib/backend/workflows";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -339,8 +339,5 @@ export const kanbanStore = defineScopedStore<KanbanState>("kanban", (scope) => (
   };
 });
 
-/**
- * Reads the nearest node scope's board. Its statics are the deprecated
- * command-scope shim; use `scope.store(kanbanStore)` instead.
- */
+/** Reads the nearest node scope's board; other code uses `scope.store(kanbanStore)`. */
 export const useKanbanStore = scopedStoreHook(kanbanStore);

@@ -18,8 +18,8 @@ import {
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import type { BuildTabData } from "@/types/paneLayout";
-import { buildPipelineStore, useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { useMediaQuery } from "@/hooks";
 import { Button } from "@/components/ui/button";
@@ -111,7 +111,7 @@ export function BuildChatTab({
   layout,
 }: BuildChatTabProps) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
-  const scope = useShimNodeScope(buildPipelineStore.name);
+  const scope = useNodeScope();
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   // Distinguishes "the user picked this step" from "we follow the pipeline".
   const [pinnedId, setPinnedId] = useState<string | null>(null);

@@ -7,7 +7,7 @@ import {
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import {
   gitHubPullRequestKey,
   type GitHubPullRequestComment,
@@ -526,8 +526,8 @@ export const pullRequestsStore = defineScopedStore<PullRequestsState>(
 );
 
 /**
- * Reads the nearest node scope's pull requests. The statics are the deprecated
- * command-scope shim; use `scope.store(pullRequestsStore)` instead.
+ * Reads the nearest node scope's pull requests; other code uses
+ * `scope.store(pullRequestsStore)`.
  */
 export const usePullRequestsStore = scopedStoreHook(pullRequestsStore);
 

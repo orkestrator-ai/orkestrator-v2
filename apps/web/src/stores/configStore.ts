@@ -13,7 +13,7 @@ import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-default
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore, type ScopedStoreDef } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import {
   configTargetsForScopes,
   layerConfig,
@@ -212,7 +212,7 @@ export const configStore: ScopedStoreDef<ConfigState> = defineScopedStore<Config
   },
 );
 
-/** Reads the nearest node scope's config. The statics are the deprecated command-scope shim. */
+/** Reads the nearest node scope's config; other code uses `scope.store(configStore)`. */
 export const useConfigStore = scopedStoreHook(configStore);
 
 /**

@@ -3,13 +3,13 @@
  *
  *   bun tests/source-guards/update-baseline.ts
  *   bun tests/source-guards/update-baseline.ts --guard window-orkestrator-direct
- *   bun tests/source-guards/update-baseline.ts --guard scoped-store-shim
+ *   bun tests/source-guards/update-baseline.ts --guard lib-backend-command-default
  *
  * With `--guard <id>` (repeatable) only those guards' entries are rescanned;
  * every other guard's entries are kept exactly as committed, so adding or
  * shrinking one guard cannot also absorb another guard's new findings. A guard
- * that counts per subject (`scoped-store-shim`, per store) also prints each
- * subject's total.
+ * that counts per subject (`lib-backend-command-default`, per `lib/backend`
+ * file) also prints each subject's total.
  *
  * The output is deterministic (guards in declaration order, files sorted), so
  * running it twice on the same tree writes the same bytes. A baseline entry

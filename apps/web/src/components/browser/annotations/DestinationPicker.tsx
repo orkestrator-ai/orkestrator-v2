@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
@@ -17,7 +17,6 @@ import {
 import { openNewAgentSession } from "@/lib/web-annotations/navigation";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { cn } from "@/lib/utils";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import {
   rememberedDestinationTabId,
   webAnnotationPreferencesStore,
@@ -101,7 +100,7 @@ export function DestinationPicker({
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   // The node whose remembered destinations this environment's choice is kept with.
-  const preferenceScope = useShimNodeScope(webAnnotationPreferencesStore.name);
+  const preferenceScope = useNodeScope();
   // Each environment (or excluded session) loads its options afresh.
   const optionsKey = `${environmentId}\0${excludeTabId ?? ""}`;
   const [loadingFor, setLoadingFor] = useState(optionsKey);

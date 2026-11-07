@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import type { HydrationStatus } from "@/lib/bounded-hydration";
 
@@ -107,7 +107,7 @@ export const prMonitorStore = defineScopedStore<PrMonitorStoreState>(
 );
 
 /**
- * Reads the nearest node scope's PR monitor state. Its statics are the
- * deprecated command-scope shim; use `scope.store(prMonitorStore)` instead.
+ * Reads the nearest node scope's PR monitor state; other code uses
+ * `scope.store(prMonitorStore)`.
  */
 export const usePrMonitorStore = scopedStoreHook(prMonitorStore);

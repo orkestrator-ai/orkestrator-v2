@@ -31,8 +31,8 @@ import { ContextMenuItem } from "@/components/ui/context-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
-import { multiReviewStore, useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -557,7 +557,7 @@ function MultiReviewOverviewTab({
   const providedCommands = commandsOverride === undefined ? defaultCommands : commandsOverride;
   const createTab = useOptionalTerminalContext()?.createTab;
   // The workflow belongs to this node; its point reads go to this node (plan item 3003).
-  const workflowScope = useShimNodeScope(multiReviewStore.name);
+  const workflowScope = useNodeScope();
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   // A graph-engine review refuses bespoke step controls even once its run has

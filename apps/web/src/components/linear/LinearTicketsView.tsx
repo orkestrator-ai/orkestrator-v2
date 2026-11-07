@@ -42,7 +42,7 @@ import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   buildPipelineStore,
   useBuildPipelineStore,
@@ -375,7 +375,7 @@ export function LinearTicketsViewContent({
   }, [selectedIssueId, commentBody]);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const pipelineStore = useScopedStoreApi(buildPipelineStore);
+  const pipelineStore = useNodeScope().store(buildPipelineStore);
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;

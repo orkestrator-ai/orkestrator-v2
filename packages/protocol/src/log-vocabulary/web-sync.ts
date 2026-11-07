@@ -82,8 +82,6 @@ export const WEB_SYNC_LOG_AREAS = defineLogAreas({
         "A node's workspace in the window's tree failed to render; only it shows an error.",
       "lifecycle.pressure":
         "Memory pressure moved hidden node scopes down a tier (heavy data dropped, suspended or disposed); counts only.",
-      "shim-under-leaf":
-        "A store's command-scope shim was used while an in-tree leaf workspace was mounted (first use per store and kind).",
     },
   },
 });

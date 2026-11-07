@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { DesignCanvas, DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignFailure,
@@ -128,8 +128,8 @@ export const designStore = defineScopedStore<DesignStoreState>("design", () => (
 }));
 
 /**
- * Reads the nearest node scope's canvas projections. The statics are the
- * deprecated command-scope shim; use `scope.store(designStore)` instead.
+ * Reads the nearest node scope's canvas projections; other code uses
+ * `scope.store(designStore)`.
  */
 export const useDesignStore = scopedStoreHook(designStore);
 

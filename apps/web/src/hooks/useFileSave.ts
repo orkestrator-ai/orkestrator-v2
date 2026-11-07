@@ -1,6 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { backendForScope } from "@/lib/backend/scope-backend";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -8,7 +8,6 @@ import {
   isFileWriteConflict,
   type FileWritePrecondition,
 } from "@orkestrator/protocol/file-write-precondition";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { useFileDirtyStore } from "@/stores";
 import { fileDirtyStore, fileSaveBaseline } from "@/stores/fileDirtyStore";
 
@@ -62,7 +61,7 @@ export function useFileSave({
   const getContent = useFileDirtyStore((state) => state.getContent);
   const setContent = useFileDirtyStore((state) => state.setContent);
   const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
-  const dirtyFiles = useScopedStoreApi(fileDirtyStore);
+  const dirtyFiles = useNodeScope().store(fileDirtyStore);
   const onReloadRef = useRef(onReloadFromDisk);
   // The conflict toast's Overwrite button outlives the render that showed it.
   const saveRef = useRef<(content: string | undefined, overwrite: boolean) => Promise<boolean>>(

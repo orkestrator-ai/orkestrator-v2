@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 export type TabLaunchSurface = "agent" | "terminal" | "page";
 
@@ -106,8 +106,5 @@ export const tabLaunchStore = defineScopedStore<TabLaunchState>("tab-launch", ()
     })),
 }));
 
-/**
- * Reads the nearest node scope's launches. Its statics are the deprecated
- * command-scope shim; use `scope.store(tabLaunchStore)` instead.
- */
+/** Reads the nearest node scope's launches; other code uses `scope.store(tabLaunchStore)`. */
 export const useTabLaunchStore = scopedStoreHook(tabLaunchStore);

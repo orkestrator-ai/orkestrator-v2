@@ -13,7 +13,6 @@ import {
 import { isTestSource } from "./paths";
 import { libBackendCommandDefault } from "./lib-backend-command-default";
 import { releasedPortRebind } from "./released-port-rebind";
-import { scopedStoreShim } from "./scoped-store-shim";
 import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion";
 import { smallFakePid } from "./small-fake-pid";
 import { subprocessWithoutBudget } from "./subprocess-without-budget";
@@ -28,7 +27,6 @@ export const SOURCE_GUARDS: readonly SourceGuard[] = [
   smallFakePid,
   windowOrkestratorDirect,
   directTransportImport,
-  scopedStoreShim,
   libBackendCommandDefault,
   windowOrkestratorPortal,
   workspaceCommandBoundCall,

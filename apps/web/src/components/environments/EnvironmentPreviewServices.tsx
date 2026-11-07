@@ -15,12 +15,8 @@ import {
   serviceReadiness,
   serviceTargetLabel,
 } from "@/lib/preview-service-display";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import {
-  ensurePreviewServiceSync,
-  previewServiceStore,
-  usePreviewServiceStore,
-} from "@/stores/previewServiceStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -55,7 +51,7 @@ export function EnvironmentPreviewServices({
   const [editing, setEditing] = useState<PreviewServiceDefinition | null | "new">(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const previewScope = useShimNodeScope(previewServiceStore.name);
+  const previewScope = useNodeScope();
 
   useEffect(() => {
     ensurePreviewServiceSync(previewScope);

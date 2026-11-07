@@ -10,7 +10,7 @@ import {
 } from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
 import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 
 const CLEANUP_IN_PROGRESS_MESSAGE =
@@ -49,7 +49,7 @@ export function useProjectHomeActivation() {
       )?.id ?? null,
   );
   // The selected project's node: its home and files panel tabs are that node's.
-  const scope = useShimNodeScope(filesPanelStore.name);
+  const scope = useNodeScope();
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const reconciled = useRef<string | null>(null);

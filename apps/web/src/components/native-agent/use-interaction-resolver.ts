@@ -7,7 +7,7 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionResolutionAction,
 } from "@orkestrator/protocol/agent-interactions";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { promptDraftStore } from "@/stores/promptDraftStore";
 
 interface InteractionResolverOptions {
@@ -37,7 +37,7 @@ export function useInteractionResolver({
   blocked = false,
 }: InteractionResolverOptions) {
   // The node the interaction is pending on holds its draft.
-  const drafts = useScopedStoreApi(promptDraftStore);
+  const drafts = useNodeScope().store(promptDraftStore);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

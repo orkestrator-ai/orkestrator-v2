@@ -12,7 +12,6 @@ import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkerPrompts } from "./CoordinatorWorkerPrompts";
 import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import {
   COORDINATOR_SIDE_AGENT_EXPLANATION,
   COORDINATOR_TIER_LABELS,
@@ -47,7 +46,7 @@ import {
   FloatingNoticeAnchor,
   FloatingNoticeLayer,
 } from "@/components/ui/floating-notice";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -67,9 +66,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   // The project is on the node of the scope this page renders in.
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   // This node's coordinator tab groups (plan item 3011).
-  const paneLayouts = useScopedStoreApi(coordinatorPaneLayoutStore);
+  const paneLayouts = useNodeScope().store(coordinatorPaneLayoutStore);
   // The same node's compose drafts (plan item 3013).
-  const composeDrafts = useScopedStoreApi(nativeComposeStore);
+  const composeDrafts = useNodeScope().store(nativeComposeStore);
   const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
   const {
     snapshot,

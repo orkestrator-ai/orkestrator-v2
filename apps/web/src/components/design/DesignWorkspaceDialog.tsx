@@ -25,7 +25,7 @@ import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePickHostPath } from "@/lib/host-path-picker";
 import { buildReviewModelCatalog, type ReviewCatalogModels } from "@/lib/review-launch-options";
-import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import {
   handTabInitialPromptToBackend,
@@ -180,12 +180,12 @@ export function DesignWorkspaceDialog({
 }) {
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
-  const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
-  const configs = useScopedStoreApi(configStore);
-  const environments = useScopedStoreApi(environmentStore);
-  const composeDrafts = useScopedStoreApi(nativeComposeStore);
+  const modelCatalog = useNodeScope().store(agentModelCatalogStore);
+  const configs = useNodeScope().store(configStore);
+  const environments = useNodeScope().store(environmentStore);
+  const composeDrafts = useNodeScope().store(nativeComposeStore);
   // This node's pane layouts (plan item 3013).
-  const nodeScope = useShimNodeScope(paneLayoutStore.name);
+  const nodeScope = useNodeScope();
   const paneLayouts = nodeScope.store(paneLayoutStore);
   // Every design call goes to this node, the one that holds the canvas (plan item 4007).
   const nodeDesign = designApiFor(nodeScope);

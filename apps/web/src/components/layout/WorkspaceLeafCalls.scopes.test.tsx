@@ -6,8 +6,8 @@
  * workspace is), every command reaches the leaf's client and none reaches
  * the command node: neither the window's command scope's client nor the
  * app's command path (`@/lib/native/backend` `invoke`, which every
- * `@/lib/backend` named export ends in). The in-tree leaf mount is on, so a
- * converted store's shim use would throw as well (plan item 4004).
+ * `@/lib/backend` named export ends in). A store hook outside the leaf's
+ * provider would throw (plan item 3018), so no read can fall back either.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, renderHook, screen, waitFor } from "@testing-library/react";
@@ -19,7 +19,6 @@ import { claudeTmuxClientFor } from "@/lib/claude-tmux-scope";
 import { requestGraphRunView, onGraphRunViewRequested } from "@/lib/graph-run-navigation";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
-import { useInTreeLeafMount } from "@/lib/node-scope/shim-under-leaf-guard";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { UserCommandCard } from "@/components/chat/UserCommandCard";
@@ -47,13 +46,8 @@ function openLeaf(responses: Record<string, unknown>): void {
   leafScope = windowScope.open({ role: "leaf", client: leafClient });
 }
 
-function LeafMount({ children }: { children: ReactNode }) {
-  useInTreeLeafMount(LEAF);
-  return <>{children}</>;
-}
-
 function renderInLeaf(ui: ReactNode) {
-  return renderInNodeScope(<LeafMount>{ui}</LeafMount>, {
+  return renderInNodeScope(<>{ui}</>, {
     windowScope,
     client: leafClient,
     role: "leaf",
@@ -64,9 +58,7 @@ function leafHook<T>(hook: () => T) {
   return renderHook(hook, {
     wrapper: ({ children }) => (
       <WindowScopeProvider windowScope={windowScope}>
-        <NodeScopeProvider scope={leafScope}>
-          <LeafMount>{children}</LeafMount>
-        </NodeScopeProvider>
+        <NodeScopeProvider scope={leafScope}>{children}</NodeScopeProvider>
       </WindowScopeProvider>
     ),
   });

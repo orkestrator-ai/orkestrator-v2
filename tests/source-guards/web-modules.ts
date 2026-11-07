@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { isTypeOnlyImport, unwrap, type AnyNode } from "./ast";
 
@@ -21,6 +22,24 @@ function normalizeModuleId(target: string): string {
   return withoutExtension.endsWith("/index")
     ? withoutExtension.slice(0, -"/index".length)
     : withoutExtension;
+}
+
+/** A module's file (repository-relative) and source by module id, or `null` when there is none. */
+export type ReadModule = (moduleId: string) => { file: string; source: string } | null;
+
+const MODULE_FILE_SUFFIXES = [".ts", ".tsx", "/index.ts", "/index.tsx"] as const;
+
+/** Reads renderer modules from a repository checkout. */
+export function repositoryModules(root: string): ReadModule {
+  return (moduleId) => {
+    if (!moduleId.startsWith(`${WEB_SOURCE_ROOT}/`)) return null;
+    for (const suffix of MODULE_FILE_SUFFIXES) {
+      const file = `${moduleId}${suffix}`;
+      const absolute = path.join(root, file);
+      if (existsSync(absolute)) return { file, source: readFileSync(absolute, "utf8") };
+    }
+    return null;
+  };
 }
 
 /** The module id of a repository-relative source file. */

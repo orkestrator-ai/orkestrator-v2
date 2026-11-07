@@ -19,7 +19,6 @@ import {
 } from "@/stores";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { sessionStore, useSessionStore } from "@/stores/sessionStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import {
   useTerminalPortalStore,
   createTerminalKey,
@@ -27,7 +26,7 @@ import {
 } from "@/stores/terminalPortalStore";
 import { cn } from "@/lib/utils";
 import { backendForScope } from "@/lib/backend/scope-backend";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import type { TabType } from "@/contexts";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -307,8 +306,8 @@ export function PersistentTerminal({
   const agentActivityState = useAgentActivityStore((state) => state.tabStates[tabId] ?? "idle");
 
   // Session persistence, on this terminal's node (plan item 3010).
-  const terminalSessions = useScopedStoreApi(terminalSessionStore);
-  const persistentSessions = useScopedStoreApi(sessionStore);
+  const terminalSessions = useNodeScope().store(terminalSessionStore);
+  const persistentSessions = useNodeScope().store(sessionStore);
   const existingSession = useTerminalSessionStore((state) => state.sessions.get(sessionKey));
   const setSession = useTerminalSessionStore((state) => state.setSession);
   const setSerializedBuffer = useTerminalSessionStore((state) => state.setSerializedBuffer);

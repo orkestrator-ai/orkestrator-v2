@@ -14,7 +14,7 @@ import * as backend from "@/lib/backend";
 import { createAgentMailApi, type AgentMailApi } from "@/lib/backend/agent-mail";
 import { backendApiForScope } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { agentMailStore, useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -211,6 +211,6 @@ export function agentMailParticipantLabel(
  * command scope, otherwise that scope's own node.
  */
 export function useAgentMailScope(): { scope: NodeScope; api: AgentMailApi } {
-  const scope = useShimNodeScope(agentMailStore.name);
+  const scope = useNodeScope();
   return { scope, api: backendApiForScope(scope, createAgentMailApi, backend) };
 }

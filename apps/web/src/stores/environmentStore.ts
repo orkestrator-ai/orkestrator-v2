@@ -2,7 +2,7 @@ import { environmentHasDeletionTombstone } from "@orkestrator/protocol/node-summ
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { clearRichEnvironmentContent } from "@/lib/chat/rich-content-reset";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { Environment, EnvironmentStatus, PrState } from "@/types";
 
 const sortByOrder = (environments: Environment[]): Environment[] =>
@@ -259,9 +259,5 @@ export const environmentStore = defineScopedStore<EnvironmentState>(
   }),
 );
 
-/**
- * Reads the nearest node scope's environments. Its statics
- * (`useEnvironmentStore.getState()` and so on) are the deprecated
- * command-scope shim; use `scope.store(environmentStore)` instead.
- */
+/** Reads the nearest node scope's environments; other code uses `scope.store(environmentStore)`. */
 export const useEnvironmentStore = scopedStoreHook(environmentStore);

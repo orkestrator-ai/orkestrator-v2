@@ -8,7 +8,7 @@ import {
 } from "@orkestrator/protocol/github-pull-requests";
 import { nodeStorageKey } from "@/lib/persistence-keys";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { FilesPanelPullRequestTab } from "./filesPanelStore";
 
 const MAX_TABS_PER_PROJECT = 10;
@@ -189,8 +189,8 @@ export const projectPullRequestsStore = defineScopedStore<ProjectPullRequestsSta
 );
 
 /**
- * Reads the nearest node scope's project pull request tabs. Its statics are
- * the deprecated command-scope shim; use `scope.store(projectPullRequestsStore)`.
+ * Reads the nearest node scope's project pull request tabs; other code uses
+ * `scope.store(projectPullRequestsStore)`.
  */
 export const useProjectPullRequestsStore = scopedStoreHook(projectPullRequestsStore);
 

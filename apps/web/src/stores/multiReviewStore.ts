@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 
@@ -36,8 +36,5 @@ export const multiReviewStore = defineScopedStore<MultiReviewState>(
   }),
 );
 
-/**
- * Reads the nearest node scope's workflows. Its statics are the deprecated
- * command-scope shim; use `scope.store(multiReviewStore)` instead.
- */
+/** Reads the nearest node scope's workflows; other code uses `scope.store(multiReviewStore)`. */
 export const useMultiReviewStore = scopedStoreHook(multiReviewStore);

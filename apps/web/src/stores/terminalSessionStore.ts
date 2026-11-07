@@ -1,6 +1,6 @@
 import { createLogger } from "@orkestrator/protocol/logger";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 const log = createLogger("terminal");
 
@@ -264,5 +264,8 @@ export const terminalSessionStore = defineScopedStore<TerminalSessionStore>(
   }),
 );
 
-/** Reads the nearest node scope's terminal sessions. The statics are the deprecated command-scope shim. */
+/**
+ * Reads the nearest node scope's terminal sessions; other code uses
+ * `scope.store(terminalSessionStore)`.
+ */
 export const useTerminalSessionStore = scopedStoreHook(terminalSessionStore);

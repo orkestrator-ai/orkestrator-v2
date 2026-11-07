@@ -4,7 +4,7 @@ import { CODEX_MODELS, type CodexModel } from "@/lib/codex-models";
 import type { ClaudeModelCatalogSnapshot } from "@/types";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * Model catalogues for launchers, settings, review options and Claude Tmux.
@@ -99,8 +99,8 @@ export const agentModelCatalogStore = defineScopedStore<AgentModelCatalogState>(
 );
 
 /**
- * Reads the nearest node scope's catalogues. Its statics are the deprecated
- * command-scope shim; use `scope.store(agentModelCatalogStore)` instead.
+ * Reads the nearest node scope's catalogues; other code uses
+ * `scope.store(agentModelCatalogStore)`.
  */
 export const useAgentModelCatalogStore = scopedStoreHook(agentModelCatalogStore);
 

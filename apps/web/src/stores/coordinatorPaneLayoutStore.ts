@@ -15,7 +15,7 @@ import {
 } from "@/lib/legacy-local-state";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 
 /** The key earlier releases kept every project's layout under (per machine). */
@@ -318,8 +318,8 @@ export const coordinatorPaneLayoutStore = defineScopedStore<CoordinatorPaneLayou
 );
 
 /**
- * Reads the nearest node scope's layouts. Its statics are the deprecated
- * command-scope shim; use `scope.store(coordinatorPaneLayoutStore)` instead.
+ * Reads the nearest node scope's layouts; other code uses
+ * `scope.store(coordinatorPaneLayoutStore)`.
  */
 export const useCoordinatorPaneLayoutStore = scopedStoreHook(coordinatorPaneLayoutStore);
 

@@ -18,12 +18,11 @@ import {
   newWebAnnotationOperationId,
   webAnnotationCommand,
 } from "@/lib/web-annotations/client";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { openConversationAtMessage } from "@/lib/web-annotations/conversation-navigation";
 import { openConversationTab, openWebAnnotationRequest } from "@/lib/web-annotations/navigation";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { cn } from "@/lib/utils";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { destinationName } from "./DestinationPicker";
@@ -118,7 +117,7 @@ export function RequestCard({
   // The annotation's environment is on the node of the scope this card renders in.
   const scopeNodeId = useScopesWithCommandFallback().scope.nodeId;
   const [busy, setBusy] = useState<string | null>(null);
-  const filesPanel = useScopedStoreApi(filesPanelStore);
+  const filesPanel = useNodeScope().store(filesPanelStore);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [response, setResponse] = useState<{

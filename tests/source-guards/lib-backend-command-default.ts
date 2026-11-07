@@ -3,8 +3,13 @@ import { parseSync } from "oxc-parser";
 import { memberName, unwrap, walk, type AnyNode } from "./ast";
 import type { GuardVisitor, ScannedFile, SourceGuard, SubjectFinding } from "./guard";
 import { isTestSource } from "./paths";
-import { repositoryModules, type ReadModule } from "./scoped-store-shim";
-import { WEB_SOURCE_ROOT, moduleReferences, resolveWebModule } from "./web-modules";
+import {
+  WEB_SOURCE_ROOT,
+  moduleReferences,
+  repositoryModules,
+  resolveWebModule,
+  type ReadModule,
+} from "./web-modules";
 
 /**
  * Uses of a `lib/backend` command-bound named export inside a converted

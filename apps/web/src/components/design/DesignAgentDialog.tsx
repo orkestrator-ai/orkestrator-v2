@@ -25,7 +25,7 @@ import {
   nativeComposeStore,
   useNativeComposeStore,
 } from "@/stores/nativeComposeStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   paneLayoutStore,
   usePaneLayoutStore,
@@ -184,9 +184,9 @@ function DesignAgentDialogBody({
   const terminal = useOptionalTerminalContext();
   const createTab = terminal?.createTab ?? null;
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
-  const composeDrafts = useScopedStoreApi(nativeComposeStore);
+  const composeDrafts = useNodeScope().store(nativeComposeStore);
   // This node's pane layouts (plan item 3013).
-  const paneLayouts = useScopedStoreApi(paneLayoutStore);
+  const paneLayouts = useNodeScope().store(paneLayoutStore);
   const paneEnvironment = usePaneLayoutStore((state) => state.environments.get(environmentId));
   const hydrated = usePaneLayoutStore((state) => state.hydration.get(environmentId) === "done");
 

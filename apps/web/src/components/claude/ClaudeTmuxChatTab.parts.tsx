@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
@@ -889,7 +889,7 @@ export function TmuxComposeBar({
   const composerLocked = disabled || settingsSwitching || submitting || queueSubmitting;
   // This node's tmux tabs (plan item 3010).
   // The tab's node: its store, and the queue mutations (plan item 4007).
-  const tmuxScope = useShimNodeScope(claudeTmuxStore.name);
+  const tmuxScope = useNodeScope();
   const tmuxTabs = tmuxScope.store(claudeTmuxStore);
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
@@ -913,7 +913,15 @@ export function TmuxComposeBar({
   const addAttachmentToStore = useClaudeTmuxStore((state) => state.addAttachment);
   const removeAttachmentFromStore = useClaudeTmuxStore((state) => state.removeAttachment);
   const clearAttachments = useClaudeTmuxStore((state) => state.clearAttachments);
-  useNativeComposeDraftPersistence("claude-tmux", environmentId, sessionKey, useClaudeTmuxStore);
+  // The tab's own node: its store instance and its draft persistence (plan item 3018).
+  useNativeComposeDraftPersistence(
+    "claude-tmux",
+    environmentId,
+    sessionKey,
+    tmuxTabs,
+    undefined,
+    tmuxScope,
+  );
   const modelObj = useMemo(() => getTmuxModel(selectedModel, models), [selectedModel, models]);
 
   // Slash command menu state. The list is static (claude builtins) — see

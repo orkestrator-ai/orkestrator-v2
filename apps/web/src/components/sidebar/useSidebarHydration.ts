@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { uiStore } from "@/stores/uiStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -42,7 +42,7 @@ export function useSidebarHydration(
     }
   }, [environments.length, load, projects, projectsLoaded]);
   const ready = projectsLoaded && projects.every((project) => settled.has(project.id));
-  const ui = useScopedStoreApi(uiStore);
+  const ui = useNodeScope().store(uiStore);
   useEffect(() => {
     if (!ready) return;
     ui.getState().collapseEmptyProjects(

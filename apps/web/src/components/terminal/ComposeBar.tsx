@@ -5,7 +5,7 @@ import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import { backendForScope } from "@/lib/backend/scope-backend";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   encodeCanvasAsPngWithinSize,
   MAX_IMAGE_DIMENSION,
@@ -14,7 +14,6 @@ import {
 } from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import { terminalSessionStore, useTerminalSessionStore } from "@/stores/terminalSessionStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import {
   composeDraftKey,
@@ -79,7 +78,7 @@ export function ComposeBar({
   // This node's backend (plan item 4001); the command node outside a node scope.
   const backendScope = useScopesWithCommandFallback().scope;
   // This node's terminal drafts (plan item 3010).
-  const terminalSessions = useScopedStoreApi(terminalSessionStore);
+  const terminalSessions = useNodeScope().store(terminalSessionStore);
   const text = useTerminalSessionStore((state) => state.composeDraftText.get(sessionKey) ?? "");
   const images = useTerminalSessionStore(
     (state) => state.composeDraftImages.get(sessionKey) ?? EMPTY_IMAGES,

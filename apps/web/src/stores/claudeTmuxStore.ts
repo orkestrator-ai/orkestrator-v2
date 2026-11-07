@@ -33,7 +33,7 @@ import type { FileMention } from "@/types";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   promptDraftStore,
@@ -813,7 +813,7 @@ export const claudeTmuxStore = defineScopedStore<ClaudeTmuxState>(
   },
 );
 
-/** Reads the nearest node scope's tmux tabs. The statics are the deprecated command-scope shim. */
+/** Reads the nearest node scope's tmux tabs; other code uses `scope.store(claudeTmuxStore)`. */
 export const useClaudeTmuxStore = scopedStoreHook(claudeTmuxStore);
 
 /**

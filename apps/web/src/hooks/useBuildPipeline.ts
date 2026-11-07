@@ -9,7 +9,7 @@ import {
   type BuildPipelineTicket,
   type GitHubIssueBuildInput,
 } from "@orkestrator/protocol/build-pipeline-tickets";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   buildPipelineStore,
   useBuildPipelineStore,
@@ -70,7 +70,7 @@ export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   // This node's pipelines (plan item 3011).
-  const scope = useShimNodeScope(buildPipelineStore.name);
+  const scope = useNodeScope();
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
 

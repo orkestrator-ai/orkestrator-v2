@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { projectKey, projectRef, type BackendId } from "@orkestrator/protocol/federation";
 import { projectFolderKey } from "@/lib/project-folders";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { uiStore } from "@/stores/uiStore";
 import type { Project } from "@/types";
 
@@ -21,7 +21,7 @@ export function useBoundCollapseSync(
 ): void {
   const adopted = useRef({ backendId, keys: new Set<string>() });
   // The bound node's own UI state: the scope that lists `projects`.
-  const uiApi = useScopedStoreApi(uiStore);
+  const uiApi = useNodeScope().store(uiStore);
 
   useEffect(() => {
     if (!backendId || !loaded) return;

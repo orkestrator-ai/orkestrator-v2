@@ -17,11 +17,16 @@
  *   }),
  * );
  * // In components (reads the nearest NodeScopeProvider):
- * export const useEnvironmentStore = <U>(selector: (s: EnvironmentState) => U) =>
- *   useScopedStore(environmentStore, selector);
+ * export const useEnvironmentStore = scopedStoreHook(environmentStore);
  * // Outside React the caller names its node:
  * scope.store(environmentStore).getState().load(projectId);
  * ```
+ *
+ * A store's hook has no `getState`/`setState`/`subscribe` statics: a static
+ * would have to pick a node without being told which, so imperative code
+ * reads `scope.store(def)` for the scope it was given or `useNodeScope()`
+ * returns (plan item 3018 retired the command-scope statics and the
+ * provider-less fallback of plan item 3001's migration shim).
  *
  * A creator that starts work of its own (a timer, a listener) registers its
  * stop with `scope.onDispose`, which runs when the scope ends (invariant 15).
@@ -50,4 +55,28 @@ export function defineScopedStore<S>(
 /** Reads `def`'s instance in the nearest `NodeScopeProvider`'s scope. */
 export function useScopedStore<S, U>(def: ScopedStoreDef<S>, selector: (state: S) => U): U {
   return useStore(useNodeScope().store(def), selector);
+}
+
+/** A per-node store's hook: `useScopedStore(def, selector)`, called like a zustand hook. */
+export interface ScopedStoreHook<S> {
+  (): S;
+  <U>(selector: (state: S) => U): U;
+  /** The store's definition, for `scope.store(def)`. */
+  readonly def: ScopedStoreDef<S>;
+}
+
+/**
+ * The hook a per-node store exports. It reads `def`'s instance in the nearest
+ * `NodeScopeProvider`'s scope, exactly as `useScopedStore(def, selector)`, so
+ * outside a provider it throws in development and tests (and in production
+ * reads the app's command scope, as `useNodeScope()` does). With no selector
+ * it returns the whole state.
+ */
+export function scopedStoreHook<S>(def: ScopedStoreDef<S>): ScopedStoreHook<S> {
+  const identity = (state: S) => state;
+  function useDefinedStore<U>(selector?: (state: S) => U): U {
+    // With no selector, U is S (the overload `(): S`).
+    return useScopedStore(def, (selector ?? identity) as (state: S) => U);
+  }
+  return Object.assign(useDefinedStore, { def }) as ScopedStoreHook<S>;
 }

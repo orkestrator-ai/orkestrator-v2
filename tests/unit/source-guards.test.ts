@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -41,19 +42,12 @@ import { sleepBeforeNegativeAssertion } from "../source-guards/sleep-before-nega
 import { smallFakePid } from "../source-guards/small-fake-pid";
 import { subprocessWithoutBudget } from "../source-guards/subprocess-without-budget";
 import {
-  SCOPED_STORE_SHIM_ROOTS,
-  SHIMMED_STORES,
-  ShimmedStoreResolver,
-  createScopedStoreShimGuard,
-  repositoryModules,
-  type ShimmedStore,
-} from "../source-guards/scoped-store-shim";
-import {
   LibBackendShimResolver,
   createLibBackendCommandDefaultGuard,
 } from "../source-guards/lib-backend-command-default";
 import { mergeBaseline, selectedGuards, subjectTotals } from "../source-guards/update-baseline";
-import { moduleIdOfFile, resolveWebModule } from "../source-guards/web-modules";
+import { moduleIdOfFile, repositoryModules, resolveWebModule } from "../source-guards/web-modules";
+import { WINDOW_STORES } from "../source-guards/window-stores";
 import {
   WINDOW_ORKESTRATOR_ROOTS,
   transportAccesses,
@@ -620,128 +614,8 @@ describe("renderer module resolution", () => {
   });
 });
 
-describe("scoped-store-shim", () => {
-  const STORE_MODULE = "apps/web/src/stores/optionsStore";
-  const stores: ShimmedStore[] = [
-    { store: "options", module: STORE_MODULE, hook: "useOptionsStore" },
-  ];
-  /** An in-memory renderer: a store module, the `@/stores` barrel and a second-level re-export. */
-  const modules: Record<string, { file: string; source: string }> = {
-    [STORE_MODULE]: {
-      file: `${STORE_MODULE}.ts`,
-      source: [
-        "export const optionsStore = defineScopedStore('options', () => () => ({}));",
-        "export const useOptionsStore = scopedStoreHook(optionsStore);",
-        "export function resetOptions() { useOptionsStore.setState({}); }",
-      ].join("\n"),
-    },
-    "apps/web/src/stores": {
-      file: "apps/web/src/stores/index.ts",
-      source: [
-        'export { useOptionsStore, optionsStore } from "./optionsStore";',
-        'export type { OptionsState } from "./optionsStore";',
-        'export { useUIStore } from "./uiStore";',
-        'export * from "./more";',
-      ].join("\n"),
-    },
-    "apps/web/src/stores/more": {
-      file: "apps/web/src/stores/more.ts",
-      source: [
-        'import { useOptionsStore as hook } from "./optionsStore";',
-        "export { hook as useLaunchOptions };",
-      ].join("\n"),
-    },
-  };
-  const guard = createScopedStoreShimGuard({
-    stores,
-    readModule: (moduleId) => modules[moduleId] ?? null,
-  });
-  const file = "apps/web/src/components/Thing.tsx";
-  const found = (source: string, path = file) =>
-    scanSource({ path, source, isBunTest: /\.test\./.test(path) }, [guard]).map(
-      ({ line, subject }) => [line, subject],
-    );
-
-  test("counts static calls through a barrel, an alias, a direct import and a namespace", () => {
-    const source = [
-      'import { useOptionsStore } from "@/stores";',
-      'import { useOptionsStore as useLaunch } from "@/stores/optionsStore";',
-      'import * as allStores from "@/stores";',
-      'import { useLaunchOptions } from "../stores";',
-      "useOptionsStore.getState().setOptions('a', {});",
-      "useLaunch.setState({ options: {} });",
-      "const stop = useOptionsStore.subscribe(() => {});",
-      "allStores.useOptionsStore.getInitialState();",
-      "useLaunchOptions.getState();",
-      "const { getState } = useLaunch;",
-    ].join("\n");
-    expect(found(source)).toEqual([
-      [5, "options"],
-      [6, "options"],
-      [7, "options"],
-      [8, "options"],
-      [9, "options"],
-      [10, "options"],
-    ]);
-  });
-
-  test("ignores the hook call, the scope path, unconverted stores and same-named bindings", () => {
-    const source = [
-      'import { useOptionsStore, optionsStore, useUIStore } from "@/stores";',
-      'import { useOptionsStore as other } from "@/lib/elsewhere";',
-      'import type { OptionsState } from "@/stores";',
-      "const options = useOptionsStore((state) => state.options);",
-      "scope.store(optionsStore).getState();",
-      "useUIStore.getState().select('x');",
-      "other.getState();",
-      "const getState = () => 1;",
-      "function f(useOptionsStore2: { getState(): void }) { useOptionsStore2.getState(); }",
-    ].join("\n");
-    expect(found(source)).toEqual([]);
-  });
-
-  test("counts a store module's static calls on itself", () => {
-    expect(found(modules[STORE_MODULE]!.source, `${STORE_MODULE}.ts`)).toEqual([[3, "options"]]);
-  });
-
-  test("does not count calls in test files or test-support modules", () => {
-    const source = 'import { useOptionsStore } from "@/stores";\nuseOptionsStore.getState();';
-    expect(found(source, "apps/web/src/components/Thing.test.tsx")).toEqual([]);
-    expect(found(source, "apps/web/src/components/thing-test-support.ts")).toEqual([]);
-    expect(found(source, "apps/web/src/test/render-in-node-scope.tsx")).toEqual([]);
-    expect(found(source)).toEqual([[2, "options"]]);
-  });
-
-  test("keys the baseline per store and file, and an increase or a stale entry fails", () => {
-    const findings = emptyFindings();
-    const source = 'import { useOptionsStore } from "@/stores";\nuseOptionsStore.getState();';
-    for (const finding of scanSource({ path: file, source, isBunTest: false }, [guard]))
-      (findings[finding.guard][baselineKey(finding)] ??= []).push(finding);
-    const key = `[options] ${file}`;
-    expect(Object.keys(findings["scoped-store-shim"])).toEqual([key]);
-
-    const atBaseline = baselineFromFindings(emptyFindings());
-    atBaseline["scoped-store-shim"][key] = 1;
-    expect(compareWithBaseline(findings, atBaseline)).toEqual({ regressions: [], stale: [] });
-
-    const lower = baselineFromFindings(emptyFindings());
-    const { regressions } = compareWithBaseline(findings, lower);
-    expect(regressions.map((regression) => regression.file)).toEqual([key]);
-    expect(formatRegressions(regressions, ADVICE)).toContain(`${file}:2`);
-    expect(formatRegressions(regressions, ADVICE)).toContain("scope.store(def)");
-
-    const higher = baselineFromFindings(emptyFindings());
-    higher["scoped-store-shim"][key] = 2;
-    higher["scoped-store-shim"][`[options] apps/web/src/Gone.tsx`] = 1;
-    const { stale } = compareWithBaseline(findings, higher);
-    expect(stale.map((entry) => [entry.file, entry.allowed, entry.actual])).toEqual([
-      ["[options] apps/web/src/Gone.tsx", 1, 0],
-      [key, 2, 1],
-    ]);
-    expect(formatStale(stale)).toContain("--guard <id>");
-  });
-
-  test("totals per store for the regeneration summary", () => {
+describe("subject totals", () => {
+  test("totals per subject for the regeneration summary", () => {
     expect(
       subjectTotals({
         "[options] apps/web/src/A.tsx": 2,
@@ -754,30 +628,45 @@ describe("scoped-store-shim", () => {
       ["options", 3],
     ]);
   });
+});
 
-  test("every converted store is registered, and every registration is a converted store", () => {
-    const hookExports: string[] = [];
-    for (const relative of listProductionSources(ROOT, SCOPED_STORE_SHIM_ROOTS)) {
-      if (relative.startsWith("apps/web/src/lib/node-scope/")) continue;
-      const source = readFileSync(path.join(ROOT, relative), "utf8");
-      for (const match of source.matchAll(/export const (\w+) = scopedStoreHook\(/g))
-        hookExports.push(`${moduleIdOfFile(relative)}#${match[1]}`);
-    }
-    expect(hookExports.sort()).toEqual(
-      SHIMMED_STORES.map((store) => `${store.module}#${store.hook}`).sort(),
-    );
-    const readModule = repositoryModules(ROOT);
-    for (const store of SHIMMED_STORES) {
-      const source = readModule(store.module)?.source ?? "";
-      expect([store.store, source.includes(`defineScopedStore<`)]).toEqual([store.store, true]);
-      expect([store.store, source.includes(`"${store.store}"`)]).toEqual([store.store, true]);
-    }
+describe("renderer store registry (plan items 4004 and 3018)", () => {
+  const storesDir = path.join(ROOT, "apps/web/src/stores");
+  const storeModules = readdirSync(storesDir)
+    .filter((file) => file.endsWith(".ts") && !file.includes(".test.") && file !== "index.ts")
+    .map((file) => ({
+      module: `stores/${file.replace(/\.ts$/u, "")}`,
+      source: readFileSync(path.join(storesDir, file), "utf8"),
+    }));
+
+  test("every store module is a per-node store or a listed window store", () => {
+    const perNode = storeModules.filter(({ source }) => source.includes("defineScopedStore"));
+    const windowModules = storeModules
+      .filter(({ source }) => !source.includes("defineScopedStore"))
+      .map(({ module }) => module)
+      .sort();
+    expect(perNode.length).toBeGreaterThan(30);
+    expect(WINDOW_STORES.map((entry) => entry.module).sort()).toEqual(windowModules);
+    for (const entry of WINDOW_STORES)
+      expect(existsSync(path.join(ROOT, "apps/web/src", `${entry.module}.ts`))).toBe(true);
   });
 
-  test("the barrel resolves to the real store module", () => {
-    const resolver = new ShimmedStoreResolver(SHIMMED_STORES, repositoryModules(ROOT));
-    for (const store of SHIMMED_STORES)
-      expect(resolver.storeOf("apps/web/src/stores", store.hook)?.store).toBe(store.store);
+  test("a per-node store exports its hook through scopedStoreHook, which has no statics", () => {
+    for (const { module, source } of storeModules) {
+      if (!source.includes("defineScopedStore")) continue;
+      expect([module, /export const use\w+ = scopedStoreHook\(\w+\);/u.test(source)]).toEqual([
+        module,
+        true,
+      ]);
+      expect([module, source.includes('from "@/lib/node-scope/scoped-store"')]).toEqual([
+        module,
+        true,
+      ]);
+    }
+    // The command-scope shim (plan item 3001) is gone, so no hook can fall back or carry statics.
+    expect(existsSync(path.join(ROOT, "apps/web/src/lib/node-scope/scoped-store-shim.ts"))).toBe(
+      false,
+    );
   });
 });
 

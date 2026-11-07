@@ -10,7 +10,7 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 import type { ByteBudget } from "@/lib/node-scope/byte-budget";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 export interface NativeAgentSyncCacheEntry {
   /**
@@ -302,7 +302,10 @@ export const nativeAgentProjectionStore = defineScopedStore<NativeAgentProjectio
   },
 );
 
-/** Reads the nearest node scope's projections. The statics are the deprecated command-scope shim. */
+/**
+ * Reads the nearest node scope's projections; other code uses
+ * `scope.store(nativeAgentProjectionStore)`.
+ */
 export const useNativeAgentProjectionStore = scopedStoreHook(nativeAgentProjectionStore);
 
 function createNativeAgentProjectionState(

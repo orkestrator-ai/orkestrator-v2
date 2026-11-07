@@ -4,8 +4,7 @@
  * node scope.
  *
  * For each store: two scopes keep independent state, the hook reads the
- * rendered scope's instance, and the deprecated statics reach the app's
- * command scope. Then, per store with backend work, a leaf scope's reads and
+ * rendered scope's instance, and the hook carries no command-scope statics. Then, per store with backend work, a leaf scope's reads and
  * subscriptions go to that leaf's client and land in that leaf's instance.
  */
 import { afterEach, describe, expect, test } from "bun:test";
@@ -26,7 +25,7 @@ import { acquireWebAnnotationSync } from "@/lib/web-annotations/sync";
 import { fixtureCapabilities } from "@/test/web-annotation-fakes";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import type { ScopedStoreDef } from "@/lib/node-scope/scoped-store";
-import type { ScopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import type { ScopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { designController } from "@/components/design/design-controller";
@@ -174,21 +173,11 @@ describe.each(CASES.map((entry) => [entry.def.name, entry] as const))("%s", (_na
     expect(entry.read(command.getState())).toBe(initial);
   });
 
-  test("the deprecated statics reach the app's command scope", () => {
-    resetWindowScopeForTests(new FakeNodeClient({ nodeId: NODE_A }));
-    const { a } = twoScopes();
-    const before = entry.read(a.store(entry.def).getState());
-
-    entry.write({
-      getState: entry.hook.getState,
-      setState: entry.hook.setState,
-      subscribe: entry.hook.subscribe,
-      getInitialState: entry.hook.getInitialState,
-    });
-
-    const command = getWindowScope().commandScope().store(entry.def);
-    expect(entry.hook.getState()).toBe(command.getState());
-    expect(entry.read(a.store(entry.def).getState())).toBe(before);
+  test("the hook has no command-scope statics", () => {
+    // Plan item 3018: a static would pick a node without being told which.
+    for (const name of ["getState", "setState", "subscribe", "getInitialState"])
+      expect([name, name in entry.hook]).toEqual([name, false]);
+    expect(entry.hook.def).toBe(entry.def);
   });
 });
 

@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import {
   BUILD_PIPELINE_VERSION,
@@ -231,8 +231,5 @@ export const buildPipelineStore = defineScopedStore<BuildPipelineState>(
   }),
 );
 
-/**
- * Reads the nearest node scope's pipelines. Its statics are the deprecated
- * command-scope shim; use `scope.store(buildPipelineStore)` instead.
- */
+/** Reads the nearest node scope's pipelines; other code uses `scope.store(buildPipelineStore)`. */
 export const useBuildPipelineStore = scopedStoreHook(buildPipelineStore);

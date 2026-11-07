@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { isSubmitShortcut } from "@/lib/keyboard-shortcuts";
 import { cn } from "@/lib/utils";
 import type { NativeAsyncQuestionPart } from "@/lib/chat/native-message-types";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   nativeAsyncQuestionDraftKey,
   promptDraftStore,
@@ -93,7 +93,7 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
         ]),
       ),
   );
-  const drafts = useScopedStoreApi(promptDraftStore);
+  const drafts = useNodeScope().store(promptDraftStore);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const response = responses.find((candidate) => candidate.itemId === part.asyncQuestion.itemId);

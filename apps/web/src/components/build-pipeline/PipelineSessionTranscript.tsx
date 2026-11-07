@@ -5,12 +5,8 @@ import {
   isSupersededPipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import {
-  buildPipelineStore,
-  type BuildPipeline,
-  type PipelineSession,
-} from "@/stores/buildPipelineStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { type BuildPipeline, type PipelineSession } from "@/stores/buildPipelineStore";
 import {
   hydrateBuildPipeline,
   isBuildPipelineTranscriptStale,
@@ -179,7 +175,7 @@ export function PipelineSessionTranscript({
   });
 
   // The node the pipeline is on (plan item 3011).
-  const nodeScope = useShimNodeScope(buildPipelineStore.name);
+  const nodeScope = useNodeScope();
   const transcriptStale = isBuildPipelineTranscriptStale(session);
   const transcriptUnavailable = isBuildPipelineTranscriptUnavailable(session);
   const transcriptRequestRef = useRef<string | null>(null);

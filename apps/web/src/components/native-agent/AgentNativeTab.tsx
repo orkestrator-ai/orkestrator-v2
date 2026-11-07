@@ -18,7 +18,7 @@ import {
 } from "@/lib/compose-draft-persistence";
 import { configStore } from "@/stores/configStore";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore } from "@/stores/environmentStore";
 import { createSessionKey } from "@/lib/utils";
 import {
@@ -105,7 +105,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   );
   // The node whose environment this tab belongs to: the one `useEnvironmentStore`
   // and `useNativeComposeStore` read. Its compose drafts and config are that node's.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   const composeDrafts = scope.store(nativeComposeStore);
   const paneLayouts = scope.store(paneLayoutStore);
   const persistLockedPane = useCallback(

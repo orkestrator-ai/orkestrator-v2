@@ -28,7 +28,7 @@ import * as graphTemplates from "@/lib/backend/graph-templates";
 import { backendApiForScope } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   acknowledgeGraphWarning,
@@ -744,10 +744,7 @@ export const graphDesignerStore = defineScopedStore<GraphDesignerState>(
   },
 );
 
-/**
- * Reads the nearest node scope's designer. Its statics are the deprecated
- * command-scope shim; use `scope.store(graphDesignerStore)` instead.
- */
+/** Reads the nearest node scope's designer; other code uses `scope.store(graphDesignerStore)`. */
 export const useGraphDesignerStore = scopedStoreHook(graphDesignerStore);
 
 /** A tab's state, or the empty state before its first load. */

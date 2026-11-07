@@ -10,7 +10,7 @@ import {
   projectRootFilesTargetId,
 } from "@/stores/filesPanelStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { ensureProjectHomeInStore } from "@/lib/project-home-ensures";
 import * as backend from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
@@ -204,7 +204,7 @@ export function useFilesPanel() {
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   // The node the panel's target belongs to: its panel state, directory reads
   // and project home ensures are that node's.
-  const scope = useShimNodeScope(filesPanelStore.name);
+  const scope = useNodeScope();
   const filesPanel = scope.store(filesPanelStore);
   // The panel is open for the whole window; its tab is this node's.
   const panelOpen = useFilesPanelChromeStore((state) => state.isOpen);

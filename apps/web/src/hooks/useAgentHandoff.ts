@@ -11,7 +11,7 @@ import * as backend from "@/lib/backend";
 import { createAgentHandoffsApi } from "@/lib/backend/agent-handoffs";
 import { backendApiForScope } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
@@ -100,7 +100,7 @@ export function useAgentHandoff(
   displayMessages: NativeMessage[];
 } {
   // The node this tab's session (and so its handoff) lives on.
-  const scope = useShimNodeScope("native-agent-projection");
+  const scope = useNodeScope();
   const requestKey = handoffId
     ? JSON.stringify([handoffId, destinationProvider, environmentId])
     : null;

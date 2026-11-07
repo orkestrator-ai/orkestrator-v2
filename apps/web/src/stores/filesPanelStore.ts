@@ -3,7 +3,7 @@ import type { StateCreator } from "zustand/vanilla";
 import type { GitFileChange, FileNode, FileSubtree } from "@/lib/backend";
 import { nodeStorageKey } from "@/lib/persistence-keys";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { useFilesPanelChromeStore } from "./filesPanelChromeStore";
 import type { CreateFileTabOptions } from "@/contexts/TerminalContext";
 import {
@@ -476,8 +476,7 @@ export const filesPanelStore = defineScopedStore<FilesPanelState>("files-panel",
 });
 
 /**
- * Reads the nearest node scope's files panel state. Its statics
- * (`useFilesPanelStore.getState()` and so on) are the deprecated
- * command-scope shim; use `scope.store(filesPanelStore)` instead.
+ * Reads the nearest node scope's files panel state; other code uses
+ * `scope.store(filesPanelStore)`.
  */
 export const useFilesPanelStore = scopedStoreHook(filesPanelStore);

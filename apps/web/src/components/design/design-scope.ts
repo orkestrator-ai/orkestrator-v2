@@ -1,7 +1,6 @@
 import { designApiFor, type DesignV2Api } from "@/lib/design-client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import { designStore } from "@/stores/designStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 
 /**
  * The node a design surface works on (plan item 4007): the nearest node
@@ -9,7 +8,7 @@ import { designStore } from "@/stores/designStore";
  * history and export all send to the one node that holds the canvas.
  */
 export function useDesignScope(): NodeScope {
-  return useShimNodeScope(designStore.name);
+  return useNodeScope();
 }
 
 /** The v2 design commands of {@link useDesignScope}'s node. Stable for a scope. */

@@ -61,7 +61,7 @@ import {
 } from "@/stores";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -336,7 +336,7 @@ export function HierarchicalSidebar() {
     updateEnvironment,
   } = useEnvironments(null);
   // The node this sidebar lists: the one the hooks above read.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
 
   useEnvironmentListSync(
     projects.map((project) => project.id),

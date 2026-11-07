@@ -1,6 +1,5 @@
 import { armPullRequestFallback } from "@/lib/pull-request-load-fallback";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import { environmentStore } from "@/stores/environmentStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   Children,
@@ -182,7 +181,7 @@ export function MarkdownLink({
   const openPullRequest = usePullRequestOpener();
   const linkSource = useContext(PreviewLinkSourceContext);
   // The node of the transcript this link is in: its environment and services.
-  const linkScope = useShimNodeScope(environmentStore.name);
+  const linkScope = useNodeScope();
   // Inside a coordinator, a pull request link on screen is watched for status changes.
   const notePullRequestOpened = useCoordinatorPullRequestLink(href);
   // The explicit gesture opens a preview tab. On remote desktop connections,

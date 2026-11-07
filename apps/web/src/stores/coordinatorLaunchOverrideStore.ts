@@ -8,7 +8,7 @@ import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createCoordinatorApi } from "@/lib/backend/coordinator";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 
 /** A launch is rare and the marker is not urgent, so a burst of store writes shares one read. */
@@ -154,8 +154,8 @@ export const coordinatorLaunchOverrideStore =
   );
 
 /**
- * Reads the nearest node scope's overrides. Its statics are the deprecated
- * command-scope shim; use `scope.store(coordinatorLaunchOverrideStore)` instead.
+ * Reads the nearest node scope's overrides; other code uses
+ * `scope.store(coordinatorLaunchOverrideStore)`.
  */
 export const useCoordinatorLaunchOverrideStore = scopedStoreHook(coordinatorLaunchOverrideStore);
 

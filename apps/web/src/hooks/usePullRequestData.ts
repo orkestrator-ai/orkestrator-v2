@@ -11,7 +11,7 @@ import {
   type GitHubPullRequestRef,
 } from "@orkestrator/protocol/github-pull-requests";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   pullRequestListKey,
   pullRequestsStore,
@@ -31,7 +31,7 @@ function isFresh(scope: NodeScope, loadKey: string): boolean {
 
 /** The node scope this view's pull requests are read from (the nearest provider). */
 function usePullRequestScope(): NodeScope {
-  return useShimNodeScope(pullRequestsStore.name);
+  return useNodeScope();
 }
 
 /** Stable ref object keyed by value, so effects do not re-run on every render. */

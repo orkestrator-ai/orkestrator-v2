@@ -1,5 +1,5 @@
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { AgentActivityState, Environment } from "@/types";
 
 export type { AgentActivityState } from "@/types";
@@ -66,8 +66,5 @@ export const agentActivityStore = defineScopedStore<AgentActivityStoreState>(
   }),
 );
 
-/**
- * Reads the nearest node scope's activity. Its statics are the deprecated
- * command-scope shim; use `scope.store(agentActivityStore)` instead.
- */
+/** Reads the nearest node scope's activity; other code uses `scope.store(agentActivityStore)`. */
 export const useAgentActivityStore = scopedStoreHook(agentActivityStore);

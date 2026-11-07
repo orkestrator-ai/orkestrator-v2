@@ -10,7 +10,7 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createChangesApi } from "@/lib/backend/changes";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { changeProjectionStore } from "@/stores/changeProjectionStore";
 
 /** Rows fetched past the projection's first page, all of one snapshot token. */
@@ -71,7 +71,7 @@ export function useEnvironmentChangeRows(
   environmentId: string | null | undefined,
 ): EnvironmentChangeRows {
   const projection = useEnvironmentChangeProjection(environmentId);
-  const scope = useShimNodeScope(changeProjectionStore.name);
+  const scope = useNodeScope();
   const resourceKey = environmentId ? environmentChangeResourceKey(environmentId) : null;
   const [extra, setExtra] = useState<ExtraPages | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);

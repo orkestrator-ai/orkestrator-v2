@@ -8,14 +8,15 @@ import {
   visitShimUses,
 } from "./lib-backend-command-default";
 import { isTestSource } from "./paths";
-import { repositoryModules, type ReadModule } from "./scoped-store-shim";
 import {
   WEB_SOURCE_ROOT,
   bringsValues,
   dynamicImportOf,
   moduleIdOfFile,
   moduleReferences,
+  repositoryModules,
   resolveWebModule,
+  type ReadModule,
 } from "./web-modules";
 
 /**

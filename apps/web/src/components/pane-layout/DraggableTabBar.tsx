@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import { toast } from "sonner";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
-import { fileDirtyStore, multiReviewStore, usePaneLayoutStore, useFileDirtyStore } from "@/stores";
-import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { multiReviewStore, usePaneLayoutStore, useFileDirtyStore } from "@/stores";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, getNativeAgentData, parseDraggableTabId } from "@/types/paneLayout";
 import { cn, createSessionKey } from "@/lib/utils";
@@ -63,7 +63,7 @@ export function DraggableTabBar({
 }: DraggableTabBarProps) {
   const nodeBackend = useScopeBackend();
   const removeTab = usePaneLayoutStore((state) => state.removeTab);
-  const multiReviews = useScopedStoreApi(multiReviewStore);
+  const multiReviews = useNodeScope().store(multiReviewStore);
   const launches = useEnvironmentTabLaunches(environmentId);
   // A launch lands in the focused pane, so its placeholder sits there too.
   const placeholders = isPaneFocused ? launches.filter((launch) => !launch.arrived) : [];
@@ -71,7 +71,7 @@ export function DraggableTabBar({
   const isDirty = useFileDirtyStore((state) => state.isDirty);
   const clearDirty = useFileDirtyStore((state) => state.clearDirty);
   // The node this pane's file drafts are kept on.
-  const draftScope = useShimNodeScope(fileDirtyStore.name);
+  const draftScope = useNodeScope();
 
   const discardTabDraft = useCallback(
     (tabId: string): Promise<void> => {

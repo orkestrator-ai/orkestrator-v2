@@ -11,11 +11,11 @@
  * source and attached too: six leaves, seven nodes. Every node gets one
  * started local environment whose layout is one terminal tab.
  *
- * The renderer runs with the runtime shim guard on
- * (`VITE_ORKESTRATOR_SHIM_GUARD=throw`, plan item 4004): start the command
- * profile with it for the browser; this spec's own Vite sets it for the
- * desktop. After every flow `window.orkestratorShimGuard.uses()` must be `[]`
- * and `mountedLeaves()` must name the in-tree node shown.
+ * The renderer is a development build, where a per-node store's hook outside
+ * a node scope throws (plan item 3018, which retired 4004's runtime shim
+ * guard with the shim it watched): such a throw lands in the node's error
+ * boundary. After every flow no node workspace shows a render failure, and
+ * the node shown (if another node) has its in-tree region mounted.
  *
  * Flows: open each node; a leaf's workspace surfaces (terminal, agent tab
  * with no turn, files, preview); the inactive-environment cycle from
@@ -24,7 +24,7 @@
  * window (desktop: z-order and focus); a grant lapse reopened without a
  * reload; attention from a hidden node.
  *
- * VITE_ORKESTRATOR_SHIM_GUARD=throw mise run dev:test --profile <cmd> --fixture --no-agent-credentials --headless
+ * mise run dev:test --profile <cmd> --fixture --no-agent-credentials --headless
  * mise run dev:test --profile <leaf> --fixture --no-agent-credentials --headless
  * ORKESTRATOR_AGENT_TEST_PROFILE=<cmd> ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=<leaf> \
  *   bunx playwright test --config e2e/agent-testing/playwright.multi-node.config.ts
@@ -67,7 +67,6 @@ import {
   raiseTerminalAttention,
   renderedTerminal,
   seedLayout,
-  shimGuard,
   startTopology,
   writeEvidence,
   type Topology,
@@ -184,22 +183,18 @@ async function terminalText(node: TopologyNode): Promise<string> {
 }
 
 /**
- * After every flow: no command-scope shim use was caught under a mounted
- * leaf, and the node shown (if another node) is mounted.
+ * After every flow: no node workspace shows a render failure (a store hook
+ * outside its node's scope throws in this development renderer), and the
+ * node shown (if another node) has its in-tree region mounted.
  */
-async function checkShimGuard(flow: string, shown: TopologyNode | null): Promise<void> {
-  const guard = await shimGuard(s().page);
-  const record = (evidence.shimGuard ??= {}) as Record<string, unknown>;
-  record[flow] = guard && {
-    mode: guard.mode,
-    uses: guard.uses,
-    mountedLeaves: guard.mountedLeaves.length,
-  };
-  expect(guard, "the renderer runs with VITE_ORKESTRATOR_SHIM_GUARD").not.toBeNull();
-  expect(guard!.mode).toBe("throw");
-  expect(guard!.uses, `no shim use under a mounted leaf (${flow})`).toEqual([]);
+async function checkScopes(flow: string, shown: TopologyNode | null): Promise<void> {
+  const page = s().page;
+  const failures = await page.getByTestId("node-workspace-error").count();
+  const record = (evidence.scopeChecks ??= {}) as Record<string, unknown>;
+  record[flow] = { renderFailures: failures };
+  expect(failures, `no node workspace render failure (${flow})`).toBe(0);
   if (shown && shown.nodeId !== s().topology.command.nodeId) {
-    expect(guard!.mountedLeaves).toContain(shown.nodeId);
+    await expect(inTreeRegion(page, shown.nodeId)).toHaveCount(1);
   }
 }
 
@@ -220,9 +215,9 @@ function saveEvidence(): void {
     kind: s().kind,
     leaves: s().topology.leaves.length,
     ...evidence,
-    shimGuard: {
-      ...(earlier.shimGuard as Record<string, unknown> | undefined),
-      ...(evidence.shimGuard as Record<string, unknown> | undefined),
+    scopeChecks: {
+      ...(earlier.scopeChecks as Record<string, unknown> | undefined),
+      ...(evidence.scopeChecks as Record<string, unknown> | undefined),
     },
   });
 }
@@ -332,7 +327,6 @@ async function openDesktopSurface(topology: Topology): Promise<Surface> {
         VITE_DEV_PORT: String(rendererPort),
         VITE_ORKESTRATOR_PROFILE: profile.id,
         VITE_ORKESTRATOR_PROFILE_FLAVOR: "agent-test",
-        VITE_ORKESTRATOR_SHIM_GUARD: "throw",
       },
     });
     ownProcessGroup(vite);
@@ -497,7 +491,7 @@ test("opens each node's environment in the window", async () => {
       await expect(page.locator('[data-testid="in-tree-workspace"]:visible')).toHaveCount(1);
       await expect(page.locator('iframe[title^="Workspace on "]')).toHaveCount(0);
     }
-    await checkShimGuard(`open ${node.name}`, node);
+    await checkScopes(`open ${node.name}`, node);
   }
   evidence.firstOpenMs = opened;
   if (s().responses) {
@@ -679,7 +673,7 @@ test("a leaf's workspace works: terminal, agent tab without a turn, files, previ
           : "not-rendered"
         : "unsupported-on-browser-same-as-command-node",
   };
-  await checkShimGuard("surfaces", leaf);
+  await checkScopes("surfaces", leaf);
 });
 
 test("inactive-environment cycle on a leaf: start, switch away, finish, return, reload", async () => {
@@ -694,12 +688,12 @@ test("inactive-environment cycle on a leaf: start, switch away, finish, return, 
   await openNode(topology.command);
   const hiddenAt = Date.now();
   await page.waitForTimeout(9_000);
-  await checkShimGuard("cycle hidden", topology.command);
+  await checkScopes("cycle hidden", topology.command);
   // Return: the output produced while hidden is there.
   await openNode(leaf);
   await expect.poll(() => terminalText(leaf), { timeout: 30_000 }).toContain(`cycle-42-${nonce}`);
   const returnedAfterMs = Date.now() - hiddenAt;
-  await checkShimGuard("cycle return", leaf);
+  await checkScopes("cycle return", leaf);
   // Reload: the same output from the authoritative snapshot.
   await page.reload();
   await expect(page.getByTestId("project-search-bar")).toBeVisible({ timeout: 90_000 });
@@ -713,7 +707,7 @@ test("inactive-environment cycle on a leaf: start, switch away, finish, return, 
     outputAfterReturn: true,
     outputAfterReload: true,
   };
-  await checkShimGuard("cycle reload", leaf);
+  await checkScopes("cycle reload", leaf);
 });
 
 test("reload rehydrates the shown leaf, painting its snapshot first", async () => {
@@ -777,7 +771,7 @@ test("reload rehydrates the shown leaf, painting its snapshot first", async () =
   expect(paint.snapshot!).toBeLessThan(paint.live!);
   // Read-only until live, then the live workspace replaces it.
   await expect(inTreeRegion(page, leaf.nodeId).getByTestId("node-snapshot-preview")).toHaveCount(0);
-  await checkShimGuard("reload", leaf);
+  await checkScopes("reload", leaf);
 });
 
 test("six-node switching with budget eviction", async () => {
@@ -791,7 +785,7 @@ test("six-node switching with budget eviction", async () => {
       const view = await lifecycleView(page);
       switches.push({ round, node: leaf.name, ms, tier: view.tiers[leaf.nodeId] ?? "?" });
       expect(view.tiers[leaf.nodeId]).toBe("live");
-      await checkShimGuard(`switch ${round} ${leaf.name}`, leaf);
+      await checkScopes(`switch ${round} ${leaf.name}`, leaf);
     }
   }
   await page.waitForTimeout(3_000);
@@ -876,7 +870,7 @@ test("six-node switching with budget eviction", async () => {
     reopenFromSummaryMs: reopenMs,
     afterReopen: { tiers: Object.values(reopened.tiers), heapUsedBytes: reopened.heapUsedBytes },
   };
-  await checkShimGuard("six-node", leaves[0]!);
+  await checkScopes("six-node", leaves[0]!);
 });
 
 test("previews from two nodes in one window keep their z-order and focus", async () => {
@@ -1071,7 +1065,7 @@ test("previews from two nodes in one window keep their z-order and focus", async
       },
     };
     expect(focusedAfter.some(isLeafPreview), "a hidden preview keeps no focus").toBe(false);
-    await checkShimGuard("previews", leaf);
+    await checkScopes("previews", leaf);
   } finally {
     for (const node of [topology.command, leaf]) await seedLayout(node).catch(() => undefined);
     for (const server of servers) server.close();
@@ -1175,7 +1169,7 @@ test("a lapsed grant reopens without a reload", async () => {
     grantsAfterTerminalWrite,
     terminalHistoryNoticeAfterLapse: noticeAfterLapse,
   };
-  await checkShimGuard("grant lapse", leaf);
+  await checkScopes("grant lapse", leaf);
 });
 
 test("attention from a hidden node reaches the window", async () => {
@@ -1208,5 +1202,5 @@ test("attention from a hidden node reaches the window", async () => {
     cues: after.sounds - before.sounds,
     notifications: after.notifications - before.notifications,
   };
-  await checkShimGuard("attention", topology.command);
+  await checkScopes("attention", topology.command);
 });

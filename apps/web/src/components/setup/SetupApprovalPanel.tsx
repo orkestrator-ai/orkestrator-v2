@@ -7,7 +7,7 @@ import {
   approveSetupCommandsOnNodes,
   type SetupApprovalNodeResult,
 } from "@/lib/portal/setup-approvals";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { approveSetupRuntime, forceResolveSetupRuntime } from "@/lib/setup-commands";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -40,7 +40,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
   const nodeBackend = useScopeBackend();
   const federation = useFederation();
   // The node whose environment this is.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   const [approval, setApproval] = useState<EnvironmentSetupApproval | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);

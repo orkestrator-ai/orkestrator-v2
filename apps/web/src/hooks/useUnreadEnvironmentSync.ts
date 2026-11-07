@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { showEnvironmentUnreadToast } from "@/components/environments/environmentUnreadToast";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -20,7 +20,7 @@ export function useUnreadEnvironmentSync(): void {
   const nodeBackend = useScopeBackend();
   const selectedEnvironmentId = useVisibleEnvironmentId();
   // The node whose environments this watches: the one the selector below reads.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   const environments = useEnvironmentStore((state) => state.environments);
   // The environment the user just switched to, until its row has been seen.
   // Work that finishes while it is already on screen clears silently instead

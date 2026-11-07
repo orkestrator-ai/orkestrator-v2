@@ -9,7 +9,7 @@ import {
   projectHomeEnvironmentIds,
 } from "@/lib/coordinator-active-turn";
 import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { environmentStore } from "@/stores/environmentStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { RunCoordinatorAction } from "./useCoordinatorActions";
@@ -36,7 +36,7 @@ export function useCoordinatorGitActions({
 }: UseCoordinatorGitActionsOptions) {
   const nodeBackend = useScopeBackend();
   // The node whose project this is: the one `useEnvironmentStore` reads.
-  const scope = useShimNodeScope("environment");
+  const scope = useNodeScope();
   const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const lifetime = new AbortController();

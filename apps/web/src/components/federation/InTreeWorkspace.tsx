@@ -22,7 +22,6 @@ import {
   useWindowScope,
 } from "@/lib/node-scope/providers";
 import { constantSignal } from "@/lib/node-scope/signal";
-import { useInTreeLeafMount } from "@/lib/node-scope/shim-under-leaf-guard";
 import { cn } from "@/lib/utils";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useFederation } from "./FederationProvider";
@@ -103,8 +102,6 @@ interface OpenedWorkspace {
 }
 
 export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: boolean }) {
-  // Plan item 4004: while mounted, a command-scope shim use of a workspace store is caught.
-  useInTreeLeafMount(nodeId);
   const { portalState } = useFederation();
   const machine = nodeName(portalState.nodes, nodeId);
   const [attempt, setAttempt] = useState(0);

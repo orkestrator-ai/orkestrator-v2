@@ -103,9 +103,10 @@ export function useNodeScope(): NodeScope {
 
 /**
  * The nearest `NodeScopeProvider`'s scope, or `null` outside one, in every
- * mode. For the converted-store shim (`scopedStoreHook`, plan item 3001),
- * which must know when it falls back to the command scope; new code uses
- * `useNodeScope()`.
+ * mode. For the few readers that render both under a provider and outside
+ * every node (a window-level indicator that only narrows to a node when it
+ * has one); a per-node store's hook never falls back (plan item 3018), and new
+ * code uses `useNodeScope()`.
  */
 export function useOptionalNodeScope(): NodeScope | null {
   return useContext(NodeScopeContext);

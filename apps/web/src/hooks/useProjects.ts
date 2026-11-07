@@ -9,7 +9,7 @@ import { backendApiForScope } from "@/lib/backend/client";
 import { createDockerSkillsApi } from "@/lib/backend/docker-skills";
 import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { defineScopedSlot } from "@/lib/node-scope-slots";
 import {
   resolveProjectArrangementIntent,
@@ -88,7 +88,7 @@ export const loadProjectsFromBackend = (scope: NodeScope): Promise<void> => {
 export function useProjects() {
   // The node whose projects this reads: the nearest node scope, which is also
   // the one `useProjectStore` reads below.
-  const scope = useShimNodeScope("project");
+  const scope = useNodeScope();
   const projects = useProjectStore((state) => state.projects);
   const isLoading = useProjectStore((state) => state.isLoading);
   const error = useProjectStore((state) => state.error);

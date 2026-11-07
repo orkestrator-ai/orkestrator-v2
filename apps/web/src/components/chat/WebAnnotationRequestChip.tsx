@@ -4,7 +4,7 @@ import {
   parseWebAnnotationRequestMarker,
   type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { openWebAnnotationRequest } from "@/lib/web-annotations/navigation";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 
@@ -36,7 +36,7 @@ export function WebAnnotationRequestChip({
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   // The chat's own node: its active environment and its annotations.
-  const scope = useShimNodeScope(paneLayoutStore.name);
+  const scope = useNodeScope();
   return (
     <div
       className="mb-2 flex flex-wrap items-center gap-2 text-xs"

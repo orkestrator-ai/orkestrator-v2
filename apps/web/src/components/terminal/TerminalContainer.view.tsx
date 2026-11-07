@@ -45,7 +45,7 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { filesPanelStore } from "@/stores/filesPanelStore";
-import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -87,9 +87,7 @@ import { onReconnectInScope } from "@/lib/node-scope-slots";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
-import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
-import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
 import {
@@ -145,18 +143,18 @@ export function TerminalContainer({
   onReveal,
 }: TerminalContainerProps) {
   // This node's Multi Review workflows and tab launches (plan item 3003).
-  const multiReviewScope = useShimNodeScope(multiReviewStore.name);
-  const tabLaunchScope = useShimNodeScope(tabLaunchStore.name);
+  const multiReviewScope = useNodeScope();
+  const tabLaunchScope = useNodeScope();
   // This node's environments (plan item 3004).
-  const environments = useScopedStoreApi(environmentStore);
+  const environments = useNodeScope().store(environmentStore);
   // This node's build pipelines (plan item 3011).
-  const buildPipelines = useScopedStoreApi(buildPipelineStore);
+  const buildPipelines = useNodeScope().store(buildPipelineStore);
   // This node's terminal sessions (plan item 3010).
-  const terminalScope = useShimNodeScope(terminalSessionStore.name);
+  const terminalScope = useNodeScope();
   const terminalSessions = terminalScope.store(terminalSessionStore);
-  const nativeComposeScope = useShimNodeScope(nativeComposeStore.name);
+  const nativeComposeScope = useNodeScope();
   // This node's pane layouts (plan item 3013).
-  const paneLayoutScope = useShimNodeScope(paneLayoutStore.name);
+  const paneLayoutScope = useNodeScope();
   const paneLayouts = paneLayoutScope.store(paneLayoutStore);
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
@@ -2071,7 +2069,7 @@ export function TerminalContainer({
   const pendingFileOpen = useFilesPanelStore((state) =>
     state.pendingFileOpens.find((request) => request.environmentId === environmentId),
   );
-  const filesPanel = useScopedStoreApi(filesPanelStore);
+  const filesPanel = useNodeScope().store(filesPanelStore);
   useEffect(() => {
     if (!pendingFileOpen || pendingFileOpen.environmentId !== environmentId) return;
     if (!isActive || !isEnvironmentRunning || !(containerId || isLocalEnvironmentReady)) return;

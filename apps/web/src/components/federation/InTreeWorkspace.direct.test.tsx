@@ -29,6 +29,7 @@ import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-defaults";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useBugReportStore } from "@/stores/bugReportStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
@@ -192,6 +193,7 @@ afterEach(() => {
   useInTreeNodesStore.setState({ nodes: [] });
   setFilesPanelTestState({ isOpen: false });
   useAppDialogStore.setState({ request: null });
+  useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null });
   portalStore.store.setState(INITIAL_PORTAL, true);
   resetReadCoordinatorForTests();
   resetWindowScopeForTests();
@@ -369,6 +371,14 @@ test("select: Add Project and New Environment open in the node's workspace once 
   expect(screen.queryByText(/Configure a new Ork environment/u)).toBeNull();
   loadConfig(scope);
   expect(await screen.findByText(/Configure a new Ork environment/u)).toBeTruthy();
+  expect(exchanged("select")).toEqual([]);
+});
+
+test("select: a request's bug-report flag opens the window's sheet on the node's scope", async () => {
+  // A request made while the node was still shown by a realm (0001's flag).
+  await openLeaf({ projectId: project.id, bugReport: true });
+  await waitFor(() => expect(useBugReportStore.getState().sheetOpen).toBe(true));
+  expect(useBugReportStore.getState().sheetNodeId).toBe(LEAF);
   expect(exchanged("select")).toEqual([]);
 });
 

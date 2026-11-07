@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { test as base, type BrowserContext, type Page, type Request } from "@playwright/test";
+import { observeCommandInvokes } from "./invoke-observer";
 
 export * from "@playwright/test";
 
@@ -28,6 +29,8 @@ export const test = base.extend<{ modulesThroughChromium: boolean }>({
   modulesThroughChromium: [false, { option: true }],
   context: async ({ context, modulesThroughChromium }, use) => {
     if (!modulesThroughChromium) await fetchModulesOutsideChromium(context);
+    // Opt-in (plan item 2010): which path each invoke and listen took.
+    await observeCommandInvokes(context);
     await use(context);
   },
 });
@@ -201,6 +204,7 @@ export async function runDirectLoads(
  * for every context a case creates for a second client.
  */
 export async function fetchModulesOutsideChromium(context: BrowserContext): Promise<void> {
+  await observeCommandInvokes(context);
   context.on("page", (page) => retryNavigationsOnNetworkChange(page));
   const cache = new ModuleCache();
   await context.route(LOOPBACK_URL, async (route) => {

@@ -37,6 +37,7 @@ import { NO_ARGS, nodesApi } from "./domains/nodes";
 import { createNodeClientRegistry, type NodeClientRegistry } from "./node-clients";
 import type { NodeScope } from "./node-scope";
 import type { WindowScope } from "./window-scope";
+import { kanbanClient } from "@orkestrator/protocol/contract/domains/kanban";
 
 export const SCOPE_PROOF_GLOBAL = "orkestratorScopeProof";
 
@@ -259,7 +260,9 @@ async function proveResourceChanged(
   if (!projectId) return { projectId, received: false, ms: 0, seenByOtherScope: 0 };
   const started = performance.now();
   const before = own.changes.length;
-  const task = await own.scope.client.invokeRaw<{ id: string }>("add_kanban_task", {
+  // Through the scope's `kanban` client (plan item 7008): the adapter its node's hello implies.
+  const kanban = own.scope.domain(kanbanClient).api();
+  const task = await kanban.add_kanban_task({
     projectId,
     title: `scope proof ${nonce}`,
     description: "Plan item 2013 scope proof; deleted at once.",
@@ -273,9 +276,7 @@ async function proveResourceChanged(
   );
   const ms = elapsed(started);
   if (task?.id) {
-    await own.scope.client
-      .invokeRaw("delete_kanban_task", { taskId: task.id })
-      .catch(() => undefined);
+    await kanban.delete_kanban_task({ taskId: task.id }).catch(() => undefined);
   }
   // Give a stray cross-scope delivery the chance to arrive.
   if (settleMs > 0) await new Promise((resolve) => setTimeout(resolve, settleMs));

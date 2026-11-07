@@ -832,6 +832,42 @@ export const nodeMailClient = domainClient(nodeMail, {
   register row serves these domains; the conditional snapshot reads
   (`knownGeneration`/`knownRevision`, `knownDigest`) keep answering the
   legacy bare shapes, which the result schemas include.
+- **Kanban, agent mail, accounts and MCP**
+  ([7008](../../plans/unified/7008-domain-kanban-mail-accounts-mcp.md)):
+  `kanban` (29 commands: tickets with their comments, images and criterion
+  checks, project notes, feature plans and the planning exchange, the Linear
+  connection), `agent-mail` (23: mailboxes, inboxes, messages and
+  conversations on one node, delivery retries, the agent registry and the
+  messaging settings; mail between nodes stays `node-mail`), `accounts` (33:
+  agent accounts and sign-in, usage limits, plan usage and history, the
+  coordinator account-switch grant, OpenCode provider logins, the Cursor SDK
+  login) and `mcp` (13: MCP management and its rollout gate), all at
+  version 1 (min 1). Results are model records over the protocol's own types
+  (`McpManagementSnapshot` keeps its `protocolVersion`, Appendix F) or open
+  structs where the type lives in the backend. Kanban ticket ids are the
+  same on every node, so a client keeps results under the node it asked.
+  `access` is `workspace`, except `admin` for the MCP rollout gate
+  (`get_`/`set_mcp_management_rollout`). The 29 strict accounts handlers
+  (`assertOnlyKeys`) and six strict Kanban and feature-planning handlers drop
+  unknown keys; the lenient mail,
+  MCP and Linear handlers read every argument as `optionalKey(Unknown)` and
+  keep their own messages. Critical keys: `requestId` on `add_kanban_task`,
+  `add_kanban_comment` and both mail sends; `markdown`/`sections` on
+  `add_kanban_task` and `update_kanban_task`; `projectId` on
+  `add_kanban_comment`; `operationId` on `start_feature_planning` and both
+  login cancels; `reauthenticate` on `start_agent_account_login`; `metadata`
+  on `set_opencode_provider_api_key`; `inputs` on
+  `start_opencode_provider_login`; `now` on `retry_agent_mail_inject`;
+  `strictProjectScope` on `list_agent_mailboxes`. None of these commands was
+  capability-gated, so nothing is folded into a version: a node that lacks a
+  newer command answers `unknown-command`, which the callers already read.
+  Each client is one function per command (`commandApi`); the web calls them
+  through `lib/node-scope/domains/{kanban,agent-mail,accounts,mcp}.ts`, the
+  per-machine account and MCP functions (`accountsOn`, `mcpOn`) on version 0
+  for another machine. No register row is served by these domains: the
+  feature-plan build fallback, the self-reminder carrier, the MCP bridge
+  report and the usage-limit text rows are renderer or bridge paths and are
+  unaffected.
 - **Adapter list.** Every domain client is defined under
   `packages/protocol/src/contract/domains/`, one per domain, and listed in
   `DOMAIN_CLIENTS` (`contract/client-adapters.ts`).

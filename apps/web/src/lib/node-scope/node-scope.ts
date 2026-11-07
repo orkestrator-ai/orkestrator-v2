@@ -23,6 +23,7 @@ import type { NodeClient, ReadableSignal } from "@orkestrator/protocol/node-clie
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { releaseNodeFromBudgets, type WindowByteBudgets } from "./byte-budget";
 import type { Lifetime } from "./lifetime";
+import { PrefetchedCommandCache } from "./prefetched-command-cache";
 import type {
   ScopedServiceDef,
   ScopedServiceHandle,
@@ -79,6 +80,12 @@ export class NodeScope {
   readonly budgets: WindowByteBudgets;
   readonly tier: ReadableSignal<NodeScopeTier>;
   readonly health: ReadableSignal<NodeScopeHealth>;
+  /**
+   * Batched read answers in front of this node's commands (`invokeInScope`
+   * consults it). Per scope because identical reads on two nodes differ;
+   * cleared on dispose.
+   */
+  readonly prefetched = new PrefetchedCommandCache();
 
   private readonly lifetime: Lifetime;
   private readonly tierSignal: WritableSignal<NodeScopeTier>;
@@ -109,6 +116,7 @@ export class NodeScope {
     this.lifetime.onClose("stores", () => {
       this.stores.clear();
       this.storeNames.clear();
+      this.prefetched.clear();
     });
   }
 

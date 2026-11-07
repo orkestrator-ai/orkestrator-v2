@@ -114,6 +114,7 @@ import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CommandNodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const log = createLogger("web.app");
 
@@ -487,22 +488,21 @@ function ConnectedApp() {
         setConnectionScopeResolved(true);
       });
     const unsubscribeConnections = subscribeToConnections(applyConnectionList);
-    const listenDesktop = window.orkestrator?.listen;
-    const unsubscribeUnavailable =
-      typeof listenDesktop === "function"
-        ? listenDesktop<{ message?: string }>("local-backend-unavailable", (payload) => {
-            if (!active || window.orkestratorWorkspaceTarget) return;
-            setLocalBackendUnavailableMessage(
-              payload.message
-                ? `The Local backend stopped: ${payload.message}`
-                : "The Local backend stopped. Restart Orkestrator to recover local work.",
-            );
-          })
-        : undefined;
+    const unsubscribeUnavailable = commandClient().listenRaw<{ message?: string }>(
+      "local-backend-unavailable",
+      (payload) => {
+        if (!active || window.orkestratorWorkspaceTarget) return;
+        setLocalBackendUnavailableMessage(
+          payload.message
+            ? `The Local backend stopped: ${payload.message}`
+            : "The Local backend stopped. Restart Orkestrator to recover local work.",
+        );
+      },
+    );
     return () => {
       active = false;
       unsubscribeConnections();
-      unsubscribeUnavailable?.();
+      unsubscribeUnavailable();
       setTransportDisconnected("desktop-connection", false);
     };
   }, []);

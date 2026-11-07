@@ -61,6 +61,7 @@ import {
   useBlockingOverlay,
 } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 interface BrowserTabProps {
   tabId: string;
@@ -306,7 +307,7 @@ function ManualBrowserTab({
 
   useEffect(() => {
     if (!nativeBrowserPreview || !browserPreviewSupported) return;
-    return window.orkestrator?.listen<BrowserPreviewState>(
+    return commandClient().listenRaw<BrowserPreviewState>(
       "browser-preview-state",
       applyNativeState,
     );

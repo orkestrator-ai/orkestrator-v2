@@ -40,6 +40,7 @@ import {
   webAnnotationCommand,
   webAnnotationErrorDetail,
 } from "./client";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 interface Work {
   full: boolean;
@@ -156,10 +157,8 @@ function isNotFound(error: unknown): boolean {
 }
 
 function listen<T>(event: string, callback: (payload: T) => void): (() => void) | undefined {
-  const api = window.orkestrator;
-  if (!api || typeof api.listen !== "function") return undefined;
   try {
-    return api.listen<T>(event, callback);
+    return commandClient().listenRaw<T>(event, callback);
   } catch {
     return undefined;
   }

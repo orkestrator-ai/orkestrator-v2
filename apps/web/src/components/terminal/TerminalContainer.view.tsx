@@ -116,6 +116,7 @@ import {
   handoffSetupFocusToStartupAgent,
   seedDeferredNativePlatform,
 } from "./TerminalContainer.helpers";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const log = createLogger("terminal");
 const setupLog = createLogger("terminal.setup");
@@ -1640,9 +1641,9 @@ export function TerminalContainer({
   );
 
   useEffect(() => {
-    if (!isActive || !window.orkestrator) return;
+    if (!isActive) return;
 
-    return window.orkestrator.listen<BrowserPreviewOpenLinkEvent>(
+    return commandClient().listenRaw<BrowserPreviewOpenLinkEvent>(
       "browser-preview-open-link",
       ({ tabId, url, service }) => {
         const sourcePane = usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId);

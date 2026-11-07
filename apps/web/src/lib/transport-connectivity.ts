@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { LOCAL_CONNECTION_ID, type ConnectionList } from "@orkestrator/protocol/connections";
 import { getReadCoordinator } from "@/lib/read-coordinator";
 import type { GatewayEventStreamConnectionState } from "@/lib/native/web-gateway";
+import { commandEventStreamConnection } from "@/lib/node-scope/command-client";
 
 /**
  * Whether the renderer's transport to its backend is known to be down.
@@ -100,9 +101,9 @@ interface EventStreamConnectionSource {
  * `eventStreamConnection`; its owner is the connection list (see `App`).
  */
 export function startTransportConnectivity(
-  source: EventStreamConnectionSource | undefined = typeof window === "undefined"
-    ? undefined
-    : window.orkestrator,
+  source: EventStreamConnectionSource | undefined = {
+    eventStreamConnection: commandEventStreamConnection(),
+  },
 ): () => void {
   const connection = source?.eventStreamConnection;
   if (!connection) return () => undefined;

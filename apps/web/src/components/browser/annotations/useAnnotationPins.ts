@@ -30,6 +30,7 @@ import { loadWebAnnotationCapture } from "@/lib/web-annotations/assets";
 import { describeWebAnnotationError } from "@/lib/web-annotations/client";
 import { anchorStateLabel, samePage, sameService, type CurrentAnnotationPage } from "./format";
 import type { ShowOnPageResult } from "./panel-context";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const PIN_CAPTURE_CONCURRENCY = 4;
 const SHOW_ON_PAGE_TIMEOUT_MS = 10_000;
@@ -269,30 +270,31 @@ export function useAnnotationPins({
   // Main clears pins for every new document (reload, navigation, hot reload)
   // and says so; results that move afterwards are read back on request.
   useEffect(() => {
-    const listen = window.orkestrator?.listen;
-    if (typeof listen !== "function") return;
-    return listen<BrowserPreviewCaptureEvent>(BROWSER_PREVIEW_CAPTURE_EVENT, (event) => {
-      if (!event || event.tabId !== tabId || !wantedRef.current) return;
-      const api = getBrowserPreviewCaptureApi();
-      if (!api) return;
-      if (event.status === "pins-invalidated") {
-        // A new document: the previous page's results go now, not when the
-        // re-sent pins come back.
-        noteGeneration(event.documentGeneration);
-        applyResults((current) => currentDocumentResults(current, generationRef.current));
-        void send(lastPinsRef.current).catch(() => undefined);
-      } else if (event.status === "pins-changed" && api.getPinResults) {
-        noteGeneration(event.documentGeneration);
-        const view = viewRef.current;
-        void api
-          .getPinResults(tabId)
-          .then((snapshot) => {
-            if (!snapshot || !wantedRef.current) return;
-            applyResults(() => resultMap(snapshot.results), view, snapshot.documentGeneration);
-          })
-          .catch(() => undefined);
-      }
-    });
+    return commandClient().listenRaw<BrowserPreviewCaptureEvent>(
+      BROWSER_PREVIEW_CAPTURE_EVENT,
+      (event) => {
+        if (!event || event.tabId !== tabId || !wantedRef.current) return;
+        const api = getBrowserPreviewCaptureApi();
+        if (!api) return;
+        if (event.status === "pins-invalidated") {
+          // A new document: the previous page's results go now, not when the
+          // re-sent pins come back.
+          noteGeneration(event.documentGeneration);
+          applyResults((current) => currentDocumentResults(current, generationRef.current));
+          void send(lastPinsRef.current).catch(() => undefined);
+        } else if (event.status === "pins-changed" && api.getPinResults) {
+          noteGeneration(event.documentGeneration);
+          const view = viewRef.current;
+          void api
+            .getPinResults(tabId)
+            .then((snapshot) => {
+              if (!snapshot || !wantedRef.current) return;
+              applyResults(() => resultMap(snapshot.results), view, snapshot.documentGeneration);
+            })
+            .catch(() => undefined);
+        }
+      },
+    );
   }, [applyResults, noteGeneration, send, tabId]);
 
   useEffect(

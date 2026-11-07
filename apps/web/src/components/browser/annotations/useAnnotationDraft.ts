@@ -29,6 +29,7 @@ import {
   readLocalDraft,
   writeLocalDraft,
 } from "@/lib/web-annotations/local-drafts";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 export const DRAFT_AUTOSAVE_MS = 800;
 /** Local copies are written at most this often while typing. */
@@ -327,9 +328,7 @@ export function useAnnotationDraft({
   // A reconnected gateway flushes text typed while it was away.
   useEffect(() => {
     if (!enabled) return;
-    const listen = window.orkestrator?.listen;
-    if (typeof listen !== "function") return;
-    return listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+    return commandClient().listenRaw(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
       if (!conflictRef.current && dirtyRef.current) {
         cancelRetry();
         retryAttemptRef.current = 0;

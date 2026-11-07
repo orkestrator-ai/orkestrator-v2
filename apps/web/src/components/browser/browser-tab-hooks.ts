@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type RefObject } from "react";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 export const BLOCKING_OVERLAY_SELECTOR = [
   '[role="dialog"]',
@@ -133,7 +134,7 @@ export function useAddressBarShortcut({
   useEffect(() => {
     if (!isActive || !enabled) return;
 
-    return window.orkestrator?.listen<string>("browser-preview-focus-address", (requestedTabId) => {
+    return commandClient().listenRaw<string>("browser-preview-focus-address", (requestedTabId) => {
       if (requestedTabId !== tabId) return;
       if (owningPaneId) {
         setActivePane(owningPaneId, environmentId);

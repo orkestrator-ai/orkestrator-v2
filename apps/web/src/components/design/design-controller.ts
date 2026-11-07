@@ -20,6 +20,7 @@ import {
   type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 import { createUuid } from "@/lib/uuid";
 import { getReadCoordinator, type ReadSubscription } from "@/lib/read-coordinator";
 import {
@@ -194,27 +195,25 @@ export class DesignCanvasController {
   }
 
   private activate() {
-    const listen = window.orkestrator?.listen;
-    if (typeof listen === "function") {
-      const hint = listen<DesignChange & { generation?: string }>(DESIGN_EVENT, (event) => {
-        if (event?.canvasId !== this.canvasId) return;
-        if (
-          event.generation &&
-          this.projection.generation &&
-          event.generation !== this.projection.generation
-        )
-          this.update((projection) => ({ ...projection, snapshot: "stale" }));
-        void this.refresh();
-      });
-      const reconnect = listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
-        this.capabilities = undefined;
-        this.update((projection) => ({ ...projection, generation: undefined }));
-        void this.refresh();
-        this.reconcilePending();
-        this.pump();
-      });
-      this.unlisten.push(hint, reconnect);
-    }
+    const client = commandClient();
+    const hint = client.listenRaw<DesignChange & { generation?: string }>(DESIGN_EVENT, (event) => {
+      if (event?.canvasId !== this.canvasId) return;
+      if (
+        event.generation &&
+        this.projection.generation &&
+        event.generation !== this.projection.generation
+      )
+        this.update((projection) => ({ ...projection, snapshot: "stale" }));
+      void this.refresh();
+    });
+    const reconnect = client.listenRaw(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+      this.capabilities = undefined;
+      this.update((projection) => ({ ...projection, generation: undefined }));
+      void this.refresh();
+      this.reconcilePending();
+      this.pump();
+    });
+    this.unlisten.push(hint, reconnect);
     void this.refresh();
     // The coordinator pauses periodic reads while hidden and reconciles on return.
     // The activation read above still subscribes to hints before reading.

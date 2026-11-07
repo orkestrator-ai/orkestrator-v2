@@ -12,6 +12,8 @@ import {
 
 import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
+import { commandTransportAvailable } from "@/lib/node-scope/command-client";
 
 export interface EnvironmentPreviewState {
   snapshot: PreviewRegistrySnapshot | null;
@@ -258,15 +260,13 @@ let syncStarted = false;
  * events are hints, snapshots are authoritative.
  */
 export function ensurePreviewServiceSync(): void {
-  if (syncStarted || typeof window === "undefined" || !window.orkestrator?.listen) return;
+  if (syncStarted || !commandTransportAvailable()) return;
   syncStarted = true;
-  window.orkestrator.listen<PreviewServicesChangedEvent>(
-    PREVIEW_SERVICES_CHANGED_EVENT,
-    (event) => {
-      usePreviewServiceStore.getState().handleChanged(event);
-    },
-  );
-  window.orkestrator.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+  const client = commandClient();
+  client.listenRaw<PreviewServicesChangedEvent>(PREVIEW_SERVICES_CHANGED_EVENT, (event) => {
+    usePreviewServiceStore.getState().handleChanged(event);
+  });
+  client.listenRaw(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
     const store = usePreviewServiceStore.getState();
     void store.loadCapabilities({ force: true }).then(() => {
       for (const environmentId of Object.keys(usePreviewServiceStore.getState().environments)) {

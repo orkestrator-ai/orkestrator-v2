@@ -13,12 +13,14 @@ import { releasedPortRebind } from "./released-port-rebind";
 import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion";
 import { smallFakePid } from "./small-fake-pid";
 import { subprocessWithoutBudget } from "./subprocess-without-budget";
+import { windowOrkestratorDirect } from "./window-orkestrator-direct";
 
 export const SOURCE_GUARDS: readonly SourceGuard[] = [
   sleepBeforeNegativeAssertion,
   releasedPortRebind,
   subprocessWithoutBudget,
   smallFakePid,
+  windowOrkestratorDirect,
 ];
 
 export const SCANNED_ROOTS = ["tests", "apps", "bridges", "packages", "scripts", "e2e"] as const;
@@ -138,20 +140,67 @@ export function listTestSources(root: string): string[] {
   return files.sort();
 }
 
-/** Walks the repository's test sources once and runs every guard over them. */
+/**
+ * Production sources under `roots`: script files that are neither test
+ * sources nor declarations, repository-relative and sorted.
+ */
+export function listProductionSources(root: string, roots: readonly string[]): string[] {
+  const files: string[] = [];
+  const visit = (relativeDirectory: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(path.join(root, relativeDirectory), { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const relative = `${relativeDirectory}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!EXCLUDED_DIRECTORIES.has(entry.name)) visit(relative);
+      } else if (
+        entry.isFile() &&
+        SCRIPT_FILE.test(entry.name) &&
+        !entry.name.endsWith(".d.ts") &&
+        !isTestSource(relative)
+      ) {
+        files.push(relative);
+      }
+    }
+  };
+  for (const sourceRoot of new Set(roots)) visit(sourceRoot);
+  return [...new Set(files)].sort();
+}
+
+/**
+ * Walks the repository's test sources once and runs every test-source guard
+ * over them, then the production sources of guards that read those instead.
+ */
 export function scanRepository(
   root: string,
   guards: readonly SourceGuard[] = SOURCE_GUARDS,
 ): Findings {
   const findings = emptyFindings();
-  for (const relative of listTestSources(root)) {
+  const scanFile = (relative: string, fileGuards: readonly SourceGuard[]) => {
+    if (fileGuards.length === 0) return;
     const file: ScannedFile = {
       path: relative,
       source: readFileSync(path.join(root, relative), "utf8"),
       isBunTest: BUN_TEST_FILE.test(relative),
     };
-    for (const finding of scanSource(file, guards))
+    for (const finding of scanSource(file, fileGuards))
       (findings[finding.guard][finding.file] ??= []).push(finding);
+  };
+  const testGuards = guards.filter((guard) => !guard.productionRoots);
+  for (const relative of listTestSources(root)) scanFile(relative, testGuards);
+  const productionGuards = guards.filter((guard) => guard.productionRoots);
+  const roots = productionGuards.flatMap((guard) => guard.productionRoots ?? []);
+  for (const relative of listProductionSources(root, roots)) {
+    const under = (sourceRoot: string) => relative.startsWith(`${sourceRoot}/`);
+    scanFile(
+      relative,
+      productionGuards.filter((guard) => guard.productionRoots?.some(under)),
+    );
   }
   return findings;
 }

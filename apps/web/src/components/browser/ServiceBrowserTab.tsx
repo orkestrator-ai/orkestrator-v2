@@ -86,6 +86,7 @@ import { PreviewDiagnostics } from "./PreviewDiagnostics";
 import { PreviewServiceDialog } from "./PreviewServiceDialog";
 import { PreviewSessionBanner, PreviewSessionImportDialog } from "./PreviewSessionImport";
 import { PreviewServicePicker, ReadinessDot } from "./PreviewServicePicker";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
   default: (await import("@/components/environments/EnvironmentSettingsDialog"))
@@ -383,7 +384,7 @@ function ServicePreview({
 
   useEffect(() => {
     if (!nativeBrowserPreview) return;
-    return window.orkestrator?.listen<BrowserPreviewState>(
+    return commandClient().listenRaw<BrowserPreviewState>(
       "browser-preview-state",
       applyNativeState,
     );

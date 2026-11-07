@@ -1,6 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { createWindowOrkestratorClient } from "./command-client";
+import {
+  commandEventStreamConnection,
+  commandTransportAvailable,
+  createWindowOrkestratorClient,
+} from "./command-client";
 
 type Api = NonNullable<Window["orkestrator"]>;
 type StreamState = "idle" | "connecting" | "connected" | "disconnected";
@@ -111,5 +115,15 @@ describe("createWindowOrkestratorClient", () => {
     client.listenRaw("resource-changed", () => {});
     expect(host.listenerCount()).toBe(1);
     unrelated();
+  });
+
+  test("reports whether the host is installed and hands out its raw stream state", () => {
+    const host = fakeHost();
+    expect(commandTransportAvailable(() => undefined)).toBe(false);
+    expect(commandTransportAvailable(() => host.api)).toBe(true);
+    expect(commandEventStreamConnection(() => undefined)).toBeUndefined();
+    const stream = commandEventStreamConnection(() => host.api);
+    host.setStream("disconnected");
+    expect(stream?.state()).toBe("disconnected");
   });
 });

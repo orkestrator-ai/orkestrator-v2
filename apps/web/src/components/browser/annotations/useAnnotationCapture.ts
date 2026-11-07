@@ -59,6 +59,7 @@ import {
 } from "@/lib/web-annotations/client";
 import { redactPngDataUrl, type RedactionRect } from "@/lib/web-annotations/redaction";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const SELECTION_POLL_MS = 400;
 /** Bounded background retry for acknowledged-but-uncleared and interrupted saves. */
@@ -459,9 +460,8 @@ export function useAnnotationCapture({
 
   useEffect(() => {
     if (!api) return;
-    const listen = window.orkestrator?.listen;
-    if (typeof listen !== "function") return;
-    const unlistenCapture = listen<BrowserPreviewCaptureEvent>(
+    const client = commandClient();
+    const unlistenCapture = client.listenRaw<BrowserPreviewCaptureEvent>(
       BROWSER_PREVIEW_CAPTURE_EVENT,
       (event) => {
         if (!event) return;
@@ -477,12 +477,12 @@ export function useAnnotationCapture({
       },
     );
     // A reconnected gateway is the moment interrupted uploads can finish.
-    const unlistenReconnect = listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+    const unlistenReconnect = client.listenRaw(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
       void resumeRef.current({ checkReceipts: true });
     });
     return () => {
-      unlistenCapture?.();
-      unlistenReconnect?.();
+      unlistenCapture();
+      unlistenReconnect();
     };
   }, [api, refreshExpired, refreshPending, refreshStatus, tabId]);
 

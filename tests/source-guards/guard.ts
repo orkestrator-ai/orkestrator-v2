@@ -5,6 +5,7 @@ export const GUARD_IDS = [
   "released-port-rebind",
   "subprocess-without-budget",
   "small-fake-pid",
+  "window-orkestrator-direct",
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];
@@ -21,6 +22,11 @@ export interface SourceGuard {
   id: GuardId;
   /** What to do instead; printed under every new finding. */
   advice: string;
+  /**
+   * Repository-relative roots whose production (non-test) sources the guard
+   * reads instead of the test sources. Absent for a test-source guard.
+   */
+  productionRoots?: readonly string[];
   appliesTo(file: ScannedFile): boolean;
   /** A cheap text test: `false` means the file cannot offend and is not parsed for this guard. */
   mayOffend(source: string): boolean;

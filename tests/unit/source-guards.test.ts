@@ -26,6 +26,7 @@ import { releasedPortRebind } from "../source-guards/released-port-rebind";
 import {
   SOURCE_GUARDS,
   emptyFindings,
+  listProductionSources,
   listTestSources,
   scanRepository,
   scanSource,
@@ -34,6 +35,13 @@ import {
 import { sleepBeforeNegativeAssertion } from "../source-guards/sleep-before-negative-assertion";
 import { smallFakePid } from "../source-guards/small-fake-pid";
 import { subprocessWithoutBudget } from "../source-guards/subprocess-without-budget";
+import { mergeBaseline, selectedGuards } from "../source-guards/update-baseline";
+import {
+  WINDOW_ORKESTRATOR_ROOTS,
+  transportAccesses,
+  windowOrkestratorDirect,
+} from "../source-guards/window-orkestrator-direct";
+import { parseSync } from "oxc-parser";
 
 const ROOT = path.resolve(import.meta.dir, "../..");
 const ADVICE = Object.fromEntries(SOURCE_GUARDS.map((guard) => [guard.id, guard.advice])) as Record<
@@ -94,6 +102,29 @@ describe("the source walk", () => {
       }
       symlinkSync(path.join(root, "apps/web/src"), path.join(root, "apps/linked"), "dir");
       expect(listTestSources(root)).toEqual([...included].sort());
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reads production sources under the given roots only, skipping tests and declarations", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "source-guards-production-"));
+    try {
+      const included = ["apps/web/src/App.tsx", "apps/web/src/lib/thing.ts"];
+      const excluded = [
+        "apps/web/src/App.test.tsx",
+        "apps/web/src/lib/thing-test-support.ts",
+        "apps/web/src/vite-env.d.ts",
+        "apps/web/src/styles.css",
+        "apps/web/node_modules/dependency/index.ts",
+        "apps/web/src/node_modules/dependency/index.ts",
+        "apps/backend/src/thing.ts",
+      ];
+      for (const file of [...included, ...excluded]) {
+        mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        writeFileSync(path.join(root, file), "export {};\n");
+      }
+      expect(listProductionSources(root, ["apps/web/src", "apps/web/src"])).toEqual(included);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -385,6 +416,108 @@ describe("small-fake-pid", () => {
       "const record = { pid: 4242, bridgePid: 3131, cwd: '/tmp' };",
     ].join("\n");
     expect(lines(guard, source)).toEqual([]);
+  });
+});
+
+describe("window-orkestrator-direct", () => {
+  const guard = windowOrkestratorDirect;
+  const file = "apps/web/src/components/Thing.tsx";
+
+  test("flags every read of the host global, optional, computed or destructured", () => {
+    const source = [
+      "const a = window.orkestrator?.clipboard.readText();",
+      "if (!window.orkestrator) throw new Error();",
+      "window.orkestrator.listen('x', () => {});",
+      'const b = window["orkestrator"];',
+      "const c = globalThis.orkestrator;",
+      "const { orkestrator } = window;",
+      "const d = (window as Window).orkestrator!.invoke('get_config');",
+    ].join("\n");
+    expect(lines(guard, source, file)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  test("ignores the other page globals, types, comments, injected windows and strings", () => {
+    const source = [
+      "// window.orkestrator.invoke is not called here",
+      "const a = window.orkestratorGateway?.baseUrl;",
+      "const b = window.orkestratorWorkspaceTarget?.nodeId;",
+      'type Api = NonNullable<Window["orkestrator"]>;',
+      "const c = targetWindow.orkestrator;",
+      "const d = 'window.orkestrator';",
+      "const { orkestratorPortal } = window;",
+    ].join("\n");
+    expect(lines(guard, source, file)).toEqual([]);
+  });
+
+  test("applies to renderer production sources outside the scope adapters and test helpers", () => {
+    const applies = (candidate: string) =>
+      guard.appliesTo({ path: candidate, source: "", isBunTest: false });
+    expect(guard.productionRoots).toEqual(WINDOW_ORKESTRATOR_ROOTS);
+    expect(applies("apps/web/src/App.tsx")).toBe(true);
+    expect(applies("apps/web/src/lib/native/clipboard.ts")).toBe(true);
+    expect(applies("apps/web/src/lib/node-scope/command-client.ts")).toBe(false);
+    expect(applies("apps/web/src/test/render-in-node-scope.tsx")).toBe(false);
+    expect(applies("apps/backend/src/index.ts")).toBe(false);
+  });
+
+  test("a test-source guard never reads production files, and this guard never reads tests", () => {
+    const findings = scanRepository(ROOT, [windowOrkestratorDirect]);
+    const files = Object.keys(findings["window-orkestrator-direct"]);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((candidate) => /\.(?:test|spec)\./.test(candidate))).toEqual([]);
+  }, 30_000);
+
+  test("no renderer file reads a transport member off window.orkestrator", () => {
+    const offenders: string[] = [];
+    for (const relative of listProductionSources(ROOT, WINDOW_ORKESTRATOR_ROOTS)) {
+      if (!guard.appliesTo({ path: relative, source: "", isBunTest: false })) continue;
+      const source = readFileSync(path.join(ROOT, relative), "utf8");
+      if (!guard.mayOffend(source)) continue;
+      const { program } = parseSync(relative, source, { astType: "js" });
+      for (const offset of transportAccesses(program as never)) {
+        const line = source.slice(0, offset).split("\n").length;
+        offenders.push(`${relative}:${line}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  }, 30_000);
+
+  test("finds the transport members in a snippet", () => {
+    const source = [
+      "window.orkestrator?.invoke('a');",
+      "const listen = window.orkestrator?.listen;",
+      "window.orkestrator.eventStreamConnection?.state();",
+      "window.orkestrator?.node?.('bk_a');",
+      "window.orkestrator?.clipboard.writeText('x');",
+    ].join("\n");
+    const { program } = parseSync("fixture.ts", source, { astType: "js" });
+    const found = transportAccesses(program as never).map(
+      (offset) => source.slice(0, offset).split("\n").length,
+    );
+    expect(found).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("regenerating one guard", () => {
+  test("--guard selects guards and rejects anything else", () => {
+    expect(selectedGuards([])).toBeNull();
+    expect(selectedGuards(["--guard", "window-orkestrator-direct"])).toEqual([
+      "window-orkestrator-direct",
+    ]);
+    expect(() => selectedGuards(["--guard", "nope"])).toThrow("--guard takes one of");
+    expect(() => selectedGuards(["--all"])).toThrow("Unknown argument");
+  });
+
+  test("keeps every other guard's committed entries as they were", () => {
+    const committed = baselineFromFindings(emptyFindings());
+    committed["small-fake-pid"]["kept.test.ts"] = 2;
+    committed["window-orkestrator-direct"]["apps/web/src/old.ts"] = 4;
+    const scanned = baselineFromFindings(emptyFindings());
+    scanned["small-fake-pid"]["new.test.ts"] = 9;
+    scanned["window-orkestrator-direct"]["apps/web/src/App.tsx"] = 1;
+    const merged = mergeBaseline(committed, scanned, ["window-orkestrator-direct"]);
+    expect(merged["small-fake-pid"]).toEqual({ "kept.test.ts": 2 });
+    expect(merged["window-orkestrator-direct"]).toEqual({ "apps/web/src/App.tsx": 1 });
   });
 });
 

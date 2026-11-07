@@ -3,6 +3,8 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import {
   COMMAND_SCOPE_PROVISIONAL_NODE_ID,
+  commandClient,
+  commandNodeIdFromPage,
   getWindowScope,
   resetWindowScopeForTests,
 } from "./app-window-scope";
@@ -122,5 +124,45 @@ describe("the app window scope", () => {
     resetWindowScopeForTests();
     expect(first.disposed).toBe(true);
     expect(getWindowScope()).not.toBe(first);
+  });
+
+  test("reset with a client builds the next one around it, as its command client", () => {
+    const fake = new FakeNodeClient({ nodeId: NODE_A });
+    resetWindowScopeForTests(fake);
+    expect(commandClient()).toBe(fake);
+    expect(getWindowScope().commandScope().nodeId).toBe(NODE_A);
+    resetWindowScopeForTests();
+    expect(fake.disposed).toBe(true);
+  });
+
+  test("the command scope takes the page's proven command-node identity", () => {
+    const identity = window.orkestratorDesktopIdentity;
+    const target = window.orkestratorWorkspaceTarget;
+    try {
+      expect(commandNodeIdFromPage()).toBe(COMMAND_SCOPE_PROVISIONAL_NODE_ID);
+      window.orkestratorWorkspaceTarget = {
+        nodeId: NODE_B,
+        nodeName: "Leaf",
+        path: "direct",
+      };
+      expect(commandNodeIdFromPage()).toBe(NODE_B);
+      window.orkestratorDesktopIdentity = {
+        connectionId: "local",
+        backendId: NODE_A,
+        legacyOrigin: null,
+      };
+      expect(commandNodeIdFromPage()).toBe(NODE_A);
+      resetWindowScopeForTests();
+      expect(getWindowScope().commandScope().nodeId).toBe(NODE_A);
+      window.orkestratorDesktopIdentity = {
+        connectionId: "remote",
+        backendId: "not a backend id!",
+        legacyOrigin: null,
+      };
+      expect(commandNodeIdFromPage()).toBe(NODE_B);
+    } finally {
+      window.orkestratorDesktopIdentity = identity;
+      window.orkestratorWorkspaceTarget = target;
+    }
   });
 });

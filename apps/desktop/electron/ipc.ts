@@ -188,6 +188,37 @@ export type BrowserPreviewController = {
   ): Promise<BrowserPreviewState> | BrowserPreviewState;
 };
 
+/**
+ * Where each preview tab's runtime is (`node-previews.ts`): a node's runtime
+ * for a tab attached with a `nodeId`, else the sending window's own.
+ */
+export type BrowserPreviewRouting = {
+  /** The runtime `tabId`'s attach goes to; it is recorded for the tab's later calls. */
+  forAttach(
+    event: IpcEventLike,
+    tabId: string,
+    nodeId: string | undefined,
+  ): Promise<BrowserPreviewController>;
+  /** The runtime showing `tabId`. */
+  forTab(event: IpcEventLike, tabId: string): BrowserPreviewController;
+  /** The runtime for a call that names a node (or the command node) but no tab. */
+  forNode(
+    event: IpcEventLike,
+    nodeId: string | undefined,
+  ): Promise<BrowserPreviewController> | BrowserPreviewController;
+  /** Destroy `tabId` where it lives and forget it. */
+  destroy(event: IpcEventLike, tabId: string): void;
+};
+
+/** An optional trailing `{ nodeId }` (older renderers send none). */
+function previewNodeId(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value))
+    throw new Error("Expected browser preview options to be an object");
+  const { nodeId } = value as Record<string, unknown>;
+  return nodeId === undefined || nodeId === null ? undefined : parseNodeId(nodeId);
+}
+
 export type MainIpcDependencies = {
   /** The sending window's command node, or the node `nodeId` names (opened on demand). */
   getBackend: (
@@ -250,6 +281,8 @@ export type MainIpcDependencies = {
   openConnectionWindow: (connectionId: string, event?: IpcEventLike) => Promise<void>;
   browserPreviews?: BrowserPreviewController;
   getBrowserPreviews?: (event: IpcEventLike) => BrowserPreviewController | null;
+  /** Per-tab runtimes; without it every handler uses the sending window's runtime. */
+  browserPreviewRouting?: BrowserPreviewRouting;
   /** The sending window's live interactive-artifact host; absent means unavailable. */
   getArtifactHosts?: (event: IpcEventLike) => ArtifactHostController | null;
   /**
@@ -346,6 +379,7 @@ export function registerMainIpc({
   openConnectionWindow,
   browserPreviews,
   getBrowserPreviews,
+  browserPreviewRouting,
   getArtifactHosts,
   setRendererDebugLogging,
   trustedRendererUrl,
@@ -596,100 +630,150 @@ export function registerMainIpc({
     if (!resolved) throw new Error("Native browser previews are unavailable");
     return resolved;
   };
-  handle("orkestrator:browser-preview:attach", (event, value: unknown) => {
+  // Calls that name a tab go to the runtime showing it; calls that name a
+  // pending capture use the window's runtime (the capture spool is shared).
+  const tabPreviews = (event: IpcEventLike, tabId: string): BrowserPreviewController =>
+    browserPreviewRouting ? browserPreviewRouting.forTab(event, tabId) : previews(event);
+  const nodePreviews = async (
+    event: IpcEventLike,
+    options: unknown,
+  ): Promise<BrowserPreviewController> => {
+    const nodeId = previewNodeId(options);
+    if (browserPreviewRouting) return browserPreviewRouting.forNode(event, nodeId);
+    if (nodeId !== undefined) throw new Error("Previews of other machines are unavailable");
+    return previews(event);
+  };
+  const attachPreviews = async (
+    event: IpcEventLike,
+    tabId: string,
+    nodeId: string | undefined,
+  ): Promise<BrowserPreviewController> => {
+    if (browserPreviewRouting) return browserPreviewRouting.forAttach(event, tabId, nodeId);
+    if (nodeId !== undefined) throw new Error("Previews of other machines are unavailable");
+    return previews(event);
+  };
+  handle("orkestrator:browser-preview:attach", async (event, value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Expected browser preview attachment details");
     }
-    const { tabId, url, environmentId, service, navigationBasis, bounds, visible } =
+    const { tabId, url, environmentId, service, navigationBasis, bounds, visible, nodeId } =
       value as Record<string, unknown>;
     if (typeof visible !== "boolean") {
       throw new Error("Expected a browser preview URL and visibility");
     }
+    const tab = browserPreviewTabId(tabId);
+    // Validated before a node is resolved, so a malformed attach opens nothing.
+    const node = nodeId === undefined || nodeId === null ? undefined : parseNodeId(nodeId);
+    const viewBounds = browserPreviewBounds(bounds);
+    const serviceTarget = service === undefined ? undefined : browserPreviewServiceTarget(service);
+    const legacyUrl = serviceTarget ? undefined : browserPreviewUrl(url);
+    const controller = await attachPreviews(event, tab, node);
     // A malformed basis is dropped, which keeps the older-renderer rule.
     const basis =
       Number.isSafeInteger(navigationBasis) && (navigationBasis as number) >= 0
         ? { navigationBasis: navigationBasis as number }
         : {};
-    if (service !== undefined) {
-      return previews(event).attach({
-        tabId: browserPreviewTabId(tabId),
-        service: browserPreviewServiceTarget(service),
+    if (serviceTarget) {
+      return controller.attach({
+        tabId: tab,
+        service: serviceTarget,
         ...basis,
-        bounds: browserPreviewBounds(bounds),
+        bounds: viewBounds,
         visible,
       });
     }
     // A malformed environment is dropped; the gateway then refuses the
     // view's requests rather than guessing an environment.
     const environment = browserPreviewEnvironmentId(environmentId);
-    return previews(event).attach({
-      tabId: browserPreviewTabId(tabId),
-      url: browserPreviewUrl(url),
+    return controller.attach({
+      tabId: tab,
+      url: legacyUrl!,
       ...(environment ? { environmentId: environment } : {}),
       ...basis,
-      bounds: browserPreviewBounds(bounds),
+      bounds: viewBounds,
       visible,
     });
   });
-  handle("orkestrator:browser-preview:open-external", (event, target: unknown) => {
-    const controller = previews(event);
-    if (!controller.openServiceExternally) throw new Error("Service previews are unavailable");
-    return controller.openServiceExternally(browserPreviewServiceTarget(target));
-  });
-  handle("orkestrator:browser-preview:reset-site-data", (event, target: unknown) => {
-    const controller = previews(event);
-    if (!controller.resetServiceSiteData) throw new Error("Service previews are unavailable");
-    return controller.resetServiceSiteData(browserPreviewServiceTarget(target));
-  });
+  handle(
+    "orkestrator:browser-preview:open-external",
+    async (event, target: unknown, options: unknown) => {
+      const service = browserPreviewServiceTarget(target);
+      const controller = await nodePreviews(event, options);
+      if (!controller.openServiceExternally) throw new Error("Service previews are unavailable");
+      return controller.openServiceExternally(service);
+    },
+  );
+  handle(
+    "orkestrator:browser-preview:reset-site-data",
+    async (event, target: unknown, options: unknown) => {
+      const service = browserPreviewServiceTarget(target);
+      const controller = await nodePreviews(event, options);
+      if (!controller.resetServiceSiteData) throw new Error("Service previews are unavailable");
+      return controller.resetServiceSiteData(service);
+    },
+  );
   handle("orkestrator:browser-preview:session-import-start", (event, tabId: unknown) => {
-    const controller = previews(event);
+    const tab = browserPreviewTabId(tabId);
+    const controller = tabPreviews(event, tab);
     if (!controller.startSessionImport) throw new Error("Service previews are unavailable");
-    return controller.startSessionImport(browserPreviewTabId(tabId));
+    return controller.startSessionImport(tab);
   });
   handle("orkestrator:browser-preview:session-import-dismiss", (event, tabId: unknown) => {
-    const controller = previews(event);
+    const tab = browserPreviewTabId(tabId);
+    const controller = tabPreviews(event, tab);
     if (!controller.dismissSessionNotice) throw new Error("Service previews are unavailable");
-    return controller.dismissSessionNotice(browserPreviewTabId(tabId));
+    return controller.dismissSessionNotice(tab);
   });
   handle("orkestrator:browser-preview:open-sign-in", (event, tabId: unknown, port: unknown) => {
-    const controller = previews(event);
+    const tab = browserPreviewTabId(tabId);
+    const controller = tabPreviews(event, tab);
     if (!controller.openServiceSignIn) throw new Error("Service previews are unavailable");
     if (typeof port !== "number") throw new Error("Expected a service port");
-    return controller.openServiceSignIn(browserPreviewTabId(tabId), port);
+    return controller.openServiceSignIn(tab, port);
   });
-  handle("orkestrator:browser-preview:set-bounds", (event, tabId: unknown, bounds: unknown) =>
-    previews(event).setBounds(browserPreviewTabId(tabId), browserPreviewBounds(bounds)),
-  );
+  handle("orkestrator:browser-preview:set-bounds", (event, tabId: unknown, bounds: unknown) => {
+    const tab = browserPreviewTabId(tabId);
+    return tabPreviews(event, tab).setBounds(tab, browserPreviewBounds(bounds));
+  });
   handle("orkestrator:browser-preview:set-visible", (event, tabId: unknown, visible: unknown) => {
+    const tab = browserPreviewTabId(tabId);
     if (typeof visible !== "boolean") throw new Error("Expected browser preview visibility");
-    return previews(event).setVisible(browserPreviewTabId(tabId), visible);
+    return tabPreviews(event, tab).setVisible(tab, visible);
   });
   handle("orkestrator:browser-preview:navigate", (event, tabId: unknown, url: unknown) => {
-    return previews(event).navigate(browserPreviewTabId(tabId), browserPreviewUrl(url));
+    const tab = browserPreviewTabId(tabId);
+    return tabPreviews(event, tab).navigate(tab, browserPreviewUrl(url));
   });
-  handle("orkestrator:browser-preview:go-back", (event, tabId: unknown) =>
-    previews(event).goBack(browserPreviewTabId(tabId)),
-  );
-  handle("orkestrator:browser-preview:go-forward", (event, tabId: unknown) =>
-    previews(event).goForward(browserPreviewTabId(tabId)),
-  );
-  handle("orkestrator:browser-preview:reload", (event, tabId: unknown) =>
-    previews(event).reload(browserPreviewTabId(tabId)),
-  );
-  handle("orkestrator:browser-preview:open-devtools", (event, tabId: unknown) =>
-    previews(event).openDevTools(browserPreviewTabId(tabId)),
-  );
+  handle("orkestrator:browser-preview:go-back", (event, tabId: unknown) => {
+    const tab = browserPreviewTabId(tabId);
+    return tabPreviews(event, tab).goBack(tab);
+  });
+  handle("orkestrator:browser-preview:go-forward", (event, tabId: unknown) => {
+    const tab = browserPreviewTabId(tabId);
+    return tabPreviews(event, tab).goForward(tab);
+  });
+  handle("orkestrator:browser-preview:reload", (event, tabId: unknown) => {
+    const tab = browserPreviewTabId(tabId);
+    return tabPreviews(event, tab).reload(tab);
+  });
+  handle("orkestrator:browser-preview:open-devtools", (event, tabId: unknown) => {
+    const tab = browserPreviewTabId(tabId);
+    return tabPreviews(event, tab).openDevTools(tab);
+  });
   // Trusted capture. Page output never reaches these handlers directly; every
   // renderer argument is validated here and again in the capture coordinator.
-  handle("orkestrator:browser-preview:capture-start", (event, input: unknown) =>
-    previews(event).startCapture(startCaptureInput(input)),
-  );
-  handle("orkestrator:browser-preview:capture-status", (event, tabId: unknown) =>
-    previews(event).getCaptureStatus(captureTabId(tabId)),
-  );
-  handle("orkestrator:browser-preview:capture-cancel", (event, tabId: unknown) =>
-    previews(event).cancelCapture(captureTabId(tabId)),
-  );
+  handle("orkestrator:browser-preview:capture-start", (event, input: unknown) => {
+    const start = startCaptureInput(input);
+    return tabPreviews(event, start.tabId).startCapture(start);
+  });
+  handle("orkestrator:browser-preview:capture-status", (event, tabId: unknown) => {
+    const tab = captureTabId(tabId);
+    return tabPreviews(event, tab).getCaptureStatus(tab);
+  });
+  handle("orkestrator:browser-preview:capture-cancel", (event, tabId: unknown) => {
+    const tab = captureTabId(tabId);
+    return tabPreviews(event, tab).cancelCapture(tab);
+  });
   handle("orkestrator:browser-preview:capture-pending-list", (event) =>
     previews(event).listPendingCaptures(),
   );
@@ -707,12 +791,14 @@ export function registerMainIpc({
   handle("orkestrator:browser-preview:capture-pending-discard", (event, id: unknown) =>
     previews(event).discardPendingCapture(captureId(id)),
   );
-  handle("orkestrator:browser-preview:capture-pins-show", (event, input: unknown) =>
-    previews(event).showPins(pinsInput(input)),
-  );
-  handle("orkestrator:browser-preview:capture-pins-clear", (event, tabId: unknown) =>
-    previews(event).clearPins(captureTabId(tabId)),
-  );
+  handle("orkestrator:browser-preview:capture-pins-show", (event, input: unknown) => {
+    const pins = pinsInput(input);
+    return tabPreviews(event, pins.tabId).showPins(pins);
+  });
+  handle("orkestrator:browser-preview:capture-pins-clear", (event, tabId: unknown) => {
+    const tab = captureTabId(tabId);
+    return tabPreviews(event, tab).clearPins(tab);
+  });
   // Contract version 2. Each handler checks the controller supports the operation.
   const unavailable = () => new Error("This capture operation is unavailable");
   handle("orkestrator:browser-preview:capture-capabilities", (event) => {
@@ -736,9 +822,10 @@ export function registerMainIpc({
     return controller.dismissExpiredCaptureNotices(captureIdList(ids));
   });
   handle("orkestrator:browser-preview:capture-pins-results", (event, tabId: unknown) => {
-    const controller = previews(event);
+    const tab = captureTabId(tabId);
+    const controller = tabPreviews(event, tab);
     if (!controller.getPinResults) throw unavailable();
-    return controller.getPinResults(captureTabId(tabId));
+    return controller.getPinResults(tab);
   });
   handle("orkestrator:browser-preview:capture-diagnostics", (event) => {
     const controller = previews(event);
@@ -746,18 +833,22 @@ export function registerMainIpc({
     return controller.getCaptureDiagnostics();
   });
   handle("orkestrator:browser-preview:capture-show-on-page", (event, input: unknown) => {
-    const controller = previews(event);
+    const show = showOnPageInput(input);
+    const controller = tabPreviews(event, show.tabId);
     if (!controller.showOnPage) throw unavailable();
-    return controller.showOnPage(showOnPageInput(input));
+    return controller.showOnPage(show);
   });
   handle("orkestrator:browser-preview:capture-responsive-set", (event, input: unknown) => {
-    const controller = previews(event);
+    const set = responsiveSetInput(input);
+    const controller = tabPreviews(event, set.tabId);
     if (!controller.captureResponsiveSet) throw unavailable();
-    return controller.captureResponsiveSet(responsiveSetInput(input));
+    return controller.captureResponsiveSet(set);
   });
-  handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) =>
-    previews(event).destroy(browserPreviewTabId(tabId)),
-  );
+  handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) => {
+    const tab = browserPreviewTabId(tabId);
+    if (browserPreviewRouting) browserPreviewRouting.destroy(event, tab);
+    else previews(event).destroy(tab);
+  });
 
   // Live interactive artifacts: positioning and presentation messages only.
   registerArtifactHostIpc({

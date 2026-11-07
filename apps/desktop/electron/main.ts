@@ -53,6 +53,11 @@ import {
 import { NodeWorkspaceScopes } from "./node-workspaces.js";
 import { DesktopNodeScopes, type NodeScopeRecord } from "./node-scopes.js";
 import { DesktopNodeIpc } from "./node-ipc.js";
+import {
+  NodePreviewRuntimes,
+  routeBrowserPreviews,
+  type NodePreviewRuntime,
+} from "./node-previews.js";
 import { editDesktopConnection, setDesktopWorkspaceTarget } from "./window-workspace-target.js";
 import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
@@ -398,6 +403,14 @@ const nodeIpc = new DesktopNodeIpc<DesktopWindowContext>({
   mapNodeConnection: (context, nodeId, connectionId) =>
     desktopWindows.mapNodeConnection(context, nodeId, connectionId),
 });
+/** Other nodes' preview runtimes in each window, and which tab shows on which. */
+const nodePreviews = new NodePreviewRuntimes<DesktopWindowContext, BrowserPreviewManager>({
+  windowPreviews: (context) => context.browserPreviewManager,
+  isCommandNode: (context, nodeId) => nodeIpc.isCommandNode(context, nodeId),
+  openNode: (context, nodeId) => nodeIpc.open(context, nodeId),
+  createRuntime: (context, record, partitionKey) =>
+    createNodeBrowserPreviews(context, record, partitionKey),
+});
 const relayedLifecycle = createDesktopRelayedLifecycle(desktopWindows, realmContexts, () =>
   scheduleConnectionListPublish(),
 );
@@ -675,13 +688,19 @@ function previewRetention(): PreviewPartitionRetention {
     sessionFor: (partitionName) => session.fromPartition(partitionName),
     inUse: () =>
       previewPartitionsInUse(
-        rendererContexts().map((context) => ({
-          sharedPartition: browserPreviewPartitionForWindow(
-            context.slot,
-            context.target ? `node:${context.target.nodeId}` : context.previewConnectionId,
-          ),
-          transport: context.previewTransport,
-        })),
+        rendererContexts().flatMap((context) => [
+          {
+            sharedPartition: browserPreviewPartitionForWindow(
+              context.slot,
+              context.target ? `node:${context.target.nodeId}` : context.previewConnectionId,
+            ),
+            transport: context.previewTransport,
+          },
+          ...nodePreviews.runtimes(context).map((runtime) => ({
+            sharedPartition: runtime.partition,
+            transport: runtime,
+          })),
+        ]),
       ),
   });
   return previewPartitionRetention;
@@ -820,6 +839,40 @@ function createWindowBrowserPreviews(
   });
   manager = runtime.manager;
   return { ...runtime, previewTransport };
+}
+
+/**
+ * A node scope's preview runtime in a window (`node-previews.ts`): the
+ * window's renderer owns it, and its views are plain `WebContentsView`s in
+ * window coordinates (no realm layout). Its partition is the node's, as a
+ * realm's is, and its services tunnel over the node scope's connection.
+ */
+function createNodeBrowserPreviews(
+  context: DesktopWindowContext,
+  record: NodeScopeRecord,
+  partitionKey: string,
+): NodePreviewRuntime<BrowserPreviewManager> {
+  if (!connectionManager) throw new Error("Connections are not initialized");
+  rememberPreviewNode(record.nodeId, context.previewConnectionId);
+  const previews = createWindowBrowserPreviews(
+    context.window,
+    record.scope,
+    context.slot,
+    connectionManager.getConnectionId(record.scope),
+    partitionKey,
+    { contents: context.contents, ViewCtor: WebContentsView },
+  );
+  return {
+    controller: previews.manager,
+    partition: browserPreviewPartitionForWindow(context.slot, partitionKey),
+    partitionsInUse: () => previews.previewTransport.partitionsInUse(),
+    dispose: () => {
+      previews.manager.destroyAll();
+      void previews.previewTransport.disposeAll().catch((error: unknown) => {
+        previewLog.warn("transport.close-failed", { error: formatLogError(error) });
+      });
+    },
+  };
 }
 
 /**
@@ -1411,6 +1464,10 @@ function registerIpc(): void {
     },
     openConnectionWindow: async (connectionId) => createWindow(connectionId),
     getBrowserPreviews: (event) => ipcContextForEvent(event).browserPreviewManager,
+    browserPreviewRouting: routeBrowserPreviews(nodePreviews, {
+      window: contextForEvent,
+      nodeWindow: nodeWindowContext,
+    }),
     trustedRendererUrl: isDev
       ? (devServerUrl ?? "http://127.0.0.1:1420")
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
@@ -1454,6 +1511,7 @@ function registerIpc(): void {
         backendId: identity.backendId,
         legacyOrigin: identity.legacyOrigin,
         backendOnThisDevice: manager().isScopeOnThisDevice(context.scope),
+        localInstallationId: manager().localInstallationId(),
         ...(context.target && context.portalScope
           ? {
               workspaceTarget: context.target,

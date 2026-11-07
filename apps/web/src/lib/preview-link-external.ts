@@ -47,6 +47,7 @@ export async function openLinkExternally({
     !environment ||
     !window.orkestrator?.browserPreview?.openServiceExternally ||
     !isLoopbackUrl(url) ||
+    // The environment store is the command node's until it is scoped.
     !isRemoteGatewayConnection()
   ) {
     return backend.openInBrowser(url);

@@ -198,7 +198,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const mergePrRequest = useMergePrRequestStore((state) => state.request);
   // The selected environment is on this action bar's node; a request for the
   // same id on another node is not for it.
-  const actionBarNodeId = useScopesWithCommandFallback().scope.nodeId;
+  const actionBarScope = useScopesWithCommandFallback().scope;
+  const actionBarNodeId = actionBarScope.nodeId;
   const selectedMergePrControl = selectedEnvironment
     ? mergePrControl(selectedEnvironment, {
         dockerAvailable,
@@ -576,7 +577,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   });
   const canLaunchResolve =
     canLaunchBackendJob || Boolean(selectedEnvironmentId && hasOpenResolveTab);
-  const editorOnAnotherDevice = isBackendOnAnotherDevice();
+  const editorOnAnotherDevice = isBackendOnAnotherDevice(actionBarScope);
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor =
     !editorOnAnotherDevice &&

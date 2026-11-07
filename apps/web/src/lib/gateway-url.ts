@@ -1,3 +1,5 @@
+import { isBackendId, isProvisionalBackendId } from "@orkestrator/protocol/federation";
+
 function isLoopbackHost(hostname: string): boolean {
   return (
     hostname === "127.0.0.1" ||
@@ -65,8 +67,40 @@ export function isGatewayBrowserPreviewSupported(): boolean {
   return !gateway?.enabled || gateway.desktop === true;
 }
 
+/**
+ * The node a device check is for: a node scope (its role says whether it is
+ * the command node), a node id, or nothing for the window's command node.
+ * Callers pass the scope they render in; code with no scope yet passes
+ * nothing until its store is scoped.
+ */
+export type DeviceCheckNode =
+  { readonly nodeId: string; readonly role: "command" | "leaf" } | string | null | undefined;
+
+/**
+ * Whether `node` is the window's command node. A string id is the command
+ * node when it is the command scope's provisional id or the window's proved
+ * machine (`orkestratorDesktopIdentity.backendId`).
+ */
+function isCommandNode(node: DeviceCheckNode): boolean {
+  if (node === null || node === undefined) return true;
+  if (typeof node !== "string") return node.role === "command";
+  if (isBackendId(node) && isProvisionalBackendId(node)) return true;
+  const backendId =
+    typeof window === "undefined" ? null : window.orkestratorDesktopIdentity?.backendId;
+  return Boolean(backendId) && node === backendId;
+}
+
+/** This computer's own backend installation id (desktop only), or null when unknown. */
+export function localInstallationId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.orkestratorDesktopIdentity?.localInstallationId || null;
+}
+
 /** Whether renderer commands are routed through a non-local Orkestrator gateway. */
-export function isRemoteGatewayConnection(): boolean {
+export function isRemoteGatewayConnection(node?: DeviceCheckNode): boolean {
+  // A leaf is always reached through a route: its own, an SSH loopback or the
+  // command node's relay.
+  if (!isCommandNode(node)) return true;
   if (typeof window === "undefined") return false;
   const gateway = window.orkestratorGateway;
   if (!gateway?.enabled) return false;
@@ -85,12 +119,34 @@ export function isRemoteGatewayConnection(): boolean {
 }
 
 /**
+ * Whether `node`'s backend is this computer's own. On desktop that is exactly
+ * `nodeId === localInstallationId` for a proved id. The command node falls
+ * back to the gateway's word when either id is unknown: no gateway or a
+ * loopback one is this computer, a desktop gateway is unless main said it
+ * leads back here. Any other node is on another device unless proved here.
+ */
+export function backendOnThisDevice(node?: DeviceCheckNode): boolean {
+  const local = localInstallationId();
+  if (isCommandNode(node)) {
+    const commandId =
+      typeof window === "undefined" ? null : window.orkestratorDesktopIdentity?.backendId;
+    if (local && commandId) return commandId === local;
+    return (
+      !isRemoteGatewayConnection() ||
+      (typeof window !== "undefined" && window.orkestratorGateway?.backendOnThisDevice === true)
+    );
+  }
+  const nodeId = typeof node === "string" ? node : node!.nodeId;
+  return local !== null && nodeId === local;
+}
+
+/**
  * Whether backend commands run on a different computer from this client, so
  * anything they launch (an editor window) would open out of the user's sight.
  * A gateway alone does not mean that: it can lead back to this computer.
  */
-export function isBackendOnAnotherDevice(): boolean {
-  return isRemoteGatewayConnection() && window.orkestratorGateway?.backendOnThisDevice !== true;
+export function isBackendOnAnotherDevice(node?: DeviceCheckNode): boolean {
+  return !backendOnThisDevice(node);
 }
 
 /** Resolve a loopback page through the gateway's browser-preview namespace. */

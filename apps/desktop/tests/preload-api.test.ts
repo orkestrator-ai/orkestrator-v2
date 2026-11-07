@@ -670,6 +670,36 @@ test("the gateway says when it leads back to this computer, and only then", () =
   expect("backendOnThisDevice" in exposeWith("true")).toBe(false);
 });
 
+test("the machine identity carries this computer's installation id, even on a local window", () => {
+  const identityWith = (localInstallationId: unknown) => {
+    const exposed = new Map<string, unknown>();
+    exposeActiveConnectionGateway(
+      { exposeInMainWorld: (key, value) => void exposed.set(key, value) },
+      {
+        sendSync: (channel) =>
+          channel.endsWith("gateway-sync")
+            ? {
+                baseUrl: null,
+                connectionId: "local",
+                backendId: "bk_desk",
+                legacyOrigin: null,
+                localInstallationId,
+              }
+            : { activeConnectionId: "local", connections: [] },
+      },
+    );
+    return exposed.get("orkestratorDesktopIdentity") as Record<string, unknown>;
+  };
+
+  expect(identityWith("bk_desk")).toMatchObject({
+    backendId: "bk_desk",
+    localInstallationId: "bk_desk",
+  });
+  // Unknown until the local backend's hello answered; never a non-string.
+  expect(identityWith(null).localInstallationId).toBeNull();
+  expect(identityWith(7).localInstallationId).toBeNull();
+});
+
 test("the portal channel is exposed only in a workspace realm", async () => {
   const exposed = new Map<string, unknown>();
   const ipc = createIpcMock();

@@ -2259,6 +2259,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   };
 
   const describeBackendLocation = () => {
+    // Settings describe the command node, as `getGatewayBaseUrl()` does.
     if (!isRemoteGatewayConnection()) return "this machine";
     try {
       return new URL(getGatewayBaseUrl()).host || "remote backend";

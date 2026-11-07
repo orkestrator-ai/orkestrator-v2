@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn, createSessionKey } from "@/lib/utils";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -271,6 +272,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
   useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
   const federation = useFederation();
+  // The node whose sessions this popover shows (the command node until the
+  // session stores are scoped).
+  const { scope: nodeScope } = useScopesWithCommandFallback();
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.
   const [connectionPath] = useState(workspaceTarget);
@@ -1653,7 +1657,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
                                 // No loopback callback reaches a remote backend.
-                                ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
+                                ...(isRemoteGatewayConnection(nodeScope)
+                                  ? { deviceCode: true }
+                                  : {}),
                               });
                               // The code is needed for as long as the sign-in takes.
                               if (result.code) {

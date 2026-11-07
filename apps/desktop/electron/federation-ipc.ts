@@ -47,6 +47,12 @@ export type GatewaySnapshot = {
   legacyOrigin: string | null;
   /** The window's machine is this computer's own backend, whatever route reaches it. */
   backendOnThisDevice?: boolean;
+  /**
+   * This computer's own backend installation id, so the renderer can tell
+   * for any node whether it is on this device (`nodeId === localInstallationId`).
+   * Null until the local backend's hello answered. An identity, never a credential.
+   */
+  localInstallationId?: string | null;
   /** A local window on the direct gateway transport: its backend's origin. Never a credential. */
   localGatewayBaseUrl?: string;
   /** A workspace realm's node. */

@@ -158,7 +158,7 @@ export interface NodeScopeRecord {
   nodeId: string;
   /** Null until the first open succeeds. */
   target: WorkspaceTarget | null;
-  /** The node's preview runtime in this window, once item 2009 creates one. */
+  /** The node's preview runtime in this window, while one exists (`node-previews.ts`). */
   previewRuntime?: unknown;
   /** The open in flight; every concurrent `ensureNodeScope` awaits this one. */
   opening: Promise<NodeScopeRecord> | null;

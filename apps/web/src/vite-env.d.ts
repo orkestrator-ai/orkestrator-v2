@@ -56,6 +56,12 @@ interface Window {
     connectionId: string;
     backendId: string | null;
     legacyOrigin: string | null;
+    /**
+     * This computer's own backend installation id, null until known: a node
+     * is on this device exactly when its id equals this
+     * (`backendOnThisDevice(nodeId)` in `lib/gateway-url.ts`).
+     */
+    localInstallationId?: string | null;
     /** The window's own machine, while its workspace is on another node. */
     portal?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
   };

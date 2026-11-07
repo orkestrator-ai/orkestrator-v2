@@ -979,6 +979,8 @@ test("a workspace scope is on this device only when its node is the local backen
     expect(connections.getGatewayBaseUrl("own")).toBe("https://local.test");
     expect(connections.isScopeOnThisDevice("own")).toBe(true);
     expect(connections.isScopeOnThisDevice("other")).toBe(false);
+    // The gateway snapshot's `localInstallationId`.
+    expect(connections.localInstallationId()).toBe("bk_local" as BackendId);
     expect(gateways.requests.length).toBeGreaterThan(0);
   } finally {
     connections.dispose();
@@ -997,6 +999,7 @@ test("no scope is on this device before the local backend has proved its identit
       token,
     });
     expect(connections.isScopeOnThisDevice("panel")).toBe(false);
+    expect(connections.localInstallationId()).toBeNull();
   } finally {
     connections.dispose();
   }

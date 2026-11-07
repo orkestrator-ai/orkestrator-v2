@@ -105,6 +105,8 @@ type DesktopGatewaySnapshot = {
   backendId: string | null;
   legacyOrigin: string | null;
   backendOnThisDevice: boolean;
+  /** This computer's own backend installation id; null until known. */
+  localInstallationId: string | null;
   localGatewayBaseUrl: string | null;
   workspaceTarget: WorkspaceTarget | null;
   portalIdentity: DesktopIdentity | null;
@@ -154,6 +156,7 @@ function readGatewaySnapshot(ipcRenderer: {
       backendId: text(value.backendId),
       legacyOrigin: text(value.legacyOrigin),
       backendOnThisDevice: value.backendOnThisDevice === true,
+      localInstallationId: text(value.localInstallationId),
       localGatewayBaseUrl: text(value.localGatewayBaseUrl),
       workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
       portalIdentity: parseIdentity(value.portalIdentity),
@@ -181,6 +184,8 @@ export function exposeActiveConnectionGateway(
       connectionId: snapshot.connectionId,
       backendId: snapshot.backendId,
       legacyOrigin: snapshot.legacyOrigin,
+      // `backendOnThisDevice(nodeId)` in the renderer compares against this.
+      localInstallationId: snapshot.localInstallationId,
       ...(snapshot.portalIdentity ? { portal: snapshot.portalIdentity } : {}),
     });
     if (snapshot.workspaceTarget) {
@@ -885,6 +890,7 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
     },
 
     browserPreview: {
+      /** `input.nodeId` names the node whose preview runtime shows the tab (default: the command node). */
       attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
         return ipcRenderer.invoke("orkestrator:browser-preview:attach", input);
       },
@@ -913,11 +919,26 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       destroy(tabId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:destroy", tabId);
       },
-      resetServiceSiteData(target: BrowserPreviewServiceTarget): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:reset-site-data", target);
+      /** `options.nodeId`: the node whose preview runtime owns the service (default: the command node). */
+      resetServiceSiteData(
+        target: BrowserPreviewServiceTarget,
+        options?: { nodeId?: string },
+      ): Promise<void> {
+        return options?.nodeId
+          ? ipcRenderer.invoke("orkestrator:browser-preview:reset-site-data", target, {
+              nodeId: options.nodeId,
+            })
+          : ipcRenderer.invoke("orkestrator:browser-preview:reset-site-data", target);
       },
-      openServiceExternally(target: BrowserPreviewServiceTarget): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:open-external", target);
+      openServiceExternally(
+        target: BrowserPreviewServiceTarget,
+        options?: { nodeId?: string },
+      ): Promise<void> {
+        return options?.nodeId
+          ? ipcRenderer.invoke("orkestrator:browser-preview:open-external", target, {
+              nodeId: options.nodeId,
+            })
+          : ipcRenderer.invoke("orkestrator:browser-preview:open-external", target);
       },
       startSessionImport(tabId: string): Promise<BrowserPreviewState> {
         return ipcRenderer.invoke("orkestrator:browser-preview:session-import-start", tabId);

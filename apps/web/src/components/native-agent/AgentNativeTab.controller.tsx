@@ -1431,6 +1431,8 @@ export function SharedNativeAgentController({
     },
     [label],
   );
+  // The node this tab's agent runs on (the command node until this tab is scoped).
+  const signInScope = useScopesWithCommandFallback().scope;
   const startSignIn = useCallback(() => {
     setSignInPending(true);
     setSignInDetails(null);
@@ -1440,7 +1442,7 @@ export function SharedNativeAgentController({
       logicalSessionKey: sessionKey,
       // A browser on another machine cannot reach a loopback callback on the
       // backend's, so a remote connection signs in with a device code.
-      ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
+      ...(isRemoteGatewayConnection(signInScope) ? { deviceCode: true } : {}),
     })
       .then((result) => {
         // Keep cancellation available even when the provider returns a bad URL.
@@ -1476,7 +1478,15 @@ export function SharedNativeAgentController({
         );
       })
       .finally(() => setSignInPending(false));
-  }, [data.environmentId, label, openSignInUrl, platform, sessionKey, setAuthReadAttempt]);
+  }, [
+    data.environmentId,
+    label,
+    openSignInUrl,
+    platform,
+    sessionKey,
+    setAuthReadAttempt,
+    signInScope,
+  ]);
   // Abandoning the sign-in releases the provider's side of it too (Codex stops
   // waiting on its loopback callback or device code). A device code lapses on
   // the bridge by itself, so only an explicit abandon needs this.

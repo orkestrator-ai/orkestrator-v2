@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useOpenCodeProviderLogin } from "@/hooks/useOpenCodeProviderLogin";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { writeText } from "@/lib/native/clipboard";
 import { openInBrowser, setOpenCodeProviderApiKey } from "@/lib/backend";
 import { useAccountMachine } from "@/components/settings/account-machine";
@@ -85,7 +86,9 @@ export function OpenCodeProviderSignIn({
   onSignedIn: () => void;
   onCancel?: () => void;
 }) {
-  const remote = isRemoteGatewayConnection();
+  // The node whose OpenCode signs in (the command node until the account
+  // stores are scoped).
+  const remote = isRemoteGatewayConnection(useScopesWithCommandFallback().scope);
   const [methodIndex, setMethodIndex] = useState(
     () =>
       (remote

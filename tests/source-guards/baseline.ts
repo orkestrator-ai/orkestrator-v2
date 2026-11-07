@@ -101,7 +101,8 @@ export function formatRegressions(
   lines.push(
     "Each file is held to its baseline count, so the lines above include the file's tolerated",
     "findings too. If a finding is a false positive, or a rewrite moved an existing offender",
-    `between files, regenerate the baseline with \`${REGENERATE_COMMAND}\` and justify it in review.`,
+    `between files, regenerate that guard's entries with \`${REGENERATE_COMMAND} --guard <id>\``,
+    "and justify it in review.",
   );
   return lines.join("\n");
 }
@@ -110,7 +111,7 @@ export function formatStale(stale: readonly StaleEntry[]): string {
   if (stale.length === 0) return "";
   return [
     "The source-guard baseline allows more than the code has. It only ever goes down: regenerate",
-    `it with \`${REGENERATE_COMMAND}\` and commit the smaller baseline.`,
+    `that guard's entries with \`${REGENERATE_COMMAND} --guard <id>\` and commit the smaller baseline.`,
     ...stale.map(
       (entry) => `  [${entry.guard}] ${entry.file}: baseline ${entry.allowed}, now ${entry.actual}`,
     ),

@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseSync, Visitor, type VisitorObject } from "oxc-parser";
 import type { AnyNode } from "./ast";
+import { directTransportImport } from "./direct-transport-import";
 import {
   GUARD_IDS,
   type GuardId,
@@ -21,6 +22,7 @@ export const SOURCE_GUARDS: readonly SourceGuard[] = [
   subprocessWithoutBudget,
   smallFakePid,
   windowOrkestratorDirect,
+  directTransportImport,
 ];
 
 export const SCANNED_ROOTS = ["tests", "apps", "bridges", "packages", "scripts", "e2e"] as const;

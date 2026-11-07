@@ -21,6 +21,10 @@ import {
   serializeBaseline,
   type Baseline,
 } from "../source-guards/baseline";
+import {
+  DIRECT_TRANSPORT_ROOTS,
+  directTransportImport,
+} from "../source-guards/direct-transport-import";
 import { GUARD_IDS, type GuardId, type SourceGuard } from "../source-guards/guard";
 import { releasedPortRebind } from "../source-guards/released-port-rebind";
 import {
@@ -36,6 +40,7 @@ import { sleepBeforeNegativeAssertion } from "../source-guards/sleep-before-nega
 import { smallFakePid } from "../source-guards/small-fake-pid";
 import { subprocessWithoutBudget } from "../source-guards/subprocess-without-budget";
 import { mergeBaseline, selectedGuards } from "../source-guards/update-baseline";
+import { moduleIdOfFile, resolveWebModule } from "../source-guards/web-modules";
 import {
   WINDOW_ORKESTRATOR_ROOTS,
   transportAccesses,
@@ -495,6 +500,110 @@ describe("window-orkestrator-direct", () => {
       (offset) => source.slice(0, offset).split("\n").length,
     );
     expect(found).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("direct-transport-import", () => {
+  const guard = directTransportImport;
+  const file = "apps/web/src/components/chat/Thing.tsx";
+
+  test("flags value imports, re-exports and import() of a transport, by alias or relative path", () => {
+    const source = [
+      'import { invoke } from "@/lib/native/backend";',
+      'import { listen, type UnlistenFn } from "../../lib/native/events";',
+      'import { listenAuthoritative } from "@/lib/native/authoritative-events.ts";',
+      'import { createNodeTransport } from "@/lib/native/node-transport";',
+      'export { invoke as call } from "@/lib/native/backend";',
+      'export * from "@/lib/native/events";',
+      'import "@/lib/native/backend";',
+      'const lazy = () => import("@/lib/native/events");',
+    ].join("\n");
+    expect(lines(guard, source, file)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  test("ignores type-only imports, the typed clients, other native wrappers and lookalikes", () => {
+    const source = [
+      'import type { UnlistenFn } from "@/lib/native/events";',
+      'import { type NodeTransport } from "@/lib/native/node-transport";',
+      'export type { InvokeOptions } from "@/lib/native/backend";',
+      'import { getConfig } from "@/lib/backend";',
+      'import { getEnvironment } from "@/lib/backend/environments";',
+      'import { writeText } from "@/lib/native/clipboard";',
+      'import { createWebGatewayApi } from "@/lib/native/web-gateway";',
+      'import { thing } from "@/lib/native/events-helpers";',
+      'import { other } from "./native/backend-shape";',
+      "const label = 'native/backend';",
+    ].join("\n");
+    expect(lines(guard, source, file)).toEqual([]);
+  });
+
+  test("applies to renderer production sources outside the scope, client and adapter layers", () => {
+    const applies = (candidate: string) =>
+      guard.appliesTo({ path: candidate, source: "", isBunTest: false });
+    expect(guard.productionRoots).toEqual(DIRECT_TRANSPORT_ROOTS);
+    expect(applies("apps/web/src/App.tsx")).toBe(true);
+    expect(applies("apps/web/src/stores/environmentStore.ts")).toBe(true);
+    expect(applies("apps/web/src/lib/node-scope/command-client.ts")).toBe(false);
+    expect(applies("apps/web/src/lib/backend/environments.ts")).toBe(false);
+    expect(applies("apps/web/src/lib/native/authoritative-events.ts")).toBe(false);
+    expect(applies("apps/web/src/test/render-in-node-scope.tsx")).toBe(false);
+    expect(applies("apps/desktop/electron/ipc.ts")).toBe(false);
+  });
+
+  test("a new direct import fails the committed baseline", () => {
+    const baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"));
+    const findings = emptyFindings();
+    for (const finding of scanSource(
+      {
+        path: "apps/web/src/components/chat/NewThing.tsx",
+        source: 'import { invoke } from "@/lib/native/backend";\nvoid invoke;',
+        isBunTest: false,
+      },
+      [guard],
+    ))
+      (findings[finding.guard][finding.file] ??= []).push(finding);
+    const { regressions } = compareWithBaseline(findings, baseline);
+    expect(regressions.map(({ guard: id, file: name }) => [id, name])).toEqual([
+      ["direct-transport-import", "apps/web/src/components/chat/NewThing.tsx"],
+    ]);
+    expect(formatRegressions(regressions, ADVICE)).toContain("useNodeScope()");
+  });
+
+  test("an existing importer may not add a second one", () => {
+    const baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"));
+    const [known, allowed] = Object.entries(baseline["direct-transport-import"])[0]!;
+    const findings = emptyFindings();
+    findings["direct-transport-import"][known] = Array.from({ length: allowed + 1 }, (_, line) => ({
+      guard: "direct-transport-import" as const,
+      file: known,
+      line: line + 1,
+    }));
+    expect(compareWithBaseline(findings, baseline).regressions).toHaveLength(1);
+  });
+
+  test("reads production sources only", () => {
+    const findings = scanRepository(ROOT, [directTransportImport]);
+    const files = Object.keys(findings["direct-transport-import"]);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((candidate) => /\.(?:test|spec)\./.test(candidate))).toEqual([]);
+  }, 30_000);
+});
+
+describe("renderer module resolution", () => {
+  test("resolves the @ alias and relative paths to module ids, and leaves packages alone", () => {
+    expect(resolveWebModule("apps/web/src/App.tsx", "@/stores")).toBe("apps/web/src/stores");
+    expect(resolveWebModule("apps/web/src/App.tsx", "@/stores/index.ts")).toBe(
+      "apps/web/src/stores",
+    );
+    expect(resolveWebModule("apps/web/src/components/chat/A.tsx", "../../stores/uiStore")).toBe(
+      "apps/web/src/stores/uiStore",
+    );
+    expect(resolveWebModule("apps/web/src/stores/index.ts", "./claudeOptionsStore")).toBe(
+      "apps/web/src/stores/claudeOptionsStore",
+    );
+    expect(resolveWebModule("apps/web/src/App.tsx", "zustand")).toBeNull();
+    expect(resolveWebModule("apps/web/src/App.tsx", "@orkestrator/protocol/federation")).toBeNull();
+    expect(moduleIdOfFile("apps/web/src/stores/index.ts")).toBe("apps/web/src/stores");
   });
 });
 

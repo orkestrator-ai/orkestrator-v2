@@ -6,6 +6,7 @@ export const GUARD_IDS = [
   "subprocess-without-budget",
   "small-fake-pid",
   "window-orkestrator-direct",
+  "direct-transport-import",
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];

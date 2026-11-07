@@ -98,6 +98,12 @@ is walked once for all four guards. The guards live in `tests/source-guards/`:
   only data (process tables, log fields, arguments to injected functions) are
   not flagged.
 
+Some guards read production sources instead of tests (`SourceGuard.productionRoots`;
+the walk is `listProductionSources`, which skips test files and test-support
+modules). They hold the node-scope boundaries of the unified federation work and
+are described in [Transports only through a scope](#transports-only-through-a-scope):
+`window-orkestrator-direct` and `direct-transport-import`.
+
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
 `tests/source-guards/baseline.json` holds a count per guard and file. The test
 fails on a file absent from the baseline that has findings and on a file whose
@@ -108,6 +114,12 @@ longer offends), so a baseline entry only ever goes down. Regenerate it with
 after fixing offenders, and never to admit a new one; a rewrite that only moves
 an existing offender between files is the one reason an entry may appear. The
 whole check takes about two seconds on an idle host.
+
+When you change one guard's findings, regenerate only that guard:
+`bun tests/source-guards/update-baseline.ts --guard <id>` (repeatable). It
+rescans the named guards and keeps every other guard's committed entries byte
+for byte, so it cannot also absorb another guard's new findings elsewhere in
+the tree. Check the diff of `baseline.json` touches only that guard's section.
 
 ## What is excluded, and why
 
@@ -238,6 +250,52 @@ new.
 The overrides for `no-restricted-imports` replace one another rather than
 merging, so the components override repeats the renderer patterns. Keep the two
 in step when you edit either.
+
+## Transports only through a scope
+
+Renderer code reaches a backend through a node scope (report §7.6, plan items
+2010 and 2012): `useNodeScope()` and `scope.client.invokeRaw`/`listenRaw` in a
+component, a scoped store or service that holds its scope, a `NodeScope` or
+`NodeClient` parameter in plain code, or a typed client in `lib/backend`
+(which runs on the command scope until plan item 3002 gives it a client
+parameter). Only `lib/node-scope/**`, which builds the clients, may hold a
+transport directly. Three checks hold the line; oxlint's built-in rules cannot
+count per file, so two of them are source guards (above) with a shrink-only
+baseline:
+
+- **`window-orkestrator-direct`** (source guard). Every read of the host global
+  (`window.orkestrator`, also through `globalThis`/`self`, computed or
+  destructured) in `apps/web/src` outside `lib/node-scope/**` and `src/test/**`.
+  The baseline lists what is left: window-shell calls (clipboard, window,
+  process, shell) and desktop-only APIs. Its transport members (`invoke`,
+  `listen`, `eventStreamReady`, `eventStreamConnection`, `node`, `nodes`) have
+  no baseline at all: `tests/unit/source-guards.test.ts` asserts no renderer
+  file reads one.
+- **`direct-transport-import`** (source guard). Each value import, re-export
+  or `import()` of a transport module in `apps/web/src`, counted per file:
+  `@/lib/native/backend` (`invoke`), `@/lib/native/events` (`listen`),
+  `@/lib/native/authoritative-events` (`listenAuthoritative`) and
+  `@/lib/native/node-transport` (`createNodeTransport`). The guard resolves
+  the `@/` alias and relative paths, so `../native/events` counts too.
+  Type-only imports reach nothing and are not counted. Exempt: `lib/node-scope/**`
+  (the scopes and their clients), `lib/backend/**` (the typed command clients),
+  `lib/native/**` (the adapter layer that defines the transports and builds them
+  on one another) and `src/test/**`. The 2026-11-07 baseline is 45 imports in
+  40 files.
+- **Whole-directory bans** (`no-restricted-imports`). Directories with no
+  importer at all may not gain one: `components/chat`, `components/native-agent`,
+  `components/pane-layout`, `components/projects`, `components/sidebar` and
+  `contexts`, besides the federation directories' older and wider ban
+  (`lib/federation`, `components/federation`). The override repeats the
+  renderer's base patterns, because overrides replace one another. Add a
+  directory to it once its last importer is gone; type-only imports stay
+  allowed (`allowTypeImports`), as in the guard.
+
+To retire an importer, route it through a scope, then regenerate only this
+guard's entries with
+`bun tests/source-guards/update-baseline.ts --guard direct-transport-import`
+and commit the smaller baseline. A new importer is never admitted to the
+baseline.
 
 ## Disable directives
 

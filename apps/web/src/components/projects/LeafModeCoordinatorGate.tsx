@@ -10,6 +10,7 @@ import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useFederation } from "@/components/federation/FederationProvider";
+import { useWindowGrouping } from "@/components/federation/useWindowGrouping";
 import { projectStore } from "@/stores/projectStore";
 import { portalStore } from "@/lib/portal/portal-store";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
@@ -123,7 +124,11 @@ export function LeafModeCoordinatorGate({
   const gitUrl = useProjectStore(
     (state) => state.projects.find((project) => project.id === projectId)?.gitUrl,
   );
-  const grouping = useRealmShellStore((state) => state.grouping);
+  // A realm is told the window's grouping; in the window's tree it is read
+  // from the window's own stores (plan item 4005).
+  const realmGrouping = useRealmShellStore((state) => state.grouping);
+  const windowGrouping = useWindowGrouping();
+  const grouping = inTreeLeaf ? windowGrouping : realmGrouping;
   const gateKey = leafCoordinatorGateKey(projectId, scope);
   const opened = useUIStore((state) => state.openedLeafCoordinators.includes(gateKey));
   const openLeafCoordinator = useUIStore((state) => state.openLeafCoordinator);

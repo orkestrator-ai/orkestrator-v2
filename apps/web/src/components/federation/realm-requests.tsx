@@ -8,15 +8,14 @@ import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import {
   parseRealmMessage,
-  realmGroupingFor,
   type RealmSelectRequest,
   type ShellToRealmMessage,
 } from "@/lib/federation/workspace-realm";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { isGlobalSettingsSection, requestGlobalSettings } from "@/lib/settings-navigation";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
-import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { useWindowGrouping } from "./useWindowGrouping";
 import {
   useRemoteWorkspaceStore,
   realmPanel,
@@ -54,7 +53,8 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * A node in the window's own tree (`inTree`, plan item 4005) shares the
  * window's document and stores, so what the window's stores already hold is
  * read there directly and not sent (report Appendix C): the sidebar is
- * `uiChromeStore`'s, the files panel's open state `filesPanelChromeStore`'s.
+ * `uiChromeStore`'s, the files panel's open state `filesPanelChromeStore`'s,
+ * and the grouping `useWindowGrouping`'s (`machineViewStore`).
  */
 export interface RealmRequestsOptions {
   /** The node is shown in the window's own tree (`InTreeWorkspace`), over a loopback. */
@@ -73,9 +73,7 @@ export function useRealmRequests(
   // The phone layout's files panel is a full-screen sheet of this window's own
   // node, and a realm shows none there, so the state is only shared on desktop.
   const phoneLayout = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
-  const storedGrouping = useMachineViewStore((state) => state.grouping);
-  const sortMode = useUIChromeStore((state) => state.environmentSortMode);
-  const grouping = realmGroupingFor(sortMode, storedGrouping, phoneLayout);
+  const grouping = useWindowGrouping();
   const delivered = useRef(0);
   const ready = useRef(false);
   const selection = useRef<Omit<RealmSelectRequest, "type">>({});
@@ -115,8 +113,8 @@ export function useRealmRequests(
   }, [inTree, send, filesPanelOpen, phoneLayout]);
 
   useEffect(() => {
-    if (send && ready.current) send({ type: "grouping", grouping });
-  }, [send, grouping]);
+    if (send && ready.current && !inTree) send({ type: "grouping", grouping });
+  }, [inTree, send, grouping]);
 
   useEffect(() => {
     if (send && ready.current) send({ type: "visibility", hidden: !shown });
@@ -186,7 +184,7 @@ export function useRealmRequests(
         if (!latest.current.phoneLayout && !inTree) {
           latest.current.send?.({ type: "filesPanel", open: latest.current.filesPanelOpen });
         }
-        latest.current.send?.({ type: "grouping", grouping: latest.current.grouping });
+        if (!inTree) latest.current.send?.({ type: "grouping", grouping: latest.current.grouping });
         latest.current.send?.({ type: "visibility", hidden: !latest.current.shown });
         flush();
         flushPanel();

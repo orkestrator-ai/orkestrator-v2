@@ -184,3 +184,13 @@ test("filesPanel: one open state for every machine, read and toggled in place", 
   expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   expect(directTraffic().filter((entry) => entry.endsWith(":filesPanel"))).toEqual([]);
 });
+
+test("grouping: the in-tree workspace reads machineViewStore; nothing is exchanged", async () => {
+  await openLeaf();
+  await settle();
+  act(() => useMachineViewStore.setState({ grouping: "repository" }));
+  await settle();
+  act(() => useUIChromeStore.setState({ environmentSortMode: "activity" }));
+  await settle();
+  expect(directTraffic().filter((entry) => entry.endsWith(":grouping"))).toEqual([]);
+});

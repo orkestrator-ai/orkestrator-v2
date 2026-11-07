@@ -7,6 +7,11 @@ import { uiStore } from "@/stores/uiStore";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import type { Project } from "@/types";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { projectStore } from "@/stores/projectStore";
+import { useMachineViewStore } from "@/stores/machineViewStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
 
 const nativeInvoke = invoke as ReturnType<typeof mock>;
@@ -437,4 +442,43 @@ test("unavailable repository metadata still permits an explicit manual open", ()
   renderGate();
   fireEvent.click(screen.getByRole("button", { name: /Open this node's coordinator anyway/ }));
   expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+});
+
+test("a leaf shown in the window's tree follows the window's own grouping, not a realm's message (plan item 4005)", () => {
+  const initialViews = useMachineViewStore.getState();
+  const initialChrome = useUIChromeStore.getState();
+  try {
+    const gitUrl = "git@github.com:acme/app.git";
+    const windowScope = new WindowScope();
+    windowScope
+      .open({ role: "command", client: new FakeNodeClient({ nodeId: "bk_top" as never }) })
+      .store(projectStore)
+      .setState({
+        hasLoaded: true,
+        projects: [{ id: "top-project", name: "app", gitUrl } as Project],
+      });
+    useUIChromeStore.setState({ environmentSortMode: "project" });
+    useMachineViewStore.setState({ grouping: "repository" });
+    const { scope } = renderInNodeScope(
+      <LeafModeCoordinatorGate projectId="leaf-project">
+        <div data-testid="coordinator-chat">chat</div>
+      </LeafModeCoordinatorGate>,
+      { role: "leaf", nodeId: "bk_leaf" as never, windowScope },
+    );
+    act(() =>
+      scope.store(projectStore).setState({
+        hasLoaded: true,
+        projects: [{ id: "leaf-project", name: "app", gitUrl } as Project],
+      }),
+    );
+    // No realm message set a grouping, yet the window's repository grouping applies.
+    expect(useRealmShellStore.getState().grouping).toBeNull();
+    expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+    act(() => useMachineViewStore.setState({ grouping: "machine" }));
+    expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+  } finally {
+    cleanupNodeScopes();
+    useMachineViewStore.setState(initialViews, true);
+    useUIChromeStore.setState(initialChrome, true);
+  }
 });

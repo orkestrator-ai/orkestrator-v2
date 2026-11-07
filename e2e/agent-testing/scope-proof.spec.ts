@@ -202,6 +202,8 @@ for (const route of ["direct", "relay"] as const) {
         expect(protocols[leaf.origin] ?? []).toEqual([]);
       } else {
         expect(protocols[leaf.origin]?.length ?? 0).toBeGreaterThan(0);
+        // The held leaf scope keeps its own event stream open on the leaf's origin.
+        expect(longLived[leaf.origin] ?? []).toContain("/__orkestrator/events");
       }
     } finally {
       await deleteLeafEnvironment(leaf, environment.id);

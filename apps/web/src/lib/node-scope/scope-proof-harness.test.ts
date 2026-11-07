@@ -162,13 +162,17 @@ describe("scope proof harness", () => {
   });
 
   test("keepOpen leaves the leaf scope open until close", async () => {
-    const { harness, leaf, scope } = setup();
+    const { harness, command, leaf, scope } = setup();
     await harness.run({ leafNodeId: LEAF, leafEnvironmentId: "env-leaf", keepOpen: true });
     expect(scope.get(LEAF)).not.toBeNull();
     expect(harness.scopes().map((entry) => entry.role)).toEqual(["command", "leaf"]);
+    // Both scopes keep a listener, so their streams stay open while held.
+    expect(command.listenerCount("resource-changed")).toBe(1);
+    expect(leaf.listenerCount("resource-changed")).toBe(1);
     harness.close(LEAF);
     expect(scope.get(LEAF)).toBeNull();
     expect(leaf.disposed).toBe(true);
+    expect(command.listenerCount()).toBe(0);
   });
 });
 

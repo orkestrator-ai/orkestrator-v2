@@ -98,7 +98,11 @@ export interface ScopeProofRunInput {
   /** A local environment on the leaf for the terminal. */
   readonly leafEnvironmentId: string;
   readonly timeoutMs?: number;
-  /** Leave the leaf scope open after the run (for connection measurements). */
+  /**
+   * Leave the leaf scope open after the run, with a `resource-changed`
+   * listener on each scope (so both event streams stay open), until `close`.
+   * For connection measurements.
+   */
   readonly keepOpen?: boolean;
 }
 
@@ -113,7 +117,7 @@ export interface ScopeProofHarness {
   run(input: ScopeProofRunInput): Promise<ScopeProofReport>;
   /** Opens (or answers) the leaf scope and its route. */
   open(leafNodeId: string): Promise<{ route: ScopeProofRoute | null; openMs: number }>;
-  /** Disposes the leaf scope (revokes its grant). */
+  /** Stops a kept run's listeners and disposes the leaf scope (revokes its grant). */
   close(leafNodeId: string): void;
   scopes(): ReadonlyArray<{ nodeId: string; role: string; connection: NodeConnectionState }>;
 }
@@ -355,6 +359,12 @@ export function createScopeProofHarness(options: {
   const windowScope = options.windowScope ?? getWindowScope;
   const host = options.host;
   const settleMs = options.settleMs ?? 500;
+  /** The listeners of a run with `keepOpen`, kept so its streams stay open until `close`. */
+  const held = new Map<string, Watch[]>();
+  const stopHeld = (leafNodeId: string) => {
+    for (const watch of held.get(leafNodeId) ?? []) watch.stop();
+    held.delete(leafNodeId);
+  };
 
   const open = async (leafNodeId: string) => {
     const started = performance.now();
@@ -419,9 +429,14 @@ export function createScopeProofHarness(options: {
           leafScopeOpenAfterRun: input.keepOpen === true,
         };
       } finally {
-        commandWatch.stop();
-        leafWatch.stop();
-        if (!input.keepOpen) leaf.dispose();
+        stopHeld(input.leafNodeId);
+        if (input.keepOpen) {
+          held.set(input.leafNodeId, [commandWatch, leafWatch]);
+        } else {
+          commandWatch.stop();
+          leafWatch.stop();
+          leaf.dispose();
+        }
       }
     },
     async open(leafNodeId) {
@@ -429,6 +444,7 @@ export function createScopeProofHarness(options: {
       return { route, openMs };
     },
     close(leafNodeId) {
+      stopHeld(leafNodeId);
       windowScope()
         .get(leafNodeId as BackendId)
         ?.dispose();

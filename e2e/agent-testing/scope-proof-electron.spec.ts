@@ -125,7 +125,8 @@ async function proveRoute(
       { leafNodeId: input.leafNodeId, leafEnvironmentId: environment.id, keepOpen: true },
     )) as ScopeProofReport;
     await page.waitForTimeout(QUIET_WINDOW_MS);
-    const pid = app.process().pid!;
+    // Electron main's own pid: `app.process()` may be the `electron` launcher script.
+    const pid = await app.evaluate(() => process.pid);
     const ports = mainConnections(pid);
     const commandPort = new URL(input.command.origin).port;
     const leafPort = new URL(input.leaf.origin).port;
@@ -146,6 +147,11 @@ async function proveRoute(
     const requests = await app.evaluate(
       () => (globalThis as { __scopeProofRequests?: unknown }).__scopeProofRequests ?? null,
     );
+    const openStreams = (await app.evaluate(
+      () => (globalThis as { __scopeProofOpenStreams?: unknown }).__scopeProofOpenStreams ?? {},
+    )) as Record<string, Record<string, number>>;
+    const streamCount = (role: string) =>
+      Object.values(openStreams[role] ?? {}).reduce((sum, count) => sum + count, 0);
     await page.evaluate(
       (nodeId) =>
         (
@@ -173,7 +179,14 @@ async function proveRoute(
       },
       scopesWhileHeld,
       quietWindowMs: QUIET_WINDOW_MS,
-      mainEstablishedConnectionsPerOrigin: {
+      // Event streams main opened after the spec instrumented it (the command
+      // connection's own stream predates that) and still had open.
+      mainLongLivedRequestsPerOrigin: {
+        command: { count: streamCount("command"), paths: openStreams.command ?? {} },
+        leaf: { count: streamCount("leaf"), paths: openStreams.leaf ?? {} },
+      },
+      // TCP sockets, including idle keep-alive ones in Node's pool.
+      mainEstablishedSocketsPerOrigin: {
         command: ports[commandPort] ?? 0,
         leaf: ports[leafPort] ?? 0,
       },
@@ -193,8 +206,15 @@ async function proveRoute(
     // The renderer never reaches a node origin itself: everything goes through main.
     expect(rendererOrigins[input.command.origin]).toBeUndefined();
     expect(rendererOrigins[input.leaf.origin]).toBeUndefined();
-    if (input.relay) expect(ports[leafPort] ?? 0).toBe(0);
-    else expect(ports[leafPort] ?? 0).toBeGreaterThan(0);
+    if (input.relay) {
+      // The leaf's stream goes through the command node; main holds none to the leaf.
+      expect(streamCount("leaf")).toBe(0);
+      expect(openStreams.command?.["/__orkestrator/nodes/<leaf>/__orkestrator/events"] ?? 0).toBe(
+        1,
+      );
+    } else {
+      expect(openStreams.leaf?.["/__orkestrator/events"] ?? 0).toBe(1);
+    }
   } finally {
     await deleteLeafEnvironment(input.leaf, environment.id);
   }
@@ -299,14 +319,19 @@ test("one Electron renderer holds the command scope and a leaf scope (direct, th
       .toBe(commandNodeId);
     await harnessReady(page);
 
-    // Count main's requests per origin (paths only), without changing them.
+    // Count main's requests per origin (paths only), and keep every event
+    // stream it opens from now on counted until its body ends, is cancelled or
+    // aborted: those are its long-lived requests. Responses pass unchanged
+    // except that an event stream's body is re-wrapped to see it end.
     await electronApp.evaluate(
       (_electron, origins) => {
         const main = globalThis as typeof globalThis & {
           __scopeProofRequests?: Record<string, Record<string, number>>;
+          __scopeProofOpenStreams?: Record<string, Record<string, number>>;
           __scopeProofRefuse?: string | null;
         };
         main.__scopeProofRequests = {};
+        main.__scopeProofOpenStreams = {};
         main.__scopeProofRefuse = null;
         const inner = globalThis.fetch;
         globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -317,15 +342,52 @@ test("one Electron renderer holds the command scope and a leaf scope (direct, th
               : url.origin === origins.leaf
                 ? "leaf"
                 : null;
+          const key = url.pathname.replace(/\/nodes\/[^/]+/u, "/nodes/<leaf>");
           if (role) {
-            const key = url.pathname.replace(/\/nodes\/[^/]+/u, "/nodes/<leaf>");
             const perRole = (main.__scopeProofRequests![role] ??= {});
             perRole[key] = (perRole[key] ?? 0) + 1;
           }
           if (main.__scopeProofRefuse && url.origin === main.__scopeProofRefuse) {
             return Promise.reject(new TypeError("fetch failed (refused by the scope-proof spec)"));
           }
-          return inner(input, init);
+          if (!role) return inner(input, init);
+          return inner(input, init).then((response) => {
+            const type = response.headers.get("content-type") ?? "";
+            if (!response.body || !type.includes("text/event-stream")) return response;
+            const open = (main.__scopeProofOpenStreams![role] ??= {});
+            open[key] = (open[key] ?? 0) + 1;
+            let ended = false;
+            const end = () => {
+              if (ended) return;
+              ended = true;
+              open[key] = (open[key] ?? 1) - 1;
+            };
+            init?.signal?.addEventListener("abort", end, { once: true });
+            const source = response.body.getReader();
+            const body = new ReadableStream<Uint8Array>({
+              async pull(controller) {
+                try {
+                  const next = await source.read();
+                  if (next.done) {
+                    end();
+                    controller.close();
+                  } else controller.enqueue(next.value);
+                } catch (error) {
+                  end();
+                  controller.error(error);
+                }
+              },
+              cancel(reason) {
+                end();
+                return source.cancel(reason);
+              },
+            });
+            return new Response(body, {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            });
+          });
         }) as typeof fetch;
       },
       { command: command.origin, leaf: leaf.origin },

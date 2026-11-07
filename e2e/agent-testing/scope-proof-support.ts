@@ -127,12 +127,14 @@ export async function createLeafEnvironment(leaf: Gateway, name: string): Promis
     name,
     environmentType: "local",
   });
+  // A local environment gets its worktree when it starts.
+  await leaf.invoke("start_environment", { environmentId: environment.id });
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     const current = await leaf.invoke<Environment>("get_environment", {
       environmentId: environment.id,
     });
-    if (current.worktreePath && current.status !== "creating") return current;
+    if (current.worktreePath && current.status === "running") return current;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error("The leaf environment never became ready.");

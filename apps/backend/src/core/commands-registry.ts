@@ -1,3 +1,12 @@
+/**
+ * The backend command registry (`createCommandRegistry`).
+ *
+ * New commands are defined with `defineCommand` in `packages/protocol` and
+ * registered as `register(def, handler)`; the number of string-registered
+ * commands only falls (`mise run contract:check`). Rules for domains,
+ * versions, critical fields and the manifest:
+ * docs/architecture/version-compatibility.md#domain-contracts.
+ */
 import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerDiffBaseCommands } from "./commands-registry-diff-base.js";
 import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";

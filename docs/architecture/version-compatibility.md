@@ -287,3 +287,290 @@ raised detail, or `logDetailKeepRaised: true` when kept on. Until either is pres
 the renderer does not promise automatic reversion or offer Keep raised. Older
 backends ignore those keys and require the user to lower detail manually. On a
 new backend, saving raised detail supplies the expiry and enables the controls.
+
+## Domain contracts
+
+Backend commands are moving from string-registered handlers
+(`register("name", handler)`, `(args: JsonRecord, context) => unknown`) to
+typed definitions grouped by **domain**, each domain with its own version
+([unified federation §11](../reports/unified-federation.md#11-versioned-interfaces),
+plan items 1001 to 1011 in `plans/unified/`). The contract code is in
+`packages/protocol/src/contract/` (one subpath per module,
+`@orkestrator/protocol/contract/<module>`, plus `@orkestrator/protocol/contract`
+for all of them); the backend side is
+`apps/backend/src/core/commands-registry-contracts.ts`. The schemas are Effect
+Schema (`effect/Schema`, `effect` 4.1.2,
+[Decision 13.8](../reports/unified-federation.md#138-schema-library)).
+
+**Every new command uses `defineCommand`.** The number of string-registered
+(untyped) commands per domain may only fall; `mise run contract:check` fails
+when it rises (see [The manifest, the ratchet and CI](#the-manifest-the-ratchet-and-ci)).
+
+### Domains and versions
+
+A domain groups the commands and events that change together. The domain
+names are `DOMAIN_NAMES` in `contract/domain.ts` (29 today); `defineDomain`
+accepts only those, so a new domain is added there first.
+
+```ts
+export const nodeMail = defineDomain({ name: "node-mail", version: 2, min: 1 });
+```
+
+- `version` is the newest version this build speaks; `min` is the oldest it
+  still accepts from a peer, and defaults to `version`, so accepting older
+  peers is always declared. Versions are integers from 1 to 1000. Version 0 is
+  reserved for the legacy adapter (see [Client adapters](#client-adapters)).
+- A backend accepts the range `[min, version]` of each domain that has at
+  least one defined command (`CommandRegistry.domainRanges`), and advertises it
+  in its hello.
+- **Bump the version** only for a change an older peer cannot handle
+  silently: a field removed, renamed, or changed in type or meaning; a new
+  must-understand (critical) field; a command removed or its meaning changed.
+- **Do not bump** for a new optional field or a new command. Peers ignore
+  unknown fields, and a new command is visible in the manifest.
+- A bump that keeps serving older clients sets `min` to the oldest version it
+  still handles. Raising `min`, or removing a command, drops clients in the
+  support window, so it needs a row in the [register](#register) like any
+  other compatibility change.
+
+### Defining commands and events
+
+A definition lives in `packages/protocol` (browser-safe; the oxlint override
+for `packages/protocol/src/contract/**` refuses `node:` and `bun:` imports), so
+the backend, web, desktop and CLI share it. Domain definitions go in
+`packages/protocol/src/contract/domains/`. The argument shapes in the examples
+here are illustrative.
+
+```ts
+import * as Schema from "effect/Schema";
+import { defineCommand } from "@orkestrator/protocol/contract/command";
+
+export const deliverNodeMail = defineCommand({
+  domain: nodeMail,
+  name: "deliver_node_mail",
+  since: 1, // the domain version that introduced the command
+  access: "workspace", // workspace | admin | internal: the grant allow-list
+  read: false, // routing classification
+  args: Schema.Struct({
+    to: Schema.String,
+    body: Schema.String,
+    steer: Schema.optionalKey(Schema.Boolean),
+  }),
+  result: Schema.Struct({ id: Schema.String }),
+  critical: ["steer"], // argument keys a receiver must not ignore
+});
+```
+
+`defineCommand` throws at module load on a name outside lower snake case, a
+`since` outside `1..domain.version`, an unknown `access`, or a `critical` key
+that `args` does not declare (at most 16). `encoded: true` marks a handler that
+returns pre-encoded JSON (the transcript splice); its result is not validated.
+`ArgsOf`, `ResultOf`, `EncodedArgsOf` and `EncodedResultOf` give the types.
+
+`defineEvent({ domain, name, payload })` defines an event (lower kebab case
+name); `decodeEventPayload` and `validateEventPayload` check payloads. Typed
+emit and listen arrive with plan item 7011.
+
+Schema rules, because the manifest digests each schema's JSON Schema export
+(`Schema.toJsonSchemaDocument`) and an export that is not stable changes every
+digest:
+
+- `args` is a `Schema.Struct`; its field names are the argument keys.
+- Wire numbers are `Schema.Finite` (or `Schema.Int`). `Schema.Number` also
+  accepts and exports `"Infinity"`, `"-Infinity"` and `"NaN"`.
+- Optional fields are `Schema.optionalKey(...)`. `Schema.optional` exports
+  `anyOf [T, null]`.
+- A RegExp passed to `Schema.isPattern` has the `u` flag; without it the
+  export has no `pattern`.
+- A named schema (`identifier` annotation) is one shared constant. Two
+  separately built schemas with the same identifier export as `Name` and
+  `Name_1`.
+- Schemas are JSON-shaped (the decoded `Type` equals the wire `Encoded`, no
+  transformations) and need no Effect services: production sends results as
+  handlers return them.
+
+### Tolerant reader and critical fields
+
+A defined command decodes its arguments tolerantly: unknown keys are dropped
+(Effect's default `onExcessProperty: "ignore"`), never rejected. Adopting
+`defineCommand` therefore makes a strict handler (`assertOnlyKeys`) tolerant;
+do not add a hand-written unknown-key rejection to a converted handler, and
+never make one of today's lenient handlers strict, because that breaks newer
+clients.
+
+A field an older receiver must not silently ignore (a steer flag, an
+idempotency key, a safety option) is listed in the definition's `critical`.
+The sender's envelope names the critical keys it actually sends
+(`buildInvokeEnvelope(def, args, version?)`):
+
+```json
+{ "command": "deliver_node_mail", "args": { "to": "…", "body": "…", "steer": true },
+  "domain": "node-mail", "version": 2, "critical": ["steer"] }
+```
+
+- `command` and `args` are today's invoke body, so an older backend ignores
+  the rest. The HTTP gateway decodes the envelope only when the body has
+  `domain`, `version` or `critical` (`invocationFromBody`,
+  `gateway-handlers.ts`).
+- The envelope guard (`decodeInvokeEnvelope`) refuses the whole call when
+  `critical` is not an array of at most 16 identifiers of at most 64
+  characters, `domain` is not a domain-name shape, or `version` is not an
+  integer from 0 to 1000. The gateway answers 400 with a message that names no
+  value. Dropping a malformed must-understand list would silently downgrade
+  the call. Unknown envelope keys are ignored.
+- A receiver refuses with `unsupported-field` a key that the envelope lists
+  as critical, that its definition does not declare, and that the arguments
+  carry. A listed key that is absent is ignored. A string-registered command
+  cannot say it understands anything, so it refuses any critical key its
+  arguments carry.
+- Every command, defined or not, refuses with `unsupported-version` an
+  envelope whose `domain` and `version` fall outside this backend's range for
+  that domain. A domain with no defined command has no range and is not
+  checked.
+- Per call, the registry runs the version check, then argument decoding (or the
+  critical check for a string command), the container guard, the handler and,
+  in development and tests (`NODE_ENV` `development` or `test`, or
+  `validateContractResults`), result validation.
+- A schema failure keeps the `commands-validation.ts` wording (`Expected
+  projectId to be a string`) and never shows a value. A `message` annotation
+  on the schema or check wins, so a converted handler can keep its exact text.
+
+Transports: the web sends the envelope in the invoke body; Electron IPC takes
+it in the third argument's `envelope` field (`orkestrator:invoke(command, args,
+{ nodeId?, envelope? })`, at most 4096 serialised characters, so send it
+without `args`); the node relay forwards the body unchanged; backend to
+backend, `NodeLink.invokeCommand(def, args)` adds it only when the peer's hello
+advertises the command's domain.
+
+### Hello `domains`
+
+The authenticated hello carries `domains`, a map from domain name to the
+`{ min, max }` the backend accepts ([federation.md](federation.md#hello-handshake)).
+It is always sent (`{}` while no command is defined), is a top-level field
+rather than a capability, and leaves `schemaVersion` at 1. `parseHelloDomains`
+drops the whole field when any entry is malformed (more than 64 entries, a
+bad name or range), and the hello still parses. A hello without `domains`,
+or no hello at all, is a **pre-contract** backend (`isPreContract`); every
+release in the window today is one. `domainRange(hello, name)` reads one
+range.
+
+### Typed errors
+
+Version skew is reported with a code, never detected from message text
+(`contract/errors.ts`):
+
+| Code | Class | Details |
+| --- | --- | --- |
+| `unknown-command` | `UnknownCommandError` (`unknownCommand(command, domain?)`) | `domain` when known. The message stays `Unknown backend command: <name>` for older clients. |
+| `unsupported-version` | `UnsupportedVersionError` (`unsupportedVersion`) | `domain` and the backend's `range` `{ min, max }`. |
+| `unsupported-field` | `UnsupportedFieldError` (`unsupportedField`) | `domain` and the critical `field` (at most 64 characters). |
+
+The classes are Effect `Data.TaggedError`s with a `code` property. The gateway
+answers them with `toWire(error)`: `{ error, code, details: { domain?, range?,
+field? } }`, never an argument value; `fromWire(body)` rebuilds the class.
+Callers use `incompatibility(error, command?)`, which reads `code` first and
+falls back to the legacy text only for the named command (a pre-contract
+node). Carrying `code` and `details` through the web HTTP client and Electron
+IPC, and the one UI state "not available on <machine>; update it", are plan
+item [1005](../../plans/unified/1005-typed-incompatibility-errors.md).
+
+### Client adapters
+
+A client calls a domain through one API with an adapter per domain version
+it can speak (`domainClient` in
+[`contract/client.ts`](../../packages/protocol/src/contract/client.ts)):
+
+```ts
+export const nodeMailClient = domainClient(nodeMail, {
+  2: (call) => ({ deliver: (mail) => call(deliverNodeMail, mail) }),
+  1: (call) => ({ deliver: (mail) => call(deliverNodeMailV1, toV1(mail)) }),
+  0: (call) => legacyNodeMailApi(call), // today's capability gating
+});
+```
+
+- An adapter for the domain's current version is required, and adapter keys
+  must be `0..domain.version`.
+- `pickVersion(versions, range)` takes the highest client version inside the
+  node's advertised range; no range (a pre-contract node, or a domain the node
+  does not advertise) means version 0 only, and disjoint ranges give `null`.
+- **Version 0 is the legacy adapter**: today's capability-gated behaviour
+  (the per-domain `*_capabilities` commands or the hello `capabilities`) for
+  nodes without a range, so callers are already version-agnostic.
+- Plan item [1009](../../plans/unified/1009-domain-clients-and-adapters.md)
+  (in progress) adds `createDomainClient(def, { call, domains })`, which picks
+  once per connection generation, caches the choice and throws a coded
+  `unsupported-version` when nothing overlaps; the committed adapter list
+  `packages/protocol/contracts/adapters.json`; and content-free usage counters
+  per (domain, adapter version). Node scopes expose it as `scope.domain(...)`
+  ([2011](../../plans/unified/2011-scope-domain-negotiation.md)).
+- **Retirement:** the adapter for version *v* is deleted when the support
+  floor passes the first Stable release with *v + 1*, the register's usual
+  rule. The legacy adapter 0 goes when the floor passes the first Stable
+  release that advertises the domain.
+
+### The manifest, the ratchet and CI
+
+- **Manifest.** `packages/protocol/contracts/manifest.json` describes every
+  registered command, generated from the real registry by
+  `scripts/generate-contract-manifest.ts`. A defined command has `{ domain,
+  since, access, read, critical, argsDigest, resultDigest }`, where a digest is
+  the SHA-256 of `canonicalJsonSchema(schema)` (`contract/json-schema.ts`:
+  object keys and `required` sorted, other arrays in order). A string command
+  has `{ domain, untyped: true, read }`, its domain from
+  `apps/backend/src/core/contract-domain-map.ts`. `counts` and
+  `untypedByDomain` are totals; `domains` holds each defined domain's
+  `{ version, min }`.
+- **Domain map.** The generator fails when a string command is in neither the
+  map nor a definition, when the map names a command that is not registered or
+  is registered with its definition, or names one twice.
+- **Ratchet.** `packages/protocol/contracts/untyped-baseline.json` holds the
+  allowed untyped count per domain. `scripts/contract-check.ts` fails when the
+  manifest's `untypedByDomain` exceeds it for any domain (a domain missing
+  from the baseline allows none), and when the baseline allows more than the
+  manifest has, so each conversion lowers it. It is rewritten only downward:
+  `--lower-baseline` writes nothing and fails if any domain rose. Moving an
+  untyped command to another domain in the map is the one reason to edit the
+  baseline by hand; the total must not change, and review checks it.
+- **Commands.** `mise run contract:manifest` regenerates the manifest and then
+  lowers the baseline. `mise run contract:check` runs the manifest drift check
+  (`--check`, no writes) and the ratchet, and every failure names this
+  section. CI runs `contract:check` in `ci.yml`'s Lint job.
+- **Release snapshots** (plan item
+  [1007](../../plans/unified/1007-release-snapshots-and-backfill.md)):
+  `release:version` writes `packages/protocol/contracts/releases/<version>.json`,
+  deduplicated by per-domain digest, with a backfill for every published
+  release since v2.21.0 and `contracts/releases/index.json` listing them.
+- **Contract CI job** (plan item
+  [1008](../../plans/unified/1008-contract-ci-job.md)): from the snapshots in
+  the support window it asserts that a client adapter exists for every
+  (domain, version), that no command disappeared without a domain bump and a
+  register row, and that register rows name real counter ids; later, that the
+  current parser accepts fixtures generated from older schemas
+  (`effect/Arbitrary`) and that no required field was added without a bump.
+
+### How to add a command
+
+1. Pick its domain from `DOMAIN_NAMES`. `contract-domain-map.ts` shows where
+   the domain's untyped commands are today.
+2. Define it in `packages/protocol/src/contract/domains/<domain>.ts` with
+   `defineCommand`, following the schema rules above. `since` is the domain's
+   current version: a new command does not bump the domain.
+3. Register it in the backend with `register(def, handler)`. The handler gets
+   the decoded arguments (`ArgsOf<typeof def>`) and returns `ResultOf<typeof
+   def>`; tests validate the result against the schema.
+4. Call it through the domain's client adapter for the current version; from
+   another backend, `NodeLink.invokeCommand(def, args)`. A node in the window
+   that lacks the command answers `unknown-command`, which the adapter or
+   caller reads with `incompatibility()`.
+5. Run `mise run contract:manifest` and commit `manifest.json` (and the
+   baseline, if it changed). `mise run contract:check` must pass.
+
+Converting an existing string command is the same, plus: delete its entry in
+`contract-domain-map.ts` (the generator refuses a defined command that is
+still mapped), keep the handler tolerant, keep its error text with `message`
+annotations, and commit the lower baseline that `contract:manifest` writes.
+
+Changing a defined command: a new optional field needs nothing else. Anything
+in the bump list above bumps the domain version, keeps the old version
+accepted through `min` where clients in the window still send it, adds a
+client adapter for the old version, and adds a register row.

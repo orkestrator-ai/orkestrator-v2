@@ -2,7 +2,8 @@ import type {
   GraphDescribeJobView,
   GraphDescribeStartInput,
 } from "@orkestrator/protocol/graphs/describe";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { graphs } from "@/lib/node-scope/domains/graphs";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * "Describe a graph" (item 215): the backend owns each environment's job, so
@@ -17,19 +18,19 @@ import { clientInvoke, commandBackendClient, type BackendClient } from "./client
  * over the window's command scope.
  */
 export function createGraphDescribeApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const api = () => graphs(client);
 
   function startGraphDescribe(input: GraphDescribeStartInput): Promise<GraphDescribeJobView> {
-    return invoke("graph_describe_start", { ...input });
+    return api().graph_describe_start({ ...input });
   }
 
   /** The environment's latest job, or null. */
   function getGraphDescribeStatus(environmentId: string): Promise<GraphDescribeJobView | null> {
-    return invoke("graph_describe_status", { environmentId });
+    return api().graph_describe_status({ environmentId });
   }
 
   function cancelGraphDescribe(environmentId: string): Promise<GraphDescribeJobView | null> {
-    return invoke("graph_describe_cancel", { environmentId });
+    return api().graph_describe_cancel({ environmentId });
   }
 
   /** Forgets a finished job once its draft was opened or the user dismissed it. */
@@ -37,7 +38,7 @@ export function createGraphDescribeApi(client: BackendClient) {
     environmentId: string,
     jobId: string,
   ): Promise<{ dismissed: boolean }> {
-    return invoke("graph_describe_dismiss", { environmentId, jobId });
+    return api().graph_describe_dismiss({ environmentId, jobId });
   }
 
   return { startGraphDescribe, getGraphDescribeStatus, cancelGraphDescribe, dismissGraphDescribe };

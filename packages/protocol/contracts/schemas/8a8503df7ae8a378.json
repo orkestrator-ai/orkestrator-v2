@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8a8503df7ae8a3786f65850ca3ef937e3189db1272c679fdc9c68032f2b64d5c",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "activationKey": {},
+        "choice": {},
+        "decision": {},
+        "kind": {},
+        "note": {},
+        "outlet": {},
+        "questionId": {},
+        "runId": {},
+        "text": {},
+        "value": {},
+        "waitId": {}
+      },
+      "type": "object"
+    }
+  }
+}

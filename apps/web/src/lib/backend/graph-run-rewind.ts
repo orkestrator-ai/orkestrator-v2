@@ -5,7 +5,8 @@ import type {
   GraphRunRestartResult,
 } from "@orkestrator/protocol/graphs/run-rewind";
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { graphsOn } from "@/lib/node-scope/domains/graphs";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Restart and code rewind of a graph run's activation (item 210), for the run
@@ -14,7 +15,8 @@ import { commandBackendClient, machineInvoker, type BackendClient } from "./clie
  * `machineInvoke`). Pass a `requestId` per user action so a retried call is a
  * no-op (`repeated: true`). A refused call rejects with the backend's message
  * and a `code`: `not-found`, `invalid-request`, `invalid-state`, `limit` or
- * `unavailable`.
+ * `unavailable`. Calls go through the `graphs` domain client (`graphsOn`,
+ * plan item 7007).
  */
 
 /**
@@ -23,14 +25,12 @@ import { commandBackendClient, machineInvoker, type BackendClient } from "./clie
  * over the window's command scope.
  */
 export function createGraphRunRewindApi(client: BackendClient) {
-  const machineInvoke = machineInvoker(client);
-
   /** Restarts the activation and everything that depended on it; a finished run reopens. */
   function restartGraphRunActivation(
     request: GraphRunRestartRequest,
     machine?: AccountMachine,
   ): Promise<GraphRunRestartResult> {
-    return machineInvoke(machine, "graph_run_restart", { ...request });
+    return graphsOn(client, machine).graph_run_restart({ ...request });
   }
 
   /** What rewinding code to the activation would drop and rerun, and why it cannot now (`blocked`). */
@@ -38,7 +38,7 @@ export function createGraphRunRewindApi(client: BackendClient) {
     request: Pick<GraphRunRestartRequest, "runId" | "activationKey">,
     machine?: AccountMachine,
   ): Promise<GraphRunCodeRewindPreview> {
-    return machineInvoke(machine, "graph_run_rewind_code_preview", {
+    return graphsOn(client, machine).graph_run_rewind_code_preview({
       runId: request.runId,
       activationKey: request.activationKey,
     });
@@ -52,7 +52,7 @@ export function createGraphRunRewindApi(client: BackendClient) {
     request: GraphRunCodeRewindRequest,
     machine?: AccountMachine,
   ): Promise<GraphRunRestartResult> {
-    return machineInvoke(machine, "graph_run_rewind_code", { ...request });
+    return graphsOn(client, machine).graph_run_rewind_code({ ...request });
   }
 
   return { restartGraphRunActivation, previewGraphRunCodeRewind, rewindGraphRunCode };

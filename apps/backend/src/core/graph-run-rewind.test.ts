@@ -5,6 +5,8 @@
  * waits.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { decodeCommandArgs } from "@orkestrator/protocol/contract/command";
+import { graphRunRestartCommand } from "@orkestrator/protocol/contract/domains/graphs";
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -774,8 +776,8 @@ describe("commands", () => {
       string,
       (args: Record<string, unknown>, context: unknown) => unknown
     >();
-    registerGraphRunRewindCommands(((name: string, handler: never) =>
-      handlers.set(name, handler)) as never);
+    registerGraphRunRewindCommands(((target: string | { name: string }, handler: never) =>
+      handlers.set(typeof target === "string" ? target : target.name, handler)) as never);
     const call = (name: string, args: Record<string, unknown>, context: unknown) =>
       Promise.resolve().then(() => handlers.get(name)!(args, context));
     const { h, run, c } = await codeRun();
@@ -785,13 +787,16 @@ describe("commands", () => {
     expect((await refusal(call("graph_run_restart", { runId: run.id }, context))).code).toBe(
       "invalid-request",
     );
-    expect(
-      (
-        await refusal(
-          call("graph_run_restart", { runId: run.id, activationKey: fix.key, x: 1 }, context),
-        )
-      ).message,
-    ).toContain("Unknown arguments");
+    // A defined command drops unknown keys before the handler (plan item 7007).
+    const stripped = decodeCommandArgs(graphRunRestartCommand, {
+      runId: run.id,
+      activationKey: fix.key,
+      x: 1,
+    });
+    expect(stripped._tag === "Success" ? stripped.success : null).toEqual({
+      runId: run.id,
+      activationKey: fix.key,
+    });
     expect(
       (
         await refusal(

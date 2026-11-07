@@ -14,6 +14,8 @@ test("read verbs may lead a command or follow one namespace", () => {
     "v2_list_items",
     "graph_run_get",
     "graph_runs_list",
+    "graph_template_get",
+    "graph_run_effects",
   ])
     expect(isNodeReadCommand(command)).toBe(true);
   for (const command of [
@@ -29,6 +31,8 @@ test("read verbs may lead a command or follow one namespace", () => {
     "graph_run_cancel",
     "graph_run_launch",
     "graph_run_answer",
+    "graph_describe_start",
+    "graph_describe_cancel",
   ])
     expect(isNodeReadCommand(command)).toBe(false);
 });

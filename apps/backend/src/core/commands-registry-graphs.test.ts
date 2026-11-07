@@ -72,14 +72,16 @@ describe("graph template commands", () => {
     }
   });
 
-  test("refuse when the service is missing or arguments are unknown", async () => {
+  test("refuse when the service is missing or an argument is malformed, drop unknown keys", async () => {
     context = { storage: fixture.storage } as unknown as CommandContext;
     expect(await refused("graph_templates_list", {})).toBe("invalid-request");
     context = {
       storage: fixture.storage,
       graphTemplates: fixture.service,
     } as unknown as CommandContext;
-    expect(await refused("graph_templates_list", { extra: 1 })).toBe("invalid-request");
+    await expect(run("graph_templates_list", { extra: 1 })).resolves.toMatchObject({
+      project: null,
+    });
     expect(await refused("graph_templates_list", { projectId: 5 })).toBe("invalid-request");
   });
 

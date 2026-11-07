@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:571f255e5b57eb9a109b3ca4703c21fa64ab0db86f93f1d9d05abd08378fb23d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {},
+        "inputs": {},
+        "panel": {},
+        "params": {},
+        "pins": {},
+        "projectId": {},
+        "ref": {},
+        "roles": {},
+        "stepMs": {}
+      },
+      "type": "object"
+    }
+  }
+}

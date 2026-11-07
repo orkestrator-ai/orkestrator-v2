@@ -7,7 +7,8 @@ import type {
   GraphTemplateShareImportResult,
 } from "@orkestrator/protocol/graphs/sharing";
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { graphsOn } from "@/lib/node-scope/domains/graphs";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Template sharing and the project template review (item 405): share
@@ -23,15 +24,13 @@ import { commandBackendClient, machineInvoker, type BackendClient } from "./clie
  * over the window's command scope.
  */
 export function createGraphTemplateSharingApi(client: BackendClient) {
-  const machineInvoke = machineInvoker(client);
-
   /** A share bundle for `ref`; `sign` uses this installation's key. */
   function exportGraphTemplateBundle(
     ref: GraphTemplateRef,
     input: { sign?: boolean; author?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplateShareExport> {
-    return machineInvoke(machine, "graph_template_share_export", { ref, ...input });
+    return graphsOn(client, machine).graph_template_share_export({ ref, ...input });
   }
 
   /**
@@ -44,7 +43,7 @@ export function createGraphTemplateSharingApi(client: BackendClient) {
     input: { projectId?: string; confirmDigest?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplateShareImportResult> {
-    return machineInvoke(machine, "graph_template_share_import", { text, ...input });
+    return graphsOn(client, machine).graph_template_share_import({ text, ...input });
   }
 
   /** The installation's public key (created with `create`) and the trusted keys. */
@@ -52,7 +51,7 @@ export function createGraphTemplateSharingApi(client: BackendClient) {
     input: { create?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<GraphSharingKeys> {
-    return machineInvoke(machine, "graph_sharing_keys", { ...input });
+    return graphsOn(client, machine).graph_sharing_keys({ ...input });
   }
 
   function setGraphSharingKeyTrust(
@@ -60,7 +59,7 @@ export function createGraphTemplateSharingApi(client: BackendClient) {
       { action: "add"; publicKey: string; label: string } | { action: "remove"; publicKey: string },
     machine?: AccountMachine,
   ): Promise<GraphSharingKeys> {
-    return machineInvoke(machine, "graph_sharing_key_trust", { ...input });
+    return graphsOn(client, machine).graph_sharing_key_trust({ ...input });
   }
 
   /** Untrusted and changed project templates, with capability summaries and diffs. */
@@ -69,7 +68,7 @@ export function createGraphTemplateSharingApi(client: BackendClient) {
     input: { path?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphProjectTemplateReview> {
-    return machineInvoke(machine, "graph_project_template_review", { projectId, ...input });
+    return graphsOn(client, machine).graph_project_template_review({ projectId, ...input });
   }
 
   /** Approve or reject a project template at the digest the user reviewed. */
@@ -77,7 +76,7 @@ export function createGraphTemplateSharingApi(client: BackendClient) {
     input: { projectId: string; path: string; digest: string; decision: "approve" | "reject" },
     machine?: AccountMachine,
   ): Promise<GraphProjectTemplateReviewDecision> {
-    return machineInvoke(machine, "graph_project_template_review_decide", { ...input });
+    return graphsOn(client, machine).graph_project_template_review_decide({ ...input });
   }
 
   return {

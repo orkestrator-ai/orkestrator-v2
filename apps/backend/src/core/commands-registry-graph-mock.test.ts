@@ -85,16 +85,17 @@ describe("graph_run_mock", () => {
   });
 
   test("validates its arguments", async () => {
-    const { world, refused } = await setup();
+    const { world, run, refused } = await setup();
     const ref = await world.save({
       ...graphTemplateExample("multi-review"),
       id: "mr",
       revision: 0,
     });
     expect((await refused("graph_run_mock", { ref })).message).toBe("projectId is required");
-    expect(
-      (await refused("graph_run_mock", { ref, projectId: world.projectId, extra: 1 })).message,
-    ).toContain("Unknown arguments: extra");
+    // An unknown key is dropped, not refused (a defined command is tolerant).
+    await expect(
+      run("graph_run_mock", { ref, projectId: world.projectId, extra: 1 }),
+    ).resolves.toMatchObject({ run: { mock: true } });
     expect(await refused("graph_run_mock", { ref, projectId: "missing" })).toMatchObject({
       code: "not-found",
     });

@@ -13,15 +13,17 @@ import type {
   GraphRunSummary,
   GraphRunTranscriptView,
 } from "@orkestrator/protocol/graphs/run-view";
+import { graphs } from "@/lib/node-scope/domains/graphs";
 import { createGraphRunRewindApi } from "./graph-run-rewind";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Graph runs (item 211): list, read and control a run, read its artifacts and
  * its agent transcripts, answer an agent's `ask_human` question (item 204)
  * or a human node (item 208), and list what a run waits on a person for. Shapes are in `@orkestrator/protocol/graphs/run-view`. Every read is
  * a snapshot of the backend's run record, which stays the authority; a
- * refused call rejects with the backend's message.
+ * refused call rejects with the backend's message. Every call goes through
+ * the `graphs` domain client (plan item 7007).
  */
 
 export interface GraphRunAnswerInput {
@@ -68,52 +70,52 @@ function requestId(): string {
  * over the window's command scope.
  */
 export function createGraphRunsApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const api = () => graphs(client);
   const { previewGraphRunCodeRewind, restartGraphRunActivation, rewindGraphRunCode } =
     createGraphRunRewindApi(client);
 
   function listGraphRuns(environmentId: string): Promise<GraphRunSummary[]> {
-    return invoke<GraphRunSummary[]>("graph_runs_list", { environmentId });
+    return api().graph_runs_list({ environmentId });
   }
 
   /** The run, or `unchanged` when `knownRevision` is still current. */
   function getGraphRun(runId: string, knownRevision?: number): Promise<GraphRunGetResult> {
-    return invoke<GraphRunGetResult>("graph_run_get", {
+    return api().graph_run_get({
       runId,
       ...(knownRevision !== undefined ? { knownRevision } : {}),
     });
   }
 
-  async function changedRun(command: string, args: Record<string, unknown>): Promise<GraphRun> {
-    const result = await invoke<GraphRunGetResult>(command, args);
+  async function changedRun(answer: Promise<GraphRunGetResult>): Promise<GraphRun> {
+    const result = await answer;
     if (result.status !== "changed") throw new Error("The backend returned no run snapshot");
     return result.run;
   }
 
   function cancelGraphRun(runId: string): Promise<GraphRun> {
-    return changedRun("graph_run_cancel", { runId });
+    return changedRun(api().graph_run_cancel({ runId }));
   }
 
   function pauseGraphRun(runId: string): Promise<GraphRun> {
-    return changedRun("graph_run_pause", { runId });
+    return changedRun(api().graph_run_pause({ runId }));
   }
 
   function resumeGraphRun(runId: string): Promise<GraphRun> {
-    return changedRun("graph_run_resume", { runId });
+    return changedRun(api().graph_run_resume({ runId }));
   }
 
   /** Reruns one failed node position as a new attempt (a live run only). */
   function retryGraphActivation(runId: string, activationKey: string): Promise<GraphRun> {
-    return changedRun("graph_run_retry", { runId, activationKey });
+    return changedRun(api().graph_run_retry({ runId, activationKey }));
   }
 
   /** Skips a position that has not been admitted yet (`waiting` or `ready`). */
   function skipGraphActivation(runId: string, activationKey: string): Promise<GraphRun> {
-    return changedRun("graph_run_skip", { runId, activationKey });
+    return changedRun(api().graph_run_skip({ runId, activationKey }));
   }
 
   function getGraphRunArtifact(runId: string, artifactId: string): Promise<GraphRunArtifactView> {
-    return invoke<GraphRunArtifactView>("graph_run_artifact", { runId, artifactId });
+    return api().graph_run_artifact({ runId, artifactId });
   }
 
   function getGraphRunTranscript(
@@ -121,7 +123,7 @@ export function createGraphRunsApi(client: BackendClient) {
     activationKey: string,
     window: { fromIndex?: number; maxBytes?: number } = {},
   ): Promise<GraphRunTranscriptView> {
-    return invoke<GraphRunTranscriptView>("graph_run_transcript", {
+    return api().graph_run_transcript({
       runId,
       activationKey,
       ...window,
@@ -132,7 +134,11 @@ export function createGraphRunsApi(client: BackendClient) {
   function answerGraphRunQuestion(
     input: GraphRunAnswerInput,
   ): Promise<{ activationKey: string; question: GraphAgentQuestion | null }> {
-    return invoke("graph_run_answer", { ...input });
+    // The answer has the form that was sent: the question form here.
+    return api().graph_run_answer({ ...input }) as Promise<{
+      activationKey: string;
+      question: GraphAgentQuestion | null;
+    }>;
   }
 
   /**
@@ -145,17 +151,18 @@ export function createGraphRunsApi(client: BackendClient) {
     input: GraphRunHumanAnswerInput,
   ): Promise<{ activationKey: string; human: GraphHumanWait | null }> {
     const { value, ...rest } = input;
-    return invoke("graph_run_answer", {
+    return api().graph_run_answer({
       ...rest,
       ...(Object.hasOwn(input, "value") ? { value } : {}),
-    });
+      // The human node form's answer.
+    }) as Promise<{ activationKey: string; human: GraphHumanWait | null }>;
   }
 
   /** What a run, or every live run of an environment, waits on a person for. */
   function listGraphRunPendingInteractions(
     target: { runId: string } | { environmentId: string },
   ): Promise<GraphRunPendingInteraction[]> {
-    return invoke<GraphRunPendingInteraction[]>("graph_run_pending", { ...target });
+    return api().graph_run_pending({ ...target });
   }
 
   const graphRunRewindBackend: GraphRunRewindBackend = {

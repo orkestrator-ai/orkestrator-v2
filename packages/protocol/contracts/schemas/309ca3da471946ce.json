@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:309ca3da471946ce06464feb9e3986ecfd572423738b67061f276f17b00f3ce2",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environment": {},
+        "inputs": {},
+        "params": {},
+        "projectId": {},
+        "ref": {},
+        "requestId": {},
+        "requestedBy": {},
+        "roles": {},
+        "saveDefaults": {},
+        "template": {},
+        "ticket": {}
+      },
+      "type": "object"
+    }
+  }
+}

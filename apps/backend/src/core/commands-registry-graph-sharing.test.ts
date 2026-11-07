@@ -139,9 +139,10 @@ describe("graph sharing commands", () => {
     expect(await refused("graph_template_share_import", { text: "{}", confirmDigest: "abc" })).toBe(
       "invalid-request",
     );
-    expect(await refused("graph_template_share_import", { text: "{}", extra: true })).toBe(
-      "invalid-request",
-    );
+    // An unknown key is dropped, not refused (a defined command is tolerant).
+    await expect(
+      run("graph_template_share_import", { text: "{}", extra: true }),
+    ).resolves.toMatchObject({ status: "refused" });
     expect(await refused("graph_sharing_key_trust", { action: "add", publicKey: "x" })).toBe(
       "invalid-request",
     );

@@ -1,5 +1,9 @@
 import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { parseGraphTemplateRef } from "@orkestrator/protocol/graphs/library";
+import {
+  graphLaunchOptionsCommand,
+  graphRunLaunchCommand,
+} from "@orkestrator/protocol/contract/domains/graphs";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { GraphLaunchError, type GraphRunLaunchService } from "./graph-run-launch.js";
@@ -16,7 +20,9 @@ import { GraphLaunchError, type GraphRunLaunchService } from "./graph-run-launch
  *
  * A refusal throws a `GraphLaunchError` whose `code` the gateway forwards
  * (`GRAPH_LAUNCH_ERROR_CODES`). The CLI, the coordinator and schedules reach
- * the same service through their own surfaces.
+ * the same service through their own surfaces. Both are defined in the
+ * `graphs` contract domain (plan item 7007): unknown argument keys are
+ * dropped, and `requestId` is critical on the launch.
  */
 
 function launches(context: CommandContext): GraphRunLaunchService {
@@ -30,11 +36,7 @@ function invalid(message: string): never {
 }
 
 export function registerGraphLaunchCommands(register: CommandRegistrar): void {
-  register("graph_launch_options", async (args, context) => {
-    const unknown = Object.keys(args).filter(
-      (key) => !["ref", "projectId", "environmentId", "create"].includes(key),
-    );
-    if (unknown.length > 0) invalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
+  register(graphLaunchOptionsCommand, async (args, context) => {
     const ref = parseGraphTemplateRef(args.ref);
     if ("error" in ref) invalid(ref.error);
     if (typeof args.projectId !== "string" || !args.projectId || args.projectId.length > 200) {
@@ -60,7 +62,7 @@ export function registerGraphLaunchCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("graph_run_launch", async (args, context) => {
+  register(graphRunLaunchCommand, async (args, context) => {
     let request;
     try {
       request = parseGraphLaunchRequest(args);

@@ -1,4 +1,12 @@
 import { parseGraphTemplateRef, type GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
+import {
+  graphProjectTemplateReviewCommand,
+  graphProjectTemplateReviewDecideCommand,
+  graphSharingKeysCommand,
+  graphSharingKeyTrustCommand,
+  graphTemplateShareExportCommand,
+  graphTemplateShareImportCommand,
+} from "@orkestrator/protocol/contract/domains/graphs";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
@@ -9,8 +17,9 @@ import type { GraphTemplateSharing } from "./graph-template-sharing.js";
  * import share bundles, read and manage signing keys, and review untrusted or
  * changed project templates. Inputs and results are the shapes in
  * `@orkestrator/protocol/graphs/sharing`. Registered with item 109's
- * `graph_template*` commands; refusals throw a `GraphTemplateError` whose
- * `code` the gateway forwards.
+ * `graph_template*` commands and defined in the `graphs` contract domain
+ * (plan item 7007); refusals throw a `GraphTemplateError` whose `code` the
+ * gateway forwards, and unknown argument keys are dropped.
  */
 
 function sharing(context: CommandContext): GraphTemplateSharing {
@@ -22,11 +31,6 @@ function sharing(context: CommandContext): GraphTemplateSharing {
 
 function invalid(message: string): never {
   throw new GraphTemplateError("invalid-request", message);
-}
-
-function onlyKeys(args: Record<string, unknown>, allowed: readonly string[]): void {
-  const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) invalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
 }
 
 function projectIdArg(value: unknown, required: true): string;
@@ -63,8 +67,7 @@ function digestArg(value: unknown, name: string): string | undefined {
 }
 
 export function registerGraphSharingCommands(register: CommandRegistrar): void {
-  register("graph_template_share_export", async (args, context) => {
-    onlyKeys(args, ["ref", "sign", "author"]);
+  register(graphTemplateShareExportCommand, async (args, context) => {
     if (args.sign !== undefined && typeof args.sign !== "boolean")
       invalid("sign must be a boolean");
     const author = stringArg(args.author, "author", 1000);
@@ -74,8 +77,7 @@ export function registerGraphSharingCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("graph_template_share_import", async (args, context) => {
-    onlyKeys(args, ["text", "projectId", "confirmDigest"]);
+  register(graphTemplateShareImportCommand, async (args, context) => {
     if (typeof args.text !== "string") invalid("text must be the bundle's (or template's) text");
     const projectId = projectIdArg(args.projectId);
     const confirmDigest = digestArg(args.confirmDigest, "confirmDigest");
@@ -85,16 +87,14 @@ export function registerGraphSharingCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("graph_sharing_keys", async (args, context) => {
-    onlyKeys(args, ["create"]);
+  register(graphSharingKeysCommand, async (args, context) => {
     if (args.create !== undefined && typeof args.create !== "boolean") {
       invalid("create must be a boolean");
     }
     return sharing(context).keys(args.create === true ? { create: true } : {});
   });
 
-  register("graph_sharing_key_trust", async (args, context) => {
-    onlyKeys(args, ["action", "publicKey", "label"]);
+  register(graphSharingKeyTrustCommand, async (args, context) => {
     if (args.action !== "add" && args.action !== "remove") invalid("action must be add or remove");
     const publicKey =
       stringArg(args.publicKey, "publicKey", 64) ?? invalid("publicKey is required");
@@ -107,14 +107,12 @@ export function registerGraphSharingCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("graph_project_template_review", async (args, context) => {
-    onlyKeys(args, ["projectId", "path"]);
+  register(graphProjectTemplateReviewCommand, async (args, context) => {
     const path = stringArg(args.path, "path", 400);
     return sharing(context).review(projectIdArg(args.projectId, true), path);
   });
 
-  register("graph_project_template_review_decide", async (args, context) => {
-    onlyKeys(args, ["projectId", "path", "digest", "decision"]);
+  register(graphProjectTemplateReviewDecideCommand, async (args, context) => {
     if (args.decision !== "approve" && args.decision !== "reject") {
       invalid("decision must be approve or reject");
     }

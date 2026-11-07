@@ -11,7 +11,8 @@ import type {
 } from "@orkestrator/protocol/graphs/library";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { graphsOn } from "@/lib/node-scope/domains/graphs";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * The graph template library (item 109): built-in, user and project
@@ -19,7 +20,8 @@ import { commandBackendClient, machineInvoker, type BackendClient } from "./clie
  * Every call goes to the machine that owns the project (`machine`, as in
  * `machineInvoke`); user templates are kept per machine. A refused call
  * rejects with the backend's message and a `code` from
- * `GRAPH_TEMPLATE_ERROR_CODES` (`revision-conflict` on a stale save).
+ * `GRAPH_TEMPLATE_ERROR_CODES` (`revision-conflict` on a stale save). Calls go
+ * through the `graphs` domain client (`graphsOn`, plan item 7007).
  */
 
 /**
@@ -28,13 +30,11 @@ import { commandBackendClient, machineInvoker, type BackendClient } from "./clie
  * over the window's command scope.
  */
 export function createGraphTemplatesApi(client: BackendClient) {
-  const machineInvoke = machineInvoker(client);
-
   function listGraphTemplates(
     input: { projectId?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplatesListResult> {
-    return machineInvoke(machine, "graph_templates_list", { ...input });
+    return graphsOn(client, machine).graph_templates_list({ ...input });
   }
 
   function getGraphTemplate(
@@ -42,7 +42,7 @@ export function createGraphTemplatesApi(client: BackendClient) {
     input: { projectId?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplateDetail> {
-    return machineInvoke(machine, "graph_template_get", { ref, ...input });
+    return graphsOn(client, machine).graph_template_get({ ref, ...input });
   }
 
   /** Saves a user template; `expectedRevision` defaults to `template.revision` (0 creates). */
@@ -51,7 +51,7 @@ export function createGraphTemplatesApi(client: BackendClient) {
     input: { expectedRevision?: number; projectId?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplateDetail> {
-    return machineInvoke(machine, "graph_template_save", { template, ...input });
+    return graphsOn(client, machine).graph_template_save({ template, ...input });
   }
 
   function deleteGraphTemplate(
@@ -59,7 +59,7 @@ export function createGraphTemplatesApi(client: BackendClient) {
     expectedRevision?: number,
     machine?: AccountMachine,
   ): Promise<{ deleted: boolean }> {
-    return machineInvoke(machine, "graph_template_delete", {
+    return graphsOn(client, machine).graph_template_delete({
       id,
       ...(expectedRevision !== undefined ? { expectedRevision } : {}),
     });
@@ -71,7 +71,7 @@ export function createGraphTemplatesApi(client: BackendClient) {
     input: { id?: string; name?: string; digest?: string; projectId?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplateDetail> {
-    return machineInvoke(machine, "graph_template_duplicate", { ref, ...input });
+    return graphsOn(client, machine).graph_template_duplicate({ ref, ...input });
   }
 
   /**
@@ -83,7 +83,7 @@ export function createGraphTemplatesApi(client: BackendClient) {
     input: { projectId?: string; includePlan?: boolean; forLaunch?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplateCompileResponse> {
-    return machineInvoke(machine, "graph_template_compile", { ...target, ...input });
+    return graphsOn(client, machine).graph_template_compile({ ...target, ...input });
   }
 
   /** JSON text to a new user template; refused text resolves with `ok: false` and errors. */
@@ -92,14 +92,14 @@ export function createGraphTemplatesApi(client: BackendClient) {
     input: { projectId?: string } = {},
     machine?: AccountMachine,
   ): Promise<GraphTemplateImportResult> {
-    return machineInvoke(machine, "graph_template_import", { text, ...input });
+    return graphsOn(client, machine).graph_template_import({ text, ...input });
   }
 
   function exportGraphTemplate(
     ref: GraphTemplateRef,
     machine?: AccountMachine,
   ): Promise<GraphTemplateExport> {
-    return machineInvoke(machine, "graph_template_export", { ref });
+    return graphsOn(client, machine).graph_template_export({ ref });
   }
 
   /** Approve a project template at the digest the user reviewed, or revoke its approval. */
@@ -109,14 +109,14 @@ export function createGraphTemplatesApi(client: BackendClient) {
     ),
     machine?: AccountMachine,
   ): Promise<GraphTemplateTrustResult> {
-    return machineInvoke(machine, "graph_template_trust", { ...input });
+    return graphsOn(client, machine).graph_template_trust({ ...input });
   }
 
   function getGraphCapabilityCeiling(
     projectId: string,
     machine?: AccountMachine,
   ): Promise<GraphProjectCeiling> {
-    return machineInvoke(machine, "graph_capability_ceiling_get", { projectId });
+    return graphsOn(client, machine).graph_capability_ceiling_get({ projectId });
   }
 
   /** Tightens (or with `null` resets) a project's ceiling; `git.push`/`github.write` are refused. */
@@ -126,7 +126,7 @@ export function createGraphTemplatesApi(client: BackendClient) {
     expectedRevision?: number,
     machine?: AccountMachine,
   ): Promise<GraphProjectCeiling> {
-    return machineInvoke(machine, "graph_capability_ceiling_set", {
+    return graphsOn(client, machine).graph_capability_ceiling_set({
       projectId,
       ceiling,
       ...(expectedRevision !== undefined ? { expectedRevision } : {}),

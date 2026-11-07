@@ -100,9 +100,8 @@ describe("graph run view commands", () => {
     expect("plan" in summary).toBe(false);
     expect(await call(context, "graph_runs_list", { environmentId: "e2" })).toEqual([]);
     expect(await refused(context, "graph_runs_list", {})).toBe("invalid-request");
-    expect(await refused(context, "graph_runs_list", { environmentId: "e1", x: 1 })).toBe(
-      "invalid-request",
-    );
+    // An unknown key is dropped, not refused (a defined command is tolerant).
+    expect(await call(context, "graph_runs_list", { environmentId: "e2", x: 1 })).toEqual([]);
   });
 
   test("get returns the snapshot, or unchanged at the known revision", async () => {
@@ -189,9 +188,10 @@ describe("graph run view commands", () => {
       runId: run.id,
     });
     expect(cancelled).toMatchObject({ status: "changed", run: { status: "cancelling" } });
-    expect(await refused(context, "graph_run_cancel", { runId: run.id, extra: true })).toBe(
-      "invalid-request",
-    );
+    // An unknown key is dropped, not refused (a defined command is tolerant).
+    await expect(
+      call(context, "graph_run_cancel", { runId: run.id, extra: true }),
+    ).resolves.toMatchObject({ status: "changed" });
   });
 
   test("an artifact read returns its value within the bound", async () => {

@@ -5,7 +5,8 @@ import type {
 } from "@orkestrator/protocol/graphs/launch";
 import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { graphsOn } from "@/lib/node-scope/domains/graphs";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Graph launches (item 214): what the launch dialog shows for a template,
@@ -20,8 +21,6 @@ import { commandBackendClient, machineInvoker, type BackendClient } from "./clie
  * over the window's command scope.
  */
 export function createGraphLaunchApi(client: BackendClient) {
-  const machineInvoke = machineInvoker(client);
-
   function getGraphLaunchOptions(
     input: {
       ref: GraphTemplateRef;
@@ -31,14 +30,14 @@ export function createGraphLaunchApi(client: BackendClient) {
     },
     machine?: AccountMachine,
   ): Promise<GraphLaunchOptions> {
-    return machineInvoke(machine, "graph_launch_options", { ...input });
+    return graphsOn(client, machine).graph_launch_options({ ...input });
   }
 
   function launchGraphRun(
     request: GraphLaunchRequest,
     machine?: AccountMachine,
   ): Promise<GraphLaunchResult> {
-    return machineInvoke(machine, "graph_run_launch", { ...request });
+    return graphsOn(client, machine).graph_run_launch({ ...request });
   }
 
   return { getGraphLaunchOptions, launchGraphRun };

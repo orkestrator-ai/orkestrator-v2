@@ -12,6 +12,7 @@
     "environments": { "current": 1, "adapters": [1, 0] },
     "files": { "current": 1, "adapters": [1, 0] },
     "git": { "current": 1, "adapters": [1, 0] },
+    "graphs": { "current": 1, "adapters": [1, 0] },
     "native-sessions": { "current": 1, "adapters": [1, 0] },
     "node-files": { "current": 1, "adapters": [1, 0] },
     "node-mail": { "current": 1, "adapters": [1, 0] },

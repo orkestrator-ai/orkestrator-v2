@@ -31,6 +31,7 @@ import { agentServersClient } from "./domains/agent-servers/client.js";
 import { coordinatorClient } from "./domains/coordinator/client.js";
 import { designClient } from "./domains/design/client.js";
 import { filesClient } from "./domains/files/client.js";
+import { graphsClient } from "./domains/graphs/client.js";
 import { nativeSessionsClient } from "./domains/native-sessions/client.js";
 import { nodeFilesClient } from "./domains/node-files/client.js";
 import { nodesClient } from "./domains/nodes/client.js";
@@ -54,6 +55,7 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   coordinatorClient,
   designClient,
   filesClient,
+  graphsClient,
   nativeSessionsClient,
   nodeFilesClient,
   nodesClient,

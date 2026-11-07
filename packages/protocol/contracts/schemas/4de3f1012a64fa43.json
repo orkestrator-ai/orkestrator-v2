@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:4de3f1012a64fa4354f39ab48ecb36dcb8309bf94d182b4d425f8dea9d9ffaa3",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "activationKey": {},
+        "requestId": {},
+        "runId": {}
+      },
+      "type": "object"
+    }
+  }
+}

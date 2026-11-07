@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:84a02e0408dd5d0928b6046e4a8484ed1ed0aa99f29aca15d395414b197a0f28",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {},
+        "baseDraft": {},
+        "description": {},
+        "environmentId": {},
+        "fastMode": {},
+        "model": {},
+        "reasoningEffort": {}
+      },
+      "type": "object"
+    }
+  }
+}

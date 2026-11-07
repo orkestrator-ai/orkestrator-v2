@@ -6,16 +6,54 @@ import type { GraphRunLaunchService } from "./graph-run-launch.js";
 
 const commands = createCommandRegistry();
 
+/** A complete `GraphLaunchOptions`: results are validated against the schema in tests. */
+const OPTIONS = {
+  summary: {
+    ref: { scope: "user", id: "sample" },
+    scope: "user",
+    id: "sample",
+    name: "Sample",
+    revision: 1,
+    digest: "d".repeat(64),
+    readOnly: false,
+    trust: "trusted",
+    launchable: true,
+    compile: {
+      ok: true,
+      launchable: true,
+      errors: 0,
+      warnings: 0,
+      infos: 0,
+      pendingAcknowledgements: 0,
+      planDigest: null,
+      cost: null,
+    },
+  },
+  launchable: true,
+  errors: [],
+  roles: [],
+  parameters: [],
+  params: {},
+  inputs: [],
+  environment: { workspace: "environment", default: "new-worktree" },
+};
+
 function harness() {
   const calls: Array<{ request: GraphLaunchRequest; origin: GraphLaunchOrigin } | unknown> = [];
   const graphLaunches = {
     async launch(request: GraphLaunchRequest, origin: GraphLaunchOrigin) {
       calls.push({ request, origin });
-      return { runId: "r1", projectId: request.projectId, status: "running", repeated: false };
+      return {
+        runId: "r1",
+        projectId: request.projectId,
+        status: "running",
+        template: { id: "sample", revision: 1, name: "Sample" },
+        repeated: false,
+      };
     },
     async options(input: unknown) {
       calls.push(input);
-      return { launchable: true };
+      return OPTIONS;
     },
   } as unknown as GraphRunLaunchService;
   const context = { graphLaunches } as unknown as CommandContext;

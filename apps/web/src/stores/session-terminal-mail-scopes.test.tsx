@@ -17,7 +17,12 @@ import type { ScopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { STORE_RESOURCE_HANDLERS, startStoreResourceSync } from "@/lib/store-resource-sync";
-import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInNodeScope,
+  type FakeNodeClientOptions,
+} from "@/test/render-in-node-scope";
 import type { Environment, Session } from "@/types";
 import { agentMailStore, requestAgentMailMailbox, useAgentMailStore } from "./agentMailStore";
 import { claudeTmuxStore, useClaudeTmuxStore } from "./claudeTmuxStore";
@@ -94,8 +99,8 @@ afterEach(() => {
 });
 
 function twoScopes(
-  invokeA: ConstructorParameters<typeof FakeNodeClient>[0]["invoke"] = {},
-  invokeB: ConstructorParameters<typeof FakeNodeClient>[0]["invoke"] = {},
+  invokeA: FakeNodeClientOptions["invoke"] = {},
+  invokeB: FakeNodeClientOptions["invoke"] = {},
 ) {
   windowScope = new WindowScope();
   const clientA = new FakeNodeClient({ nodeId: NODE_A, invoke: invokeA });

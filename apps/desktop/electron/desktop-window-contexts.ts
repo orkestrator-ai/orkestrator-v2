@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/node-events";
 import type { ConnectionManager } from "./connection-manager.js";
 import { PORTAL_EVENT_CHANNEL } from "./federation-ipc.js";
+import { NODE_EVENT_CHANNEL } from "./node-ipc.js";
 import { rebindWindowPreviews, type WindowPreviewRuntime } from "./preview-connection-backend.js";
 import { editDesktopConnection, type WorkspaceContext } from "./window-workspace-target.js";
 import { formatLogError, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
@@ -100,6 +101,11 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
   private readonly relayedListens = new Map<number, Record<RelayedListenChannel, Set<string>>>();
   /** What each connection's filtered stream was last told to carry. */
   private readonly appliedRelayedEvents = new Map<string, string>();
+  /** Node scope connections: whose `orkestrator:node-event` each one feeds. */
+  private readonly nodeConnections = new Map<
+    string,
+    Set<{ contents: RendererContents; nodeId: string }>
+  >();
   lastFocusedWindowId: number | null = null;
 
   constructor(private readonly options: DesktopWindowContextsOptions<T>) {}
@@ -164,6 +170,26 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
    */
   relayBackendEvent(connectionId: string, event: string, payload: unknown): void {
     this.sendToConnection(connectionId, event, payload, connectionId === LOCAL_CONNECTION_ID);
+  }
+
+  /**
+   * Deliver a node scope's connection events to its window, tagged with the
+   * node, until the returned callback runs (the scope's release).
+   */
+  mapNodeConnection(
+    context: { contents: RendererContents },
+    nodeId: string,
+    connectionId: string,
+  ): () => void {
+    const entry = { contents: context.contents, nodeId };
+    const entries = this.nodeConnections.get(connectionId) ?? new Set();
+    this.nodeConnections.set(connectionId, entries);
+    entries.add(entry);
+    return () => {
+      const current = this.nodeConnections.get(connectionId);
+      if (!current?.delete(entry)) return;
+      if (current.size === 0) this.nodeConnections.delete(connectionId);
+    };
   }
 
   /** Whether any open window would take terminal output from main's local stream. */
@@ -312,6 +338,13 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       ) {
         context.contents.send(PORTAL_EVENT_CHANNEL, event, payload);
       }
+    }
+    // A node scope's own stream, terminal output included. Per-node relayed
+    // events are a command-node channel; a node scope never asks for them.
+    const nodes = this.nodeConnections.get(connectionId);
+    if (!nodes || isPerNodeRelayedEvent(event)) return;
+    for (const { contents, nodeId } of nodes) {
+      if (!contents.isDestroyed()) contents.send(NODE_EVENT_CHANNEL, nodeId, event, payload);
     }
   }
 

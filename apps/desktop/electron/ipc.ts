@@ -56,10 +56,62 @@ import {
   startCaptureInput,
 } from "./browser-preview-capture-validation.js";
 import { registerArtifactHostIpc, type ArtifactHostController } from "./artifact-host-ipc.js";
+import { parseNodeId } from "./node-ipc.js";
+
+/**
+ * The contract envelope (`{ command, args, domain?, version?, critical? }`,
+ * plan item 1003). Opaque here: main only bounds it and forwards it.
+ */
+export type InvokeEnvelope = Record<string, unknown>;
+
+/** The serialized size an envelope may have. */
+export const MAX_INVOKE_ENVELOPE_LENGTH = 4096;
+
+/** `orkestrator:invoke`'s optional third argument. */
+export type InvokeOptions = { nodeId?: string; envelope?: InvokeEnvelope };
 
 type BackendInvoker = {
-  invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
+  invoke(
+    command: string,
+    args: Record<string, unknown>,
+    options?: { envelope: InvokeEnvelope },
+  ): Promise<unknown> | unknown;
 };
+
+/** Node scopes of the sending window (`node-ipc.ts`). */
+export type NodeScopeIpc = {
+  open(event: IpcEventLike, nodeId: string): Promise<unknown>;
+  release(event: IpcEventLike, nodeId: string): void;
+  gateway(event: IpcEventLike, nodeId: string): unknown;
+};
+
+/** Older renderers send no options; anything else must be a plain object. */
+export function parseInvokeOptions(value: unknown): InvokeOptions {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value))
+    throw new Error("Expected invoke options to be an object");
+  const { nodeId, envelope } = value as Record<string, unknown>;
+  const options: InvokeOptions = {};
+  if (nodeId !== undefined && nodeId !== null) options.nodeId = parseNodeId(nodeId);
+  if (envelope !== undefined && envelope !== null) {
+    if (typeof envelope !== "object" || Array.isArray(envelope))
+      throw new Error("Expected the invoke envelope to be an object");
+    let length: number;
+    try {
+      length = JSON.stringify(envelope).length;
+    } catch {
+      throw new Error("Expected the invoke envelope to be plain data");
+    }
+    if (length > MAX_INVOKE_ENVELOPE_LENGTH) throw new Error("The invoke envelope is too large");
+    options.envelope = envelope as InvokeEnvelope;
+  }
+  return options;
+}
+
+/** The node an administration request names, if any. */
+function adminNodeId(value: unknown): string | undefined {
+  return parseInvokeOptions(value).nodeId;
+}
 
 type IpcEventLike = {
   senderFrame?: { url: string } | null;
@@ -137,7 +189,11 @@ export type BrowserPreviewController = {
 };
 
 export type MainIpcDependencies = {
-  getBackend: (event?: IpcEventLike) => BackendInvoker | null;
+  /** The sending window's command node, or the node `nodeId` names (opened on demand). */
+  getBackend: (
+    event?: IpcEventLike,
+    nodeId?: string,
+  ) => BackendInvoker | null | Promise<BackendInvoker | null>;
   getMainWindow: (event?: IpcEventLike) => BrowserWindow | null;
   ipc: IpcMainLike;
   clipboardApi: ClipboardLike;
@@ -147,11 +203,25 @@ export type MainIpcDependencies = {
   appApi: AppLike;
   nativeImageApi: ClipboardNativeImageApi;
   getMacOsPermissions: () => Promise<MacOsPermissionsStatus>;
-  getWebClientStatus: (event?: IpcEventLike) => WebClientStatus | Promise<WebClientStatus>;
-  setWebClientEnabled: (enabled: boolean, event?: IpcEventLike) => Promise<WebClientStatus>;
-  resetWebClientServe: (event?: IpcEventLike) => Promise<WebClientStatus>;
-  getGatewayTokenSettings: (event?: IpcEventLike) => Promise<GatewayTokenSettings>;
-  setGatewayToken: (token: string, event?: IpcEventLike) => Promise<GatewayTokenSettings>;
+  // Machine administration. `nodeId` names the machine; a leaf is refused.
+  getWebClientStatus: (
+    event?: IpcEventLike,
+    nodeId?: string,
+  ) => WebClientStatus | Promise<WebClientStatus>;
+  setWebClientEnabled: (
+    enabled: boolean,
+    event?: IpcEventLike,
+    nodeId?: string,
+  ) => Promise<WebClientStatus>;
+  resetWebClientServe: (event?: IpcEventLike, nodeId?: string) => Promise<WebClientStatus>;
+  getGatewayTokenSettings: (event?: IpcEventLike, nodeId?: string) => Promise<GatewayTokenSettings>;
+  setGatewayToken: (
+    token: string,
+    event?: IpcEventLike,
+    nodeId?: string,
+  ) => Promise<GatewayTokenSettings>;
+  /** `orkestrator:nodes:*`; absent means node scopes are unavailable. */
+  nodes?: NodeScopeIpc;
   // Preload bootstrap reads this through sendSync, so this dependency must
   // remain synchronous even though the invoke-based handler also accepts it.
   listConnections: (event?: IpcEventLike) => ConnectionList;
@@ -279,6 +349,7 @@ export function registerMainIpc({
   getArtifactHosts,
   setRendererDebugLogging,
   trustedRendererUrl,
+  nodes,
 }: MainIpcDependencies): void {
   const isTrustedSender = (event: IpcEventLike): boolean =>
     isTrustedRendererUrl(event.senderFrame?.url ?? "", trustedRendererUrl);
@@ -306,35 +377,56 @@ export function registerMainIpc({
   const fileDraftWrites = new DesktopFileDraftWrites();
   const draftSenders = new Set<number>();
 
-  handle("orkestrator:invoke", async (event, command: unknown, args?: unknown) => {
-    const backend = getBackend(event);
-    if (!backend) throw new Error("Backend is not initialized");
-    if (typeof command !== "string") throw new Error("Expected command to be a string");
-    const safeArgs =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as Record<string, unknown>)
-        : {};
-    if (command === "desktop_file_draft_release") {
-      if (!event.sender) throw new Error("Draft sender is unavailable");
-      fileDraftWrites.releaseClient(event.sender.id, safeArgs.clientId);
-      return;
-    }
-    if (command === "desktop_file_draft_write") {
-      const sender = event.sender;
-      if (!sender) throw new Error("Draft sender is unavailable");
-      if (!draftSenders.has(sender.id)) {
-        draftSenders.add(sender.id);
-        const release = () => {
-          draftSenders.delete(sender.id);
-          fileDraftWrites.releaseSender(sender.id);
-        };
-        sender.once?.("destroyed", release);
-        sender.on?.("did-navigate", () => fileDraftWrites.releaseSender(sender.id));
+  // `options` is `{ nodeId?, envelope? }`; an older renderer sends two arguments.
+  handle(
+    "orkestrator:invoke",
+    async (event, command: unknown, args?: unknown, options?: unknown) => {
+      if (typeof command !== "string") throw new Error("Expected command to be a string");
+      const { nodeId, envelope } = parseInvokeOptions(options);
+      const backend = await (nodeId === undefined ? getBackend(event) : getBackend(event, nodeId));
+      if (!backend) throw new Error("Backend is not initialized");
+      const safeArgs =
+        args && typeof args === "object" && !Array.isArray(args)
+          ? (args as Record<string, unknown>)
+          : {};
+      if (command === "desktop_file_draft_release") {
+        if (!event.sender) throw new Error("Draft sender is unavailable");
+        fileDraftWrites.releaseClient(event.sender.id, safeArgs.clientId);
+        return;
       }
-      return fileDraftWrites.write(sender.id, safeArgs, backend);
-    }
-    return backend.invoke(command, safeArgs);
+      if (command === "desktop_file_draft_write") {
+        const sender = event.sender;
+        if (!sender) throw new Error("Draft sender is unavailable");
+        if (!draftSenders.has(sender.id)) {
+          draftSenders.add(sender.id);
+          const release = () => {
+            draftSenders.delete(sender.id);
+            fileDraftWrites.releaseSender(sender.id);
+          };
+          sender.once?.("destroyed", release);
+          sender.on?.("did-navigate", () => fileDraftWrites.releaseSender(sender.id));
+        }
+        return fileDraftWrites.write(sender.id, safeArgs, backend);
+      }
+      return envelope
+        ? backend.invoke(command, safeArgs, { envelope })
+        : backend.invoke(command, safeArgs);
+    },
+  );
+
+  const nodeScopes = (): NodeScopeIpc => {
+    if (!nodes) throw new Error("Node scopes are unavailable");
+    return nodes;
+  };
+  handle("orkestrator:nodes:open", (event, nodeId: unknown) =>
+    nodeScopes().open(event, parseNodeId(nodeId)),
+  );
+  handle("orkestrator:nodes:release", (event, nodeId: unknown) => {
+    nodeScopes().release(event, parseNodeId(nodeId));
   });
+  handle("orkestrator:nodes:gateway", (event, nodeId: unknown) =>
+    nodeScopes().gateway(event, parseNodeId(nodeId)),
+  );
 
   handle("orkestrator:clipboard:read-text", () => clipboardApi.readText());
   handle("orkestrator:clipboard:write-text", (_event, text: unknown) =>
@@ -371,16 +463,34 @@ export function registerMainIpc({
     return shellApi.openExternal(macOsPrivacySettingsUrl(pane));
   });
 
-  handle("orkestrator:web-client:get-status", (event) => getWebClientStatus(event));
-  handle("orkestrator:web-client:set-enabled", (event, enabled: unknown) => {
-    if (typeof enabled !== "boolean") throw new Error("Expected enabled to be a boolean");
-    return setWebClientEnabled(enabled, event);
+  // A trailing `{ nodeId }` names the machine; without one it is the command node.
+  handle("orkestrator:web-client:get-status", (event, options: unknown) => {
+    const nodeId = adminNodeId(options);
+    return nodeId === undefined ? getWebClientStatus(event) : getWebClientStatus(event, nodeId);
   });
-  handle("orkestrator:web-client:reset-serve", (event) => resetWebClientServe(event));
-  handle("orkestrator:web-client:get-token-settings", (event) => getGatewayTokenSettings(event));
-  handle("orkestrator:web-client:set-token", (event, token: unknown) => {
+  handle("orkestrator:web-client:set-enabled", (event, enabled: unknown, options: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Expected enabled to be a boolean");
+    const nodeId = adminNodeId(options);
+    return nodeId === undefined
+      ? setWebClientEnabled(enabled, event)
+      : setWebClientEnabled(enabled, event, nodeId);
+  });
+  handle("orkestrator:web-client:reset-serve", (event, options: unknown) => {
+    const nodeId = adminNodeId(options);
+    return nodeId === undefined ? resetWebClientServe(event) : resetWebClientServe(event, nodeId);
+  });
+  handle("orkestrator:web-client:get-token-settings", (event, options: unknown) => {
+    const nodeId = adminNodeId(options);
+    return nodeId === undefined
+      ? getGatewayTokenSettings(event)
+      : getGatewayTokenSettings(event, nodeId);
+  });
+  handle("orkestrator:web-client:set-token", (event, token: unknown, options: unknown) => {
     if (typeof token !== "string") throw new Error("Expected token to be a string");
-    return setGatewayToken(token, event);
+    const nodeId = adminNodeId(options);
+    return nodeId === undefined
+      ? setGatewayToken(token, event)
+      : setGatewayToken(token, event, nodeId);
   });
 
   handle("orkestrator:connections:list", (event) => listConnections(event));

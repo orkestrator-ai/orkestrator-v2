@@ -52,6 +52,7 @@ import {
 } from "./workspace-views.js";
 import { NodeWorkspaceScopes } from "./node-workspaces.js";
 import { DesktopNodeScopes, type NodeScopeRecord } from "./node-scopes.js";
+import { DesktopNodeIpc } from "./node-ipc.js";
 import { editDesktopConnection, setDesktopWorkspaceTarget } from "./window-workspace-target.js";
 import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
@@ -290,7 +291,7 @@ let connectionManager: ConnectionManager | null = null;
 let sshPrompts: SshPromptBroker | null = null;
 let connectionListPublish: ReturnType<typeof setTimeout> | null = null;
 let workspaceViews: WorkspaceViews | null = null;
-/** Per-(window, node) scopes; nothing in the renderer opens one yet. */
+/** Per-(window, node) scopes, opened by the window renderer through `nodeIpc`. */
 const nodeScopes = new DesktopNodeScopes({
   manager: () => connectionManager,
   scopes: () => {
@@ -367,6 +368,13 @@ const desktopWindows = new DesktopWindowContexts<DesktopWindowContext>({
   publishConnectionLists: () => publishConnectionLists(),
   menuChanged: () => createMenu(),
   logger: previewLog,
+});
+/** Node-addressed invoke, events and gateway snapshots for window renderers. */
+const nodeIpc = new DesktopNodeIpc<DesktopWindowContext>({
+  nodeScopes,
+  manager: () => connectionManager,
+  mapNodeConnection: (context, nodeId, connectionId) =>
+    desktopWindows.mapNodeConnection(context, nodeId, connectionId),
 });
 const relayedLifecycle = createDesktopRelayedLifecycle(desktopWindows, realmContexts, () =>
   scheduleConnectionListPublish(),
@@ -1027,10 +1035,12 @@ async function createWindow(connectionId?: string): Promise<void> {
           event.preventDefault();
           setConnectionTitle(createdWindow, scope);
         });
-        // A reloaded window no longer knows about its prompts or realms.
+        // A reloaded window no longer knows about its prompts, realms or node scopes.
         createdWindow.webContents.on("did-navigate", () => {
           sshPrompts?.cancelFor(webContentsId);
           workspaceViews?.closeAllFor(webContentsId);
+          const context = windowContexts.get(webContentsId);
+          if (context) nodeScopes.releaseWindowNodeScopes(context);
         });
         createdWindow.webContents.on("did-finish-load", () => {
           // A new window can join an already-open pooled event stream and
@@ -1246,15 +1256,15 @@ function registerIpc(): void {
   };
   const scopeForEvent = (event?: { sender?: { id: number } }) => ipcContextForEvent(event).scope;
   // A workspace grant cannot administer its node; say where that is done
-  // instead of surfacing the node's refusal.
-  const machineAdminScope = (event?: { sender?: { id: number } }) => {
-    const context = contextForEvent(event);
-    if (context.target) {
-      throw new Error(
-        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Machines on the command node.`,
-      );
-    }
-    return context.scope;
+  // instead of surfacing the node's refusal. A realm's workspace and a named
+  // leaf are both refused (`DesktopNodeIpc.adminScope`).
+  const machineAdminScope = (event?: { sender?: { id: number } }, nodeId?: string) =>
+    nodeIpc.adminScope(contextForEvent(event), nodeId);
+  // Node scopes belong to a window; a realm (already another node) has none.
+  const nodeWindowContext = (event?: { sender?: { id: number } }) => {
+    const context = event?.sender ? windowContexts.get(event.sender.id) : undefined;
+    if (!context) throw new Error("Only a window can open other machines' scopes.");
+    return context;
   };
   // Connection management acts on the window's own (command node)
   // connection, even while its workspace is on another node.
@@ -1274,8 +1284,11 @@ function registerIpc(): void {
   const updateWindowTitle = (event: { sender?: { id: number } } | undefined) =>
     desktopWindows.updateWindowTitle(event);
   registerMainIpc({
-    getBackend: (event) => {
+    getBackend: (event, nodeId) => {
+      if (nodeId !== undefined) return nodeIpc.backendFor(nodeWindowContext(event), nodeId);
       const scope = scopeForEvent(event);
+      // The contract envelope (third argument) stops here until item 1003
+      // carries it on the backend client.
       return {
         invoke: (command, args) => {
           nodeWorkspaceScopes?.noteUse(scope);
@@ -1374,12 +1387,21 @@ function registerIpc(): void {
     trustedRendererUrl: isDev
       ? (devServerUrl ?? "http://127.0.0.1:1420")
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
-    getWebClientStatus: (event) => manager().getWebClientStatus(machineAdminScope(event)),
-    setWebClientEnabled: (enabled, event) =>
-      manager().setWebClientEnabled(enabled, machineAdminScope(event)),
-    resetWebClientServe: (event) => manager().resetWebClientServe(machineAdminScope(event)),
-    getGatewayTokenSettings: (event) => manager().getTokenSettings(machineAdminScope(event)),
-    setGatewayToken: (token, event) => manager().setToken(token, machineAdminScope(event)),
+    getWebClientStatus: (event, nodeId) =>
+      manager().getWebClientStatus(machineAdminScope(event, nodeId)),
+    setWebClientEnabled: (enabled, event, nodeId) =>
+      manager().setWebClientEnabled(enabled, machineAdminScope(event, nodeId)),
+    resetWebClientServe: (event, nodeId) =>
+      manager().resetWebClientServe(machineAdminScope(event, nodeId)),
+    getGatewayTokenSettings: (event, nodeId) =>
+      manager().getTokenSettings(machineAdminScope(event, nodeId)),
+    setGatewayToken: (token, event, nodeId) =>
+      manager().setToken(token, machineAdminScope(event, nodeId)),
+    nodes: {
+      open: (event, nodeId) => nodeIpc.openForRenderer(nodeWindowContext(event), nodeId),
+      release: (event, nodeId) => nodeIpc.release(nodeWindowContext(event), nodeId),
+      gateway: (event, nodeId) => nodeIpc.gateway(nodeWindowContext(event), nodeId),
+    },
   });
   const afterCatalogueChange = <T>(list: T): T => {
     scheduleConnectionListPublish();

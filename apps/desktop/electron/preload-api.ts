@@ -48,9 +48,17 @@ export type IpcRendererLike = {
 const REMOTE_METHOD_ERROR_PREFIX =
   /^Error invoking remote method '[^']*': (?:(?:[A-Za-z_$][\w$]*Error|Error): )?/;
 
+/**
+ * A coded refusal from main leads its message with `[code] ` (`node-ipc.ts`),
+ * because only the message crosses IPC. The code stays in the message, which
+ * is all that crosses the context bridge, and is also set as `error.code`.
+ */
+const REFUSAL_CODE_PREFIX = /^\[([a-z][a-z0-9-]{0,63})\] /;
+
 function readableInvokeError(error: unknown): unknown {
   if (!(error instanceof Error) || !REMOTE_METHOD_ERROR_PREFIX.test(error.message)) return error;
-  const readable = new Error(error.message.replace(REMOTE_METHOD_ERROR_PREFIX, ""), {
+  const message = error.message.replace(REMOTE_METHOD_ERROR_PREFIX, "");
+  const readable = new Error(message, {
     cause: error,
   });
   // Keep IPC diagnostics available locally. Electron/contextBridge may serialize
@@ -60,6 +68,8 @@ function readableInvokeError(error: unknown): unknown {
   delete diagnostics.stack;
   delete diagnostics.cause;
   Object.defineProperties(readable, diagnostics);
+  const code = REFUSAL_CODE_PREFIX.exec(message)?.[1];
+  if (code && !("code" in readable)) Object.defineProperty(readable, "code", { value: code });
   return readable;
 }
 
@@ -476,10 +486,166 @@ export function createWorkspaceRealmApi(ipcRenderer: IpcRendererLike) {
   };
 }
 
+/** `orkestrator:invoke`'s optional third argument; see `ipc.ts`. */
+export type InvokeOptions = { nodeId?: string; envelope?: Record<string, unknown> };
+
+/** Main's `(nodeId, event, payload)` channel; must match `NODE_EVENT_CHANNEL` in `node-ipc.ts`. */
+export const NODE_EVENT_CHANNEL = "orkestrator:node-event";
+/** Must match `NODE_SCOPE_RELEASED_EVENT` in `node-ipc.ts`. */
+const NODE_SCOPE_RELEASED_EVENT = "node-scope-released";
+const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connected";
+
+export type NodeStreamConnectionState = "idle" | "connecting" | "connected" | "disconnected";
+
+/** One node, as `window.orkestrator.node(nodeId)` reaches it. */
+export type NodeApi = {
+  readonly nodeId: string;
+  invoke<T = unknown>(
+    command: string,
+    args?: Record<string, unknown>,
+    options?: { envelope?: Record<string, unknown> },
+  ): Promise<T>;
+  /** Opens the node's scope in this window if it is not open yet. */
+  listen<T = unknown>(event: string, callback: EventCallback<T>): () => void;
+  /** Settles once the node's scope (and so its event stream) is open. */
+  eventStreamReady(event: string): Promise<void>;
+  eventStreamConnection: {
+    state(): NodeStreamConnectionState;
+    subscribe(listener: (state: NodeStreamConnectionState) => void): () => void;
+  };
+};
+
+/**
+ * `node(nodeId)` for one renderer. Every node's events arrive on one IPC
+ * listener (registered on first use) and are passed on by `nodeId`; a node's
+ * scope is opened once, with one hold, and opened again after main released it.
+ */
+export function createNodeApis(ipcRenderer: IpcRendererLike) {
+  type NodeEntry = {
+    api: NodeApi;
+    listeners: Map<string, Set<EventCallback<unknown>>>;
+    state: NodeStreamConnectionState;
+    stateListeners: Set<(state: NodeStreamConnectionState) => void>;
+    opening: Promise<void> | null;
+  };
+  const entries = new Map<string, NodeEntry>();
+  let subscribed = false;
+  const setState = (entry: NodeEntry, state: NodeStreamConnectionState) => {
+    if (entry.state === state) return;
+    entry.state = state;
+    for (const listener of entry.stateListeners) listener(state);
+  };
+  const subscribe = () => {
+    if (subscribed) return;
+    subscribed = true;
+    ipcRenderer.on(
+      NODE_EVENT_CHANNEL,
+      (_event, nodeId: unknown, name: unknown, payload: unknown) => {
+        if (typeof nodeId !== "string" || typeof name !== "string") return;
+        const entry = entries.get(nodeId);
+        if (!entry) return;
+        if (name === NATIVE_EVENT_STREAM_CONNECTED_EVENT) setState(entry, "connected");
+        if (name === NODE_SCOPE_RELEASED_EVENT) {
+          entry.opening = null;
+          setState(entry, "disconnected");
+        }
+        const callbacks = entry.listeners.get(name);
+        if (!callbacks) return;
+        for (const callback of Array.from(callbacks)) callback(payload);
+      },
+    );
+  };
+  const open = (entry: NodeEntry): Promise<void> => {
+    if (!entry.opening) {
+      if (entry.state !== "connected") setState(entry, "connecting");
+      const opening = ipcRenderer.invoke<unknown>("orkestrator:nodes:open", entry.api.nodeId).then(
+        () => undefined,
+        (error: unknown) => {
+          if (entry.opening === opening) entry.opening = null;
+          setState(entry, "disconnected");
+          throw error;
+        },
+      );
+      entry.opening = opening;
+    }
+    return entry.opening;
+  };
+  const node = (nodeId: string): NodeApi => {
+    if (typeof nodeId !== "string" || nodeId.length === 0 || nodeId.length > 256)
+      throw new Error("Expected a node identity");
+    const existing = entries.get(nodeId);
+    if (existing) return existing.api;
+    subscribe();
+    const entry: NodeEntry = {
+      listeners: new Map(),
+      state: "idle",
+      stateListeners: new Set(),
+      opening: null,
+      api: {
+        nodeId,
+        invoke<T = unknown>(
+          command: string,
+          args?: Record<string, unknown>,
+          options?: { envelope?: Record<string, unknown> },
+        ): Promise<T> {
+          return ipcRenderer.invoke("orkestrator:invoke", command, args ?? {}, {
+            nodeId,
+            ...(options?.envelope ? { envelope: options.envelope } : {}),
+          });
+        },
+        listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
+          const callbackSet = entry.listeners.get(event) ?? new Set<EventCallback<unknown>>();
+          entry.listeners.set(event, callbackSet);
+          callbackSet.add(callback as EventCallback<unknown>);
+          // A failed open is reported by `eventStreamConnection` and the next invoke.
+          void open(entry).catch(() => undefined);
+          return () => {
+            if (!callbackSet.delete(callback as EventCallback<unknown>)) return;
+            if (callbackSet.size === 0 && entry.listeners.get(event) === callbackSet)
+              entry.listeners.delete(event);
+          };
+        },
+        eventStreamReady: () => open(entry),
+        eventStreamConnection: {
+          state: () => entry.state,
+          subscribe(listener) {
+            entry.stateListeners.add(listener);
+            return () => {
+              entry.stateListeners.delete(listener);
+            };
+          },
+        },
+      },
+    };
+    entries.set(nodeId, entry);
+    return entry.api;
+  };
+  return {
+    node,
+    nodes: {
+      /** Open the node's scope in this window (with a hold); answers its snapshot. */
+      open(nodeId: string): Promise<unknown> {
+        return ipcRenderer.invoke("orkestrator:nodes:open", nodeId);
+      },
+      /** Close the node's scope in this window now. */
+      release(nodeId: string): Promise<void> {
+        const entry = entries.get(nodeId);
+        if (entry) entry.opening = null;
+        return ipcRenderer.invoke("orkestrator:nodes:release", nodeId);
+      },
+      /** The node's snapshot (never a credential), or null while it is not open. */
+      gateway(nodeId: string): Promise<unknown> {
+        return ipcRenderer.invoke("orkestrator:nodes:gateway", nodeId);
+      },
+    },
+  };
+}
+
 export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
   const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
   const relayedListens = createRelayedListenReporter(ipcRenderer, "workspace");
+  const nodeApis = createNodeApis(ipcRenderer);
 
   ipcRenderer.on("orkestrator:event", (_event, name: string, payload: unknown) => {
     const callbacks = listeners.get(name);
@@ -492,9 +658,20 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
     keyboardShortcuts: {
       closed: (): Promise<void> => ipcRenderer.invoke("orkestrator:keyboard-shortcuts:closed"),
     },
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
-      return ipcRenderer.invoke("orkestrator:invoke", command, args ?? {});
+    /** `options.nodeId` names another node; absent means the command node. */
+    invoke<T = unknown>(
+      command: string,
+      args?: Record<string, unknown>,
+      options?: InvokeOptions,
+    ): Promise<T> {
+      return options
+        ? ipcRenderer.invoke("orkestrator:invoke", command, args ?? {}, options)
+        : ipcRenderer.invoke("orkestrator:invoke", command, args ?? {});
     },
+
+    /** Another node, through this window's scope on it (`node-ipc.ts`). */
+    node: nodeApis.node,
+    nodes: nodeApis.nodes,
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
@@ -549,21 +726,32 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       },
     },
 
+    // `options.nodeId` names the machine; main refuses a leaf (`node-admin-refused`).
     webClient: {
-      getStatus(): Promise<WebClientStatus> {
-        return ipcRenderer.invoke("orkestrator:web-client:get-status");
+      getStatus(options?: { nodeId?: string }): Promise<WebClientStatus> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:get-status", options)
+          : ipcRenderer.invoke("orkestrator:web-client:get-status");
       },
-      setEnabled(enabled: boolean): Promise<WebClientStatus> {
-        return ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled);
+      setEnabled(enabled: boolean, options?: { nodeId?: string }): Promise<WebClientStatus> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled, options)
+          : ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled);
       },
-      resetServe(): Promise<WebClientStatus> {
-        return ipcRenderer.invoke("orkestrator:web-client:reset-serve");
+      resetServe(options?: { nodeId?: string }): Promise<WebClientStatus> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:reset-serve", options)
+          : ipcRenderer.invoke("orkestrator:web-client:reset-serve");
       },
-      getTokenSettings(): Promise<GatewayTokenSettings> {
-        return ipcRenderer.invoke("orkestrator:web-client:get-token-settings");
+      getTokenSettings(options?: { nodeId?: string }): Promise<GatewayTokenSettings> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:get-token-settings", options)
+          : ipcRenderer.invoke("orkestrator:web-client:get-token-settings");
       },
-      setToken(token: string): Promise<GatewayTokenSettings> {
-        return ipcRenderer.invoke("orkestrator:web-client:set-token", token);
+      setToken(token: string, options?: { nodeId?: string }): Promise<GatewayTokenSettings> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:set-token", token, options)
+          : ipcRenderer.invoke("orkestrator:web-client:set-token", token);
       },
     },
 

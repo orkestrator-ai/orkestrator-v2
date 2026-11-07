@@ -6,6 +6,7 @@ import {
   exposeActiveConnectionGateway,
   exposeDesktopApi,
   exposePortal,
+  NODE_EVENT_CHANNEL,
   type IpcRendererLike,
 } from "../electron/preload-api";
 
@@ -305,6 +306,20 @@ describe("preload API factory", () => {
     } as IpcRendererLike;
 
     await expect(createOrkestratorElectronApi(ipc).invoke("get_projects")).rejects.toBe(original);
+  });
+
+  test("a coded refusal from main keeps its code in the message and as error.code", async () => {
+    const ipc = {
+      invoke: async () => {
+        throw new Error(
+          "Error invoking remote method 'orkestrator:invoke': Error: [unknown-node] Not known.",
+        );
+      },
+      on: () => undefined,
+    } as IpcRendererLike;
+    await expect(
+      createOrkestratorElectronApi(ipc).node("bk_a").invoke("get_projects"),
+    ).rejects.toMatchObject({ message: "[unknown-node] Not known.", code: "unknown-node" });
   });
 
   test("subscribes and unsubscribes renderer event callbacks by event name", () => {
@@ -780,4 +795,137 @@ test("dialog dismissal uses a dedicated desktop IPC channel", async () => {
   const api = createOrkestratorElectronApi(ipc);
   await api.keyboardShortcuts.closed();
   expect(invoke).toHaveBeenCalledWith("orkestrator:keyboard-shortcuts:closed");
+});
+
+describe("node(nodeId)", () => {
+  /** Node events as main sends them: `(nodeId, event, payload)` on one channel. */
+  function nodeIpc() {
+    const listeners = new Map<string, Array<(event: unknown, ...args: unknown[]) => void>>();
+    const invoke = mock(async (channel: string, ...args: unknown[]): Promise<IpcEcho> => ({
+      channel,
+      args,
+    }));
+    const on = mock((channel: string, listener: (event: unknown, ...args: unknown[]) => void) => {
+      listeners.set(channel, [...(listeners.get(channel) ?? []), listener]);
+    });
+    return {
+      ipc: { invoke, on } as IpcRendererLike,
+      invoke,
+      on,
+      count: (channel: string) => listeners.get(channel)?.length ?? 0,
+      emit: (...args: unknown[]) => {
+        for (const listener of listeners.get(NODE_EVENT_CHANNEL) ?? []) listener({}, ...args);
+      },
+      opens: () => invoke.mock.calls.filter(([channel]) => channel === "orkestrator:nodes:open"),
+    };
+  }
+
+  test("invoke names the node; the top-level invoke without options stays two-argument", async () => {
+    const { ipc, invoke } = nodeIpc();
+    const api = createOrkestratorElectronApi(ipc);
+    await api.node("bk_a").invoke("get_projects", { page: 1 });
+    expect(invoke).toHaveBeenLastCalledWith(
+      "orkestrator:invoke",
+      "get_projects",
+      { page: 1 },
+      {
+        nodeId: "bk_a",
+      },
+    );
+    await api.node("bk_a").invoke("get_projects", undefined, { envelope: { version: 1 } });
+    expect(invoke).toHaveBeenLastCalledWith(
+      "orkestrator:invoke",
+      "get_projects",
+      {},
+      { nodeId: "bk_a", envelope: { version: 1 } },
+    );
+    await api.invoke("get_projects");
+    expect(invoke.mock.calls.at(-1)).toEqual(["orkestrator:invoke", "get_projects", {}]);
+    await api.invoke("get_projects", {}, { nodeId: "bk_b" });
+    expect(invoke.mock.calls.at(-1)).toEqual([
+      "orkestrator:invoke",
+      "get_projects",
+      {},
+      { nodeId: "bk_b" },
+    ]);
+  });
+
+  test("demultiplexes by node over one IPC listener, and unlisten stops delivery", () => {
+    const { ipc, emit, count, opens } = nodeIpc();
+    const api = createOrkestratorElectronApi(ipc);
+    const a = api.node("bk_a");
+    const b = api.node("bk_b");
+    expect(api.node("bk_a")).toBe(a);
+    const onA = mock((_payload: unknown) => undefined);
+    const onA2 = mock((_payload: unknown) => undefined);
+    const onB = mock((_payload: unknown) => undefined);
+    const stopA = a.listen("project-updated", onA);
+    a.listen("project-updated", onA2);
+    b.listen("project-updated", onB);
+    expect(count(NODE_EVENT_CHANNEL)).toBe(1);
+    // Listening opens each node's scope once.
+    expect(opens().map(([, nodeId]) => nodeId)).toEqual(["bk_a", "bk_b"]);
+
+    emit("bk_b", "project-updated", { from: "b" });
+    expect(onA).not.toHaveBeenCalled();
+    expect(onB).toHaveBeenCalledWith({ from: "b" });
+    emit("bk_a", "project-updated", { from: "a" });
+    expect(onA).toHaveBeenCalledWith({ from: "a" });
+    expect(onA2).toHaveBeenCalledWith({ from: "a" });
+
+    stopA();
+    stopA();
+    emit("bk_a", "project-updated", { from: "a2" });
+    expect(onA).toHaveBeenCalledTimes(1);
+    expect(onA2).toHaveBeenCalledTimes(2);
+    // Unknown nodes and malformed frames reach no one.
+    emit("bk_c", "project-updated", {});
+    emit(42, "project-updated", {});
+    emit("bk_b", undefined, {});
+    expect(onB).toHaveBeenCalledTimes(1);
+    // Command-node events are not node events.
+    expect(count("orkestrator:event")).toBe(1);
+  });
+
+  test("the stream state follows main's frames, and a release lets the node reopen", async () => {
+    const { ipc, emit, opens } = nodeIpc();
+    const api = createOrkestratorElectronApi(ipc);
+    const a = api.node("bk_a");
+    const states: string[] = [];
+    const stop = a.eventStreamConnection.subscribe((state) => void states.push(state));
+    expect(a.eventStreamConnection.state()).toBe("idle");
+    await a.eventStreamReady("project-updated");
+    await a.eventStreamReady("other");
+    expect(opens()).toHaveLength(1);
+    emit("bk_a", "native-event-stream-connected", undefined);
+    expect(a.eventStreamConnection.state()).toBe("connected");
+    emit("bk_a", "node-scope-released", { nodeId: "bk_a" });
+    expect(a.eventStreamConnection.state()).toBe("disconnected");
+    await a.eventStreamReady("project-updated");
+    expect(opens()).toHaveLength(2);
+    stop();
+    emit("bk_a", "native-event-stream-connected", undefined);
+    expect(states).toEqual(["connecting", "connected", "disconnected", "connecting"]);
+    await api.nodes.release("bk_a");
+    await api.nodes.gateway("bk_a");
+    expect(ipc.invoke).toHaveBeenCalledWith("orkestrator:nodes:release", "bk_a");
+    expect(ipc.invoke).toHaveBeenCalledWith("orkestrator:nodes:gateway", "bk_a");
+  });
+
+  test("a failed open is reported as disconnected and retried by the next ready", async () => {
+    let fail = true;
+    const invoke = mock(async (channel: string) => {
+      if (channel === "orkestrator:nodes:open" && fail) throw new Error("[unknown-node] No.");
+      return null;
+    });
+    const api = createOrkestratorElectronApi({ invoke, on: () => undefined } as IpcRendererLike);
+    const a = api.node("bk_a");
+    await expect(a.eventStreamReady("x")).rejects.toThrow("[unknown-node] No.");
+    expect(a.eventStreamConnection.state()).toBe("disconnected");
+    fail = false;
+    await a.eventStreamReady("x");
+    expect(
+      invoke.mock.calls.filter(([channel]) => channel === "orkestrator:nodes:open"),
+    ).toHaveLength(2);
+  });
 });

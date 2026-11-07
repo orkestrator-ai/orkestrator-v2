@@ -73,7 +73,38 @@ interface Window {
     keyboardShortcuts?: { closed(): Promise<void> };
     /** Electron windows keep focus and renderer storage independent. */
     isolatedViewState?: true;
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
+    /** Electron also takes `{ nodeId?, envelope? }`; an absent `nodeId` is the command node. */
+    invoke<T = unknown>(
+      command: string,
+      args?: Record<string, unknown>,
+      options?: { nodeId?: string; envelope?: Record<string, unknown> },
+    ): Promise<T>;
+    /**
+     * Electron only: another node through this window's scope on it. Refusals
+     * lead their message with `[code] ` (`unknown-node`, `node-scope-closed`, ...).
+     */
+    node?(nodeId: string): {
+      readonly nodeId: string;
+      invoke<T = unknown>(
+        command: string,
+        args?: Record<string, unknown>,
+        options?: { envelope?: Record<string, unknown> },
+      ): Promise<T>;
+      listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
+      eventStreamReady(event: string): Promise<void>;
+      eventStreamConnection: {
+        state(): "idle" | "connecting" | "connected" | "disconnected";
+        subscribe(
+          listener: (state: "idle" | "connecting" | "connected" | "disconnected") => void,
+        ): () => void;
+      };
+    };
+    /** Electron only: open (with a hold), release and read a node scope's snapshot. */
+    nodes?: {
+      open(nodeId: string): Promise<unknown>;
+      release(nodeId: string): Promise<void>;
+      gateway(nodeId: string): Promise<unknown>;
+    };
     listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
     /** Browser gateway only: resolves once the event's filtered stream is live. */
     eventStreamReady?(event: string): Promise<void>;

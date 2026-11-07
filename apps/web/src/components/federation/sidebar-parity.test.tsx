@@ -17,7 +17,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { uiStore } from "@/stores";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
@@ -34,11 +34,12 @@ import {
   uninstallDesktopFake,
   type MachineDataset,
 } from "@/test/federation-desktop-fake";
+import { appCommandStore } from "@/test/app-command-store";
 
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 
 function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset) {
@@ -52,8 +53,8 @@ function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset)
         ? []
         : undefined,
   });
-  useProjectStore.getState().setProjects([]);
-  useEnvironmentStore.getState().setEnvironments([]);
+  appCommandStore(projectStore).getState().setProjects([]);
+  appCommandStore(environmentStore).getState().setEnvironments([]);
   useMachineViewStore.setState({
     grouping,
     machineFilter: "all",
@@ -82,7 +83,7 @@ async function startKeyboardDrag(handle: HTMLElement): Promise<void> {
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
   useRemoteWorkspaceStore.setState({ active: null });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
@@ -101,9 +102,9 @@ afterEach(() => {
   leafScope = null;
   uninstallDesktopFake();
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 

@@ -20,23 +20,24 @@ import { invoke } from "@/lib/native/backend";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore, useEnvironmentStore, useUIStore } from "@/stores";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
 import { NodeWorkspaceHost } from "./NodeWorkspaceHost";
 import { RemoteProjectGroup } from "./RemoteMachineTree";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalPortal = portalStore.getState();
 const originalRemote = useRemoteWorkspaceStore.getState();
-const originalUI = useUIStore.getState();
-const originalConfig = useConfigStore.getState();
-const originalProjects = useProjectStore.getState();
-const originalEnvironments = useEnvironmentStore.getState();
+const originalUI = appCommandStore(uiStore).getState();
+const originalConfig = appCommandStore(configStore).getState();
+const originalProjects = appCommandStore(projectStore).getState();
+const originalEnvironments = appCommandStore(environmentStore).getState();
 const nativeInvoke = invoke as ReturnType<typeof mock>;
 const leafId = "bk_leaf" as BackendId;
 const project = { id: "project", name: "Checkout", localPath: "/checkout", order: 0 } as Project;
@@ -120,14 +121,14 @@ beforeEach(() => {
     status: { mode: "command" } as never,
     selfId: "bk_command" as BackendId,
   });
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [],
     hasLoaded: false,
     isLoading: false,
     deletingProjects: new Set(),
   });
-  useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-  useUIStore.setState({
+  appCommandStore(environmentStore).setState({ environments: [], deletingEnvironments: new Set() });
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     projectBoardTab: "coordinator",
@@ -141,10 +142,10 @@ afterEach(() => {
   cleanup();
   useAppDialogStore.setState({ request: null });
   useRemoteWorkspaceStore.setState(originalRemote, true);
-  useConfigStore.setState(originalConfig, true);
-  useUIStore.setState(originalUI, true);
-  useProjectStore.setState(originalProjects, true);
-  useEnvironmentStore.setState(originalEnvironments, true);
+  appCommandStore(configStore).setState(originalConfig, true);
+  appCommandStore(uiStore).setState(originalUI, true);
+  appCommandStore(projectStore).setState(originalProjects, true);
+  appCommandStore(environmentStore).setState(originalEnvironments, true);
   portalStore.store.setState(originalPortal, true);
   resetReadCoordinatorForTests();
   resetWindowScopeForTests();
@@ -158,8 +159,10 @@ test("opens on the window's request; the selection is the window's own", async (
     return undefined;
   });
   open({ projectId: project.id, environmentId: environment.id }, <NodeWorkspaceHost />);
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(environment.id));
-  expect(useUIStore.getState().selectedProjectId).toBe(project.id);
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(environment.id),
+  );
+  expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id);
   expect(getWindowScope().selection.get()).toMatchObject({
     projectId: project.id,
     environmentId: environment.id,
@@ -171,8 +174,10 @@ test("a later request from the window is applied as a sidebar click would", asyn
   await act(async () => resolveProjects([project]));
   await settle();
   ask({ projectId: project.id, boardTab: "kanban" });
-  await waitFor(() => expect(useUIStore.getState().selectedProjectId).toBe(project.id));
-  expect(useUIStore.getState().projectBoardTab).toBe("kanban");
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id),
+  );
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("kanban");
 });
 
 test("the window's own document visibility stands: a hidden node is its scope's tier, not a hidden page", async () => {
@@ -184,8 +189,10 @@ test("the window's own document visibility stands: a hidden node is its scope's 
 test("initial leaf selection keeps Home through a delayed project snapshot and displays its environment", async () => {
   asLeaf();
   open();
-  await waitFor(() => expect(useUIStore.getState().selectedProjectId).toBe(project.id));
-  expect(useUIStore.getState().projectBoardTab).toBe("home");
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id),
+  );
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
   expect(
     nativeInvoke.mock.calls.some(([command]) => command === "ensure_project_home_environment"),
   ).toBe(false);
@@ -193,8 +200,8 @@ test("initial leaf selection keeps Home through a delayed project snapshot and d
   await waitFor(() =>
     expect(screen.getByLabelText("Visible workspace").textContent).toBe(home.name),
   );
-  expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id);
-  expect(useUIStore.getState().projectBoardTab).toBe("home");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id);
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
 });
 
 test("a project dialog waits for the node's projects, then opens for this node once", async () => {
@@ -210,7 +217,7 @@ test("a project dialog waits for the node's projects, then opens for this node o
       projectId: project.id,
     }),
   );
-  expect(useUIStore.getState().selectedProjectId).toBe(project.id);
+  expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id);
   const first = useAppDialogStore.getState().requestSequence;
   // A rerender does not reopen it.
   await settle();
@@ -231,19 +238,23 @@ test("a host remounted on the same scope resumes without reopening a one-shot di
 
 test("a board choice made while projects load survives Home activation", async () => {
   open();
-  act(() => useUIStore.getState().setProjectBoardTab("kanban"));
+  act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
   await act(async () => resolveProjects([project]));
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+  );
   expect(screen.getByLabelText("Visible workspace").textContent).toBe("kanban");
 });
 
 test("a leaf project confirmed to have no checkout falls back to Coordinator after loading", async () => {
   asLeaf();
   open();
-  expect(useUIStore.getState().projectBoardTab).toBe("home");
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
   await act(async () => resolveProjects([{ ...project, localPath: null }]));
-  await waitFor(() => expect(useUIStore.getState().projectBoardTab).toBe("coordinator"));
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator"),
+  );
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   expect(
     nativeInvoke.mock.calls.some(([command]) => command === "ensure_project_home_environment"),
   ).toBe(false);
@@ -297,7 +308,9 @@ for (const [grouping, board] of [
     asLeaf();
     open(request);
     await act(async () => resolveProjects([project]));
-    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+    await waitFor(() =>
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+    );
     expect(screen.getByLabelText("Visible workspace").textContent).toBe(
       coordinator ? "coordinator" : home.name,
     );
@@ -318,7 +331,7 @@ for (const fail of [false, true]) {
       return undefined;
     });
     open({ projectId: project.id, dialog: "delete-project" }, <NodeWorkspaceHost />);
-    await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+    await waitFor(() => expect(appCommandStore(projectStore).getState().hasLoaded).toBe(true));
     expect(useAppDialogStore.getState().request).toBeNull();
     await act(async () => {
       if (fail) reject(new Error("snapshot unavailable"));
@@ -333,12 +346,12 @@ for (const fail of [false, true]) {
 }
 
 test("repository settings request waits for configuration after projects have loaded", async () => {
-  useConfigStore.setState({ hasLoaded: false });
+  appCommandStore(configStore).setState({ hasLoaded: false });
   open({ projectId: project.id, dialog: "repository-settings" });
   await act(async () => resolveProjects([project]));
-  await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+  await waitFor(() => expect(appCommandStore(projectStore).getState().hasLoaded).toBe(true));
   expect(useAppDialogStore.getState().request).toBeNull();
-  act(() => useConfigStore.setState({ hasLoaded: true }));
+  act(() => appCommandStore(configStore).setState({ hasLoaded: true }));
   await waitFor(() =>
     expect(useAppDialogStore.getState().request).toEqual({
       nodeId: commandNodeId(),
@@ -355,8 +368,10 @@ test("a project home opened from another machine's sidebar lands on its Home tab
     return undefined;
   });
   open({ projectId: project.id, environmentId: home.id, boardTab: "home" }, <NodeWorkspaceHost />);
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
-  expect(useUIStore.getState().projectBoardTab).toBe("home");
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+  );
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
 });
 
 test("environment settings waits for its environment and selects without starting it", async () => {
@@ -374,7 +389,7 @@ test("environment settings waits for its environment and selects without startin
     { projectId: project.id, environmentId: stopped.id, dialog: "environment-settings" },
     <NodeWorkspaceHost />,
   );
-  await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+  await waitFor(() => expect(appCommandStore(projectStore).getState().hasLoaded).toBe(true));
   expect(useAppDialogStore.getState().request).toBeNull();
   await act(async () => finish([stopped]));
   await waitFor(() =>
@@ -384,7 +399,7 @@ test("environment settings waits for its environment and selects without startin
       environmentId: stopped.id,
     }),
   );
-  expect(useUIStore.getState().selectedEnvironmentId).toBe(stopped.id);
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(stopped.id);
   expect(
     nativeInvoke.mock.calls.filter(([command]) => String(command).startsWith("start_environment")),
   ).toEqual([]);
@@ -461,14 +476,14 @@ test("remote Updates Rebuild reaches the node's visible Container section withou
       <AppDialogHost />
     </>,
   );
-  await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+  await waitFor(() => expect(appCommandStore(projectStore).getState().hasLoaded).toBe(true));
   expect(useAppDialogStore.getState().request).toBeNull();
   await act(async () => finish([stopped]));
   expect(await screen.findByRole("button", { name: "Rebuild (keeps files)…" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Container" }).getAttribute("aria-current")).toBe(
     "page",
   );
-  expect(useUIStore.getState().selectedEnvironmentId).toBe(stopped.id);
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(stopped.id);
   expect(
     nativeInvoke.mock.calls.some(([command]) => String(command).startsWith("start_environment")),
   ).toBe(false);
@@ -509,7 +524,9 @@ for (const ensured of [false, true]) {
       );
       await act(async () => finish(home));
     }
-    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+    await waitFor(() =>
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+    );
     await waitFor(() =>
       expect(getWindowScope().selection.get()).toMatchObject({
         projectId: project.id,
@@ -522,10 +539,10 @@ for (const ensured of [false, true]) {
 }
 
 test("remote worker selection activates its delegated tab after delayed layout hydration", async () => {
-  const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
-  const original = usePaneLayoutStore.getState();
+  const { paneLayoutStore } = await import("@/stores/paneLayoutStore");
+  const original = appCommandStore(paneLayoutStore).getState();
   try {
-    usePaneLayoutStore.setState({ environments: new Map(), hydration: new Map() });
+    appCommandStore(paneLayoutStore).setState({ environments: new Map(), hydration: new Map() });
     open({
       projectId: project.id,
       environmentId: home.id,
@@ -537,9 +554,11 @@ test("remote worker selection activates its delegated tab after delayed layout h
       },
     });
     await act(async () => resolveProjects([project]));
-    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+    await waitFor(() =>
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+    );
     act(() =>
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         activeEnvironmentId: home.id,
         hydration: new Map([[home.id, "done"]]),
         environments: new Map([
@@ -569,15 +588,15 @@ test("remote worker selection activates its delegated tab after delayed layout h
     );
     await waitFor(() =>
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs(home.id)
           .find((tab) => tab.id === "delegated"),
       ).toBeDefined(),
     );
-    const layout = usePaneLayoutStore.getState().environments.get(home.id)!;
+    const layout = appCommandStore(paneLayoutStore).getState().environments.get(home.id)!;
     expect(layout.root).toHaveProperty("activeTabId", "delegated");
   } finally {
-    usePaneLayoutStore.setState(original, true);
+    appCommandStore(paneLayoutStore).setState(original, true);
   }
 });

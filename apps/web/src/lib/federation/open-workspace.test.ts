@@ -10,10 +10,11 @@ import { useMachineViewStore } from "@/stores/machineViewStore";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { openMachineWorkspace } from "./open-workspace";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { selectOnNode } from "@/test/node-selection";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -21,12 +22,12 @@ const commandNodeId = () => getWindowScope().commandScope().nodeId;
 const originalViews = useMachineViewStore.getState();
 const originalPortal = portalStore.getState();
 const originalRemote = useRemoteWorkspaceStore.getState();
-const originalUI = useUIStore.getState();
+const originalUI = appCommandStore(uiStore).getState();
 afterEach(() => {
   useMachineViewStore.setState(originalViews, true);
   portalStore.store.setState(originalPortal, true);
   useRemoteWorkspaceStore.setState(originalRemote, true);
-  useUIStore.setState(originalUI, true);
+  appCommandStore(uiStore).setState(originalUI, true);
   useAppDialogStore.setState({ request: null });
 });
 
@@ -47,9 +48,9 @@ for (const dialog of ["delete-project", "repository-settings", "environment-sett
         : { nodeId: commandNodeId(), kind: dialog, projectId: "project" },
     );
     expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project");
     if (dialog === "environment-settings")
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env");
   });
 }
 
@@ -68,7 +69,7 @@ test("an environment's rebuild opens its settings on the Container section", () 
     environmentId: "env",
     section: "container",
   });
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env");
 });
 
 test("another node's environment rebuild goes to that node's workspace", () => {
@@ -97,7 +98,7 @@ const remoteEnvironment = (nodeId: string, id: string) =>
 test("navigation and creation in the shown node update machine-qualified recency without local selections", () => {
   portalStore.store.setState({ selfId: "bk_self" as BackendId });
   openMachineWorkspace({ connectionId: "bk_other", projectId: "project", title: "Remote" });
-  const local = useUIStore.getState();
+  const local = appCommandStore(uiStore).getState();
   selectOnNode("bk_other", { projectId: "project", environmentId: "selected" });
   expect(useMachineViewStore.getState().recentKeys.slice(0, 2)).toEqual([
     remoteEnvironment("bk_other", "selected"),
@@ -108,7 +109,7 @@ test("navigation and creation in the shown node update machine-qualified recency
     remoteEnvironment("bk_other", "created"),
     remoteProject("bk_other", "new-project"),
   ]);
-  expect(useUIStore.getState()).toBe(local);
+  expect(appCommandStore(uiStore).getState()).toBe(local);
   const views = useMachineViewStore.getState();
   selectOnNode("bk_inactive", { projectId: "inactive", environmentId: "hidden" });
   expect(useMachineViewStore.getState()).toBe(views);
@@ -117,7 +118,7 @@ test("navigation and creation in the shown node update machine-qualified recency
 
 test("remote opens and the shown node's selections clear a different reveal but preserve opening its project", () => {
   portalStore.store.setState({ selfId: "bk_self" as BackendId });
-  useUIStore.getState().selectProject(null);
+  appCommandStore(uiStore).getState().selectProject(null);
   const key = remoteProject("bk_other", "project");
   useMachineViewStore.getState().revealProject(key);
   openMachineWorkspace({ connectionId: "bk_other", projectId: "project", title: "Remote" });

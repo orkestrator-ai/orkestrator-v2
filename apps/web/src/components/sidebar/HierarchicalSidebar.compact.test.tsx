@@ -7,12 +7,12 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { requestAppShortcut } from "@/lib/app-shortcuts";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
+import { agentMailStore, useAgentMailStore } from "@/stores/agentMailStore";
+import { configStore, useConfigStore } from "@/stores/configStore";
+import { coordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
@@ -22,14 +22,15 @@ import {
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
-const initialConfig = useConfigStore.getState();
-const initialMail = useAgentMailStore.getState();
+const initialConfig = appCommandStore(configStore).getState();
+const initialMail = appCommandStore(agentMailStore).getState();
 const originalMatchMedia = window.matchMedia;
 
 const SHARED_URL = "git@github.com:acme/app.git";
@@ -106,9 +107,9 @@ async function findCompactIcons(count: number): Promise<HTMLElement[]> {
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
   useRemoteWorkspaceStore.setState({ active: null });
-  useProjectStore.getState().setProjects([localProject]);
-  useEnvironmentStore.getState().setEnvironments([localHome]);
-  useUIStore.setState({
+  appCommandStore(projectStore).getState().setProjects([localProject]);
+  appCommandStore(environmentStore).getState().setEnvironments([localHome]);
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     selectedEnvironmentIds: [],
@@ -135,13 +136,13 @@ afterEach(() => {
   uninstallDesktopFake();
   window.matchMedia = originalMatchMedia;
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
-  useConfigStore.setState(initialConfig, true);
-  useAgentMailStore.setState(initialMail, true);
-  useCoordinatorActivityStore.setState({ projects: new Map() });
+  appCommandStore(configStore).setState(initialConfig, true);
+  appCommandStore(agentMailStore).setState(initialMail, true);
+  appCommandStore(coordinatorActivityStore).setState({ projects: new Map() });
 });
 
 describe("what compact shows", () => {
@@ -196,7 +197,9 @@ describe("what compact shows", () => {
 
   test("a repository with an icon shows it through the shared tile", async () => {
     const icon = "data:image/png;base64,iVBORw0KGgo=";
-    useProjectStore.getState().setProjects([{ ...localProject, icon }]);
+    appCommandStore(projectStore)
+      .getState()
+      .setProjects([{ ...localProject, icon }]);
     renderSidebar();
     const [button] = await findCompactIcons(1);
     const tile = within(button!).getByTestId("command-node-home-icon");
@@ -215,12 +218,12 @@ describe("what compact shows", () => {
     const [icon] = await findCompactIcons(1);
     expect(icon!.getAttribute("aria-label")).toBe("app");
     fireEvent.click(icon!);
-    expect(useUIStore.getState().selectedProjectId).toBe("local");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("local");
   });
 
   test("with no projects it offers to add one, without text", async () => {
-    useProjectStore.getState().setProjects([]);
-    useEnvironmentStore.getState().setEnvironments([]);
+    appCommandStore(projectStore).getState().setProjects([]);
+    appCommandStore(environmentStore).getState().setEnvironments([]);
     renderSidebar();
     const [add] = await findCompactIcons(1);
     expect(add!.getAttribute("aria-label")).toBe("Add project");
@@ -235,8 +238,10 @@ describe("opening a repository", () => {
     renderSidebar();
     const [app] = await findCompactIcons(2);
     fireEvent.click(app!);
-    await waitFor(() => expect(useUIStore.getState().selectedProjectId).toBe("local"));
-    expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+    await waitFor(() =>
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("local"),
+    );
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
     expect(useMachineViewStore.getState().grouping).toBe("compact");
     await waitFor(() =>
       expect(
@@ -271,7 +276,12 @@ describe("opening a repository", () => {
   test("an environment of the project keeps its repository selected", async () => {
     renderSidebar();
     const [icon] = await findCompactIcons(1);
-    act(() => useUIStore.setState({ selectedProjectId: "local", selectedEnvironmentId: "env" }));
+    act(() =>
+      appCommandStore(uiStore).setState({
+        selectedProjectId: "local",
+        selectedEnvironmentId: "env",
+      }),
+    );
     await waitFor(() => expect(icon!.getAttribute("aria-current")).toBe("page"));
   });
 });
@@ -279,16 +289,18 @@ describe("opening a repository", () => {
 describe("status on an icon", () => {
   for (const activity of ["working", "waiting"] as const) {
     test("ordinary local environment " + activity + " survives remount", async () => {
-      useEnvironmentStore.getState().setEnvironments([
-        localHome,
-        {
-          ...localHome,
-          id: "feature",
-          projectHome: false,
-          agentActivityState: activity,
-          agentActivityUpdatedAt: new Date().toISOString(),
-        },
-      ]);
+      appCommandStore(environmentStore)
+        .getState()
+        .setEnvironments([
+          localHome,
+          {
+            ...localHome,
+            id: "feature",
+            projectHome: false,
+            agentActivityState: activity,
+            agentActivityUpdatedAt: new Date().toISOString(),
+          },
+        ]);
       renderSidebar();
       let [icon] = await findCompactIcons(1);
       await waitFor(() =>
@@ -316,11 +328,19 @@ describe("status on an icon", () => {
     renderSidebar();
     const [icon] = await findCompactIcons(1);
     expect(within(icon!).getByTestId("coordinator-activity-icon").dataset.state).toBe("idle");
-    act(() => useCoordinatorActivityStore.setState({ projects: new Map([["local", "waiting"]]) }));
+    act(() =>
+      appCommandStore(coordinatorActivityStore).setState({
+        projects: new Map([["local", "waiting"]]),
+      }),
+    );
     await waitFor(() =>
       expect(within(icon!).getByTestId("coordinator-activity-icon").dataset.state).toBe("waiting"),
     );
-    act(() => useCoordinatorActivityStore.setState({ projects: new Map([["local", "working"]]) }));
+    act(() =>
+      appCommandStore(coordinatorActivityStore).setState({
+        projects: new Map([["local", "working"]]),
+      }),
+    );
     await waitFor(() =>
       expect(within(icon!).getByTestId("coordinator-activity-icon").dataset.state).toBe("working"),
     );
@@ -329,7 +349,11 @@ describe("status on an icon", () => {
   test("the ring and badge are outside the tile's layout", async () => {
     renderSidebar();
     const [icon] = await findCompactIcons(1);
-    act(() => useCoordinatorActivityStore.setState({ projects: new Map([["local", "working"]]) }));
+    act(() =>
+      appCommandStore(coordinatorActivityStore).setState({
+        projects: new Map([["local", "working"]]),
+      }),
+    );
     await waitFor(() =>
       expect(within(icon!).getByTestId("coordinator-activity-ring").className).toContain(
         "absolute",
@@ -339,16 +363,16 @@ describe("status on an icon", () => {
   });
 
   test("unread agent mail is a dot, never a count", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
-        ...useConfigStore.getState().config,
+        ...appCommandStore(configStore).getState().config,
         global: {
-          ...useConfigStore.getState().config.global,
+          ...appCommandStore(configStore).getState().config.global,
           agentMessaging: { enabled: true },
         },
       } as ReturnType<typeof useConfigStore.getState>["config"],
     });
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       summary: new Map([
         ["mailbox", { projectId: "local", unreadCount: 12, failedInjectCount: 0 }],
       ]) as unknown as ReturnType<typeof useAgentMailStore.getState>["summary"],
@@ -507,10 +531,12 @@ describe("leaving with the mouse", () => {
 
 describe("other surfaces", () => {
   test("a multi-selection is cleared, having no rows to act on", async () => {
-    useUIStore.setState({ selectedEnvironmentIds: ["env"] });
+    appCommandStore(uiStore).setState({ selectedEnvironmentIds: ["env"] });
     renderSidebar();
     await findCompactIcons(1);
-    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]));
+    await waitFor(() =>
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]),
+    );
   });
 
   test("the search shortcut opens nothing", async () => {

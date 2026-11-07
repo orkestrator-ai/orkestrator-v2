@@ -3,17 +3,18 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { COORDINATOR_ACTIVITY_COMMAND } from "@orkestrator/protocol/coordinator-activity";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
-import { useUIStore } from "@/stores/uiStore";
+import { coordinatorActivityStore } from "@/stores/coordinatorActivityStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { MachineHomeIcon } from "@/components/federation/MachineDot";
 import { SortableProjectGroup } from "./SortableProjectGroup";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
 afterEach(() => {
   cleanup();
-  useCoordinatorActivityStore.getState().reset();
+  appCommandStore(coordinatorActivityStore).getState().reset();
   invokeMock.mockReset();
 });
 
@@ -25,7 +26,7 @@ test("project header highlights Home selection, counts worker rows, and opens th
     projectHome: true,
     hasUnreadWork: true,
   } as Environment;
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: project.id,
     selectedEnvironmentId: home.id,
     projectBoardTab: "home",
@@ -40,7 +41,7 @@ test("project header highlights Home selection, counts worker rows, and opens th
       isSelected
       selectedEnvironmentId={home.id}
       onToggleCollapse={noop}
-      onSelectProject={() => useUIStore.getState().selectProject(project.id)}
+      onSelectProject={() => appCommandStore(uiStore).getState().selectProject(project.id)}
       onSelectEnvironment={noop}
       onDeleteProject={noop}
       onOpenSettings={noop}
@@ -59,11 +60,11 @@ test("project header highlights Home selection, counts worker rows, and opens th
   expect(screen.getByRole("button", { name: "Checkout Home needs attention" })).toBeTruthy();
   expect(screen.queryByText("project-home") === null).toBe(true);
   fireEvent.click(row);
-  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
-  useUIStore.setState({ projectBoardTab: "home" });
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
+  appCommandStore(uiStore).setState({ projectBoardTab: "home" });
   fireEvent.contextMenu(row);
   fireEvent.click(screen.getByText("Open Board"));
-  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   view.rerender(
     <SortableProjectGroup
       project={project}
@@ -195,7 +196,7 @@ test("a working coordinator rings the project's icon, and shows its own icon whe
   // Idle again: a project without an icon of its own shows nothing.
   activity = {};
   view.rerender(<SortableProjectGroup {...props} />);
-  await act(() => useCoordinatorActivityStore.getState().refresh());
+  await act(() => appCommandStore(coordinatorActivityStore).getState().refresh());
   await waitFor(() =>
     expect(within(row).queryByTestId("coordinator-activity-icon") === null).toBe(true),
   );

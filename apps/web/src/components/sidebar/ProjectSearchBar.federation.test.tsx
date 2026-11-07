@@ -13,10 +13,10 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 import { selectOnNode } from "@/test/node-selection";
@@ -25,6 +25,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { noteAuthoritativeRead } from "@/lib/node-scope/snapshot-sync";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
@@ -141,8 +142,8 @@ describe("ProjectSearchBar across machines", () => {
     localStorage.removeItem("machine-view-storage");
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
-    useUIStore.setState({ recentProjectIds: [] });
-    useConfigStore.setState((state) => ({
+    appCommandStore(uiStore).setState({ recentProjectIds: [] });
+    appCommandStore(configStore).setState((state) => ({
       config: { ...state.config, repositories: {} },
     }));
     install();
@@ -158,9 +159,11 @@ describe("ProjectSearchBar across machines", () => {
 
   for (const state of ["current", "stale", "blocked"] as const) {
     test(`remote search hit reacts to the checks setting with an unchanged ${state} PR summary`, async () => {
-      const initialConfig = useConfigStore.getState().config;
+      const initialConfig = appCommandStore(configStore).getState().config;
       try {
-        useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ autoMergeRequireChecks: true });
         renderSearch();
         await openAndType("run-desktop");
         await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
@@ -191,7 +194,9 @@ describe("ProjectSearchBar across machines", () => {
         );
         for (const requireChecks of [true, false, true]) {
           act(() =>
-            useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+            appCommandStore(configStore)
+              .getState()
+              .updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
           );
           expect(row.querySelector("[data-merge-ready]") !== null).toBe(
             state === "current" && !requireChecks,
@@ -200,7 +205,7 @@ describe("ProjectSearchBar across machines", () => {
         }
       } finally {
         cleanup();
-        useConfigStore.setState({ config: initialConfig });
+        appCommandStore(configStore).setState({ config: initialConfig });
       }
     });
   }
@@ -469,7 +474,7 @@ describe("ProjectSearchBar across machines", () => {
     const localProjects = ["unranked", "legacy-second", "tg", "overlap", "modern"].map(
       (id, order) => ({ ...localProject, id, name: id, order }),
     );
-    useUIStore.setState({ recentProjectIds: ["tg", "legacy-second", "overlap"] });
+    appCommandStore(uiStore).setState({ recentProjectIds: ["tg", "legacy-second", "overlap"] });
     useMachineViewStore.setState({
       recentKeys: [
         projectKey(projectRef("bk_mbp3" as BackendId, "tg")),

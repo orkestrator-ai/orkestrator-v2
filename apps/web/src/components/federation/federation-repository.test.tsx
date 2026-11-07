@@ -11,7 +11,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { onCreateEnvironmentRequest } from "@/lib/federation/open-workspace";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import {
   connectionList,
   installDesktopFake,
@@ -21,10 +21,11 @@ import {
 } from "@/test/federation-desktop-fake";
 import { MergedProjectList } from "./FederatedSidebarSections";
 import { firstEnvironment, machineView, renderWithFederation } from "./federation-ui-test-fixture";
+import { appCommandStore } from "@/test/app-command-store";
 
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
-const INITIAL_UI_STATE = useUIStore.getState();
+const INITIAL_UI_STATE = appCommandStore(uiStore).getState();
 
 function installTwoMachines() {
   return installDesktopFake({
@@ -41,7 +42,7 @@ beforeEach(() => {
   sessionStorage.clear();
   useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
-  useUIStore.setState(INITIAL_UI_STATE, true);
+  appCommandStore(uiStore).setState(INITIAL_UI_STATE, true);
 });
 
 afterEach(() => {
@@ -49,7 +50,7 @@ afterEach(() => {
   uninstallDesktopFake();
   useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
-  useUIStore.setState(INITIAL_UI_STATE, true);
+  appCommandStore(uiStore).setState(INITIAL_UI_STATE, true);
   localStorage.removeItem("machine-view-storage");
 });
 
@@ -117,7 +118,7 @@ for (const bound of [true, false]) {
     ["New Environment", null],
   ] as const) {
     test(`${action} targets the repository member on the ${destination}`, async () => {
-      useUIStore.setState({
+      appCommandStore(uiStore).setState({
         selectedProjectId: "previous-project",
         selectedEnvironmentId: "previous-environment",
         projectBoardTab: action === "Open Board" ? "coordinator" : "kanban",
@@ -133,9 +134,11 @@ for (const bound of [true, false]) {
           if (bound) {
             expect(useRemoteWorkspaceStore.getState().active).toBeNull();
             if (boardTab) {
-              expect(useUIStore.getState().selectedProjectId).toBe(project.ref.projectId);
-              expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-              expect(useUIStore.getState().projectBoardTab).toBe(boardTab);
+              expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(
+                project.ref.projectId,
+              );
+              expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+              expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(boardTab);
             } else {
               expect(create.mock.calls).toEqual([[project.ref.projectId]]);
             }
@@ -147,7 +150,7 @@ for (const bound of [true, false]) {
               projectId: project.ref.projectId,
               ...(boardTab ? { boardTab } : { createEnvironmentProjectId: project.ref.projectId }),
             });
-            expect(useUIStore.getState().selectedProjectId).toBeNull();
+            expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
             expect(create.mock.calls).toEqual([]);
           }
         });

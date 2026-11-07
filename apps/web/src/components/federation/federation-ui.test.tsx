@@ -13,7 +13,7 @@ import {
   startRemoteWorkspaceSelectionSync,
   useRemoteWorkspaceStore,
 } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   OUTCOME_UNKNOWN,
@@ -44,7 +44,7 @@ import {
   RemoteMachineSection,
 } from "./FederatedSidebarSections";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
 import { CommandHandoverDialog } from "./CommandHandoverDialog";
@@ -53,6 +53,7 @@ import { MachineBadge, MachineDot } from "./MachineDot";
 import { MachinesFilter } from "./MachinesFilter";
 import { SshPromptDialog } from "./SshPromptDialog";
 import { useMachineViews } from "./useMachineViews";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** A project's header button, found through its "+" button, which names project and machine. */
 function projectHeading(project: string, machine: string): HTMLElement {
@@ -529,7 +530,8 @@ describe("CL-05: machine identity visual rules", () => {
         networkAccessMode: "restricted",
         order: 0,
       };
-      if (state === "deleting") useEnvironmentStore.getState().setDeleting(environment.id, true);
+      if (state === "deleting")
+        appCommandStore(environmentStore).getState().setDeleting(environment.id, true);
       try {
         renderWithFederation(
           <EnvironmentItem
@@ -554,7 +556,7 @@ describe("CL-05: machine identity visual rules", () => {
         if (state === "selecting") expect(screen.getByRole("checkbox")).toBeTruthy();
         else expect(row.querySelector("svg.animate-spin") !== null).toBe(true);
       } finally {
-        useEnvironmentStore.getState().setDeleting(environment.id, false);
+        appCommandStore(environmentStore).getState().setDeleting(environment.id, false);
       }
     });
   }
@@ -1213,8 +1215,12 @@ describe("OP-06/CR-03: opening another machine's environment", () => {
       );
       await waitFor(() => expect(useRemoteWorkspaceStore.getState().active).not.toBeNull());
       // The window's own selection was cleared for it.
-      expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-      act(() => useUIStore.getState().selectProjectAndEnvironment("local-project", "local-env"));
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+      act(() =>
+        appCommandStore(uiStore)
+          .getState()
+          .selectProjectAndEnvironment("local-project", "local-env"),
+      );
       expect(useRemoteWorkspaceStore.getState().active).toBeNull();
       // Machine A stays held behind it, so going back is instant.
       expect(useRemoteWorkspaceStore.getState().openNodes).toEqual(["bk_a"]);

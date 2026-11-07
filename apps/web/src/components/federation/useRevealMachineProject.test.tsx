@@ -20,7 +20,7 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSections";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
@@ -30,6 +30,7 @@ import { FederationEffects } from "./FederationEffects";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 import { useRevealMachineProject } from "./useRevealMachineProject";
+import { appCommandStore } from "@/test/app-command-store";
 
 const INITIAL_REMOTE_STATE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
@@ -162,7 +163,9 @@ describe("useRevealMachineProject", () => {
     );
     await waitFor(() => expect(portalStore.getState().selfId).toBe(SELF_NODE_ID));
     act(() => useMachineViewStore.getState().revealProject(key));
-    act(() => useUIStore.getState().selectProjectAndEnvironment("p-local", "e-local"));
+    act(() =>
+      appCommandStore(uiStore).getState().selectProjectAndEnvironment("p-local", "e-local"),
+    );
     await waitFor(() =>
       expect(useMachineViewStore.getState().recentKeys.slice(0, 2)).toEqual([
         environmentKey(environmentRef(SELF_NODE_ID, "e-local")),
@@ -262,7 +265,7 @@ describe("useRevealMachineProject", () => {
   }
 
   test("another remote selection removes the row highlight with no local selection", async () => {
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
     openMachineWorkspace({ connectionId: "bk_other", projectId: "other", title: "Other" });
     await revealIn();
     const row = projectRow()!;

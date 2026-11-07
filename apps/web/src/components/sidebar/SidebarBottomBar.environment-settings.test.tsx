@@ -6,23 +6,24 @@ import { AppDialogHost } from "@/components/layout/AppDialogHost";
 import { MobileAppShellLayout } from "@/components/layout/MobileAppShellLayout";
 import { invoke } from "@/lib/native/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { SidebarBottomBar } from "./SidebarBottomBar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const nativeInvoke = invoke as ReturnType<typeof mock>;
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
-const initialUI = useUIStore.getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
+const initialUI = appCommandStore(uiStore).getState();
 
 afterEach(() => {
   cleanup();
   useAppDialogStore.setState({ request: null });
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
-  useUIStore.setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
   nativeInvoke.mockReset();
 });
 
@@ -30,7 +31,7 @@ test("the drawer's bottom bar and AppDialogHost open interactive settings and re
   // Background reads stay pending, as in the browser fixture, so this exercises
   // the real composed UI without depending on unrelated backend responses.
   nativeInvoke.mockImplementation(() => new Promise(() => {}));
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -42,7 +43,7 @@ test("the drawer's bottom bar and AppDialogHost open interactive settings and re
       } as Project,
     ],
   });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -57,7 +58,10 @@ test("the drawer's bottom bar and AppDialogHost open interactive settings and re
       } as Environment,
     ],
   });
-  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project-1",
+    selectedEnvironmentId: "env-1",
+  });
   renderInAppCommandScope(
     <>
       <AppDialogHost />

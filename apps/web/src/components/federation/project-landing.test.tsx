@@ -14,7 +14,7 @@ import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore, useUIStore } from "@/stores/uiStore";
 import { LeafModeCoordinatorGate } from "@/components/projects/LeafModeCoordinatorGate";
 import {
   SELF_NODE_ID,
@@ -29,6 +29,7 @@ import { RemoteProjectGroup } from "./RemoteMachineTree";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 import { selectOnNode } from "@/test/node-selection";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** A project's header button, found through its "+" button, which names project and machine. */
 function projectHeading(project: string, machine: string): HTMLElement {
@@ -36,7 +37,7 @@ function projectHeading(project: string, machine: string): HTMLElement {
   return add.parentElement!.querySelector("button")!;
 }
 
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const initialMachines = useMachineViewStore.getState();
 const MACHINE_A = remoteConnection("a", "Machine A", "teal");
@@ -51,7 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   uninstallDesktopFake();
-  useUIStore.setState(initialUI, true);
+  appCommandStore(uiStore).setState(initialUI, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
   useMachineViewStore.setState(initialMachines, true);
 });
@@ -137,7 +138,7 @@ function rowOf(connectionId: string): HTMLElement {
 describe("a project's entry opens on the tab its grouping calls for", () => {
   for (const mode of ["command", "leaf"] as const) {
     test(`a repository heading opens a bound ${mode} node on ${mode === "leaf" ? "Home" : "Coordinator"}`, async () => {
-      const initialUI = useUIStore.getState();
+      const initialUI = appCommandStore(uiStore).getState();
       installDesktopFake({
         list: connectionList([]),
         datasets: {},
@@ -172,7 +173,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         );
       }
       try {
-        useUIStore.setState({ selectedProjectId: null, projectBoardTab: "kanban" });
+        appCommandStore(uiStore).setState({ selectedProjectId: null, projectBoardTab: "kanban" });
         renderWithFederation(
           <>
             <MergedProjectList
@@ -188,14 +189,14 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         await waitFor(() => expect(portalStore.getState().status?.mode).toBe(mode));
         const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
         for (let click = 0; click < 2; click++) {
-          act(() => useUIStore.getState().setProjectBoardTab("kanban"));
+          act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
           fireEvent.click(heading);
           await waitFor(() =>
-            expect(useUIStore.getState().projectBoardTab).toBe(
+            expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(
               mode === "leaf" ? "home" : "coordinator",
             ),
           );
-          expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+          expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
           expect(
             screen.getByText(mode === "leaf" ? "Project Home" : "Project Coordinator"),
           ).toBeTruthy();
@@ -205,7 +206,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         }
       } finally {
         cleanup();
-        useUIStore.setState(initialUI, true);
+        appCommandStore(uiStore).setState(initialUI, true);
       }
     });
   }

@@ -23,8 +23,8 @@ import { useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useUIStore } from "@/stores/uiStore";
+import { configStore } from "@/stores/configStore";
+import { uiStore } from "@/stores/uiStore";
 import {
   connectionList,
   installDesktopFake,
@@ -36,8 +36,9 @@ import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { FederatedActivityList } from "./FederatedSidebarSections";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const initialMachines = useMachineViewStore.getState();
 
@@ -50,7 +51,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   uninstallDesktopFake();
-  useUIStore.setState(initialUI, true);
+  appCommandStore(uiStore).setState(initialUI, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
   useMachineViewStore.setState(initialMachines, true);
 });
@@ -413,7 +414,7 @@ test("a machine-qualified row describes change counts along with unread work and
 
 for (const state of ["current", "stale", "blocked"] as const) {
   test(`remote row reacts to the checks setting with an unchanged ${state} PR summary`, () => {
-    const initialConfig = useConfigStore.getState().config;
+    const initialConfig = appCommandStore(configStore).getState().config;
     const row = environment("feature", {
       environmentType: "local",
       prState: "open",
@@ -425,13 +426,15 @@ for (const state of ["current", "stale", "blocked"] as const) {
     const machine = machineView([row]);
     if (state === "stale") machine.freshness = "stale";
     try {
-      useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+      appCommandStore(configStore).getState().updateGlobalConfig({ autoMergeRequireChecks: true });
       render(<RemoteEnvironmentItem machine={machine} environment={row} />);
       const button = screen.getByRole("button", { name: "feature, on Machine A, Idle" });
       // No rerender or summary replacement: only the live config changes.
       for (const requireChecks of [true, false, true]) {
         act(() =>
-          useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+          appCommandStore(configStore)
+            .getState()
+            .updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
         );
         expect(button.querySelector("[data-merge-ready]") !== null).toBe(
           state === "current" && !requireChecks,
@@ -439,7 +442,7 @@ for (const state of ["current", "stale", "blocked"] as const) {
       }
     } finally {
       cleanup();
-      useConfigStore.setState({ config: initialConfig });
+      appCommandStore(configStore).setState({ config: initialConfig });
     }
   });
 }

@@ -11,7 +11,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   OUTCOME_UNKNOWN,
@@ -23,11 +23,12 @@ import {
 import type { Environment, Project } from "@/types";
 import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 
 const localProject = {
@@ -108,8 +109,8 @@ function setup({
           ? environments.filter((entry) => entry.projectId === args.projectId)
           : undefined,
   });
-  useProjectStore.getState().setProjects([localProject]);
-  useEnvironmentStore.getState().setEnvironments(environments);
+  appCommandStore(projectStore).getState().setProjects([localProject]);
+  appCommandStore(environmentStore).getState().setEnvironments(environments);
   useMachineViewStore.setState({
     grouping,
     machineFilter: "all",
@@ -129,7 +130,7 @@ function setup({
 }
 
 const row = (name: string) => screen.findByRole("button", { name: new RegExp(`^${name}, on `) });
-const selected = () => useUIStore.getState().selectedEnvironmentIds;
+const selected = () => appCommandStore(uiStore).getState().selectedEnvironmentIds;
 
 /** Every selectable row's id, top to bottom. */
 function rowIdsOnScreen(): string[] {
@@ -157,7 +158,7 @@ beforeEach(() => {
   mockToastWarning.mockClear();
   mockToastError.mockClear();
   useRemoteWorkspaceStore.setState({ active: null });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: "p1",
     selectedEnvironmentId: null,
     selectedEnvironmentIds: [],
@@ -171,9 +172,9 @@ afterEach(() => {
   cleanup();
   uninstallDesktopFake();
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 
@@ -249,7 +250,7 @@ describe("selecting", () => {
 
     fireEvent.click(await row("Own b1"));
     expect(selected()).toEqual([]);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("b1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("b1");
   });
 });
 

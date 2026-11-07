@@ -292,7 +292,7 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
       },
       {
         id: "delete-focused-environment",
-        description: "Delete the environment focused in the sidebar, after confirming",
+        description: "Delete the sidebar environment just clicked or focused, after confirming",
         mac: ["⌘", "⌫"],
         other: ["Ctrl", "Backspace"],
         keywords: ["remove", "trash", "environment row"],

@@ -432,6 +432,32 @@ describe("EnvironmentItem delete shortcut", () => {
     expect(callbacks.onDelete).not.toHaveBeenCalled();
   });
 
+  test("after a click, ⌘⌫ asks even once another field has taken focus", () => {
+    callbacks.onDelete.mockClear();
+    renderItem();
+    const field = document.createElement("textarea");
+    document.body.append(field);
+
+    fireEvent.click(screen.getByRole("button", { name: /Pulsing icon/ }));
+    field.focus();
+    expect(fireEvent.keyDown(field, { key: "Backspace", metaKey: true })).toBe(false);
+    expect(screen.getByRole("alertdialog", { name: "Delete Environment" })).toBeTruthy();
+    expect(callbacks.onDelete).not.toHaveBeenCalled();
+    field.remove();
+  });
+
+  test("a click followed by typing does not ask", () => {
+    renderItem();
+    const field = document.createElement("textarea");
+    document.body.append(field);
+
+    fireEvent.click(screen.getByRole("button", { name: /Pulsing icon/ }));
+    fireEvent.keyDown(field, { key: "x" });
+    expect(fireEvent.keyDown(field, { key: "Backspace", metaKey: true })).toBe(true);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    field.remove();
+  });
+
   test("plain, shifted and held Backspace do not ask", () => {
     renderItem();
     const row = screen.getByRole("button", { name: /Pulsing icon/ });

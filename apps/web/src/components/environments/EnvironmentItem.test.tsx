@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
@@ -428,7 +429,7 @@ describe("EnvironmentItem delete shortcut", () => {
 
     fireEvent.keyDown(row, { key: "Backspace", ctrlKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
     expect(callbacks.onDelete).not.toHaveBeenCalled();
   });
 
@@ -446,6 +447,57 @@ describe("EnvironmentItem delete shortcut", () => {
     field.remove();
   });
 
+  test("a normal click leaving multi-select arms the newly selected row", () => {
+    function Selection() {
+      const [multi, setMulti] = useState(true);
+      return (
+        <EnvironmentItem
+          environment={environmentFixture()}
+          isSelected={!multi}
+          isMultiSelectMode={multi}
+          {...callbacks}
+          onSelect={() => setMulti(false)}
+        />
+      );
+    }
+    render(<Selection />);
+    const field = document.createElement("textarea");
+    const fieldKeys = mock(() => undefined);
+    field.addEventListener("keydown", fieldKeys);
+    document.body.append(field);
+    fireEvent.click(screen.getByRole("button", { name: /Pulsing icon/ }));
+    field.focus();
+    expect(fireEvent.keyDown(field, { key: "Backspace", metaKey: true })).toBe(false);
+    expect(screen.getAllByRole("alertdialog").length).toBe(1);
+    expect(fieldKeys).not.toHaveBeenCalled();
+    field.remove();
+  });
+
+  test("starting multi-select, disabling Delete, or unmounting disarms a clicked row", () => {
+    for (const change of ["multi-select", "disabled", "unmount"]) {
+      const env = environmentFixture();
+      const view = renderItem(env);
+      fireEvent.click(screen.getByRole("button", { name: /Pulsing icon/ }));
+      if (change === "multi-select") {
+        view.rerender(
+          <EnvironmentItem environment={env} isSelected={false} isMultiSelectMode {...callbacks} />,
+        );
+      } else if (change === "disabled") {
+        act(() => {
+          claimSidebarAction("env-1");
+        });
+      } else {
+        view.unmount();
+      }
+      expect(fireEvent.keyDown(window, { key: "Backspace", metaKey: true })).toBe(true);
+      expect(screen.queryByRole("alertdialog") === null).toBe(true);
+      view.unmount();
+      act(() => {
+        releaseSidebarAction("env-1");
+      });
+    }
+  });
+
   test("a click followed by typing does not ask", () => {
     renderItem();
     const field = document.createElement("textarea");
@@ -454,7 +506,7 @@ describe("EnvironmentItem delete shortcut", () => {
     fireEvent.click(screen.getByRole("button", { name: /Pulsing icon/ }));
     fireEvent.keyDown(field, { key: "x" });
     expect(fireEvent.keyDown(field, { key: "Backspace", metaKey: true })).toBe(true);
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
     field.remove();
   });
 
@@ -465,7 +517,7 @@ describe("EnvironmentItem delete shortcut", () => {
     expect(fireEvent.keyDown(row, { key: "Backspace" })).toBe(true);
     fireEvent.keyDown(row, { key: "Backspace", metaKey: true, shiftKey: true });
     fireEvent.keyDown(row, { key: "Backspace", metaKey: true, repeat: true });
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
   });
 
   test("a row whose Delete is disabled does not ask", () => {
@@ -476,7 +528,7 @@ describe("EnvironmentItem delete shortcut", () => {
 
       expect(row.getAttribute("aria-keyshortcuts")).toBeNull();
       fireEvent.keyDown(row, { key: "Backspace", metaKey: true });
-      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByRole("alertdialog") === null).toBe(true);
     } finally {
       releaseSidebarAction("env-1");
     }

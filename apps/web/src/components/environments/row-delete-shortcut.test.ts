@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { armRowDeleteShortcut, isDeleteRowChord } from "./row-delete-shortcut";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { armRowDeleteShortcut, isDeleteRowChord, ROW_DELETE_ARM_MS } from "./row-delete-shortcut";
 
 const chord = { key: "Backspace", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
 
@@ -53,6 +53,54 @@ describe("armRowDeleteShortcut", () => {
 
     press({ key: "Backspace", metaKey: true }, field);
     expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  test("a later chord reaches populated composer and terminal fields after expiry", () => {
+    const now = spyOn(Date, "now").mockReturnValue(1000);
+    try {
+      for (const label of ["Composer", "Terminal input"]) {
+        now.mockReturnValue(1000);
+        const field = document.createElement("textarea");
+        field.setAttribute("aria-label", label);
+        field.value = "existing text";
+        const fieldKeys = mock(() => undefined);
+        field.addEventListener("keydown", fieldKeys);
+        document.body.append(field);
+        field.focus();
+        const onDelete = mock(() => undefined);
+        arm(onDelete);
+        now.mockReturnValue(1000 + ROW_DELETE_ARM_MS);
+        const event = press({ key: "Backspace", ctrlKey: true }, field);
+        expect(event.defaultPrevented).toBe(false);
+        expect(fieldKeys).toHaveBeenCalledTimes(1);
+        expect(onDelete).not.toHaveBeenCalled();
+        field.remove();
+      }
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test("the expiry timer releases listeners and disarming cancels its timer", () => {
+    let expire: (() => void) | undefined;
+    const timer = spyOn(window, "setTimeout").mockImplementation(((callback: TimerHandler) => {
+      expire = callback as () => void;
+      return 123;
+    }) as typeof window.setTimeout);
+    const clear = spyOn(window, "clearTimeout").mockImplementation(() => undefined);
+    try {
+      const onDelete = mock(() => undefined);
+      arm(onDelete);
+      expect(timer).toHaveBeenCalledWith(expect.any(Function), ROW_DELETE_ARM_MS);
+      expire?.();
+      expect(press({ key: "Backspace", ctrlKey: true }).defaultPrevented).toBe(false);
+      expect(onDelete).not.toHaveBeenCalled();
+      arm(onDelete)();
+      expect(clear).toHaveBeenCalledWith(123);
+    } finally {
+      timer.mockRestore();
+      clear.mockRestore();
+    }
   });
 
   test("any other key, a pointer press or leaving the window disarms it", () => {

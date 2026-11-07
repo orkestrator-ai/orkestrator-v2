@@ -7,6 +7,7 @@
  * therefore arms the shortcut at the window, in the capture phase so the
  * focused terminal or composer never receives it, until the user does
  * anything else: presses another key, presses a pointer, or leaves the window.
+ * Arming expires after 1.5 seconds so a later editing chord keeps its meaning.
  */
 
 export interface DeleteChordEvent {
@@ -47,6 +48,8 @@ const MODIFIER_KEYS = new Set([
   "CapsLock",
 ]);
 
+export const ROW_DELETE_ARM_MS = 1500;
+
 /** At most one row is armed: arming another disarms it. */
 let disarmCurrent: (() => void) | null = null;
 
@@ -57,13 +60,21 @@ let disarmCurrent: (() => void) | null = null;
  */
 export function armRowDeleteShortcut(onDelete: () => void, target: Window = window): () => void {
   disarmCurrent?.();
+  const deadline = Date.now() + ROW_DELETE_ARM_MS;
+  let expiry: ReturnType<Window["setTimeout"]> | undefined;
   const disarm = () => {
+    target.clearTimeout(expiry);
     target.removeEventListener("keydown", onKeyDown, true);
     target.removeEventListener("pointerdown", disarm, true);
     target.removeEventListener("blur", disarm);
     if (disarmCurrent === disarm) disarmCurrent = null;
   };
   function onKeyDown(event: KeyboardEvent) {
+    // Check the deadline too: a delayed timer must not extend input interception.
+    if (Date.now() >= deadline) {
+      disarm();
+      return;
+    }
     if (MODIFIER_KEYS.has(event.key)) return;
     disarm();
     if (!isDeleteRowChord(event) || event.repeat) return;
@@ -75,6 +86,7 @@ export function armRowDeleteShortcut(onDelete: () => void, target: Window = wind
   // Pressing anywhere, the row included, ends this arming; a click on a row arms it again.
   target.addEventListener("pointerdown", disarm, true);
   target.addEventListener("blur", disarm);
+  expiry = target.setTimeout(disarm, ROW_DELETE_ARM_MS);
   disarmCurrent = disarm;
   return disarm;
 }

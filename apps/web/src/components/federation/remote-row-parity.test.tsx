@@ -443,3 +443,36 @@ for (const state of ["current", "stale", "blocked"] as const) {
     }
   });
 }
+
+test("a remote row disarms when focus leaves the shell for a child frame", () => {
+  const row = environment("frame-target");
+  render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
+  fireEvent.click(screen.getByRole("button", { name: /frame-target/ }));
+  const frameDocument = document.implementation.createHTMLDocument("Child realm");
+  try {
+    // A separate document has its own event path; shell blur revokes the arm.
+    fireEvent.blur(window);
+    const field = frameDocument.createElement("textarea");
+    frameDocument.body.append(field);
+    field.focus();
+    expect(
+      field.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Backspace",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    ).toBe(true);
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
+    // Returning to the shell must not revive the stale row intent.
+    expect(fireEvent.keyDown(window, { key: "Backspace", metaKey: true })).toBe(true);
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /frame-target/ }));
+    fireEvent.keyDown(window, { key: "Backspace", metaKey: true });
+    expect(screen.getByRole("alertdialog", { name: "Delete Environment" })).toBeTruthy();
+  } finally {
+    frameDocument.body.replaceChildren();
+  }
+});

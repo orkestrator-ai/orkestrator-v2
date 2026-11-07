@@ -536,8 +536,9 @@ export function EnvironmentRow({
     onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
     disarmDeleteShortcut();
     // The environment's terminal or composer takes focus next, so the chord
-    // is caught at the window until the user does anything else.
-    if (canRequestDelete && !modified) {
+    // is caught briefly at the window until the user does anything else.
+    // Normal activation clears multi-select; use the resulting single-row eligibility.
+    if (!model.menu.deleteDisabled && !modified) {
       disarmDeleteShortcutRef.current = armRowDeleteShortcut(() => setDeleteOpen(true));
     }
   };

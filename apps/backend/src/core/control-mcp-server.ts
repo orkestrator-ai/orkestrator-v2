@@ -1,3 +1,4 @@
+import { StorageService } from "./storage.js";
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -178,6 +179,7 @@ export class ControlMcpServer {
   private readonly confirmTokens = new ConfirmTokens();
   /** Per listener run, in memory only: stop() ends every agent voice chat. */
   private agentVoiceChats = new AgentVoiceChats();
+  private readonly voiceStorage: StorageService;
   private readonly agentVoiceChatReply: AgentVoiceChatHost["reply"];
   private info: ControlMcpInfo | null = null;
   private startError: string | null = null;
@@ -205,6 +207,7 @@ export class ControlMcpServer {
     private readonly invoke: ControlMcpInvoker,
     options: ControlMcpServerOptions = {},
   ) {
+    this.voiceStorage = new StorageService(dataDir, { snapshots: false });
     this.bindAddress = options.bindAddress ?? "127.0.0.1";
     this.port = options.port ?? configuredControlMcpPort();
     this.bindRetry = options.retry ?? DEFAULT_BIND_RETRY;
@@ -435,6 +438,7 @@ export class ControlMcpServer {
       const server = this.server;
       this.server = null;
       this.coordinatorCredentials.clear();
+      this.voiceStorage.close();
       this.agentVoiceChats.dispose();
       this.agentVoiceChats = new AgentVoiceChats();
       try {
@@ -489,7 +493,11 @@ export class ControlMcpServer {
       authority: controlMcpAuthority(credential.id),
       invoke: this.invoke,
       confirmTokens: this.confirmTokens,
-      agentVoiceChats: { chats: this.agentVoiceChats, reply: this.agentVoiceChatReply },
+      agentVoiceChats: {
+        chats: this.agentVoiceChats,
+        reply: this.agentVoiceChatReply,
+        bindInterrupt: (input) => this.voiceStorage.publicOperations.bindVoiceInterrupt(input),
+      },
       messagingEnabled,
     };
   }

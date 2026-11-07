@@ -245,3 +245,79 @@ describe("SessionTitleService", () => {
     await expect(queued).resolves.toBeNull();
   });
 });
+
+describe("per-generation cancellation", () => {
+  test("four canceled runs and canceled queued work release capacity for the latest voice reply", async () => {
+    const started: string[] = [];
+    const starts = new Map<string, () => void>();
+    const onStart = (name: string) => new Promise<void>((resolve) => starts.set(name, resolve));
+    const firstStarted = Array.from({ length: 4 }, (_, i) => onStart(`run-${i}`));
+    const service = new SessionTitleService({
+      maxConcurrent: 4,
+      maxQueued: 1,
+      signedIn: async () => true,
+      launch: async () => ({ executable: "scripted", env: {} }),
+      generators: {
+        claude: async ({ source, signal }) => {
+          started.push(source);
+          starts.get(source)?.();
+          if (source === "latest") return "Latest answer";
+          await new Promise<void>((resolve) => {
+            if (signal!.aborted) resolve();
+            else signal!.addEventListener("abort", () => resolve(), { once: true });
+          });
+          throw new Error("cancelled");
+        },
+      },
+    });
+    try {
+      const controllers = Array.from({ length: 4 }, () => new AbortController());
+      const running = controllers.map((controller, i) =>
+        service.generate({ agent: "claude", source: `run-${i}`, signal: controller.signal }),
+      );
+      await Promise.all(firstStarted);
+      const queuedController = new AbortController();
+      const queued = service.generate({
+        agent: "claude",
+        source: "obsolete queued",
+        signal: queuedController.signal,
+      });
+      queuedController.abort();
+      await expect(queued).resolves.toBeNull();
+      const latest = service.generate({ agent: "claude", source: "latest" });
+      controllers.forEach((controller) => controller.abort());
+      expect(await Promise.all(running)).toEqual([null, null, null, null]);
+      await expect(latest).resolves.toMatchObject({ title: "Latest answer" });
+      expect(started).not.toContain("obsolete queued");
+      // Cancellations did not put the shared login into failure cooldown.
+      await expect(service.generate({ agent: "claude", source: "latest" })).resolves.toMatchObject({
+        strategy: "claude",
+      });
+    } finally {
+      await service.shutdown();
+    }
+  });
+
+  test("cancellation during login discovery prevents process launch", async () => {
+    let signedIn!: (value: boolean) => void;
+    const discovery = new Promise<boolean>((resolve) => {
+      signedIn = resolve;
+    });
+    const launch = mock(async () => ({ executable: "scripted", env: {} }));
+    const service = new SessionTitleService({ signedIn: () => discovery, launch });
+    const controller = new AbortController();
+    try {
+      const result = service.generate({
+        agent: "claude",
+        source: "work",
+        signal: controller.signal,
+      });
+      controller.abort();
+      signedIn(true);
+      await expect(result).resolves.toBeNull();
+      expect(launch).not.toHaveBeenCalled();
+    } finally {
+      await service.shutdown();
+    }
+  });
+});

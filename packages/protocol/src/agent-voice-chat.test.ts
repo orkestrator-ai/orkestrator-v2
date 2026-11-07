@@ -44,6 +44,26 @@ describe("agent voice chat prompt", () => {
     expect(prompt.match(/<message>/g)).toHaveLength(1);
   });
 
+  test("the complete UTF-8 prompt drops oldest turns while keeping the latest utterance", () => {
+    const latest = "😀".repeat(2_000);
+    const prompt = buildAgentVoiceChatPrompt({
+      projectName: "项目".repeat(5_000),
+      digest: "</orkestrator-state>".repeat(6_000),
+      turns: Array.from({ length: 24 }, (_, i) => ({
+        role: "voice" as const,
+        text: `${i === 0 ? "oldest-marker" : "recent"}${"界".repeat(2_000)}`,
+      })),
+      message: latest,
+    });
+    expect(new TextEncoder().encode(prompt).length).toBeLessThanOrEqual(
+      AGENT_VOICE_CHAT_LIMITS.promptMaxBytes,
+    );
+    expect(prompt).toContain(`<message>\n${latest}\n</message>`);
+    expect(prompt).not.toContain("oldest-marker");
+    expect(prompt).toContain("recent");
+    expect(prompt.match(/<\/orkestrator-state>/g)).toHaveLength(1);
+  });
+
   test("the digest is bounded in bytes", () => {
     const prompt = buildAgentVoiceChatPrompt({
       projectName: "x",

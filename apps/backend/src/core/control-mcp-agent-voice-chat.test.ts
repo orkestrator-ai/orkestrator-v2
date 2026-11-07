@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { AGENT_VOICE_CHAT_INTERRUPT_OPEN_TAG } from "@orkestrator/protocol/agent-voice-chat";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { adapterError } from "./control-mcp-results.js";
 import { AGENT_VOICE_CHAT_TOOL_NAMES } from "./control-mcp-agent-voice-chat.js";
 import { controlMcpHarness } from "./control-mcp-test-support.js";
 import { seedCoordinator } from "./public-api/test-coordinator.js";
@@ -183,6 +185,120 @@ describe("agent voice chat tools", () => {
     expect(workspace?.conversations).toHaveLength(3);
   });
 
+  test("opening retries, including concurrent calls, share one chat and model run", async () => {
+    const harness = await open();
+    const voice = await harness.credential("voice");
+    const input = { projectId: harness.projectId, text: "Status?", requestId: "opening" };
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => harness.call(voice.token, "agent_voice_chat_say", input)),
+    );
+    const first = structured(results[0]!).result!;
+    for (const result of results)
+      expect(structured(result).result).toMatchObject({
+        chatId: first.chatId,
+        turnId: first.turnId,
+      });
+    expect(
+      structured(await harness.call(voice.token, "agent_voice_chat_say", input)).result,
+    ).toMatchObject({ chatId: first.chatId, turnId: first.turnId, replayed: true });
+    expect(harness.replies).toHaveBeenCalledTimes(1);
+    expect(
+      structured(
+        await harness.call(voice.token, "agent_voice_chat_say", { ...input, text: "Changed" }),
+      ).error?.code,
+    ).toBe("request-conflict");
+  });
+
+  test("blank openings at capacity preserve all eight conversations", async () => {
+    const harness = await open();
+    const voice = await harness.credential("voice");
+    const ids: unknown[] = [];
+    for (let i = 0; i < 8; i++)
+      ids.push(
+        structured(
+          await harness.call(voice.token, "agent_voice_chat_say", {
+            projectId: harness.projectId,
+            text: "Hello",
+            requestId: `fill-${i}`,
+          }),
+        ).result!.chatId,
+      );
+    for (const text of ["", " \n\t "])
+      expect(
+        structured(
+          await harness.call(voice.token, "agent_voice_chat_say", {
+            projectId: harness.projectId,
+            text,
+            requestId: "blank",
+          }),
+        ).error?.code,
+      ).toBe("invalid-input");
+    for (const chatId of ids)
+      expect(
+        structured(
+          await harness.call(voice.token, "agent_voice_chat_listen", { chatId, waitMs: 0 }),
+        ).ok,
+      ).toBe(true);
+    expect(harness.replies).toHaveBeenCalledTimes(8);
+  });
+
+  test("listen speaks pending and failed status instead of an older answer", async () => {
+    let reject!: (error: Error) => void;
+    let count = 0;
+    const harness = await open(async () =>
+      ++count === 1
+        ? "Old answer."
+        : new Promise<string>((_resolve, fail) => {
+            reject = fail;
+          }),
+    );
+    const voice = await harness.credential("voice");
+    const first = structured(
+      await harness.call(voice.token, "agent_voice_chat_say", {
+        projectId: harness.projectId,
+        text: "One",
+        requestId: "one",
+      }),
+    );
+    const chatId = first.result!.chatId;
+    await harness.call(voice.token, "agent_voice_chat_say", {
+      chatId,
+      text: "Two",
+      requestId: "two",
+      waitMs: 0,
+    });
+    expect(
+      spoken(await harness.call(voice.token, "agent_voice_chat_listen", { chatId, waitMs: 0 })),
+    ).toStartWith("Still thinking.");
+    reject(new Error("private"));
+    expect(
+      spoken(await harness.call(voice.token, "agent_voice_chat_listen", { chatId, waitMs: 1000 })),
+    ).toStartWith("No reply:");
+  });
+
+  test("denied session list or state reads do not reach the reply prompt", async () => {
+    const harness = await open();
+    for (const deniedActions of [
+      ["session.list"],
+      ["session.get"],
+      ["session.list", "session.get"],
+    ]) {
+      const voice = await harness.credential("voice", { deniedActions });
+      const result = structured(
+        await harness.call(voice.token, "agent_voice_chat_say", {
+          projectId: harness.projectId,
+          text: "Status?",
+          requestId: "denied",
+        }),
+      );
+      expect(result.ok).toBe(true);
+      const prompt = harness.replies.mock.calls.at(-1)![0].prompt;
+      expect(prompt).toContain("agents could not be read");
+      for (const denied of ["Main coordinator:", "agent tabs in", "goal ", "Coordinator said:"])
+        expect(prompt).not.toContain(denied);
+    }
+  });
+
   test("a slow reply is heard later with listen", async () => {
     let finish!: (reply: string) => void;
     const harness = await open(
@@ -299,6 +415,12 @@ describe("agent voice chat interrupts the main coordinator", () => {
     );
     expect(retried).toMatchObject({ ok: true, action: "session.steer" });
     expect(action).toHaveBeenCalledTimes(1);
+    const replayView = structured(
+      await harness.call(voice.token, "agent_voice_chat_listen", { chatId, waitMs: 0 }),
+    );
+    expect(
+      (replayView.result!.turns as Array<{ role: string }>).filter((turn) => turn.role === "event"),
+    ).toHaveLength(1);
   });
 
   test("an idle coordinator gets the words as a new message", async () => {
@@ -322,6 +444,191 @@ describe("agent voice chat interrupts the main coordinator", () => {
     expect(harness.stub.sends).toHaveLength(1);
     expect(harness.stub.sends[0]!.prompt).toContain(AGENT_VOICE_CHAT_INTERRUPT_OPEN_TAG);
     expect(harness.stub.sends[0]!.prompt).toContain("Start on the release notes.");
+  });
+
+  test("interrupt replay survives a new listener and changed coordinator activity", async () => {
+    const harness = await open();
+    const action = steerable(harness.stub);
+    setActivity(
+      harness.service,
+      "claude",
+      harness.tabId,
+      harness.providerSessionId,
+      "idle",
+      harness.environmentId,
+    );
+    const voice = await harness.credential("voice");
+    const input = { projectId: harness.projectId, text: "Release notes", requestId: "durable" };
+    const calls = await Promise.all([
+      harness.call(voice.token, "agent_voice_chat_interrupt", input),
+      harness.call(voice.token, "agent_voice_chat_interrupt", input),
+    ]);
+    expect(calls.map((call) => structured(call).action)).toEqual([
+      "session.prompt",
+      "session.prompt",
+    ]);
+    expect(harness.stub.sends).toHaveLength(1);
+    // More than the former 256-entry cache: none may displace the original binding.
+    for (let i = 0; i < 300; i++)
+      harness.harness.storage.publicOperations.bindVoiceInterrupt({
+        ownerId: voice.id,
+        requestId: `later-${i}`,
+        fingerprint: `hash-${i}`,
+        choice: { sessionId: "later", action: "session.stop" },
+      });
+    await harness.server.stop();
+    const { ControlMcpServer } = await import("./control-mcp-server.js");
+    const { rpc } = await import("./control-mcp-test-support.js");
+    const server = new ControlMcpServer(
+      harness.harness.dataDir,
+      async <T>(command: string, args: Record<string, unknown> = {}) =>
+        (await harness.harness.commands.get(command)!(args, harness.harness.context)) as T,
+      { port: 0 },
+    );
+    harnesses.push({ close: () => server.stop() });
+    await server.start();
+    setActivity(
+      harness.service,
+      "claude",
+      harness.tabId,
+      harness.providerSessionId,
+      "working",
+      harness.environmentId,
+    );
+    const replay = await rpc(server.getInfo()!.url, voice.token, "tools/call", {
+      name: "agent_voice_chat_interrupt",
+      arguments: input,
+    });
+    expect(structured(replay.body.result!)).toMatchObject({ ok: true, action: "session.prompt" });
+    expect(harness.stub.sends).toHaveLength(1);
+    expect(action).not.toHaveBeenCalled();
+    const conflict = await rpc(server.getInfo()!.url, voice.token, "tools/call", {
+      name: "agent_voice_chat_interrupt",
+      arguments: { ...input, text: "Changed" },
+    });
+    expect(structured(conflict.body.result!).error?.code).toBe("request-conflict");
+  });
+
+  test("definitive refusals and ambiguous dispatch never switch an interrupt's action", async () => {
+    const harness = await open();
+    const voice = await harness.credential("voice");
+    const original = harness.harness.commands.get("public_action")!;
+    const attempts: string[] = [];
+    let failure: "busy" | "session-idle" | "dispatch-unknown" = "busy";
+    harness.harness.commands.set("public_action", async (args, context) => {
+      if (args.action === "session.prompt" || args.action === "session.steer") {
+        attempts.push(args.action);
+        return adapterError(args.action, failure, "Scripted dispatch outcome");
+      }
+      return original(args, context);
+    });
+    for (const [state, code, action] of [
+      ["idle", "busy", "session.prompt"],
+      ["working", "session-idle", "session.steer"],
+      ["idle", "dispatch-unknown", "session.prompt"],
+    ] as const) {
+      failure = code;
+      setActivity(
+        harness.service,
+        "claude",
+        harness.tabId,
+        harness.providerSessionId,
+        state,
+        harness.environmentId,
+      );
+      const input = {
+        projectId: harness.projectId,
+        text: "Check build",
+        requestId: `refused-${code}`,
+      };
+      expect(
+        structured(await harness.call(voice.token, "agent_voice_chat_interrupt", input)).error
+          ?.code,
+      ).toBe(code);
+      setActivity(
+        harness.service,
+        "claude",
+        harness.tabId,
+        harness.providerSessionId,
+        state === "idle" ? "working" : "idle",
+        harness.environmentId,
+      );
+      expect(
+        structured(await harness.call(voice.token, "agent_voice_chat_interrupt", input)).error
+          ?.code,
+      ).toBe(code);
+      expect(attempts.splice(0)).toEqual([action, action]);
+    }
+    expect(harness.stub.sends).toHaveLength(0);
+  });
+
+  test("durable binding capacity refuses new keys while retaining existing choices", async () => {
+    const harness = await open();
+    const storage = harness.harness.storage.publicOperations;
+    const input = {
+      ownerId: "voice",
+      requestId: "original",
+      fingerprint: "hash",
+      choice: { sessionId: "original-target", action: "session.prompt" as const },
+    };
+    storage.bindVoiceInterrupt(input);
+    const bindings = readStoredValue<Record<string, unknown>>(
+      harness.harness.dataDir,
+      "control-mcp-voice-interrupts.json",
+    )!;
+    for (let i = 0; i < 8191; i++)
+      bindings[`filler-${i}`] = {
+        fingerprint: "hash",
+        sessionId: "later-target",
+        action: "session.stop",
+      };
+    seedStore(harness.harness.dataDir, "control-mcp-voice-interrupts.json", bindings);
+    expect(() => storage.bindVoiceInterrupt({ ...input, requestId: "overflow" })).toThrow(
+      "storage is full",
+    );
+    expect(
+      storage.bindVoiceInterrupt({
+        ...input,
+        choice: { sessionId: "new-target", action: "session.steer" },
+      }),
+    ).toMatchObject({ sessionId: "original-target", action: "session.prompt" });
+    expect(() => storage.bindVoiceInterrupt({ ...input, fingerprint: "changed" })).toThrow(
+      "different interrupt",
+    );
+    expect(
+      storage.bindVoiceInterrupt({ ...input, ownerId: "other", choice: undefined }),
+    ).toBeNull();
+  });
+
+  test("failed context reads are omitted without preventing a spoken reply", async () => {
+    const harness = await open();
+    const voice = await harness.credential("voice");
+    const first = structured(
+      await harness.call(voice.token, "agent_voice_chat_say", {
+        projectId: harness.projectId,
+        text: "One",
+        requestId: "first",
+      }),
+    );
+    const original = harness.harness.commands.get("public_action")!;
+    harness.harness.commands.set("public_action", async (args, context) => {
+      if (["project.get", "attention.list", "session.transcript"].includes(String(args.action)))
+        throw new Error("private failed read");
+      return original(args, context);
+    });
+    const result = structured(
+      await harness.call(voice.token, "agent_voice_chat_say", {
+        chatId: first.result!.chatId,
+        text: "Two",
+        requestId: "second",
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.result!.state).toBe("idle");
+    const prompt = harness.replies.mock.calls.at(-1)![0].prompt;
+    expect(prompt).toContain("Project: unnamed");
+    expect(prompt).not.toContain("private failed read");
+    expect(prompt).not.toContain("Coordinator said:");
   });
 
   test("stop ends the coordinator's running turn", async () => {

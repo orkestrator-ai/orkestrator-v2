@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /**
  * Agent voice chat over Control MCP: a voice agent's short, two-way exchange
  * with Orkestrator, separate from the main coordinator's conversation, plus
@@ -33,7 +34,11 @@ import type {
   AgentRegistrySnapshot,
 } from "@orkestrator/protocol/agent-registry";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
-import { publicSuccessEnvelope, type PublicActionName } from "@orkestrator/protocol/public-api";
+import {
+  publicSuccessEnvelope,
+  isPublicRequestId,
+  type PublicActionName,
+} from "@orkestrator/protocol/public-api";
 import type {
   PublicAttentionPage,
   PublicTranscriptPage,
@@ -189,11 +194,15 @@ async function projectDigest(
   const lines: string[] = [];
   const [project, entries, attention] = await Promise.all([
     allowed(caller, "project.get")
-      ? dispatchAs<{ name?: string }>(routed, "project.get", { projectId: chat.projectId })
+      ? dispatchAs<{ name?: string }>(routed, "project.get", { projectId: chat.projectId }).catch(
+          () => null,
+        )
       : null,
-    projectAgents(caller, chat.projectId, chat.nodeId).catch(() => null),
+    allowed(caller, "session.list") && allowed(caller, "session.get")
+      ? projectAgents(caller, chat.projectId, chat.nodeId).catch(() => null)
+      : null,
     allowed(caller, "attention.list")
-      ? dispatchAs<PublicAttentionPage>(routed, "attention.list", { limit: 20 })
+      ? dispatchAs<PublicAttentionPage>(routed, "attention.list", { limit: 20 }).catch(() => null)
       : null,
   ]);
   const projectName = project?.ok ? (project.result.name ?? "") : "";
@@ -209,8 +218,8 @@ async function projectDigest(
     const transcript = await dispatchAs<PublicTranscriptPage>(routed, "session.transcript", {
       sessionId: coordinator.sessionId,
       limit: 4,
-    });
-    if (transcript.ok) {
+    }).catch(() => null);
+    if (transcript?.ok) {
       const rows = transcript.result.messages.map(digestRow).filter((row) => row !== null);
       lines.push(...(rows.length ? rows : ["The coordinator has no messages yet."]));
     }
@@ -243,8 +252,9 @@ async function projectDigest(
 }
 
 function replyRun(caller: ControlMcpCaller, host: AgentVoiceChatHost) {
-  return async (chat: AgentVoiceChatRecord) => {
+  return async (chat: AgentVoiceChatRecord, signal: AbortSignal) => {
     const { digest, projectName, coordinatorAgent } = await projectDigest(caller, chat);
+    signal.throwIfAborted();
     // Every voice message since the last reply is answered together; notes stay context.
     const lastAgent = chat.turns.map((turn) => turn.role).lastIndexOf("agent");
     const history = chat.turns.filter((turn, index) => index <= lastAgent || turn.role === "event");
@@ -253,6 +263,7 @@ function replyRun(caller: ControlMcpCaller, host: AgentVoiceChatHost) {
       .filter((turn) => turn.role === "voice")
       .map((turn) => turn.text);
     return host.reply({
+      signal,
       prompt: buildAgentVoiceChatPrompt({
         projectName,
         digest,
@@ -302,6 +313,12 @@ export function registerAgentVoiceChatTools(server: McpServer, caller: ControlMc
       async ({ text: said, requestId, chatId, projectId, nodeId, waitMs }) => {
         const tool = "agent_voice_chat_say";
         try {
+          if (!said.trim() || !isPublicRequestId(requestId)) {
+            return envelopeToolResult(
+              adapterError(tool, "invalid-input", "Say something and pass a valid requestId"),
+              profile,
+            );
+          }
           if (Array.from(said).length > AGENT_VOICE_CHAT_LIMITS.messageMaxChars) {
             return envelopeToolResult(
               adapterError(tool, "input-too-large", "Say it in fewer words"),
@@ -327,7 +344,8 @@ export function registerAgentVoiceChatTools(server: McpServer, caller: ControlMc
               );
               if (!project.ok) return envelopeToolResult(project, profile, sayForEnvelope(project));
             }
-            chat = host.chats.open({
+            chat = host.chats.openRequest({
+              requestId,
               ownerId: owner,
               projectId: projectId!,
               ...(nodeId ? { nodeId } : {}),
@@ -385,13 +403,12 @@ export function registerAgentVoiceChatTools(server: McpServer, caller: ControlMc
           const reply = view.turns.filter((turn) => turn.role === "agent").at(-1);
           const last = view.turns.at(-1);
           return envelopeToolResult(success(tool, view), profile, {
-            say: reply
-              ? reply.text
-              : view.state === "replying"
+            say:
+              view.state === "replying"
                 ? "Still thinking."
                 : view.state === "failed"
                   ? `No reply: ${view.error ?? "try again"}.`
-                  : "Nothing new.",
+                  : (reply?.text ?? "Nothing new."),
             ids: { chatId, ...(last ? { turnId: last.id } : {}) },
           });
         } catch (error) {
@@ -457,64 +474,69 @@ export function registerAgentVoiceChatTools(server: McpServer, caller: ControlMc
               profile,
             );
           }
-          const coordinator = mainCoordinator(await projectAgents(caller, project, node));
-          if (!coordinator?.sessionId) {
+          if (!isPublicRequestId(requestId))
             return envelopeToolResult(
-              adapterError(tool, "not-found", "This project's main coordinator is not running"),
+              adapterError(tool, "invalid-input", "Pass a valid requestId"),
               profile,
-              { say: "The coordinator is not running, so there is nothing to interrupt." },
             );
+          const fingerprint = createHash("sha256")
+            .update(
+              JSON.stringify([
+                node ?? "",
+                project,
+                mode ?? "message",
+                words?.trim() ?? "",
+                chat?.title ?? "",
+              ]),
+            )
+            .digest("hex");
+          const bindingInput = { ownerId: owner, requestId, fingerprint };
+          let binding = host.bindInterrupt(bindingInput);
+          if (!binding) {
+            const coordinator = mainCoordinator(await projectAgents(caller, project, node));
+            if (!coordinator?.sessionId)
+              return envelopeToolResult(
+                adapterError(tool, "not-found", "This project's main coordinator is not running"),
+                profile,
+                { say: "The coordinator is not running, so there is nothing to interrupt." },
+              );
+            binding = host.bindInterrupt({
+              ...bindingInput,
+              choice: {
+                sessionId: coordinator.sessionId,
+                action: stop
+                  ? "session.stop"
+                  : coordinator.state === "working" || coordinator.state === "waiting"
+                    ? "session.steer"
+                    : "session.prompt",
+              },
+            })!;
           }
           const routed = onNode(caller, node);
-          const sessionId = coordinator.sessionId;
-          let envelope: ControlMcpEnvelope;
-          let action: "session.stop" | "session.steer" | "session.prompt";
-          if (stop) {
-            action = "session.stop";
-            envelope = await runPublicAction(routed, action, { sessionId }, requestId, undefined);
-          } else {
-            const message = renderAgentVoiceChatInterrupt({
-              text: words!,
-              ...(chat ? { chatTitle: chat.title } : {}),
-            });
-            const remembered = host.chats.interruptAction(owner, requestId);
-            action =
-              remembered === "session.prompt" || remembered === "session.steer"
-                ? remembered
-                : coordinator.state === "working" || coordinator.state === "waiting"
-                  ? "session.steer"
-                  : "session.prompt";
-            const send = (chosen: "session.steer" | "session.prompt") =>
-              runPublicAction(
-                routed,
-                chosen,
-                chosen === "session.steer"
+          const sessionId = binding.sessionId;
+          const action = binding.action;
+          const message = stop
+            ? ""
+            : renderAgentVoiceChatInterrupt({
+                text: words!,
+                ...(chat ? { chatTitle: chat.title } : {}),
+              });
+          const send = (chosen: typeof action) =>
+            runPublicAction(
+              routed,
+              chosen,
+              chosen === "session.stop"
+                ? { sessionId }
+                : chosen === "session.steer"
                   ? { sessionId, text: message }
                   : { sessionId, prompt: message },
-                requestId,
-                undefined,
-              );
-            envelope = await send(action);
-            // A refusal ran nothing, so the turn moving on since the registry read
-            // may be followed with the other action. Only a fresh request does.
-            if (!remembered && !envelope.ok) {
-              const code = envelope.error.code;
-              const other =
-                action === "session.steer" && code === "session-idle"
-                  ? "session.prompt"
-                  : action === "session.prompt" && code === "busy"
-                    ? "session.steer"
-                    : null;
-              if (other) {
-                action = other;
-                envelope = await send(other);
-              }
-            }
-          }
-          if (!stop && (envelope.ok || envelope.error.code === "dispatch-unknown")) {
-            host.chats.rememberInterrupt(owner, requestId, action);
-          }
-          if (chat && envelope.ok) {
+              requestId,
+              undefined,
+            );
+          const envelope = await send(action);
+          // A refusal is returned as-is. Switching actions after admission can
+          // race another delivery; a retry always uses this durable choice.
+          if (chat && envelope.ok && !envelope.receipt?.replayed) {
             host.chats.note(
               owner,
               chat.id,

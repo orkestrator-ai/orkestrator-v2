@@ -32,7 +32,7 @@ import { oneShotAgentRunDependencies, SessionTitleService } from "./session-titl
 /** Largest reply file `codex exec` may write before it is ignored. */
 const MAX_REPLY_FILE_BYTES = 64 * 1024;
 /** A prompt is a bounded digest plus bounded turns; anything larger is refused. */
-const MAX_PROMPT_BYTES = 64 * 1024;
+const MAX_PROMPT_BYTES = AGENT_VOICE_CHAT_LIMITS.promptMaxBytes;
 
 export async function generateClaudeAgentVoiceChatReply(
   input: SessionTitleRunInput,
@@ -133,7 +133,7 @@ export class AgentVoiceChatReplyUnavailableError extends Error {
 
 export interface AgentVoiceChatReplier {
   /** One spoken reply to a prompt built by `buildAgentVoiceChatPrompt`. */
-  reply(input: { prompt: string; agent?: string }): Promise<string>;
+  reply(input: { prompt: string; agent?: string; signal?: AbortSignal }): Promise<string>;
   /** Stops every run in flight and refuses new ones. */
   shutdown(): Promise<void>;
 }
@@ -152,13 +152,13 @@ export function createAgentVoiceChatReplier(
     ? createAgentVoiceChatReplyService(context)
     : null;
   return {
-    async reply({ prompt, agent }) {
+    async reply({ prompt, agent, signal }) {
       if (!prompt.trim()) throw new Error("prompt is required");
       if (Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES)
         throw new Error("prompt is too long");
       if (!service) throw new AgentVoiceChatReplyUnavailableError();
       const preferred: AgentPlatform = isAgentPlatform(agent) ? agent : "claude";
-      const generated = await service.generate({ agent: preferred, source: prompt });
+      const generated = await service.generate({ agent: preferred, source: prompt, signal });
       if (!generated) throw new AgentVoiceChatReplyUnavailableError();
       return generated.title;
     },

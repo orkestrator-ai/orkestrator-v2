@@ -248,15 +248,40 @@ describe("AgentVoiceChats", () => {
     expect(ids).not.toContain(opened[0]!.id);
   });
 
-  test("interrupt decisions are remembered per credential and bounded", () => {
+  test("opening requests bind owner, node, project and text, retaining ended tombstones", () => {
     const store = chats();
-    store.rememberInterrupt("voice", "r1", "session.steer");
-    expect(store.interruptAction("voice", "r1")).toBe("session.steer");
-    expect(store.interruptAction("other", "r1")).toBeUndefined();
-    for (let index = 0; index < AGENT_VOICE_CHAT_LIMITS.interruptDecisionsKept; index += 1) {
-      store.rememberInterrupt("voice", `fill-${index}`, "session.prompt");
+    const input = { ownerId: "voice", projectId: "p1", firstMessage: "hi", requestId: "r1" };
+    const first = store.openRequest(input);
+    expect(store.openRequest(input).id).toBe(first.id);
+    for (const changed of [{ firstMessage: "other" }, { projectId: "p2" }, { nodeId: "remote" }]) {
+      expect(errorCode(() => store.openRequest({ ...input, ...changed }))).toBe("request-conflict");
     }
-    expect(store.interruptAction("voice", "r1")).toBeUndefined();
+    expect(store.openRequest({ ...input, ownerId: "other" }).id).not.toBe(first.id);
+    store.end("voice", first.id);
+    expect(errorCode(() => store.openRequest(input))).toBe("not-found");
+  });
+
+  test("supersession, end and dispose abort the owned generation", async () => {
+    const store = chats();
+    const chat = store.open({ ownerId: "voice", projectId: "p1", firstMessage: "hi" });
+    const signals: AbortSignal[] = [];
+    const reply = async (_record: AgentVoiceChatRecord, signal: AbortSignal) => {
+      signals.push(signal);
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      return "obsolete";
+    };
+    store.say({ ownerId: "voice", chatId: chat.id, text: "one", requestId: "1", reply });
+    store.say({ ownerId: "voice", chatId: chat.id, text: "two", requestId: "2", reply });
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+    store.end("voice", chat.id);
+    expect(signals[1]!.aborted).toBe(true);
+    const other = store.open({ ownerId: "voice", projectId: "p1", firstMessage: "hi" });
+    store.say({ ownerId: "voice", chatId: other.id, text: "three", requestId: "3", reply });
+    store.dispose();
+    expect(signals[2]!.aborted).toBe(true);
   });
 
   test("dispose ends every chat and refuses new ones", () => {

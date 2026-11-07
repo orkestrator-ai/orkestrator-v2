@@ -82,7 +82,9 @@ voice agent --agent_voice_chat_end {chatId}
   digest read under the caller's own credential: the main coordinator's state
   and its latest four messages, the project's working or waiting agents and
   up to five attention items. So the model sees only what that credential may
-  read, and it cannot change anything. The replier is handed to the Control
+  read, and it cannot change anything. Registry-derived state is omitted unless
+  both `session.list` and `session.get` are allowed. Failed context reads are
+  omitted. The replier is handed to the Control
   MCP listener directly rather than registered as a backend command, because
   every command-bridge client can call any registered command, and none of
   them needs a model run on the user's login over a prompt of its choosing.
@@ -91,9 +93,19 @@ voice agent --agent_voice_chat_end {chatId}
   the `turnId`; `agent_voice_chat_listen` with `afterTurnId` waits for it and
   returns the turns since. A message is idempotent on its `requestId`: a retry
   repeats the reply without a second model run, and retries a reply that
-  failed. Another text under the same ID is `request-conflict`.
+  failed. This also covers concurrent opening calls before the client knows
+  `chatId`: the key binds the credential, node, project and text. Another intent
+  under the same ID is `request-conflict`. Blank input is refused before any
+  chat can be opened or evicted. Opening keys (including ended-chat tombstones)
+  are retained for the listener lifetime, capped at 1,024; new keys are refused
+  at capacity rather than allowing a retry to open a second chat.
 - **Talking over a reply.** A new message while a reply is being written
-  supersedes it: the late reply is dropped and the new one answers both.
+  cancels its queued or running model work and the new one answers both. Ending
+  a chat or stopping the listener cancels its work too. Listening while the
+  newest reply is pending or failed reports that state instead of speaking an
+  older answer. The complete framed prompt is capped at 64 KiB in UTF-8,
+  dropping oldest history first and, for many unanswered messages, retaining
+  the newest utterance.
 - **Interrupting the coordinator.** `agent_voice_chat_interrupt` (with `chatId`
   or `projectId`) finds the project's main coordinator in the agent registry.
   `mode: "message"` (the default) steers its running turn with the person's
@@ -102,9 +114,13 @@ voice agent --agent_voice_chat_end {chatId}
   `mode: "stop"` stops its turn. Each is exactly one public action
   (`session.steer`, `session.prompt` or `session.stop`) under the caller's
   `requestId`, so the receipt, key and confirmation rules are the CLI's. A
-  refusal that ran nothing (`session-idle` for a steer, `busy` for a prompt)
-  is followed by the other action once; a retry with the same `requestId`
-  repeats whichever action was chosen. The chat notes the interrupt, so the
+  refusal is returned without automatically switching actions. A durable,
+  content-free binding of the request fingerprint, public session and action
+  is committed to SQLite before dispatch; retries use that same target and
+  action even after listener or backend restarts. Bindings are never evicted
+  and new keys are refused at 8,192 entries or a 4 MiB store budget. This keeps
+  bindings at least as long as public receipts, including ambiguous runs. The
+  chat notes the initial successful interrupt once, so the
   next reply knows about it, and since the digest carries the coordinator's
   latest messages, asking the chat what the coordinator answered works.
 - **Bounds.** A chat keeps 24 turns and ends after 30 minutes idle. A

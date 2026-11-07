@@ -1,3 +1,9 @@
+import { createHash } from "node:crypto";
+import {
+  AgentVoiceChatError,
+  type VoiceInterruptBinding,
+  type VoiceInterruptBindingInput,
+} from "./agent-voice-chats.js";
 import {
   attentionKey,
   compareAttention,
@@ -88,6 +94,47 @@ export class PublicOperationsRepository {
     private readonly files: StorageFiles,
     private readonly repos: StorageRepositories,
   ) {}
+
+  /** Persist before dispatch. Never evict a binding while its public receipt may replay.
+   * Capacity refuses new keys instead of turning an old retry into a new action.
+   * Only hashes, public session IDs and action names reach this store.
+   */
+  bindVoiceInterrupt(input: VoiceInterruptBindingInput): VoiceInterruptBinding | null {
+    const key = createHash("sha256")
+      .update(JSON.stringify([input.ownerId, input.requestId]))
+      .digest("hex");
+    if (input.requestId.length > 200 || !input.requestId.trim())
+      throw new AgentVoiceChatError("invalid-input", "A bounded requestId is required");
+    return this.context.updateStore<
+      Record<string, VoiceInterruptBinding>,
+      VoiceInterruptBinding | null
+    >(
+      this.voiceInterruptBindingsFile(),
+      () => ({}),
+      (bindings) => {
+        const existing = bindings[key];
+        if (existing) {
+          if (existing.fingerprint !== input.fingerprint)
+            throw new AgentVoiceChatError(
+              "request-conflict",
+              "That requestId was used for a different interrupt",
+            );
+          return bindings[key]!;
+        }
+        if (!input.choice) return null;
+        if (Object.keys(bindings).length >= 8192)
+          throw new AgentVoiceChatError("store-capacity", "Voice interrupt replay storage is full");
+        bindings[key] = { ...input.choice, fingerprint: input.fingerprint };
+        if (Buffer.byteLength(JSON.stringify(bindings)) > 4 * 1024 * 1024)
+          throw new AgentVoiceChatError("store-capacity", "Voice interrupt replay storage is full");
+        return bindings[key];
+      },
+    );
+  }
+
+  private voiceInterruptBindingsFile(): string {
+    return this.files.file("control-mcp-voice-interrupts.json");
+  }
 
   private publicOperationLimits: {
     maxOperationsPerNamespace: number;
@@ -685,6 +732,7 @@ export class PublicOperationsRepository {
  */
 export type PublicOperationsStorage = Pick<
   PublicOperationsRepository,
+  | "bindVoiceInterrupt"
   | "setPublicOperationLimitsForTesting"
   | "publicOperationNamespaces"
   | "admitPublicOperation"

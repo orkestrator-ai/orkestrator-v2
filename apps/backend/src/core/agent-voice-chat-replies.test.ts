@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { AGENT_VOICE_CHAT_SYSTEM_PROMPT } from "@orkestrator/protocol/agent-voice-chat";
+import {
+  AGENT_VOICE_CHAT_LIMITS,
+  buildAgentVoiceChatPrompt,
+  AGENT_VOICE_CHAT_SYSTEM_PROMPT,
+} from "@orkestrator/protocol/agent-voice-chat";
 import {
   agentVoiceChatRepliesEnabled,
   createAgentVoiceChatReplier,
@@ -100,4 +104,49 @@ describe("the backend's agent voice chat replier", () => {
     );
     await replier.shutdown();
   });
+});
+
+test("valid maximum Unicode conversations remain within the actual replier boundary", async () => {
+  const boundary = createAgentVoiceChatReplier({} as CommandContext, { NODE_ENV: "test" });
+  const { run, calls } = fakeRun(() => "A bounded spoken answer.");
+  try {
+    for (const character of ["界", "😀"]) {
+      const latest = character.repeat(AGENT_VOICE_CHAT_LIMITS.messageMaxChars);
+      const turns = Array.from({ length: 24 }, (_, i) => ({
+        role: i % 2 ? ("agent" as const) : ("voice" as const),
+        text: i % 2 ? character.repeat(600) : latest,
+      }));
+      const prompt = buildAgentVoiceChatPrompt({
+        projectName: "Unicode",
+        digest: character.repeat(6000),
+        turns,
+        message: latest,
+      });
+      expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(AGENT_VOICE_CHAT_LIMITS.promptMaxBytes);
+      expect(prompt).toContain(`<message>\n${latest}\n</message>`);
+      // This is the replier's validation path: it reaches unavailable, never too-long.
+      await expect(boundary.reply({ prompt })).rejects.toThrow("No signed-in");
+      expect(
+        await generateClaudeAgentVoiceChatReply({
+          executable: "scripted",
+          env: {},
+          source: prompt,
+          run,
+        }),
+      ).toBe("A bounded spoken answer.");
+      expect(calls.at(-1)!.stdin).toBe(prompt);
+      const pending = buildAgentVoiceChatPrompt({
+        projectName: "Unicode",
+        digest: "",
+        turns: [],
+        message: Array(24).fill(latest).join(" … "),
+      });
+      expect(Buffer.byteLength(pending)).toBeLessThanOrEqual(
+        AGENT_VOICE_CHAT_LIMITS.promptMaxBytes,
+      );
+      expect(pending).toContain(`${latest}\n</message>`);
+    }
+  } finally {
+    await boundary.shutdown();
+  }
 });

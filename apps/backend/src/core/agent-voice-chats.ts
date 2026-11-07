@@ -13,7 +13,7 @@
  * idempotent on its request ID, so a voice agent that retries after a dropped
  * connection hears the same reply rather than asking twice.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   AGENT_VOICE_CHAT_LIMITS,
   agentVoiceChatTitle,
@@ -36,7 +36,10 @@ export class AgentVoiceChatError extends Error {
 }
 
 /** Writes one reply to the chat's latest message; throws when none can be written. */
-export type AgentVoiceChatReplyRun = (chat: AgentVoiceChatRecord) => Promise<string>;
+export type AgentVoiceChatReplyRun = (
+  chat: AgentVoiceChatRecord,
+  signal: AbortSignal,
+) => Promise<string>;
 
 export interface AgentVoiceChatRecord {
   readonly id: string;
@@ -57,6 +60,7 @@ interface ChatState {
   record: AgentVoiceChatRecord;
   /** Bumped by every reply start; a reply finishing under an older value is dropped. */
   generation: number;
+  controller?: AbortController;
   waiters: Set<() => void>;
   /** requestId → the voice turn it created and its text. */
   requests: Map<string, { turnId: string; text: string }>;
@@ -81,8 +85,8 @@ export class AgentVoiceChats {
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
   private turnCounter = 0;
-  /** `owner\0requestId` → the public action an interrupt chose, so a retry repeats it. */
-  private readonly interrupts = new Map<string, string>();
+  /** Opening keys retain tombstones: an evicted chat must not become a second opening. */
+  private readonly openings = new Map<string, { intent: string; chatId: string }>();
 
   constructor(private readonly options: AgentVoiceChatsOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -99,6 +103,8 @@ export class AgentVoiceChats {
     firstMessage: string;
   }): AgentVoiceChatRecord {
     this.assertLive();
+    if (!input.firstMessage.trim())
+      throw new AgentVoiceChatError("invalid-input", "Say something first");
     this.sweep();
     const owned = this.ownedBy(input.ownerId);
     if (owned.length >= AGENT_VOICE_CHAT_LIMITS.chatsPerOwner) {
@@ -261,24 +267,36 @@ export class AgentVoiceChats {
     };
   }
 
-  /**
-   * The public action an interrupt under this request ID already chose, if
-   * any. A retry must replay that action under the same key rather than pick
-   * another one, which would be a second delivery under a different key.
-   */
-  interruptAction(ownerId: string, requestId: string): string | undefined {
-    return this.interrupts.get(`${ownerId}\0${requestId}`);
-  }
-
-  rememberInterrupt(ownerId: string, requestId: string, action: string): void {
-    const key = `${ownerId}\0${requestId}`;
-    this.interrupts.delete(key);
-    this.interrupts.set(key, action);
-    while (this.interrupts.size > AGENT_VOICE_CHAT_LIMITS.interruptDecisionsKept) {
-      const oldest = this.interrupts.keys().next().value;
-      if (oldest === undefined) break;
-      this.interrupts.delete(oldest);
+  /** Synchronous reservation, before say starts work; concurrent callers reuse the same chat. */
+  openRequest(input: {
+    ownerId: string;
+    requestId: string;
+    projectId: string;
+    nodeId?: string;
+    firstMessage: string;
+  }): AgentVoiceChatRecord {
+    this.assertLive();
+    const key = JSON.stringify([input.ownerId, input.requestId]);
+    const intent = createHash("sha256")
+      .update(JSON.stringify([input.nodeId ?? "", input.projectId, input.firstMessage.trim()]))
+      .digest("hex");
+    const previous = this.openings.get(key);
+    if (previous) {
+      if (previous.intent !== intent)
+        throw new AgentVoiceChatError(
+          "request-conflict",
+          "That requestId was used for a different opening",
+        );
+      return this.get(input.ownerId, previous.chatId);
     }
+    if (this.openings.size >= 1024)
+      throw new AgentVoiceChatError(
+        "store-capacity",
+        "Too many opening requests; restart the voice chat listener",
+      );
+    const chat = this.open(input);
+    this.openings.set(key, { intent, chatId: chat.id });
+    return chat;
   }
 
   /** Ends every chat and stops the expiry sweep; later calls are refused. */
@@ -287,7 +305,7 @@ export class AgentVoiceChats {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
     for (const state of Array.from(this.chats.values())) this.remove(state);
-    this.interrupts.clear();
+    this.openings.clear();
   }
 
   /** Ends chats idle past the expiry; a chat that is replying is not idle. */
@@ -312,6 +330,9 @@ export class AgentVoiceChats {
 
   private startReply(state: ChatState, turnId: string, run: AgentVoiceChatReplyRun): void {
     const record = state.record;
+    state.controller?.abort();
+    const controller = new AbortController();
+    state.controller = controller;
     state.generation += 1;
     const generation = state.generation;
     record.state = "replying";
@@ -322,7 +343,7 @@ export class AgentVoiceChats {
       let reply: string | null = null;
       let failure: string | null = null;
       try {
-        reply = (await run(record)).trim() || null;
+        reply = (await run(record, controller.signal)).trim() || null;
         if (!reply) failure = "The reply was empty";
       } catch (error) {
         // Content-free: a CLI handed the conversation on stdin can quote it back.
@@ -370,6 +391,7 @@ export class AgentVoiceChats {
 
   private remove(state: ChatState): void {
     this.chats.delete(state.record.id);
+    state.controller?.abort();
     // A late reply finds the chat gone and is dropped.
     state.generation += 1;
     this.notify(state);
@@ -412,6 +434,20 @@ export class AgentVoiceChats {
 /** What a Control MCP listener gives its operator callers for agent voice chat. */
 export interface AgentVoiceChatHost {
   chats: AgentVoiceChats;
+  bindInterrupt(input: VoiceInterruptBindingInput): VoiceInterruptBinding | null;
   /** One spoken reply to a prompt built by `buildAgentVoiceChatPrompt`. */
-  reply(input: { prompt: string; agent?: string }): Promise<string>;
+  reply(input: { prompt: string; agent?: string; signal?: AbortSignal }): Promise<string>;
+}
+
+/** Content-free durable choice, published before the public mutation. */
+export interface VoiceInterruptBinding {
+  fingerprint: string;
+  sessionId: string;
+  action: "session.prompt" | "session.steer" | "session.stop";
+}
+export interface VoiceInterruptBindingInput {
+  ownerId: string;
+  requestId: string;
+  fingerprint: string;
+  choice?: Omit<VoiceInterruptBinding, "fingerprint">;
 }

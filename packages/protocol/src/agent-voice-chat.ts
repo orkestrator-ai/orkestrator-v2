@@ -32,6 +32,8 @@ export const AGENT_VOICE_CHAT_LIMITS = Object.freeze({
   waitMaxMs: 25_000,
   /** Default wait of a call that sends a message. */
   waitDefaultMs: 15_000,
+  /** Bytes of the complete framed model prompt. */
+  promptMaxBytes: 64 * 1024,
   /** Bytes of the project digest the reply run is shown. */
   digestMaxBytes: 6_000,
   /** One reply run's process timeout. */
@@ -40,8 +42,6 @@ export const AGENT_VOICE_CHAT_LIMITS = Object.freeze({
   titleMaxChars: 80,
   /** Characters of an interrupt sent to the coordinator. */
   interruptMaxChars: 2_000,
-  /** Remembered interrupt decisions, so a retry repeats the same action. */
-  interruptDecisionsKept: 256,
 });
 
 export type AgentVoiceChatRole = "voice" | "agent" | "event";
@@ -127,27 +127,45 @@ export function buildAgentVoiceChatPrompt(input: {
   turns: readonly Pick<AgentVoiceChatTurn, "role" | "text">[];
   message: string;
 }): string {
-  const conversation = input.turns
-    .map((turn) => {
-      const speaker =
-        turn.role === "voice" ? "Voice agent" : turn.role === "agent" ? "You" : "Note";
-      return `${speaker}: ${inert(flatten(turn.text))}`;
-    })
-    .join("\n");
-  return [
-    `Project: ${inert(flatten(input.projectName)) || "unnamed"}`,
-    "<orkestrator-state>",
-    inert(boundedBytes(input.digest.trim(), AGENT_VOICE_CHAT_LIMITS.digestMaxBytes)) ||
-      "Nothing could be read.",
-    "</orkestrator-state>",
-    "<conversation>",
-    conversation || "This is the first message.",
-    "</conversation>",
-    "<message>",
-    inert(flatten(input.message)),
-    "</message>",
-    "Reply to the message in one or two short spoken sentences.",
-  ].join("\n");
+  const encoder = new TextEncoder();
+  const rows = input.turns.map((turn) => {
+    const speaker = turn.role === "voice" ? "Voice agent" : turn.role === "agent" ? "You" : "Note";
+    return `${speaker}: ${inert(flatten(turn.text))}`;
+  });
+  const project = boundedBytes(inert(flatten(input.projectName)), 1_000) || "unnamed";
+  const digest =
+    boundedBytes(inert(input.digest.trim()), AGENT_VOICE_CHAT_LIMITS.digestMaxBytes) ||
+    "Nothing could be read.";
+  // Preserve the latest utterance even after many unanswered messages. Bound
+  // after inert framing, which can increase the UTF-8 size of malicious tags.
+  const message = inert(flatten(input.message));
+  const render = (conversation: string, words: string) =>
+    [
+      `Project: ${project}`,
+      "<orkestrator-state>",
+      digest,
+      "</orkestrator-state>",
+      "<conversation>",
+      conversation || "This is the first message.",
+      "</conversation>",
+      "<message>",
+      words,
+      "</message>",
+      "Reply to the message in one or two short spoken sentences.",
+    ].join("\n");
+  const budget = AGENT_VOICE_CHAT_LIMITS.promptMaxBytes;
+  const overhead = encoder.encode(render("", "")).length;
+  const messageBudget = budget - overhead - 32;
+  const characters = Array.from(message);
+  let start = 0;
+  let bytes = encoder.encode(message).length;
+  while (bytes > messageBudget && start < characters.length) {
+    bytes -= encoder.encode(characters[start++]!).length;
+  }
+  const boundedMessage = characters.slice(start).join("");
+  while (rows.length && encoder.encode(render(rows.join("\n"), boundedMessage)).length > budget)
+    rows.shift();
+  return render(rows.join("\n"), boundedMessage);
 }
 
 /**

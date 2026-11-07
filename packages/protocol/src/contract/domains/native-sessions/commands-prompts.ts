@@ -9,6 +9,7 @@
  */
 import * as Schema from "effect/Schema";
 import { defineCommand } from "../../command.js";
+import { mutableArray } from "../../model-schema.js";
 import { nativeSessionsDomain } from "./domain.js";
 import {
   AgentHandoffCapabilitiesSchema,
@@ -312,7 +313,7 @@ export const pruneAgentHandoffsCommand = defineCommand({
   // `referencedHandoffIds` is checked strictly by the handler (a non-array must
   // never read as "nothing is referenced").
   args: Schema.Struct({ environmentId: Schema.String, referencedHandoffIds: optionalUnknown }),
-  result: Schema.Array(Schema.String),
+  result: mutableArray(Schema.String),
   critical: [],
 });
 

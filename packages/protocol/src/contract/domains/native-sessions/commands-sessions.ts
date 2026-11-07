@@ -9,6 +9,7 @@
  */
 import * as Schema from "effect/Schema";
 import { defineCommand } from "../../command.js";
+import { mutableArray } from "../../model-schema.js";
 import { nativeSessionsDomain } from "./domain.js";
 import {
   conditionalSnapshotOf,
@@ -182,7 +183,7 @@ export const deleteSessionsByEnvironmentCommand = defineCommand({
   access: "workspace",
   read: false,
   args: Schema.Struct({ environmentId: Schema.String }),
-  result: Schema.Array(Schema.String),
+  result: mutableArray(Schema.String),
   critical: [],
 });
 
@@ -263,7 +264,7 @@ export const cleanupOrphanedBuffersCommand = defineCommand({
   access: "workspace",
   read: false,
   args: Schema.Struct({}),
-  result: Schema.Array(Schema.String),
+  result: mutableArray(Schema.String),
   critical: [],
 });
 

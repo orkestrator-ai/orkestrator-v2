@@ -373,16 +373,16 @@ Report: [§11](../../docs/reports/unified-federation.md#11-versioned-interfaces)
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
 | 1001 | [1001-schema-library-spike.md](1001-schema-library-spike.md) | 1 | done | — | Measure the renderer bundle cost of Effect Schema against Zod 4, `zod/mini` and hand-written guards, record Decision 13.8 (Effect, the user's choice), and add `effect` to protocol. |
-| 1002 | [1002-contract-primitives.md](1002-contract-primitives.md) | 1 | not-started | 1001 | `defineDomain`, `defineCommand`, `defineEvent`, the invoke envelope, typed error codes and `domainClient` types in `packages/protocol/src/contract/`. |
-| 1003 | [1003-backend-register-overload.md](1003-backend-register-overload.md) | 1 | not-started | 1002 | `register(def, handler)` with tolerant parsing and critical fields, through every wrapping registrar; the envelope on HTTP, IPC and the relay. |
-| 1004 | [1004-hello-domains.md](1004-hello-domains.md) | 1 | not-started | 1002, 1003 | A new top-level hello field, `domains: {min, max}` per domain, parsed explicitly with bounds. Pre-contract nodes are detected. |
-| 1005 | [1005-typed-incompatibility-errors.md](1005-typed-incompatibility-errors.md) | 1 | not-started | 1002, 0007 | `unknown-command` / `unsupported-version` / `unsupported-field` codes survive web HTTP and Electron IPC (both drop `code` today). All text matchers are replaced. |
-| 1006 | [1006-contract-manifest-generator.md](1006-contract-manifest-generator.md) | 1 | not-started | 1003 | `contracts/manifest.json` from the live registry, with `--check` in CI. Every string-registered command must be assigned a domain. |
-| 1007 | [1007-release-snapshots-and-backfill.md](1007-release-snapshots-and-backfill.md) | 1 | not-started | 1006 | `release:version` writes a snapshot; backfill covers every published release since v2.21.0, deduplicated per domain digest. |
+| 1002 | [1002-contract-primitives.md](1002-contract-primitives.md) | 1 | done | 1001 | `defineDomain`, `defineCommand`, `defineEvent`, the invoke envelope, typed error codes and `domainClient` types in `packages/protocol/src/contract/`. |
+| 1003 | [1003-backend-register-overload.md](1003-backend-register-overload.md) | 1 | done | 1002 | `register(def, handler)` with tolerant parsing and critical fields, through every wrapping registrar; the envelope on HTTP, IPC and the relay. |
+| 1004 | [1004-hello-domains.md](1004-hello-domains.md) | 1 | done | 1002, 1003 | A new top-level hello field, `domains: {min, max}` per domain, parsed explicitly with bounds. Pre-contract nodes are detected. |
+| 1005 | [1005-typed-incompatibility-errors.md](1005-typed-incompatibility-errors.md) | 1 | done | 1002, 0007 | `unknown-command` / `unsupported-version` / `unsupported-field` codes survive web HTTP and Electron IPC (both drop `code` today). All text matchers are replaced. |
+| 1006 | [1006-contract-manifest-generator.md](1006-contract-manifest-generator.md) | 1 | done | 1003 | `contracts/manifest.json` from the live registry, with `--check` in CI. Every string-registered command must be assigned a domain. |
+| 1007 | [1007-release-snapshots-and-backfill.md](1007-release-snapshots-and-backfill.md) | 1 | done | 1006 | `release:version` writes a snapshot; backfill covers every published release since v2.21.0, deduplicated per domain digest. |
 | 1008 | [1008-contract-ci-job.md](1008-contract-ci-job.md) | 1 | not-started | 1007, 1009 | A CI job computes the floor and checks adapter coverage, disappeared commands and register consistency. Stage 2 adds the old-argument fixtures. |
-| 1009 | [1009-domain-clients-and-adapters.md](1009-domain-clients-and-adapters.md) | 1 | not-started | 1002, 1004 | `createDomainClient` with version selection, version-0 legacy adapters for pre-contract nodes, an adapter list and usage counters. |
+| 1009 | [1009-domain-clients-and-adapters.md](1009-domain-clients-and-adapters.md) | 1 | done | 1002, 1004 | `createDomainClient` with version selection, version-0 legacy adapters for pre-contract nodes, an adapter list and usage counters. |
 | 1010 | [1010-pilot-node-mail-and-ticket-sync.md](1010-pilot-node-mail-and-ticket-sync.md) | 1 | not-started | 1003, 1004, 1005, 1009 | Pilot: node mail, node files and ticket sync, defined, negotiated and adapted in the backend sender, with register rows retired. |
-| 1011 | [1011-contract-policy-and-docs.md](1011-contract-policy-and-docs.md) | 1 | not-started | 1006 | The untyped-command count can only fall. A "Domain contracts" docs section and an `AGENTS.md` row. |
+| 1011 | [1011-contract-policy-and-docs.md](1011-contract-policy-and-docs.md) | 1 | done | 1006 | The untyped-command count can only fall. A "Domain contracts" docs section and an `AGENTS.md` row. |
 | 1012 | [1012-mixed-version-qualification.md](1012-mixed-version-qualification.md) | 1 | not-started | 1010 | A scheduled run of the current code against the floor release in both directions, generalising the design mixed-version script. |
 
 Exit criteria:
@@ -398,17 +398,17 @@ Report: [§5](../../docs/reports/unified-federation.md#5-target-architecture), [
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
 | 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | in-progress | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
-| 2002 | [2002-browser-transport-split.md](2002-browser-transport-split.md) | 2 | not-started | 2001 | Move `createNodeTransport` out of `web-gateway.ts` (1,743 lines) and cut its couplings to the window shell. Two transports coexist. |
-| 2003 | [2003-browser-credentials-and-auth-transport.md](2003-browser-credentials-and-auth-transport.md) | 2 | not-started | 2002 | `setCredential` on reopen, rich-content cleared per node, no global `fetch`/`EventSource` patch for node clients, and an `acp-client.ts` fix. |
-| 2004 | [2004-browser-node-clients-registry.md](2004-browser-node-clients-registry.md) | 2 | not-started | 2002, 2003 | `node-clients.ts`: in-memory grants, direct then relay, reopen without reload, a `pagehide` close, per-node URLs, WebSocket terminals for leaves. |
-| 2005 | [2005-relay-status-and-session.md](2005-relay-status-and-session.md) | 2 | in-progress | — | Relay `/status` so a relayed client can diagnose a 401; node transports skip `/session`. |
+| 2002 | [2002-browser-transport-split.md](2002-browser-transport-split.md) | 2 | in-progress | 2001 | Move `createNodeTransport` out of `web-gateway.ts` (1,743 lines) and cut its couplings to the window shell. Two transports coexist. |
+| 2003 | [2003-browser-credentials-and-auth-transport.md](2003-browser-credentials-and-auth-transport.md) | 2 | in-progress | 2002 | `setCredential` on reopen, rich-content cleared per node, no global `fetch`/`EventSource` patch for node clients, and an `acp-client.ts` fix. |
+| 2004 | [2004-browser-node-clients-registry.md](2004-browser-node-clients-registry.md) | 2 | in-progress | 2002, 2003 | `node-clients.ts`: in-memory grants, direct then relay, reopen without reload, a `pagehide` close, per-node URLs, WebSocket terminals for leaves. |
+| 2005 | [2005-relay-status-and-session.md](2005-relay-status-and-session.md) | 2 | done | — | Relay `/status` so a relayed client can diagnose a 401; node transports skip `/session`. |
 | 2006 | [2006-desktop-node-scopes.md](2006-desktop-node-scopes.md) | 2 | done | — | Main-process `node-scopes.ts`: single-flight `ensureNodeScope` per (window, node), reusing `NodeWorkspaceScopes`; release triggers. |
-| 2007 | [2007-desktop-node-ipc-and-events.md](2007-desktop-node-ipc-and-events.md) | 2 | not-started | 2006 | `orkestrator:invoke(..., { nodeId })`, admin refusal by node, `orkestrator:node-event`, and a preload `node(nodeId)` API. |
-| 2008 | [2008-desktop-request-auth.md](2008-desktop-request-auth.md) | 2 | not-started | 2006 | One longest-prefix request-auth resolver over the command scope and every node scope of a window. |
-| 2009 | [2009-desktop-previews-and-gateway-snapshot.md](2009-desktop-previews-and-gateway-snapshot.md) | 2 | not-started | 2007 | A preview runtime per node scope (`orkestrator:browser-preview:*` resolved by tab); `localInstallationId` and `backendOnThisDevice(nodeId)`. |
-| 2010 | [2010-command-scope-wiring.md](2010-command-scope-wiring.md) | 2 | not-started | 2001, 2002, 2007 | Browser and desktop `NodeClient`s; `invoke`/`listen` become command-scope wrappers; the 52 direct `window.orkestrator` users are baselined. |
+| 2007 | [2007-desktop-node-ipc-and-events.md](2007-desktop-node-ipc-and-events.md) | 2 | done | 2006 | `orkestrator:invoke(..., { nodeId })`, admin refusal by node, `orkestrator:node-event`, and a preload `node(nodeId)` API. |
+| 2008 | [2008-desktop-request-auth.md](2008-desktop-request-auth.md) | 2 | done | 2006 | One longest-prefix request-auth resolver over the command scope and every node scope of a window. |
+| 2009 | [2009-desktop-previews-and-gateway-snapshot.md](2009-desktop-previews-and-gateway-snapshot.md) | 2 | done | 2007 | A preview runtime per node scope (`orkestrator:browser-preview:*` resolved by tab); `localInstallationId` and `backendOnThisDevice(nodeId)`. |
+| 2010 | [2010-command-scope-wiring.md](2010-command-scope-wiring.md) | 2 | in-progress | 2001, 2002, 2007 | Browser and desktop `NodeClient`s; `invoke`/`listen` become command-scope wrappers; the 52 direct `window.orkestrator` users are baselined. |
 | 2011 | [2011-scope-domain-negotiation.md](2011-scope-domain-negotiation.md) | 2 | not-started | 2010, 1009 | **Track join.** Negotiated `domains` per connection generation; typed `invoke(def)`; `scope.domain(def)`. |
-| 2012 | [2012-transport-lint-boundary.md](2012-transport-lint-boundary.md) | 2 | not-started | 2010 | A source guard: transports are reached only through a scope, and existing imports may only fall. |
+| 2012 | [2012-transport-lint-boundary.md](2012-transport-lint-boundary.md) | 2 | done | 2010 | A source guard: transports are reached only through a scope, and existing imports may only fall. |
 | 2013 | [2013-second-scope-proof.md](2013-second-scope-proof.md) | 2 | not-started | 2004, 2005, 2008, 2009, 2010 | Exit: a live harness holds the command scope and a leaf scope in one renderer, on desktop and browser, over direct and relay routes. |
 
 Exit criteria:
@@ -422,7 +422,7 @@ Report: [§7](../../docs/reports/unified-federation.md#7-store-and-service-scopi
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 3001 | [3001-scoped-store-shim-and-ratchet.md](3001-scoped-store-shim-and-ratchet.md) | 3 | not-started | 2001, 2010 | The command-scope shim on converted hooks, and a shrink-only source guard per store that handles the `@/stores` barrel. The worked example is `claudeOptionsStore`. |
+| 3001 | [3001-scoped-store-shim-and-ratchet.md](3001-scoped-store-shim-and-ratchet.md) | 3 | done | 2001, 2010 | The command-scope shim on converted hooks, and a shrink-only source guard per store that handles the `@/stores` barrel. The worked example is `claudeOptionsStore`. |
 | 3002 | [3002-lib-backend-client-parameter.md](3002-lib-backend-client-parameter.md) | 3 | not-started | 2010 | `createXApi(client)` factories for all 37 `lib/backend` files, with command-bound exports kept as a counted shim. |
 | 3003 | [3003-stores-batch-a-leaf-light.md](3003-stores-batch-a-leaf-light.md) | 3 | not-started | 3001, 3002 | Eight light stores (environmentDiff, worktreeSnapshot, agentActivity, prMonitor, multiReview, agentModelCatalog, claudeOptions, tabLaunch). |
 | 3004 | [3004-project-and-environment-stores.md](3004-project-and-environment-stores.md) | 3 | not-started | 3001, 3002, 3016 | `projectStore` and `environmentStore` (57 imperative sites), with `useEnvironments` and `useProjects`. |
@@ -436,9 +436,9 @@ Report: [§7](../../docs/reports/unified-federation.md#7-store-and-service-scopi
 | 3012 | [3012-workflow-stores-b.md](3012-workflow-stores-b.md) | 3 | not-started | 3004, 3016 | Design, web annotations, GitHub issues, PRs, change projection, file dirty and preview service stores. |
 | 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | not-started | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
 | 3014 | [3014-scoped-services-and-startup.md](3014-scoped-services-and-startup.md) | 3 | not-started | 3001 | `App.tsx:355-369`'s six `start*` services become per-scope services; the read coordinator is split into window and node parts. |
-| 3015 | [3015-persistence-keys-per-node.md](3015-persistence-keys-per-node.md) | 3 | not-started | 2001 | `desktopConnectionStorageKey(base, nodeId)`; the local-drafts key is namespaced; the command node's keys do not move. |
-| 3016 | [3016-rich-content-and-caches.md](3016-rich-content-and-caches.md) | 3 | not-started | 2001, 2003 | Rich-content identity per node, byte-bounded caches under window budgets, and capability caches per scope. |
-| 3017 | [3017-window-stores-node-qualified.md](3017-window-stores-node-qualified.md) | 3 | not-started | 2001 | Window stores (dialogs, merge PR, coordinator conversation, scroll targets, host path picker) carry `nodeId`. |
+| 3015 | [3015-persistence-keys-per-node.md](3015-persistence-keys-per-node.md) | 3 | done | 2001 | `desktopConnectionStorageKey(base, nodeId)`; the local-drafts key is namespaced; the command node's keys do not move. |
+| 3016 | [3016-rich-content-and-caches.md](3016-rich-content-and-caches.md) | 3 | done | 2001, 2003 | Rich-content identity per node, byte-bounded caches under window budgets, and capability caches per scope. |
+| 3017 | [3017-window-stores-node-qualified.md](3017-window-stores-node-qualified.md) | 3 | done | 2001 | Window stores (dialogs, merge PR, coordinator conversation, scroll targets, host path picker) carry `nodeId`. |
 
 Exit criteria:
 

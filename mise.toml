@@ -203,6 +203,11 @@ run = "bun scripts/generate-contract-adapters.ts"
 description = "Check the domain client adapter list for drift from the domain client definitions"
 run = "bun scripts/generate-contract-adapters.ts --check"
 
+[tasks."qualify:mixed-versions"]
+description = "Run this checkout against a published release (default: the support floor) in both node topologies, every domain scenario module (scheduled weekly in CI)"
+raw_args = true
+run = "bun scripts/qualify-contract-mixed-versions.ts"
+
 [tasks.setup]
 description = "Install dependencies and build every native bridge"
 run = [

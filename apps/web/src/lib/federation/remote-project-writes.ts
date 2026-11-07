@@ -8,6 +8,8 @@ import {
   type ProjectArrangementIntent,
 } from "@/lib/project-folders";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { routedBackendClient } from "@/lib/backend/domain-client";
+import { projects } from "@/lib/node-scope/domains/projects";
 import type { FederatedProject } from "./summaries";
 
 const OPTIMISTIC_ARRANGEMENT_MS = 10_000;
@@ -126,21 +128,22 @@ export function createRemoteProjectWrites(portal: PortalStore) {
 
   const send = (entry: Pending, write: Write) => {
     entry.writing = true;
+    // The `projects` domain client over the routed call (plan item 7005): a
+    // routed call carries no negotiated range, so it is today's call (version 0).
+    const node = projects(routedBackendClient(portal, write.nodeId))();
     const whole = (): Promise<unknown> =>
-      portal.invokeOnNode(write.nodeId, "arrange_projects", {
+      node.arrange_projects({
         projectIds: [...write.arrangement.projectIds],
         folders: { ...write.arrangement.folders },
       });
     const intent = entry.intents.shift();
     const request: Promise<unknown> = intent
-      ? portal
-          .invokeOnNode(write.nodeId, "arrange_projects_by_intent", { intent })
-          .catch((error: unknown) => {
-            if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
-              throw error;
-            entry.intents.length = 0;
-            return whole();
-          })
+      ? node.arrange_projects_by_intent({ intent }).catch((error: unknown) => {
+          if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
+            throw error;
+          entry.intents.length = 0;
+          return whole();
+        })
       : whole();
     void request.then(
       (result) => {

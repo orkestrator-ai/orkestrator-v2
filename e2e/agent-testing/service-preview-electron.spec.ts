@@ -407,6 +407,15 @@ async function uiStore(action: string, ...args: unknown[]): Promise<void> {
   );
 }
 
+/** App zoom lives in the window's chrome store, shared by every node it shows. */
+async function setZoomLevel(level: number): Promise<void> {
+  await s().window.evaluate(async (zoom) => {
+    const modulePath = "/src/stores/uiChromeStore.ts";
+    const { useUIChromeStore } = await import(modulePath);
+    useUIChromeStore.getState().setZoomLevel(zoom);
+  }, level);
+}
+
 const UI_TABS: Record<Name, string> = {
   a: "service-ui-tab-a",
   b: "service-ui-tab-b",
@@ -946,12 +955,12 @@ test("history, app zoom, DevTools, screenshots and capture work after reattach",
   // At every app zoom the native view sits on the renderer's preview host
   // (whose CSS rect main scales by the host zoom), and the page is kept.
   for (const level of [125, 80, 100]) {
-    await uiStore("setZoomLevel", level);
+    await setZoomLevel(level);
     try {
       await expectViewOnHost("a", tabId, testInfo, `zoom-${level}`);
       await waitForService("a", "/app/next");
     } finally {
-      if (level !== 100) await uiStore("setZoomLevel", 100).catch(() => undefined);
+      if (level !== 100) await setZoomLevel(100).catch(() => undefined);
     }
   }
 
@@ -1858,7 +1867,7 @@ test("the narrowest window keeps the picker, service dialog and diagnostics usab
   });
   try {
     for (const level of [100, 150]) {
-      await uiStore("setZoomLevel", level);
+      await setZoomLevel(level);
       try {
         const label = `zoom-${level}`;
         const trigger = page.getByRole("button", { name: "Preview service svc-a" });
@@ -1901,7 +1910,7 @@ test("the narrowest window keeps the picker, service dialog and diagnostics usab
         await expect(page.getByText("readiness", { exact: true })).toHaveCount(0);
         await expectVisibility("a", [true]);
       } finally {
-        if (level !== 100) await uiStore("setZoomLevel", 100).catch(() => undefined);
+        if (level !== 100) await setZoomLevel(100).catch(() => undefined);
       }
     }
   } finally {
@@ -1973,7 +1982,7 @@ test("at a 519 px pane the address takes its own full-width row in service and U
   const paneWidth = async () => (await toolbarLayout())?.pane ?? 0;
   try {
     await expect(uiTab("a")).toBeVisible({ timeout: 30_000 });
-    await uiStore("setZoomLevel", 100);
+    await setZoomLevel(100);
     await host.evaluate((window) => {
       const [width, height] = window.getMinimumSize();
       window.setSize(width!, height!);

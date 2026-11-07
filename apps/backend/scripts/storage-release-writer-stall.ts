@@ -110,7 +110,7 @@ function variants(): Variant[] {
   });
 }
 
-function buildFixture(directory: string, freeMb: number, liveMb: number): string {
+export function buildFixture(directory: string, freeMb: number, liveMb: number): string {
   const db = new StorageDatabase(directory);
   try {
     db.db.exec("CREATE TABLE waste (id INTEGER PRIMARY KEY, body BLOB)");
@@ -119,14 +119,15 @@ function buildFixture(directory: string, freeMb: number, liveMb: number): string
     const live = db.db.query(`INSERT INTO live (body) VALUES (randomblob(${ROW_BYTES}))`);
     const wasteRows = Math.ceil((freeMb * MIB) / PAGE_BYTES);
     const liveRows = Math.ceil((liveMb * MIB) / PAGE_BYTES);
-    const ratio = wasteRows / Math.max(1, liveRows);
     let written = 0;
     let livesWritten = 0;
     while (written < wasteRows) {
       db.db.transaction(() => {
         for (let batch = 0; batch < 8192 && written < wasteRows; batch += 1, written += 1) {
           waste.run();
-          if (livesWritten < liveRows && written >= livesWritten * ratio) {
+          // Spread every live row across the waste rows, including ratios above 1.
+          const liveTarget = Math.floor(((written + 1) * liveRows) / wasteRows);
+          while (livesWritten < liveTarget) {
             live.run();
             livesWritten += 1;
           }
@@ -490,4 +491,4 @@ function printRow(result: Result): void {
   );
 }
 
-await main();
+if (import.meta.main) await main();

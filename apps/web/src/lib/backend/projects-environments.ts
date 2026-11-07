@@ -1,6 +1,8 @@
 import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
 import { hydrationActivity } from "@/lib/hydration-activity";
+import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
+import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type {
   ProjectArrangement,
@@ -43,13 +45,7 @@ import {
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import {
-  clientInvoke,
-  commandBackendClient,
-  type BackendClient,
-  machineBackendClient,
-} from "./client";
-import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
+import { commandBackendClient, type BackendClient, machineBackendClient } from "./client";
 import { domainApi } from "@/lib/node-scope/domains/domain-api";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -91,7 +87,6 @@ export interface RecreateEnvironmentOptions {
 export function createProjectsEnvironmentsApi(client: BackendClient) {
   // The `projects` domain (plan item 7005): typed, decoded results.
   const projects = projectsDomain(client);
-  const invoke = clientInvoke(client);
   // The `environments` domain (plan item 7003): typed, decoded results.
   const environments = () => domainApi(client, environmentsClient);
   const environmentsOn = (machine: AccountMachine) =>
@@ -103,7 +98,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     knownGeneration?: string,
     knownRevisions: Partial<ResourceRevisionMap> = {},
   ): Promise<ResourceRevisionManifest> {
-    const response = await invoke<unknown>("get_resource_revision_manifest", {
+    const response = await systemApi(client).get_resource_revision_manifest({
       ...(knownGeneration === undefined ? {} : { knownGeneration }),
       knownRevisions,
     });
@@ -119,7 +114,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     knownRevisions: Partial<ResourceRevisionMap> = {},
     highWater?: number,
   ): Promise<ScopedResourceRevisionManifest> {
-    const response = await invoke<unknown>("get_scoped_resource_revision_manifest", {
+    const response = await systemApi(client).get_scoped_resource_revision_manifest({
       ...(knownGeneration === undefined ? {} : { knownGeneration }),
       cursor,
       knownRevisions,
@@ -134,7 +129,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   async function getScopedResourceSnapshots(
     changes: ResourceChange[],
   ): Promise<ScopedResourceSnapshotBatch> {
-    const response = await invoke<unknown>("get_scoped_resource_snapshots", { changes });
+    const response = await systemApi(client).get_scoped_resource_snapshots({ changes });
     if (
       new TextEncoder().encode(JSON.stringify(response)).byteLength >
       SCOPED_RESOURCE_SNAPSHOT_BATCH_MAX_BYTES

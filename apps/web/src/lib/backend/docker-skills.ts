@@ -18,13 +18,13 @@ import type {
   PreferredEditor,
   ClaudeModelCatalogSnapshot,
 } from "@/types";
+import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import type { AgentExtensionCatalog } from "./files-sessions";
-import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { agentServersClient } from "@orkestrator/protocol/contract/domains/agent-servers";
+import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import {
-  clientInvoke,
   commandBackendClient,
   machineInvoker,
   type BackendClient,
@@ -312,12 +312,8 @@ export interface GitHubCliLoginProgress {
 export function createDockerSkillsApi(client: BackendClient) {
   // Git remote checks (`projects` domain, plan item 7005).
   const gitRemotes = projectsDomain(client);
-  const invoke = clientInvoke(client);
   const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
-  // The `docker` domain (plan item 7003): typed, decoded results.
-  const docker = () => domainApi(client, dockerClient);
-  // The machine-aware functions sent through `machineInvoke`, which always
   // The `agent-servers` domain (plan item 7009): bridges, CLI checks,
   // catalogues, skills and the GitHub CLI sign-in.
   const agentServers = () => domainApi(client, agentServersClient);
@@ -326,6 +322,9 @@ export function createDockerSkillsApi(client: BackendClient) {
     machine === undefined
       ? ownMachineAgentServers()
       : domainApi(machineBackendClient(client, machine), agentServersClient);
+  // The `docker` domain (plan item 7003): typed, decoded results.
+  const docker = () => domainApi(client, dockerClient);
+  // The machine-aware functions sent through `machineInvoke`, which always
   // passes an arguments object; their calls keep that shape.
   const ownMachineDocker = () => domainApi(withArgumentsObject(client), dockerClient);
   const dockerOn = (machine: AccountMachine) =>
@@ -655,7 +654,7 @@ export function createDockerSkillsApi(client: BackendClient) {
   }
 
   async function greet(name: string): Promise<string> {
-    return invoke<string>("greet", { name });
+    return systemApi(client).greet({ name });
   }
 
   async function validateGitUrl(url: string): Promise<boolean> {

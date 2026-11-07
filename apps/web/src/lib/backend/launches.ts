@@ -18,7 +18,7 @@ import type {
   MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import { pipelines } from "@/lib/node-scope/domains/pipelines";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
@@ -26,8 +26,6 @@ import { clientInvoke, commandBackendClient, type BackendClient } from "./client
  * over the window's command scope.
  */
 export function createLaunchesApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
-
   /** The Build button: the ticket and only the choices the user made. */
   async function launchBuildPipeline(
     input: LaunchBuildPipelineInput,

@@ -112,7 +112,6 @@ import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/
 import {
   asString,
   asRecord,
-  assertOnlyKeys,
   redactGlobalConfig,
   redactAppConfig,
   stripRendererCredentials,
@@ -137,13 +136,6 @@ import {
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-
-const log = createLogger("models");
-
-/**
- * Total extra time a first-use catalogue read may spend starting a bridge and
- * reading its live list before it answers from the durable cache instead.
- */
 import {
   cacheAgentModelCatalogCommand,
   ensureHostPiModelCatalogCommand,
@@ -151,6 +143,13 @@ import {
   getNativeAgentModelCatalogCommand,
   refreshHostAgentModelCatalogCommand,
 } from "@orkestrator/protocol/contract/domains/agent-servers";
+
+const log = createLogger("models");
+
+/**
+ * Total extra time a first-use catalogue read may spend starting a bridge and
+ * reading its live list before it answers from the durable cache instead.
+ */
 export const FIRST_USE_CATALOG_BUDGET_MS = 45_000;
 
 /** The share of that budget allowed for the bridge to become ready. */

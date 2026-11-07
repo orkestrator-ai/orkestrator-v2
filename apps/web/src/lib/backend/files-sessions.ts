@@ -37,7 +37,7 @@ import type {
 } from "@/types";
 import { isRecord } from "./shared";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
 import { domainApi } from "@/lib/node-scope/domains/domain-api";
 /** PR detection result containing URL, state, and merge conflict status */
@@ -218,7 +218,6 @@ const NO_ARGUMENTS = undefined as unknown as Record<string, never>;
 export function createFilesSessionsApi(client: BackendClient) {
   // The host folder picker and project icons (`projects` domain, plan item 7005).
   const hostFiles = projectsDomain(client);
-  const invoke = clientInvoke(client);
   // The `environments` domain's commands here (plan item 7003).
   const environments = () => domainApi(client, environmentsClient);
   const native = () => nativeSessions(client);

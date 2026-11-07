@@ -1,5 +1,6 @@
 import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
+import { asKanbanModel, kanban, NO_ARGS } from "@/lib/node-scope/domains/kanban";
 import type {
   DatabaseStats,
   DiagnosticsBundleChunk,
@@ -43,20 +44,20 @@ import type {
   GitHubIssueStatus,
 } from "@/types/github";
 import type { CodexModel } from "@/lib/codex-models";
+import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { accountsOn } from "@/lib/node-scope/domains/accounts";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
 import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
+import { systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import {
-  clientInvoke,
   commandBackendClient,
   machineInvoker,
   type BackendClient,
@@ -323,12 +324,11 @@ export type { MergeEnvironmentPrResult, MergePrResult };
  * over the window's command scope.
  */
 export function createConfigIntegrationsApi(client: BackendClient) {
+  // GitHub issues and the environment PR commands (`pull-requests`, plan item 7006).
+  const prDomain = () => pullRequests(client);
   // The machine's own settings commands here (`config` domain, plan item 7005);
   // the layered reads and saves go through `command-node-config.ts`.
   const settings = configDomain(client);
-  const invoke = clientInvoke(client);
-  // GitHub issues and the environment PR commands (`pull-requests`, plan item 7006).
-  const prDomain = () => pullRequests(client);
   // The Control MCP settings and credentials (`coordinator` domain, plan item 7009).
   const coordinator = () => coordinatorApi(client);
   // The `environments` domain's commands here (plan item 7003).
@@ -549,12 +549,12 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getDatabaseStats(machine?: AccountMachine): Promise<DatabaseStats> {
-    return machineInvoke<DatabaseStats>(machine, "get_database_stats");
+    return systemApiOn(client, machine).get_database_stats({});
   }
 
   /** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
   async function planDiagnosticsBundle(machine?: AccountMachine): Promise<DiagnosticsBundlePlan> {
-    return machineInvoke<DiagnosticsBundlePlan>(machine, "plan_diagnostics_bundle");
+    return systemApiOn(client, machine).plan_diagnostics_bundle({});
   }
 
   async function readDiagnosticsBundle(
@@ -562,37 +562,39 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     offset: number,
     machine?: AccountMachine,
   ): Promise<DiagnosticsBundleChunk> {
-    return machineInvoke<DiagnosticsBundleChunk>(machine, "read_diagnostics_bundle", {
+    return systemApiOn(client, machine).read_diagnostics_bundle({
       planId,
       offset,
     });
   }
 
   async function getLinearConnection(): Promise<LinearConnectionStatus> {
-    return invoke<LinearConnectionStatus>("get_linear_connection");
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).get_linear_connection(NO_ARGS));
   }
 
   async function connectLinear(apiKey: string): Promise<LinearConnectionStatus> {
-    return invoke<LinearConnectionStatus>("connect_linear", { apiKey });
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).connect_linear({ apiKey }));
   }
 
   async function disconnectLinear(): Promise<LinearConnectionStatus> {
-    return invoke<LinearConnectionStatus>("disconnect_linear");
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).disconnect_linear(NO_ARGS));
   }
 
   async function getLinearIssues(): Promise<LinearIssueListItem[]> {
-    return invoke<LinearIssueListItem[]>("get_linear_issues");
+    return asKanbanModel<LinearIssueListItem[]>(kanban(client).get_linear_issues(NO_ARGS));
   }
 
   async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
-    return invoke<LinearIssueDetail>("get_linear_issue", { issueId });
+    return asKanbanModel<LinearIssueDetail>(kanban(client).get_linear_issue({ issueId }));
   }
 
   async function postLinearIssueComment(
     issueId: string,
     body: string,
   ): Promise<LinearIssueComment> {
-    return invoke<LinearIssueComment>("post_linear_issue_comment", { issueId, body });
+    return asKanbanModel<LinearIssueComment>(
+      kanban(client).post_linear_issue_comment({ issueId, body }),
+    );
   }
 
   async function postLinearCompletionComment(
@@ -600,11 +602,9 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueId: string,
     body: string,
   ): Promise<LinearCompletionCommentResult> {
-    return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", {
-      pipelineId,
-      issueId,
-      body,
-    });
+    return asKanbanModel<LinearCompletionCommentResult>(
+      kanban(client).post_linear_completion_comment({ pipelineId, issueId, body }),
+    );
   }
 
   async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {

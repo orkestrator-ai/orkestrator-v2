@@ -24,7 +24,8 @@ import {
 } from "@/lib/federation/workspace-realm";
 import { useConfigStore } from "@/stores/configStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -57,6 +58,8 @@ export function WorkspaceRealmHost() {
     startEnvironment,
     updateEnvironment,
   } = useEnvironments(null);
+  // The node this realm shows: the one the hooks above read.
+  const scope = useShimNodeScope("environment");
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const configLoaded = useConfigStore((state) => state.hasLoaded);
   const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
@@ -172,7 +175,8 @@ export function WorkspaceRealmHost() {
           type: "selection",
           projectId: state.selectedProjectId,
           environmentId: state.selectedEnvironmentId,
-          ...(useEnvironmentStore
+          ...(scope
+            .store(environmentStore)
             .getState()
             .environments.some(
               (environment) =>
@@ -184,7 +188,7 @@ export function WorkspaceRealmHost() {
             : {}),
         });
       }),
-    [],
+    [scope],
   );
 
   // The New Environment dialog reads its defaults (environment type, ports)

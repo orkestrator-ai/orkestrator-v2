@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 import type { BackendClient } from "@/lib/backend/client";
+import { createDockerSkillsApi } from "@/lib/backend/docker-skills";
 import { createSignal } from "@/lib/node-scope/signal";
 import { nativeSessions } from "./native-sessions";
 
@@ -58,5 +59,36 @@ describe("native-sessions over a lib/backend client", () => {
       pruning: true,
     });
     expect(invokeRaw.mock.calls).toEqual([["get_agent_handoff_capabilities"]] as never);
+  });
+
+  test("the DNS check is the domain's call: typed and decoded on a node with it", async () => {
+    const answer = [
+      { domain: "a.test", valid: true, resolvable: true, ips: ["1.2.3.4"], error: null },
+    ];
+    const client = fakeClient({ "native-sessions": { min: 1, max: 1 } }, () => answer);
+    await expect(createDockerSkillsApi(client).testDomainResolution(["a.test"])).resolves.toEqual(
+      answer,
+    );
+    expect(client.invokeRaw).toHaveBeenCalledWith(
+      "test_domain_resolution",
+      { domains: ["a.test"] },
+      { envelope: { domain: "native-sessions", version: 1 } },
+    );
+    const bad = fakeClient({ "native-sessions": { min: 1, max: 1 } }, () => [{ domain: 1 }]);
+    await expect(createDockerSkillsApi(bad).testDomainResolution(["a.test"])).rejects.toThrow(
+      "Invalid result from test_domain_resolution",
+    );
+  });
+
+  test("the DNS check on a pre-contract node is today's call, answered as sent", async () => {
+    const answer = [{ anything: "as sent" }];
+    const client = fakeClient(null, () => answer);
+    await expect(createDockerSkillsApi(client).testDomainResolution(["a.test"])).resolves.toBe(
+      answer as never,
+    );
+    expect(client.invokeRaw.mock.calls.at(-1)).toEqual([
+      "test_domain_resolution",
+      { domains: ["a.test"] },
+    ]);
   });
 });

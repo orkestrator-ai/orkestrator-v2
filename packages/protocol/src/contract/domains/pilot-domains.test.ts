@@ -402,3 +402,67 @@ describe("node-files client", () => {
     expect(legacy.usage).toEqual([["node-files", 0]]);
   });
 });
+
+describe("the command node's own reads in ticket-sync and node-mail", () => {
+  const request = {
+    requestId: "q1",
+    kind: "answer-worker-question",
+    state: "pending",
+    createdAt: "2026-11-07T00:00:00.000Z",
+    expiresAt: "2026-11-08T00:00:00.000Z",
+    workerQuestion: { question: "Which?" },
+  };
+  const status = { projectId: "p1", nodes: [], conflicts: [] };
+  const answer = (command: string) =>
+    command === "get_ticket_sync_status"
+      ? status
+      : command.startsWith("list_")
+        ? [request]
+        : request;
+
+  function withInvoke(node: ReturnType<typeof fakeNode>) {
+    const invoked: Array<[string, unknown]> = [];
+    return {
+      invoked,
+      options: {
+        ...node.options,
+        invoke: async (command: string, args?: unknown) => {
+          invoked.push([command, args]);
+          return answer(command);
+        },
+      },
+    };
+  }
+
+  it("version 1: typed calls with the envelope; an action request keeps every key", async () => {
+    const node = fakeNode({ ...NODE_MAIL_V1, "ticket-sync": { min: 1, max: 1 } }, [], answer);
+    await expect(
+      createDomainClient(ticketSyncClient, node.options).api().status({ projectId: "p1" }),
+    ).resolves.toEqual(status);
+    const mail = createDomainClient(nodeMailClient, node.options).api();
+    await expect(mail.actionRequests({ pendingOnly: true })).resolves.toEqual([request]);
+    await expect(
+      mail.resolveActionRequest({ requestId: "q1", decision: "approve" }),
+    ).resolves.toEqual(request);
+    expect(node.sent.map((sent) => [sent.command, sent.envelope?.domain])).toEqual([
+      ["get_ticket_sync_status", "ticket-sync"],
+      ["list_node_action_requests", "node-mail"],
+      ["resolve_node_action_request", "node-mail"],
+    ]);
+  });
+
+  it("version 0: today's calls by name, never capability-gated", async () => {
+    const legacy = withInvoke(fakeNode(undefined, []));
+    await expect(
+      createDomainClient(ticketSyncClient, legacy.options).api().status({ projectId: "p1" }),
+    ).resolves.toBe(status);
+    const mail = createDomainClient(nodeMailClient, legacy.options).api();
+    await mail.actionRequests({ pendingOnly: true });
+    await mail.resolveActionRequest({ requestId: "q1", decision: "reject" });
+    expect(legacy.invoked).toEqual([
+      ["get_ticket_sync_status", { projectId: "p1" }],
+      ["list_node_action_requests", { pendingOnly: true }],
+      ["resolve_node_action_request", { requestId: "q1", decision: "reject" }],
+    ]);
+  });
+});

@@ -39,6 +39,8 @@ import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
 import { invoke } from "@/lib/native/backend";
 import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { backendClientOver } from "@/lib/node-scope/domains/invoke-over";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
+import { nodeMailClient } from "@orkestrator/protocol/contract/domains/node-mail";
 import { NO_ARGS, nodesApiOver, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { commandScopeInvoke, commandScopeListen } from "./command-scope";
@@ -430,12 +432,15 @@ export interface NodeActionRequestView {
   result?: { code: string; message: string; url?: string };
 }
 
+/** The `node-mail` domain on the window's command node (version 0: today's calls). */
+function nodeMailOnCommandScope() {
+  return domainApi(backendClientOver(commandScopeInvoke), nodeMailClient);
+}
+
 /** Requests from coordinators that wait for this user's decision. */
 export async function listNodeActionRequests(): Promise<NodeActionRequestView[]> {
-  const value = await commandScopeInvoke<NodeActionRequestView[]>("list_node_action_requests", {
-    pendingOnly: true,
-  });
-  return Array.isArray(value) ? value : [];
+  const value: unknown = await nodeMailOnCommandScope().actionRequests({ pendingOnly: true });
+  return Array.isArray(value) ? (value as NodeActionRequestView[]) : [];
 }
 
 export async function resolveNodeActionRequest(
@@ -453,11 +458,12 @@ export async function resolveNodeActionRequest(
     answers?: AgentInteractionQuestionAnswer[];
   },
 ): Promise<NodeActionRequestView> {
-  return commandScopeInvoke<NodeActionRequestView>("resolve_node_action_request", {
+  // The request is an open record (every key kept); `NodeActionRequestView` is its shape.
+  return nodeMailOnCommandScope().resolveActionRequest({
     requestId,
     decision,
     ...(approval ? { approval } : {}),
-  });
+  }) as Promise<unknown> as Promise<NodeActionRequestView>;
 }
 
 /** The ## Orkestrator section on the latest base branch, for an AGENTS.md request's review. */

@@ -26,7 +26,6 @@ import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import {
   commandBackendClient,
-  machineInvoker,
   type BackendClient,
   machineBackendClient,
   withArgumentsObject,
@@ -313,7 +312,13 @@ export function createDockerSkillsApi(client: BackendClient) {
   // Git remote checks (`projects` domain, plan item 7005).
   const gitRemotes = projectsDomain(client);
   const native = () => nativeSessions(client);
-  const machineInvoke = machineInvoker(client);
+  // The machine-aware `native-sessions` call (`test_domain_resolution`, plan
+  // item 7001): typed and decoded like the rest of the domain, sent to the
+  // chosen machine, always with an arguments object.
+  const nativeOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? nativeSessions(withArgumentsObject(client))
+      : nativeSessions(machineBackendClient(client, machine));
   // The `agent-servers` domain (plan item 7009): bridges, CLI checks,
   // catalogues, skills and the GitHub CLI sign-in.
   const agentServers = () => domainApi(client, agentServersClient);
@@ -324,8 +329,8 @@ export function createDockerSkillsApi(client: BackendClient) {
       : domainApi(machineBackendClient(client, machine), agentServersClient);
   // The `docker` domain (plan item 7003): typed, decoded results.
   const docker = () => domainApi(client, dockerClient);
-  // The machine-aware functions sent through `machineInvoke`, which always
-  // passes an arguments object; their calls keep that shape.
+  // The machine-aware functions were sent through `machineInvoker`, which
+  // always passes an arguments object; their calls keep that shape.
   const ownMachineDocker = () => domainApi(withArgumentsObject(client), dockerClient);
   const dockerOn = (machine: AccountMachine) =>
     machine === undefined
@@ -669,7 +674,7 @@ export function createDockerSkillsApi(client: BackendClient) {
     domains: string[],
     machine?: AccountMachine,
   ): Promise<DomainTestResult[]> {
-    return machineInvoke<DomainTestResult[]>(machine, "test_domain_resolution", { domains });
+    return asWebModel<DomainTestResult[]>(nativeOn(machine).test_domain_resolution({ domains }));
   }
 
   async function validateDomains(domains: string[]): Promise<DomainTestResult[]> {

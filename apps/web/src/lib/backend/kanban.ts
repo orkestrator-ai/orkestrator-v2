@@ -11,7 +11,9 @@ import type {
 import type { TicketSyncMeta, TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
 import { files } from "@/lib/node-scope/domains/files";
 import { asKanbanModel, kanban } from "@/lib/node-scope/domains/kanban";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { ticketSyncClient } from "@orkestrator/protocol/contract/domains/ticket-sync";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
+import { commandBackendClient, type BackendClient } from "./client";
 /** PR detection result containing URL, state, and merge conflict status */
 
 // --- File System Utilities ---
@@ -129,7 +131,6 @@ export interface FeaturePlan {
  * over the window's command scope.
  */
 export function createKanbanApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
   // The two file reads are in the `files` domain (plan item 7002).
   const filesDomain = () => files(client);
   // Tickets, notes, feature plans and planning: the `kanban` domain (plan item
@@ -160,7 +161,11 @@ export function createKanbanApi(client: BackendClient) {
    * predates ticket sync.
    */
   async function getTicketSyncStatus(projectId: string): Promise<TicketSyncStatusResult> {
-    return invoke<TicketSyncStatusResult>("get_ticket_sync_status", { projectId });
+    // The board's read in the `ticket-sync` domain (its nodes and conflicts
+    // decode as unknown; `TicketSyncStatusResult` is the shape they carry).
+    return asKanbanModel<TicketSyncStatusResult>(
+      domainApi(client, ticketSyncClient).status({ projectId }),
+    );
   }
 
   /**

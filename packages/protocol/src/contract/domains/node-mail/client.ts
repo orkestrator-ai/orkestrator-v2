@@ -20,6 +20,11 @@
  *   `prepare_node_mail_attachments` without `node-mail-attachments` is
  *   `unknown-command`, which is what such a leaf would answer.
  *
+ * `actionRequests` and `resolveActionRequest` are the command node's own
+ * coordinator action requests (the approvals list in the window; plan item
+ * 7001's audit on 2026-11-07). They are never capability-gated: at version 0
+ * they are today's untyped calls, answered as sent.
+ *
  * Retirement: adapter 0 goes when the support floor passes the first Stable
  * release that advertises `node-mail` (version-compatibility.md, Register).
  *
@@ -34,7 +39,9 @@ import {
   collectNodeOutboxCommand,
   deliverNodeMailCommand,
   getNodeProjectCoordinatorCommand,
+  listNodeActionRequestsCommand,
   prepareNodeMailAttachmentsCommand,
+  resolveNodeActionRequestCommand,
   returnNodeOutboxMailCommand,
 } from "./commands.js";
 import { nodeMailDomain } from "./domain.js";
@@ -66,6 +73,10 @@ export interface NodeMailApi {
   returnOutboxMail: Call<typeof returnNodeOutboxMailCommand>;
   /** Which of a batch's images the node still needs (`node-mail-attachments` before the contract). */
   prepareAttachments: Call<typeof prepareNodeMailAttachmentsCommand>;
+  /** The command node's coordinator action requests (the window's approvals). */
+  actionRequests: Call<typeof listNodeActionRequestsCommand>;
+  /** Approve or reject one of them. */
+  resolveActionRequest: Call<typeof resolveNodeActionRequestCommand>;
 }
 
 function currentApi(call: CommandCall): NodeMailApi {
@@ -77,6 +88,8 @@ function currentApi(call: CommandCall): NodeMailApi {
     ackOutbox: (args) => call(ackNodeOutboxCommand, args),
     returnOutboxMail: (args) => call(returnNodeOutboxMailCommand, args),
     prepareAttachments: (args) => call(prepareNodeMailAttachmentsCommand, args),
+    actionRequests: (args) => call(listNodeActionRequestsCommand, args),
+    resolveActionRequest: (args) => call(resolveNodeActionRequestCommand, args),
   };
 }
 
@@ -144,6 +157,14 @@ function legacyApi(call: CommandCall, context: DomainAdapterContext): NodeMailAp
       }
       return call(prepareNodeMailAttachmentsCommand, args);
     },
+    actionRequests: (args) =>
+      context.invoke(listNodeActionRequestsCommand.name, args) as ReturnType<
+        NodeMailApi["actionRequests"]
+      >,
+    resolveActionRequest: (args) =>
+      context.invoke(resolveNodeActionRequestCommand.name, args) as ReturnType<
+        NodeMailApi["resolveActionRequest"]
+      >,
   };
 }
 

@@ -194,9 +194,11 @@ export const returnNodeOutboxMailCommand = defineCommand({
  * An action request as the command node keeps it. Only the fields every
  * kind has are described; the rest (targets, the kind's own fields, the
  * decision) pass through unchanged. Converging the full record with the
- * renderer's model is plan item 7010.
+ * renderer's model is plan item 7010. An open record (2026-11-07): as a
+ * plain struct a version-1 decode dropped every other key, which the
+ * window's approvals list (`listNodeActionRequests`) reads.
  */
-export const NodeActionRequestSchema = Schema.Struct({
+export const NodeActionRequestSchema = openRecord({
   requestId: Schema.String,
   kind: Schema.String,
   state: Schema.String,

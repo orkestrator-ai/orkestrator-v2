@@ -11,6 +11,12 @@
  *   "update that machine") and every call is refused with `unknown-command`,
  *   which is what such a leaf would answer.
  *
+ * `status` is the command node's own board read (`get_ticket_sync_status`,
+ * the Kanban sync strip, plan item 7001's audit on 2026-11-07). It is not
+ * gated on `syncs`: a renderer's client often carries no capabilities, and a
+ * backend that predates it answers `unknown-command` itself. At version 0 it
+ * is today's untyped call, answered as sent.
+ *
  * Retirement: adapter 0 goes when the support floor passes the first Stable
  * release that advertises the `ticket-sync` domain.
  *
@@ -25,6 +31,7 @@ import {
   applyTicketSyncCommand,
   collectTicketSyncOutboxCommand,
   getTicketSyncCursorCommand,
+  getTicketSyncStatusCommand,
 } from "./commands.js";
 import { ticketSyncDomain } from "./domain.js";
 
@@ -37,9 +44,15 @@ export interface TicketSyncApi {
   ackOutbox: Call<typeof ackTicketSyncOutboxCommand>;
   cursor: Call<typeof getTicketSyncCursorCommand>;
   apply: Call<typeof applyTicketSyncCommand>;
+  /** The command node's per-leaf sync state for one project's board; never gated. */
+  status: Call<typeof getTicketSyncStatusCommand>;
 }
 
-function api(call: CommandCall, syncs: boolean): TicketSyncApi {
+function api(
+  call: CommandCall,
+  syncs: boolean,
+  status: TicketSyncApi["status"] = (args) => call(getTicketSyncStatusCommand, args),
+): TicketSyncApi {
   const run =
     <C extends AnyCommandDef>(def: C): Call<C> =>
     async (args) => {
@@ -52,11 +65,19 @@ function api(call: CommandCall, syncs: boolean): TicketSyncApi {
     ackOutbox: run(ackTicketSyncOutboxCommand),
     cursor: run(getTicketSyncCursorCommand),
     apply: run(applyTicketSyncCommand),
+    status,
   };
 }
 
 export const ticketSyncClient = domainClient(ticketSyncDomain, {
   1: (call) => api(call, true),
   0: (call, context: DomainAdapterContext) =>
-    api(call, context.capabilities?.has(BACKEND_CAPABILITIES.ticketSync) ?? false),
+    api(
+      call,
+      context.capabilities?.has(BACKEND_CAPABILITIES.ticketSync) ?? false,
+      (args) =>
+        context.invoke(getTicketSyncStatusCommand.name, args) as ReturnType<
+          TicketSyncApi["status"]
+        >,
+    ),
 });

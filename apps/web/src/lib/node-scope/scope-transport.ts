@@ -9,7 +9,7 @@
  * would be missing under test.
  */
 
-import type { NodeClient } from "@orkestrator/protocol/node-client";
+import type { NodeClient, NodeInvokeOptions } from "@orkestrator/protocol/node-client";
 import type { NodeScope } from "./node-scope";
 
 /**
@@ -21,6 +21,7 @@ export async function invokeInScope<T = unknown>(
   scope: NodeScope,
   command: string,
   args?: Record<string, unknown>,
+  options?: NodeInvokeOptions,
 ): Promise<T> {
   const prefetched = scope.prefetched.read(command, args);
   if (prefetched.found) return prefetched.value as T;
@@ -28,7 +29,9 @@ export async function invokeInScope<T = unknown>(
   // them. Report it before the round trip so a mutation cannot be overtaken by
   // a read that the batch primed earlier in the same reconciliation.
   scope.prefetched.noteInvocation(command);
-  return scope.client.invokeRaw<T>(command, args);
+  return options
+    ? scope.client.invokeRaw<T>(command, args, options)
+    : scope.client.invokeRaw<T>(command, args);
 }
 
 /** The shape `listenOn` (`@/lib/native/events`) takes. */

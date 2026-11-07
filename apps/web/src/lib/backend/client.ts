@@ -16,16 +16,23 @@
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
-import type { NodeClient } from "@orkestrator/protocol/node-client";
+import type { NodeClient, NodeInvokeOptions } from "@orkestrator/protocol/node-client";
 import { invoke } from "@/lib/native/backend";
-import { isAppCommandScope } from "@/lib/node-scope-slots";
+import { appCommandScope, isAppCommandScope } from "@/lib/node-scope-slots";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { invokeInScope } from "@/lib/node-scope/scope-transport";
 import { portalStore } from "@/lib/portal/portal-store";
 import { portalInvoke } from "@/lib/portal/portal-transport";
 
-/** What a factory needs of a node: its untyped command call. A `NodeClient` is one. */
-export type BackendClient = Pick<NodeClient, "invokeRaw">;
+/**
+ * What a factory needs of a node: its untyped command call. A `NodeClient` is
+ * one. A client may also carry the node's negotiated `domains` and hello
+ * `capabilities` (plan item 2011), which a domain client over it
+ * (`./domain-client.ts`) picks its adapter from; the command-scope and
+ * per-scope clients below carry their scope client's.
+ */
+export type BackendClient = Pick<NodeClient, "invokeRaw"> &
+  Partial<Pick<NodeClient, "domains" | "capabilities">>;
 
 /** The `invoke` shape the factory bodies call. */
 export type BackendInvoke = <T = unknown>(
@@ -33,7 +40,7 @@ export type BackendInvoke = <T = unknown>(
   args?: Record<string, unknown>,
 ) => Promise<T>;
 
-type InvokeCall = [command: string, args?: Record<string, unknown>];
+type InvokeCall = [command: string, args?: Record<string, unknown>, options?: NodeInvokeOptions];
 
 /**
  * The window's command scope: `@/lib/native/backend` `invoke`, read at call
@@ -42,8 +49,14 @@ type InvokeCall = [command: string, args?: Record<string, unknown>];
  * args stays a one-argument call).
  */
 export const commandBackendClient: BackendClient = {
-  invokeRaw: <T>(...call: [string, Readonly<Record<string, unknown>>?]) =>
+  invokeRaw: <T>(...call: [string, Readonly<Record<string, unknown>>?, NodeInvokeOptions?]) =>
     invoke<T>(...(call as InvokeCall)),
+  get domains() {
+    return appCommandScope().client.domains;
+  },
+  get capabilities() {
+    return appCommandScope().client.capabilities;
+  },
 };
 
 /**
@@ -53,7 +66,7 @@ export const commandBackendClient: BackendClient = {
  */
 export const portalBackendClient: BackendClient = {
   invokeRaw: <T>(...call: [string, Readonly<Record<string, unknown>>?]) =>
-    portalInvoke<T>(...(call as InvokeCall)),
+    portalInvoke<T>(...(call as [command: string, args?: Record<string, unknown>])),
 };
 
 /** `client`'s command call in the `invoke` shape. */
@@ -69,8 +82,20 @@ export function clientInvoke(client: BackendClient): BackendInvoke {
 export function scopeBackendClient(scope: NodeScope): BackendClient {
   if (isAppCommandScope(scope)) return commandBackendClient;
   return {
-    invokeRaw: <T>(command: string, args?: Readonly<Record<string, unknown>>) =>
-      invokeInScope<T>(scope, command, args as Record<string, unknown> | undefined),
+    invokeRaw: <T>(
+      command: string,
+      args?: Readonly<Record<string, unknown>>,
+      options?: NodeInvokeOptions,
+    ) =>
+      options
+        ? invokeInScope<T>(scope, command, args as Record<string, unknown> | undefined, options)
+        : invokeInScope<T>(scope, command, args as Record<string, unknown> | undefined),
+    get domains() {
+      return scope.client.domains;
+    },
+    get capabilities() {
+      return scope.client.capabilities;
+    },
   };
 }
 

@@ -18,7 +18,8 @@ is the worked example (plan item 3001).
 | `useScopedStore(def, selector)` | `lib/node-scope/scoped-store.ts` | The strict hook. It reads the nearest `NodeScopeProvider`, and it throws outside one in development and tests. |
 | `scopedStoreHook(def)` | `lib/node-scope/scoped-store-shim.ts` | The migration hook. It is called like the old zustand hook, reads the nearest node scope, and falls back to the command scope outside a provider. It keeps `getState`, `setState`, `subscribe` and `getInitialState` as `@deprecated` statics on the **command scope's** instance. |
 | `useShimNodeScope(name)`, `useScopedStoreApi(def)` | `lib/node-scope/scoped-store-shim.ts` | The nearest node scope (or `def`'s instance in it) for imperative code in a component or hook, falling back to the command scope outside a provider and noting a shim use, as the hook does. For readers whose tests still render without a provider (plan item 3007). |
-| `noteShimUse(store, via)` | `lib/node-scope/scoped-store-shim.ts` | Called by every shim use: each static, and the hook when it falls back. It does nothing until plan item 4004 installs the runtime guard (`setShimUseObserver`). |
+| `noteShimUse(store, via)` | `lib/node-scope/scoped-store-shim.ts` | Called by every shim use: each static, and the hook when it falls back. Its default observer is the runtime shim guard (plan item 4004, below); a test that records shim uses itself replaces it with `setShimUseObserver`. |
+| Runtime shim guard | `lib/node-scope/shim-under-leaf-guard.ts` | While an in-tree leaf workspace is mounted (`useInTreeLeafMount`, called by `InTreeWorkspace`), a shim use of a store in `WORKSPACE_SUBTREE_STORES` throws `ShimUnderLeafError` in development and tests, and in production is counted (`shimUnderLeafCounts()`) and logged once per store and kind as `web.node-scope` `shim-under-leaf`. `SHIM_GUARD_EXEMPT_STORES` lists the window stores. |
 | `scoped-store-shim` guard | `tests/source-guards/scoped-store-shim.ts` | Counts static calls on a converted hook, per store and per file. Its baseline only falls. |
 | `createXApi(client)` | every `lib/backend/<x>.ts` | That file's command functions on `client`'s node (plan item 3002). `client` is anything with `invokeRaw` (a `NodeClient`). The file's named exports are `createXApi(commandBackendClient)`: the command-scope shim. |
 | `scopeBackendClient(scope)`, `backendApiForScope(scope, createXApi, { getX })` | `lib/backend/client.ts` | A scope as a factory client (through `invokeInScope`, so the scope's prefetched cache applies), and one factory's functions for a scope, made once per scope. On the app's command scope both return the command-bound path, so suites that mock `@/lib/backend` still see the call. |
@@ -333,10 +334,22 @@ still reaches the command node.
   it either moves its calls onto `createXApi(...)` or regenerates with
   `bun tests/source-guards/update-baseline.ts --guard lib-backend-command-default`
   and says why in its Notes.
-- At runtime, plan item 4004 turns `noteShimUse` into a guard. A shim use for
-  a store the shown leaf's workspace uses throws in development and tests
-  while an in-tree leaf is mounted. Phase 4 cannot mount a leaf in-tree until
-  every store its workspace touches has a zero baseline.
+- At runtime, the shim guard (plan item 4004,
+  `lib/node-scope/shim-under-leaf-guard.ts`) is `noteShimUse`'s default
+  observer. While any in-tree leaf workspace is mounted, a shim use of a store
+  in `WORKSPACE_SUBTREE_STORES` (every converted store so far, plan item
+  3013's set) throws `ShimUnderLeafError` in development and tests. In
+  production it is counted and logged once per store and kind
+  (`web.node-scope` `shim-under-leaf`, store name and kind only). Stores
+  outside the workspace subtree are listed in `SHIM_GUARD_EXEMPT_STORES` (the
+  window stores today) and never throw. A store item that converts a store
+  adds it to one of the two lists; `shim-under-leaf-guard.test.tsx` fails on
+  a `SHIMMED_STORES` entry in neither. A renderer started with
+  `VITE_ORKESTRATOR_SHIM_GUARD=throw` (or `count`) runs that mode whatever
+  the build, and exposes `window.orkestratorShimGuard` (`mode`,
+  `mountedLeaves()`, `uses()`) for the multi-node e2e (plan item 4006).
+  Phase 4 cannot mount a leaf in-tree until every store its workspace touches
+  has a zero baseline.
 - Transports are reached only through a scope
   ([linting.md](linting.md#transports-only-through-a-scope)). A converted
   store calls `scope.client`, never `invoke`/`listen` directly.

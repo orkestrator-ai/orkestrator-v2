@@ -39,6 +39,7 @@ Evidence that in-tree nodes have feature parity with realms and fit the memory b
   - preview z-order and focus with previews from two nodes in one window (desktop);
   - grant lapse and reopen without a reload;
   - attention from a hidden node.
+- [ ] The runtime shim guard from [4004](4004-runtime-shim-guard.md) is on in that e2e: start the renderer (the Vite dev server, or a production build) with `VITE_ORKESTRATOR_SHIM_GUARD=throw`, and after each flow assert `await page.evaluate(() => window.orkestratorShimGuard?.uses())` is `[]` (it also lists uses whose throw a callback swallowed) and that `mountedLeaves()` names the in-tree nodes while they are shown. This closes 4004's open e2e box.
 - [ ] The parity suites run on both the realm path and the in-tree path.
 - [ ] iPad: memory with six warm nodes against the budget from [0004](0004-measurement-report.md); a jetsam-free session of N switches. Record in the measurements report.
 - [ ] Record evidence: profiles, commands, pass counts and any skipped flow with its reason.

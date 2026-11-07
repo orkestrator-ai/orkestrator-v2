@@ -22,8 +22,11 @@
  * A static call made on behalf of another node silently reaches the command
  * node, so every one left is counted per store and file by the
  * `scoped-store-shim` source guard, whose baseline only falls
- * (`tests/source-guards/`). Each shim use also calls `noteShimUse`, which
- * does nothing until plan item 4004 installs the runtime guard.
+ * (`tests/source-guards/`). Each shim use also calls `noteShimUse`, whose
+ * default observer is plan item 4004's runtime guard
+ * (`shim-under-leaf-guard.ts`): while an in-tree leaf workspace is mounted, a
+ * use of a workspace store throws in development and tests and is counted in
+ * production.
  *
  * The recipe is in `docs/development/node-scopes.md`.
  */
@@ -34,6 +37,7 @@ import { getWindowScope } from "./app-window-scope";
 import { useOptionalNodeScope } from "./providers";
 import type { NodeScope } from "./node-scope";
 import type { ScopedStoreDef } from "./scoped-store";
+import { shimUnderLeafGuard } from "./shim-under-leaf-guard";
 
 /** How the shim was reached: a deprecated static, or the hook with no node scope above it. */
 export type ShimUseKind =
@@ -47,22 +51,23 @@ export interface ShimUse {
 
 export type ShimUseObserver = (use: ShimUse) => void;
 
-let shimUseObserver: ShimUseObserver | null = null;
+/** The runtime guard (plan item 4004); `setShimUseObserver` replaces it. */
+let shimUseObserver: ShimUseObserver | null = shimUnderLeafGuard;
 
 /**
- * Records one use of a store's command-scope shim. A no-op until plan item
- * 4004 installs an observer (it throws in development and tests while an
- * in-tree leaf is mounted, and records `node-scope.shim-under-leaf` in
- * production).
+ * Records one use of a store's command-scope shim. The default observer is
+ * the runtime guard: while an in-tree leaf workspace is mounted, a use of a
+ * workspace store throws `ShimUnderLeafError` in development and tests, and is
+ * counted and logged once as `web.node-scope` `shim-under-leaf` in production.
  */
 export function noteShimUse(store: string, via: ShimUseKind): void {
   shimUseObserver?.({ store, via });
 }
 
 /**
- * Installs the observer `noteShimUse` reports to (`null` removes it) and
- * returns a function that restores the previous one. For plan item 4004 and
- * tests.
+ * Installs the observer `noteShimUse` reports to in place of the runtime
+ * guard (`null` removes it) and returns a function that restores the
+ * previous one. For tests that observe shim uses themselves.
  */
 export function setShimUseObserver(observer: ShimUseObserver | null): () => void {
   const previous = shimUseObserver;

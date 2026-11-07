@@ -87,6 +87,8 @@ describe("createWindowOrkestratorClient", () => {
   test("maps the browser gateway's stream state onto the connection signal", () => {
     const host = fakeHost();
     const client = createWindowOrkestratorClient(NODE, () => host.api);
+    // The client's own reconnect watch, which re-reads the hello (plan item 2011).
+    const baseline = host.streamListenerCount();
     expect(client.connection.get()).toBe("connecting");
     const seen: string[] = [];
     const stop = client.connection.subscribe((state) => seen.push(state));
@@ -95,8 +97,10 @@ describe("createWindowOrkestratorClient", () => {
     host.setStream("disconnected");
     stop();
     expect(seen).toEqual(["live", "connecting"]);
-    expect(host.streamListenerCount()).toBe(0);
+    expect(host.streamListenerCount()).toBe(baseline);
     expect(client.domains.get()).toBeNull();
+    client.dispose();
+    expect(host.streamListenerCount()).toBe(0);
   });
 
   test("dispose drops only its own listeners and refuses further calls", async () => {

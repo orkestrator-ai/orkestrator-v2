@@ -88,6 +88,13 @@ interface Window {
       options?: { nodeId?: string; envelope?: Record<string, unknown> },
     ): Promise<T>;
     /**
+     * Browser gateway (and a local desktop window on the direct gateway
+     * transport) only: the command node's hello, `null` when it answered
+     * none (plan item 2011). Electron's IPC windows read it from
+     * `nodes.gateway(commandNodeId)` instead.
+     */
+    hello?(): Promise<unknown>;
+    /**
      * Electron only: another node through this window's scope on it. Refusals
      * lead their message with `[code] ` (`unknown-node`, `node-scope-closed`, ...).
      */

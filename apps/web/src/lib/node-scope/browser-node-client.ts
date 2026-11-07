@@ -10,12 +10,19 @@
  * every change (`browserConnectionState`): whether the transport was created
  * unavailable, whether the node refused the credential since it was last set,
  * and the main stream's state.
+ *
+ * The node's hello is read through the same transport (its own origin, or the
+ * relay, which relays `/__orkestrator/hello`) when the client is created and
+ * again whenever the main stream reconnects after a drop, which is when a new
+ * backend generation can appear (plan item 2011). `domains` and
+ * `capabilities` change only for a hello of another generation.
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type {
   NodeClient,
   NodeConnectionState,
+  NodeInvokeOptions,
   ReadableSignal,
   Unlisten,
 } from "@orkestrator/protocol/node-client";
@@ -27,7 +34,9 @@ import {
   type NodeTransportOptions,
 } from "@/lib/native/node-transport";
 import { createListenerFanout } from "./listener-fanout";
-import { constantSignal, createSignal } from "./signal";
+import { createHelloNegotiation } from "./negotiation";
+import { createSignal } from "./signal";
+import { typedInvoke } from "./typed-invoke";
 import { typedListen } from "./typed-listen";
 
 export interface BrowserNodeClientOptions {
@@ -107,11 +116,26 @@ export function createBrowserNodeClient(options: BrowserNodeClientOptions): Brow
   } as NodeTransportOptions;
   const created = make(transportOptions);
   transport = created;
+  const negotiation = createHelloNegotiation(() =>
+    typeof created.hello === "function" ? created.hello() : Promise.resolve(undefined),
+  );
+  /** The main stream dropped since the hello was last read: the next open may be a new generation. */
+  let droppedSinceHello = false;
   const stopWatchingStream = created.eventStreamConnection.subscribe((stream) => {
-    if (stream === "connected") credentialRejected = false;
+    if (stream === "disconnected") droppedSinceHello = true;
+    if (stream === "connected") {
+      credentialRejected = false;
+      if (droppedSinceHello) {
+        droppedSinceHello = false;
+        void negotiation.refresh();
+      } else {
+        void negotiation.ensure();
+      }
+    }
     publish();
   });
   publish();
+  if (!unavailable) void negotiation.ensure();
 
   const listeners = createListenerFanout((event, deliver) => created.listen(event, deliver));
   const pendingReady = new Set<() => void>();
@@ -146,6 +170,19 @@ export function createBrowserNodeClient(options: BrowserNodeClientOptions): Brow
 
   const connection: ReadableSignal<NodeConnectionState> = state;
 
+  function invokeRaw<T>(
+    command: string,
+    args?: Readonly<Record<string, unknown>>,
+    options?: NodeInvokeOptions,
+  ): Promise<T> {
+    if (disposed) return Promise.reject(new Error("This node client is disposed."));
+    const wireArgs = args as Record<string, unknown> | undefined;
+    // An untyped call stays two arguments, as before.
+    return options?.envelope
+      ? created.invoke<T>(command, wireArgs, { envelope: options.envelope })
+      : created.invoke<T>(command, wireArgs);
+  }
+
   return {
     nodeId: options.nodeId,
     baseUrl: created.baseUrl,
@@ -156,10 +193,8 @@ export function createBrowserNodeClient(options: BrowserNodeClientOptions): Brow
       credentialRejected = false;
       publish();
     },
-    invokeRaw<T>(command: string, args?: Readonly<Record<string, unknown>>): Promise<T> {
-      if (disposed) return Promise.reject(new Error("This node client is disposed."));
-      return created.invoke<T>(command, args as Record<string, unknown> | undefined);
-    },
+    invoke: typedInvoke(invokeRaw),
+    invokeRaw,
     listenRaw,
     listen: typedListen(listenRaw),
     eventStreamReady,
@@ -169,8 +204,8 @@ export function createBrowserNodeClient(options: BrowserNodeClientOptions): Brow
       outputReady: (sessionId) => eventStreamReady(`${TERMINAL_OUTPUT_EVENT_PREFIX}${sessionId}`),
     },
     connection,
-    // The node's hello is not parsed here yet (plan item 2011).
-    domains: constantSignal(null),
+    domains: negotiation.domains,
+    capabilities: negotiation.capabilities,
     suspend() {
       if (!disposed) listeners.suspend();
     },
@@ -180,6 +215,7 @@ export function createBrowserNodeClient(options: BrowserNodeClientOptions): Brow
     dispose() {
       if (disposed) return;
       disposed = true;
+      negotiation.dispose();
       listeners.close();
       for (const cancel of Array.from(pendingReady)) cancel();
       stopWatchingStream();

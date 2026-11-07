@@ -135,6 +135,31 @@ export class ByteBudget {
     }
   }
 
+  /**
+   * Moves every reservation of `from` to `to`, keeping the recency order: a
+   * command scope opened under a provisional id learnt its proven one (plan
+   * item 2011). Where `to` already holds the same key, `to`'s is kept.
+   */
+  renameNode(from: BackendId, to: BackendId): void {
+    if (from === to) return;
+    const entries = Array.from(this.entries);
+    const ids = new Set(this.entries.keys());
+    this.entries.clear();
+    for (const [id, entry] of entries) {
+      if (entry.nodeId !== from) {
+        this.entries.set(id, entry);
+        continue;
+      }
+      const renamed = entryKey(to, entry.key);
+      if (ids.has(renamed)) {
+        this.used -= entry.bytes;
+        continue;
+      }
+      this.entries.set(renamed, { ...entry, nodeId: to });
+    }
+    if (this.shownNode === from) this.shownNode = to;
+  }
+
   private remove(id: string): void {
     const entry = this.entries.get(id);
     if (!entry) return;
@@ -213,4 +238,15 @@ export function releaseNodeFromBudgets(budgets: WindowByteBudgets, nodeId: Backe
   budgets.transcripts.releaseNode(nodeId);
   budgets.artifacts.releaseNode(nodeId);
   budgets.images.releaseNode(nodeId);
+}
+
+/** `ByteBudget.renameNode` on every budget of the window. */
+export function renameNodeInBudgets(
+  budgets: WindowByteBudgets,
+  from: BackendId,
+  to: BackendId,
+): void {
+  budgets.transcripts.renameNode(from, to);
+  budgets.artifacts.renameNode(from, to);
+  budgets.images.renameNode(from, to);
 }

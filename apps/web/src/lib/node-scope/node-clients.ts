@@ -44,6 +44,7 @@ import type {
   NegotiatedDomains,
   NodeClient,
   NodeConnectionState,
+  NodeInvokeOptions,
   ReadableSignal,
   Unlisten,
 } from "@orkestrator/protocol/node-client";
@@ -77,6 +78,7 @@ import { createListenerFanout } from "./listener-fanout";
 import type { NodeScope, NodeScopeTier } from "./node-scope";
 import { createSignal } from "./signal";
 import type { WindowScope } from "./window-scope";
+import { typedInvoke } from "./typed-invoke";
 import { typedListen } from "./typed-listen";
 
 /** How a leaf is reached right now; shown in the info panel. */
@@ -241,6 +243,7 @@ interface SharedLeafClient {
   readonly route: ReadableSignal<LeafRoute>;
   readonly connection: ReadableSignal<NodeConnectionState>;
   readonly domains: ReadableSignal<NegotiatedDomains | null>;
+  readonly capabilities: ReadableSignal<ReadonlySet<string> | null>;
   current(): LeafTransportClient;
   listen(event: string, handler: (payload: unknown) => void): Unlisten;
   /** Same route: swap the bearer. Another route: replace the transport client. */
@@ -257,13 +260,19 @@ function createSharedLeafClient(
   const route = createSignal<LeafRoute>(routeOf(workspace));
   const connection = createSignal<NodeConnectionState>(inner.connection.get());
   const domains = createSignal<NegotiatedDomains | null>(inner.domains.get());
+  const capabilities = createSignal<ReadonlySet<string> | null>(inner.capabilities.get());
+  // A replaced transport client reads its own hello (a new route may reach a
+  // new generation); its values are mirrored as they come, capabilities first.
   const mirror = (client: LeafTransportClient) => {
     const stopConnection = client.connection.subscribe((state) => connection.set(state));
+    const stopCapabilities = client.capabilities.subscribe((value) => capabilities.set(value));
     const stopDomains = client.domains.subscribe((value) => domains.set(value));
     connection.set(client.connection.get());
+    capabilities.set(client.capabilities.get());
     domains.set(client.domains.get());
     return () => {
       stopConnection();
+      stopCapabilities();
       stopDomains();
     };
   };
@@ -274,6 +283,7 @@ function createSharedLeafClient(
     route,
     connection,
     domains,
+    capabilities,
     current: () => inner,
     listen: (event, handler) => listeners.add(event, handler),
     adopt(next, create) {
@@ -316,6 +326,16 @@ function createLease(
   const listenRaw = <T>(event: string, handler: (payload: T) => void): Unlisten =>
     disposed ? () => {} : listeners.add(event, handler as (payload: unknown) => void);
   const relayBase = () => shared.route.get().relayBaseUrl;
+  function invokeRaw<T>(
+    command: string,
+    args?: Readonly<Record<string, unknown>>,
+    options?: NodeInvokeOptions,
+  ): Promise<T> {
+    if (disposed) return Promise.reject(disposedError());
+    return options
+      ? shared.current().invokeRaw<T>(command, args, options)
+      : shared.current().invokeRaw<T>(command, args);
+  }
   return {
     nodeId,
     route: shared.route,
@@ -326,10 +346,8 @@ function createLease(
     resolveMediaUrl: (pathname) => resolveNodeGatewayUrl(relayBase(), pathname),
     resolveLoopbackUrl: (url) => resolveNodeLoopbackBaseUrl(relayBase(), url),
     resolvePreviewUrl: (url) => resolveNodeBrowserPreviewUrl(relayBase(), url),
-    invokeRaw<T>(command: string, args?: Readonly<Record<string, unknown>>): Promise<T> {
-      if (disposed) return Promise.reject(disposedError());
-      return shared.current().invokeRaw<T>(command, args);
-    },
+    invoke: typedInvoke(invokeRaw),
+    invokeRaw,
     listenRaw,
     listen: typedListen(listenRaw),
     eventStreamReady(event) {
@@ -346,6 +364,7 @@ function createLease(
     },
     connection: shared.connection,
     domains: shared.domains,
+    capabilities: shared.capabilities,
     suspend() {
       if (!disposed) listeners.suspend();
     },

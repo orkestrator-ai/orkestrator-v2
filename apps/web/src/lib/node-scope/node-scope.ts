@@ -9,19 +9,35 @@
  * and disposes the client, in that order.
  *
  * Code that is not a component must hold a scope explicitly (decision 13.2 B):
- * `scope.store(def)`, `scope.service(def)`, `scope.client.invokeRaw(...)`.
- * There is no ambient "current scope".
+ * `scope.store(def)`, `scope.service(def)`, `scope.domain(def)`,
+ * `scope.client.invoke(def, args)`. There is no ambient "current scope".
+ *
+ * `scope.domain(def)` (plan item 2011) is this node's version-adapted client
+ * for one domain: built once per scope over `scope.client`, it picks its
+ * adapter from the client's negotiated `domains` (and the hello's
+ * `capabilities` for the legacy adapter) and picks again when a new
+ * connection generation publishes new values. A reconnect that keeps them
+ * (a node with no hello) resets the cached choice too, so a legacy adapter's
+ * capability reads are not carried across a backend restart.
  *
  * The lifetime underneath is an Effect `Scope` (see `lifetime.ts`): the node
  * scope's lifetime is a child of the window's, and each running service has a
  * child of the node's, so disposal order and idempotence come from Effect.
  */
 
+import {
+  createDomainClient,
+  type ApiOf,
+  type DomainAdapterUsageRecorder,
+  type DomainClient,
+  type DomainClientDef,
+} from "@orkestrator/protocol/contract/client";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { createLogger, logErrorKind } from "@orkestrator/protocol/logger";
 import type { NodeClient, ReadableSignal } from "@orkestrator/protocol/node-client";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { releaseNodeFromBudgets, type WindowByteBudgets } from "./byte-budget";
+import { recordDomainAdapterUsage } from "@/lib/domain-adapter-usage-ring";
+import { releaseNodeFromBudgets, renameNodeInBudgets, type WindowByteBudgets } from "./byte-budget";
 import type { Lifetime } from "./lifetime";
 import { PrefetchedCommandCache } from "./prefetched-command-cache";
 import type {
@@ -32,6 +48,7 @@ import type {
 } from "./scoped-service";
 import type { ScopedStoreDef } from "./scoped-store";
 import { createSignal, type WritableSignal } from "./signal";
+import { nodeDomainCall } from "./typed-invoke";
 
 const log = createLogger("web.node-scope");
 
@@ -65,6 +82,8 @@ export interface NodeScopeInit {
   /** The window's lifetime; the scope's own is a child of it. */
   readonly parent: Lifetime;
   readonly budgets: WindowByteBudgets;
+  /** Counts calls through adapters below a domain's current version; defaults to the renderer ring. */
+  readonly domainUsage?: DomainAdapterUsageRecorder;
 }
 
 interface ServiceRecord {
@@ -73,7 +92,6 @@ interface ServiceRecord {
 }
 
 export class NodeScope {
-  readonly nodeId: BackendId;
   readonly role: NodeScopeRole;
   readonly client: NodeClient;
   /** The window-wide budgets; reserve with this scope's `nodeId`. Released on dispose. */
@@ -95,10 +113,17 @@ export class NodeScope {
   private readonly creating = new Set<ScopedStoreDef<unknown>>();
   private readonly services = new Map<ScopedServiceDef<ScopedServiceInstance>, ServiceRecord>();
   private readonly failedServices = new Set<string>();
+  private readonly domainClients = new Map<DomainClientDef, DomainClient<unknown>>();
+  private readonly domainUsage: DomainAdapterUsageRecorder;
+  private stopWatchingGenerations: (() => void) | null = null;
+  private currentNodeId: BackendId;
+  /** Every id this scope has had; budgets are released under each on dispose. */
+  private readonly formerNodeIds: BackendId[] = [];
 
   /** Use `WindowScope.open`, which registers the scope with its window. */
   constructor(init: NodeScopeInit) {
-    this.nodeId = init.client.nodeId;
+    this.currentNodeId = init.client.nodeId;
+    this.domainUsage = init.domainUsage ?? recordDomainAdapterUsage;
     this.role = init.role;
     this.client = init.client;
     this.budgets = init.budgets;
@@ -112,16 +137,66 @@ export class NodeScope {
     // registered later first, then stores, budgets, the client, and health.
     this.lifetime.onClose("health", () => this.healthSignal.set(HEALTH_DISPOSED));
     this.lifetime.onClose("client", () => this.client.dispose());
-    this.lifetime.onClose("budgets", () => releaseNodeFromBudgets(this.budgets, this.nodeId));
+    this.lifetime.onClose("budgets", () => {
+      releaseNodeFromBudgets(this.budgets, this.nodeId);
+      for (const former of this.formerNodeIds) releaseNodeFromBudgets(this.budgets, former);
+    });
     this.lifetime.onClose("stores", () => {
       this.stores.clear();
       this.storeNames.clear();
       this.prefetched.clear();
     });
+    this.lifetime.onClose("domains", () => {
+      this.stopWatchingGenerations?.();
+      this.stopWatchingGenerations = null;
+      this.domainClients.clear();
+    });
+  }
+
+  /**
+   * The node's installation identity. Fixed for the scope's life, except
+   * that a command scope opened under a provisional id moves to the id its
+   * hello proves (`WindowScope.adoptCommandNodeId`).
+   */
+  get nodeId(): BackendId {
+    return this.currentNodeId;
   }
 
   get disposed(): boolean {
     return this.lifetime.closed;
+  }
+
+  /**
+   * This node's client for one domain (plan item 2011), created on first use
+   * and kept for the scope's life. Call `api()` per use: it answers the
+   * adapter for the current connection generation, and throws the coded
+   * `unsupported-version` when the node's range has none.
+   */
+  domain<D extends DomainClientDef>(def: D): DomainClient<ApiOf<D>> {
+    const existing = this.domainClients.get(def);
+    if (existing) return existing as DomainClient<ApiOf<D>>;
+    this.assertOpen(`domain ${def.domain.name}`);
+    this.watchGenerations();
+    const client = this.client;
+    const created = createDomainClient(def as DomainClientDef<D["domain"], ApiOf<D>>, {
+      call: nodeDomainCall(client),
+      domains: () => client.domains.get(),
+      capabilities: () => client.capabilities.get(),
+      invoke: (command, args) => client.invokeRaw<unknown>(command, args),
+      usage: this.domainUsage,
+    });
+    this.domainClients.set(def, created as DomainClient<unknown>);
+    return created;
+  }
+
+  /** WindowScope only: the command scope learnt its proven id. */
+  adoptNodeId(nodeId: BackendId): void {
+    if (nodeId === this.currentNodeId) return;
+    this.assertOpen("an identity change");
+    const former = this.currentNodeId;
+    this.formerNodeIds.push(former);
+    this.currentNodeId = nodeId;
+    renameNodeInBudgets(this.budgets, former, nodeId);
   }
 
   /**
@@ -245,6 +320,21 @@ export class NodeScope {
       });
     }
     return record.handle as ScopedServiceHandle<A>;
+  }
+
+  /**
+   * Resets every domain client's choice when the connection comes back after
+   * a gap. New `domains` or `capabilities` objects already make them pick
+   * again; this covers a reconnect that keeps them (a node with no hello).
+   */
+  private watchGenerations(): void {
+    if (this.stopWatchingGenerations) return;
+    let wasLive = this.client.connection.get() === "live";
+    this.stopWatchingGenerations = this.client.connection.subscribe((state) => {
+      const live = state === "live";
+      if (live && !wasLive) for (const client of this.domainClients.values()) client.reset();
+      wasLive = live;
+    });
   }
 
   private publishHealth(): void {

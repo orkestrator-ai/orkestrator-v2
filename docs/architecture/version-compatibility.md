@@ -488,6 +488,44 @@ or no hello at all, is a **pre-contract** backend (`isPreContract`); every
 release in the window today is one. `domainRange(hello, name)` reads one
 range.
 
+Every renderer `NodeClient` reads its node's hello once per connection
+generation and exposes the result as `client.domains` (the ranges, `null`
+while unknown and for a pre-contract node) and `client.capabilities` (the
+hello's capability names, which legacy adapters gate on)
+([2011](../../plans/unified/2011-scope-domain-negotiation.md),
+`apps/web/src/lib/node-scope/negotiation.ts`):
+
+- **Where it is read.** The browser and iOS client reads
+  `/__orkestrator/hello` through its own transport (`NodeTransport.hello()`,
+  appended to the node's base, so a relayed node answers its own); the page's
+  command node through its gateway API (`window.orkestrator.hello`); an
+  Electron node scope, and an Electron IPC window's command node, from main's
+  `orkestrator:nodes:gateway` snapshot, whose `hello` main reads per
+  connection (`ConnectionManager.scopeHello`: the local backend's, a saved
+  machine's last hello, or a workspace scope's own, once per connection
+  epoch).
+- **When.** On creation (or the stream's first open), and again whenever the
+  stream reconnects after a drop (Electron's command node: on
+  `desktop-connections-changed`). The values change only when the hello is
+  of another generation (`installationId` and `generation`), so a reconnect
+  to the same process keeps every object and a domain client keeps its
+  adapter. A read that cannot tell (unreachable, refused) changes nothing;
+  an answer without a hello (a 404, or a page) is pre-contract.
+- **Typed calls.** `client.invoke(def, args)` sends the envelope for this
+  build's version of the domain (`contractEnvelopeFields`; over IPC as the
+  invoke options, never inside the arguments) and decodes the result.
+  `client.invokeRaw(command, args, { envelope })` is the transport both it
+  and domain clients use; an untyped call sends no envelope.
+- **`scope.domain(def)`** is the node scope's memoised `createDomainClient`
+  over its client, with `domains`, `capabilities`, the untyped invoke and the
+  renderer usage ring. A new generation's objects make it pick again; a
+  reconnect that keeps them (a node without a hello) resets the choice too.
+- **Proven command id.** A hosted page has no proven command-node id when its
+  window scope opens, so its command scope starts under
+  `provisional:command-node` and moves to the id the hello proves
+  (`WindowScope.adoptCommandNodeId`); the provisional id stays an alias for
+  lookups, and byte-budget reservations move with it.
+
 ### Typed errors
 
 Version skew is reported with a code, never detected from message text
@@ -565,8 +603,8 @@ export const nodeMailClient = domainClient(nodeMail, {
   command's schema. Adapter 0's context has the hello `capabilities`, an
   untyped `invoke`, and `capability(command)`, which reads one of the domain's
   `LEGACY_CAPABILITY_COMMANDS` once per generation (`null` when the node
-  predates it). Node scopes expose it as `scope.domain(...)`
-  ([2011](../../plans/unified/2011-scope-domain-negotiation.md)).
+  predates it). Node scopes expose it as `scope.domain(def)`, memoised per
+  scope over the scope's client ([Hello `domains`](#hello-domains)).
 - **Pilot domains** ([1010](../../plans/unified/1010-pilot-node-mail-and-ticket-sync.md)):
   `node-mail`, `node-files` and `ticket-sync`, all at version 1 (min 1),
   are the first defined domains and the first clients, called backend to

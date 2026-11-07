@@ -17,16 +17,29 @@
  * window's transport, and the command scope is always live. `dispose` drops
  * only the listeners registered through this client; it never tears down
  * `window.orkestrator`.
+ *
+ * The command node's hello (plan item 2011) is read from the page's gateway
+ * (`window.orkestrator.hello`, the browser gateway and a local desktop window
+ * on the direct transport) or, in an Electron IPC window, from main's
+ * `nodes.gateway(commandNodeId)` snapshot. It is read when the client is made
+ * (or on the first call, if the gateway API was installed later), after the
+ * gateway's main stream reconnects from a drop, and in Electron when main
+ * reports a connection change (`desktop-connections-changed`, sent after the
+ * local backend restarts). A client made with a provisional id adopts the
+ * installation id the hello proves (`provenNodeId`); `app-window-scope.ts`
+ * moves the command scope to it.
  */
 
-import type { BackendId } from "@orkestrator/protocol/federation";
+import { isProvisionalBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type {
   NodeClient,
   NodeConnectionState,
+  NodeInvokeOptions,
   ReadableSignal,
   Unlisten,
 } from "@orkestrator/protocol/node-client";
-import { constantSignal } from "./signal";
+import { createHelloNegotiation } from "./negotiation";
+import { typedInvoke } from "./typed-invoke";
 import { typedListen } from "./typed-listen";
 
 type OrkestratorApi = NonNullable<Window["orkestrator"]>;
@@ -43,6 +56,26 @@ function connectionStateOf(state: GatewayStreamState | undefined): NodeConnectio
 
 const windowHost = (): OrkestratorApi | undefined =>
   typeof window === "undefined" ? undefined : window.orkestrator;
+
+/** Main's event after a connection change (a local backend restart re-reads its hello). */
+const DESKTOP_CONNECTIONS_CHANGED_EVENT = "desktop-connections-changed";
+
+/** The hello in a `nodes.gateway` snapshot; see `snapshotHello` in `desktop-node-client.ts`. */
+function gatewaySnapshotHello(snapshot: unknown): unknown {
+  if (!snapshot || typeof snapshot !== "object" || !Object.hasOwn(snapshot, "hello")) {
+    return undefined;
+  }
+  return (snapshot as { hello?: unknown }).hello ?? null;
+}
+
+/** The command scope's client: a `NodeClient` that can learn its proven id. */
+export interface WindowOrkestratorClient extends NodeClient {
+  /**
+   * The installation id the command node's hello proved, or `null` while
+   * none has. A client made with a provisional id takes it as its `nodeId`.
+   */
+  readonly provenNodeId: ReadableSignal<BackendId | null>;
+}
 
 /**
  * Whether the window's command transport is installed yet. Code that
@@ -72,9 +105,53 @@ export function commandEventStreamConnection(
 export function createWindowOrkestratorClient(
   nodeId: BackendId,
   host: () => OrkestratorApi | undefined = windowHost,
-): NodeClient {
+): WindowOrkestratorClient {
   const unlisteners = new Set<Unlisten>();
   let disposed = false;
+  let currentNodeId = nodeId;
+
+  const negotiation = createHelloNegotiation(async () => {
+    const api = host();
+    if (typeof api?.hello === "function") return api.hello();
+    if (typeof api?.nodes?.gateway === "function" && !isProvisionalBackendId(currentNodeId)) {
+      return gatewaySnapshotHello(await api.nodes.gateway(currentNodeId));
+    }
+    return undefined;
+  });
+  const stopAdopting = negotiation.installationId.subscribe((proven) => {
+    if (proven && isProvisionalBackendId(currentNodeId)) currentNodeId = proven;
+  });
+
+  /** Attached once the host exists: reconnects and main's connection changes re-read the hello. */
+  let watchedHost: OrkestratorApi | undefined;
+  let stopWatchingHost: Unlisten = () => {};
+  const watchHost = () => {
+    const api = host();
+    if (disposed || !api || api === watchedHost) return;
+    stopWatchingHost();
+    watchedHost = api;
+    const stops: Unlisten[] = [];
+    const stream = api.eventStreamConnection;
+    if (stream) {
+      let dropped = false;
+      stops.push(
+        stream.subscribe((state) => {
+          if (state === "disconnected") dropped = true;
+          if (state === "connected" && dropped) {
+            dropped = false;
+            void negotiation.refresh();
+          }
+        }),
+      );
+    } else if (api.nodes && typeof api.listen === "function") {
+      // Electron: main's own event, so listening opens no backend stream.
+      stops.push(api.listen(DESKTOP_CONNECTIONS_CHANGED_EVENT, () => void negotiation.refresh()));
+    }
+    stopWatchingHost = () => {
+      for (const stop of stops) stop();
+    };
+    void negotiation.ensure();
+  };
 
   const listenRaw = <T>(event: string, handler: (payload: T) => void): Unlisten => {
     const api = host();
@@ -108,14 +185,34 @@ export function createWindowOrkestratorClient(
     },
   };
 
+  function invokeRaw<T>(
+    command: string,
+    args?: Readonly<Record<string, unknown>>,
+    options?: NodeInvokeOptions,
+  ): Promise<T> {
+    const api = host();
+    if (disposed) return Promise.reject(new Error("This node client is disposed."));
+    if (!api) return Promise.reject(new Error("Orkestrator native backend is not available"));
+    watchHost();
+    const wireArgs = args as Record<string, unknown> | undefined;
+    // An untyped call stays two arguments, as before; the envelope never
+    // carries the arguments (plan item 1003).
+    return options?.envelope
+      ? api.invoke<T>(command, wireArgs, {
+          envelope: options.envelope as unknown as Record<string, unknown>,
+        })
+      : api.invoke<T>(command, wireArgs);
+  }
+
+  watchHost();
+
   return {
-    nodeId,
-    invokeRaw<T>(command: string, args?: Readonly<Record<string, unknown>>): Promise<T> {
-      const api = host();
-      if (disposed) return Promise.reject(new Error("This node client is disposed."));
-      if (!api) return Promise.reject(new Error("Orkestrator native backend is not available"));
-      return api.invoke<T>(command, args as Record<string, unknown> | undefined);
+    get nodeId() {
+      return currentNodeId;
     },
+    provenNodeId: negotiation.installationId,
+    invoke: typedInvoke(invokeRaw),
+    invokeRaw,
     listenRaw,
     listen: typedListen(listenRaw),
     eventStreamReady,
@@ -125,13 +222,16 @@ export function createWindowOrkestratorClient(
       outputReady: (sessionId) => eventStreamReady(`${TERMINAL_OUTPUT_EVENT_PREFIX}${sessionId}`),
     },
     connection,
-    // The renderer does not parse the command node's hello yet (plan item 2011).
-    domains: constantSignal(null),
+    domains: negotiation.domains,
+    capabilities: negotiation.capabilities,
     suspend() {},
     resume() {},
     dispose() {
       if (disposed) return;
       disposed = true;
+      negotiation.dispose();
+      stopAdopting();
+      stopWatchingHost();
       for (const unlisten of Array.from(unlisteners)) unlisten();
     },
   };

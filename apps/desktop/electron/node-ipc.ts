@@ -1,4 +1,5 @@
 import { Data } from "effect";
+import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 import type { ConnectionManager } from "./connection-manager.js";
@@ -66,7 +67,8 @@ export function parseNodeId(value: unknown): string {
 export type NodeIpcManager = Pick<
   ConnectionManager,
   "invoke" | "getBackendIdentity" | "getConnectionId" | "getGatewayBaseUrl" | "isScopeOnThisDevice"
->;
+> &
+  Partial<Pick<ConnectionManager, "scopeHello">>;
 
 /** A window as node IPC uses it. */
 export interface NodeIpcWindow extends NodeScopeWindow {
@@ -74,8 +76,15 @@ export interface NodeIpcWindow extends NodeScopeWindow {
   target: { nodeName: string } | null;
 }
 
-/** Per-node snapshot for the renderer. Never a credential. */
-export type NodeGatewaySnapshot =
+/**
+ * Per-node snapshot for the renderer. Never a credential.
+ *
+ * `hello` (plan item 2011) is the node's hello for its current connection,
+ * which the renderer's node client reads its negotiated `domains` and
+ * `capabilities` from: `null` when the node answered none (pre-contract),
+ * absent when main could not tell this time.
+ */
+export type NodeGatewaySnapshot = (
   | {
       nodeId: string;
       commandNode: true;
@@ -92,7 +101,8 @@ export type NodeGatewaySnapshot =
       baseUrl: string | null;
       backendId: string | null;
       backendOnThisDevice: boolean;
-    };
+    }
+) & { hello?: BackendHello | null };
 
 export type NodeInvoker = {
   /** `options.envelope`: the renderer's invoke envelope (plan item 1003), forwarded. */
@@ -189,22 +199,24 @@ export class DesktopNodeIpc<W extends NodeIpcWindow> {
   }
 
   /** The node's snapshot, or null while its scope is not open. */
-  gateway(context: W, nodeId: string): NodeGatewaySnapshot | null {
+  async gateway(context: W, nodeId: string): Promise<NodeGatewaySnapshot | null> {
     const manager = this.manager();
     if (this.isCommandNode(context, nodeId)) {
       const scope = this.commandScope(context);
-      return {
+      const snapshot: NodeGatewaySnapshot = {
         nodeId,
         commandNode: true,
         baseUrl: manager.getGatewayBaseUrl(scope),
         backendOnThisDevice: manager.isScopeOnThisDevice(scope),
       };
+      return this.withHello(manager, scope, snapshot);
     }
     const record = context.nodes.get(nodeId);
     if (!record || record.opening || !record.target) return null;
     const { target } = record;
+    let snapshot: NodeGatewaySnapshot;
     try {
-      return {
+      snapshot = {
         nodeId,
         commandNode: false,
         nodeName: target.nodeName,
@@ -218,6 +230,22 @@ export class DesktopNodeIpc<W extends NodeIpcWindow> {
     } catch {
       // Released between the lookup and the read.
       return null;
+    }
+    return this.withHello(manager, record.scope, snapshot);
+  }
+
+  /** `snapshot` with the scope's hello, or as it is when it cannot be read now. */
+  private async withHello(
+    manager: NodeIpcManager,
+    scope: string,
+    snapshot: NodeGatewaySnapshot,
+  ): Promise<NodeGatewaySnapshot> {
+    if (!manager.scopeHello) return snapshot;
+    try {
+      return { ...snapshot, hello: await manager.scopeHello(scope) };
+    } catch {
+      // Unreachable or released meanwhile: the renderer asks again on reconnect.
+      return snapshot;
     }
   }
 

@@ -947,6 +947,40 @@ test("a window points at a leaf workspace and back to its command node", async (
   }
 });
 
+test("a workspace scope's hello is its own node's, read once per connection (plan item 2011)", async () => {
+  const gateways = installGateways({ "https://leaf.example": { installationId: "bk_leaf" } });
+  const connections = manager(new MemoryStore(catalogue([])));
+  try {
+    await connections.initialize();
+    await connections.bind("window", "local");
+    connections.retargetScopeToWorkspace("window", {
+      workspaceId: "w1",
+      nodeId: "bk_leaf",
+      baseUrl: "https://leaf.example",
+      token,
+    });
+    const hello = await connections.scopeHello("window");
+    expect(hello?.installationId).toBe("bk_leaf" as BackendId);
+    expect(await connections.scopeHello("window")).toBe(hello);
+    const reads = gateways.requests.filter((request) => request.path === "/__orkestrator/hello");
+    expect(reads).toEqual([
+      {
+        origin: "https://leaf.example",
+        path: "/__orkestrator/hello",
+        authorization: `Bearer ${token}`,
+      },
+    ]);
+    // A new connection (another route or token) reads it again.
+    connections.rebindWorkspace("window", { baseUrl: "https://leaf.example", token: "renewed" });
+    await connections.scopeHello("window").catch(() => null);
+    expect(
+      gateways.requests.filter((request) => request.path === "/__orkestrator/hello"),
+    ).toHaveLength(2);
+  } finally {
+    connections.dispose();
+  }
+});
+
 test("a workspace scope is on this device only when its node is the local backend", async () => {
   const gateways = installGateways({
     "https://local.test": { installationId: "bk_local" },

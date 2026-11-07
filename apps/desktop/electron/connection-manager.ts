@@ -39,6 +39,7 @@ import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protoco
 import { BackendHttpClient, type BackendStreamState } from "./backend-process.js";
 import { savedMachineImportEntry } from "./command-node-migration.js";
 import { checkBackendRoute, connectionCheckError, type HelloOutcome } from "./backend-hello.js";
+import { readNodeHelloAt } from "./scope-hello.js";
 import {
   backendAddress,
   newRouteId,
@@ -131,6 +132,8 @@ const MAX_BACKGROUND_ATTEMPTS = 4;
 const STREAM_FAILURES_BEFORE_FALLBACK = 3;
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 const LOCAL_HELLO_TIMEOUT_MS = 3_000;
+/** A workspace scope's hello read gives up after this long; the next ask reads again. */
+const WORKSPACE_HELLO_TIMEOUT_MS = 10_000;
 /**
  * `isAsyncEncryptionAvailable()` can wait on a keychain access prompt (macOS
  * asks when the "<app name> Safe Storage" item's access list does not name
@@ -207,6 +210,11 @@ export class ConnectionManager {
   private secureStorageAvailable = false;
   private localBackendAvailable: boolean;
   private localHello: BackendHello | null = null;
+  /** Each workspace connection's hello, read once per connection epoch (plan item 2011). */
+  private readonly workspaceHellos = new WeakMap<
+    RemoteConnection,
+    { epoch: number; hello: Promise<BackendHello | null> }
+  >();
   /** Gateway tokens accepted during this process, per route. Never persisted. */
   private readonly sessionTokens = new Map<string, string>();
   private readonly scopeQueues = new Map<string, Promise<unknown>>();
@@ -1176,6 +1184,35 @@ export class ConnectionManager {
           : null),
       legacyOrigin: backend ? backendAddress(backend) : null,
     };
+  }
+
+  /**
+   * The hello of a scope's machine for its current connection (plan item
+   * 2011), which the renderer's node clients read their negotiated domains
+   * from: the local backend's, a saved machine's last hello, or, for a
+   * workspace scope (another node through a grant), its own, read from the
+   * scope's base once per connection epoch. `null` when the machine answered
+   * none (it predates the hello). Rejects when a workspace read cannot tell;
+   * the next ask reads again.
+   */
+  async scopeHello(scope = DEFAULT_CONNECTION_SCOPE): Promise<BackendHello | null> {
+    const connectionId = this.connectionIdForScope(scope);
+    if (connectionId === LOCAL_CONNECTION_ID) return this.localHello;
+    const remote = this.remoteConnections.get(connectionId);
+    if (!remote?.connectionId.startsWith(WORKSPACE_CONNECTION_PREFIX)) {
+      return this.statuses.get(connectionId)?.hello ?? null;
+    }
+    const cached = this.workspaceHellos.get(remote);
+    if (cached && cached.epoch === remote.epoch) return cached.hello;
+    const hello = readNodeHelloAt(remote.transport.baseUrl, remote.token, {
+      timeoutMs: WORKSPACE_HELLO_TIMEOUT_MS,
+    });
+    const entry = { epoch: remote.epoch, hello };
+    this.workspaceHellos.set(remote, entry);
+    hello.catch(() => {
+      if (this.workspaceHellos.get(remote) === entry) this.workspaceHellos.delete(remote);
+    });
+    return hello;
   }
 
   /** This computer's own backend installation, once its hello answered; else null. */

@@ -11,18 +11,27 @@
  * Connection state is a pure function (`desktopConnectionState`) of the
  * preload's stream state for the node, whether it was ever connected, and
  * the last coded refusal main answered (`[code] text`, see `nodeRefusalCode`).
+ *
+ * The node's hello comes from main, which reads it for the node scope's
+ * connection (once per connection epoch) and puts it in the
+ * `orkestrator:nodes:gateway` snapshot (plan item 2011). The client asks for
+ * it when the node's stream first connects and again after every drop, so
+ * `domains` and `capabilities` follow the node's connection generation.
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type {
   NodeClient,
   NodeConnectionState,
+  NodeInvokeOptions,
   ReadableSignal,
   Unlisten,
 } from "@orkestrator/protocol/node-client";
 import { createWindowOrkestratorClient } from "./command-client";
 import { createListenerFanout } from "./listener-fanout";
-import { constantSignal, createSignal } from "./signal";
+import { createHelloNegotiation } from "./negotiation";
+import { createSignal } from "./signal";
+import { typedInvoke } from "./typed-invoke";
 import { typedListen } from "./typed-listen";
 
 type OrkestratorApi = NonNullable<Window["orkestrator"]>;
@@ -97,6 +106,18 @@ function windowCommandNodeId(): BackendId | null {
 
 const NO_NODE_SCOPES = "This window cannot open other machines' scopes.";
 
+/**
+ * The hello in a `nodes.gateway` snapshot: the hello, `null` when main read
+ * none (a node that predates it), or `undefined` when the snapshot has no
+ * answer (the scope is not open, or main could not tell).
+ */
+export function snapshotHello(snapshot: unknown): unknown {
+  if (!snapshot || typeof snapshot !== "object" || !Object.hasOwn(snapshot, "hello")) {
+    return undefined;
+  }
+  return (snapshot as { hello?: unknown }).hello ?? null;
+}
+
 export function createDesktopNodeClient(options: DesktopNodeClientOptions): NodeClient {
   const host = options.host ?? windowHost;
   const commandNodeId =
@@ -114,6 +135,22 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
   let stopWatching: Unlisten = () => {};
 
   const state = createSignal<NodeConnectionState>("connecting");
+  const negotiation = createHelloNegotiation(async () => {
+    const nodes = host()?.nodes;
+    return nodes ? snapshotHello(await nodes.gateway(nodeId)) : undefined;
+  });
+  /** The stream dropped since the hello was last read: the next open may be a new generation. */
+  let droppedSinceHello = false;
+  const noteStream = (stream: PreloadStreamState) => {
+    if (stream === "disconnected") droppedSinceHello = true;
+    if (stream !== "connected") return;
+    if (droppedSinceHello) {
+      droppedSinceHello = false;
+      void negotiation.refresh();
+    } else {
+      void negotiation.ensure();
+    }
+  };
   const publish = () => {
     const stream = watched?.eventStreamConnection.state() ?? "idle";
     state.set(desktopConnectionState({ stream, everConnected, refusal }));
@@ -128,9 +165,12 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
         everConnected = true;
         refusal = null;
       }
+      noteStream(stream);
       publish();
     });
-    if (api.eventStreamConnection.state() === "connected") everConnected = true;
+    const current = api.eventStreamConnection.state();
+    if (current === "connected") everConnected = true;
+    noteStream(current);
     publish();
   };
   const noteRefusal = (error: unknown) => {
@@ -163,20 +203,33 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
 
   const connection: ReadableSignal<NodeConnectionState> = state;
 
+  function invokeRaw<T>(
+    command: string,
+    args?: Readonly<Record<string, unknown>>,
+    options?: NodeInvokeOptions,
+  ): Promise<T> {
+    if (disposed) return Promise.reject(new Error("This node client is disposed."));
+    const api = nodeApi();
+    if (!api) return Promise.reject(new Error(NO_NODE_SCOPES));
+    watch(api);
+    const wireArgs = args as Record<string, unknown> | undefined;
+    // The envelope crosses IPC without the arguments (plan item 1003); an
+    // untyped call stays two arguments, as before.
+    const sent = options?.envelope
+      ? api.invoke<T>(command, wireArgs, {
+          envelope: options.envelope as unknown as Record<string, unknown>,
+        })
+      : api.invoke<T>(command, wireArgs);
+    return sent.catch((error: unknown) => {
+      noteRefusal(error);
+      throw error;
+    });
+  }
+
   return {
     nodeId,
-    invokeRaw<T>(command: string, args?: Readonly<Record<string, unknown>>): Promise<T> {
-      if (disposed) return Promise.reject(new Error("This node client is disposed."));
-      const api = nodeApi();
-      if (!api) return Promise.reject(new Error(NO_NODE_SCOPES));
-      watch(api);
-      return api
-        .invoke<T>(command, args as Record<string, unknown> | undefined)
-        .catch((error: unknown) => {
-          noteRefusal(error);
-          throw error;
-        });
-    },
+    invoke: typedInvoke(invokeRaw),
+    invokeRaw,
     listenRaw,
     listen: typedListen(listenRaw),
     eventStreamReady,
@@ -186,8 +239,8 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
       outputReady: (sessionId) => eventStreamReady(`${TERMINAL_OUTPUT_EVENT_PREFIX}${sessionId}`),
     },
     connection,
-    // Main does not pass the node's negotiated domains yet (plan item 2011).
-    domains: constantSignal(null),
+    domains: negotiation.domains,
+    capabilities: negotiation.capabilities,
     // Main owns the node's stream and closes it when the scope goes idle; a
     // suspended client only stops delivering, and resumes without a reopen.
     suspend() {
@@ -199,6 +252,7 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
     dispose() {
       if (disposed) return;
       disposed = true;
+      negotiation.dispose();
       listeners.close();
       stopWatching();
       // Releasing the node's scope revokes its grant in main.

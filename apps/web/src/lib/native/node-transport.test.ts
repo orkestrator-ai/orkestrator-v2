@@ -712,3 +712,94 @@ describe("a failed invoke (plan item 1005)", () => {
     expect(plain.message).toBe("Plain failure");
   });
 });
+
+describe("contract negotiation over a node transport (plan item 2011)", () => {
+  const RELAY = "https://command.test/__orkestrator/nodes/bk_leaf";
+  const HELLO = {
+    schemaVersion: 1,
+    installationId: "bk_leaf",
+    generation: "gen-1",
+    appVersion: "2.30.0",
+    clientApi: { minVersion: 1, maxVersion: 1 },
+    capabilities: {},
+    profile: {
+      revision: 1,
+      displayName: "Leaf",
+      colorToken: "teal",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    },
+    endpointRole: "client",
+    domains: { "node-mail": { min: 1, max: 1 } },
+  };
+
+  function answering(respond: (url: string) => Response) {
+    const requests: Array<{ url: string; body: unknown; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({
+        url,
+        body: init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined,
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
+      return respond(url);
+    }) as unknown as typeof fetch;
+    return requests;
+  }
+
+  test("an invoke envelope's contract fields go beside command and args, and nothing else", async () => {
+    const requests = answering(() => new Response(JSON.stringify({ result: { ok: true } })));
+    const node = transport({ baseUrl: A, credential: "grant-a" });
+    await node.invoke(
+      "deliver_node_mail",
+      { body: "hi", steer: true },
+      {
+        envelope: {
+          domain: "node-mail",
+          version: 1,
+          critical: ["steer"],
+          args: { smuggled: true },
+        } as never,
+      },
+    );
+    await node.invoke("get_projects", { page: 1 });
+    expect(requests.map((request) => request.body)).toEqual([
+      {
+        command: "deliver_node_mail",
+        args: { body: "hi", steer: true },
+        domain: "node-mail",
+        version: 1,
+        critical: ["steer"],
+      },
+      { command: "get_projects", args: { page: 1 } },
+    ]);
+  });
+
+  test("hello reads the node's own hello on a relay base, and tells no hello from a failure", async () => {
+    let status = 200;
+    let body = JSON.stringify(HELLO);
+    const requests = answering(() => new Response(body, { status }));
+    const node = transport({ baseUrl: RELAY });
+    const hello = await node.hello();
+    expect(requests.at(-1)?.url).toBe(`${RELAY}/__orkestrator/hello`);
+    expect(hello?.domains).toEqual({ "node-mail": { min: 1, max: 1 } });
+
+    status = 404;
+    expect(await node.hello()).toBeNull();
+    status = 200;
+    body = "<!doctype html><title>Orkestrator</title>";
+    expect(await node.hello()).toBeNull();
+    status = 401;
+    await expect(node.hello()).rejects.toThrow("HTTP 401");
+    status = 503;
+    await expect(node.hello()).rejects.toThrow("HTTP 503");
+  });
+
+  test("hello carries the transport's bearer", async () => {
+    const requests = answering(() => new Response(JSON.stringify(HELLO)));
+    await transport({ baseUrl: B, credential: "grant-b" }).hello();
+    expect(requests.at(-1)).toMatchObject({
+      url: `${B}/__orkestrator/hello`,
+      authorization: "Bearer grant-b",
+    });
+  });
+});

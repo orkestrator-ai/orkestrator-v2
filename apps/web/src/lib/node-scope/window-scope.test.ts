@@ -135,6 +135,46 @@ describe("the app window scope", () => {
     expect(fake.disposed).toBe(true);
   });
 
+  test("a hosted page's provisional command scope moves to the id its hello proves (2011)", async () => {
+    const original = window.orkestrator;
+    try {
+      window.orkestrator = {
+        ...original,
+        invoke: async () => null,
+        listen: () => () => {},
+        hello: async () => ({
+          schemaVersion: 1,
+          installationId: NODE_A,
+          generation: "g1",
+          appVersion: "2.30.0",
+          clientApi: { minVersion: 1, maxVersion: 1 },
+          capabilities: {},
+          profile: {
+            revision: 1,
+            displayName: "Command",
+            colorToken: "teal",
+            updatedAt: "2026-11-07T00:00:00.000Z",
+          },
+          endpointRole: "client",
+          domains: { "node-mail": { min: 1, max: 1 } },
+        }),
+      } as NonNullable<Window["orkestrator"]>;
+      resetWindowScopeForTests();
+      const windowScope = getWindowScope();
+      const command = windowScope.commandScope();
+      expect(command.nodeId).toBe(COMMAND_SCOPE_PROVISIONAL_NODE_ID);
+      for (let i = 0; i < 5 && command.nodeId !== NODE_A; i++) await Promise.resolve();
+      expect(command.nodeId).toBe(NODE_A);
+      expect(command.client.nodeId).toBe(NODE_A);
+      expect(windowScope.get(NODE_A)).toBe(command);
+      expect(windowScope.get(COMMAND_SCOPE_PROVISIONAL_NODE_ID)).toBe(command);
+      expect(command.client.domains.get()).toEqual({ "node-mail": { min: 1, max: 1 } });
+    } finally {
+      window.orkestrator = original;
+      resetWindowScopeForTests();
+    }
+  });
+
   test("the command scope takes the page's proven command-node identity", () => {
     const identity = window.orkestratorDesktopIdentity;
     const target = window.orkestratorWorkspaceTarget;

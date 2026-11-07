@@ -167,6 +167,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const api = {
     invoke: transport.invoke,
+    hello: transport.hello,
     listen: transport.listen,
     eventStreamReady: transport.eventStreamReady,
     eventStreamConnection: transport.eventStreamConnection,
@@ -253,6 +254,7 @@ export function installLocalDesktopGateway(
   targetWindow.orkestrator = {
     ...host.api,
     invoke: gateway.invoke,
+    hello: gateway.hello,
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
       const unlistenGateway = gateway.listen(event, callback);
       // Main raises neither itself, so its relay has nothing to add here.

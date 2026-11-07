@@ -23,10 +23,12 @@
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
+import type { ContractEnvelopeFields } from "@orkestrator/protocol/contract/client";
 import type {
   NegotiatedDomains,
   NodeClient,
   NodeConnectionState,
+  NodeInvokeOptions,
   Unlisten,
 } from "@orkestrator/protocol/node-client";
 import { render, type RenderOptions, type RenderResult } from "@testing-library/react";
@@ -34,6 +36,7 @@ import type { ReactElement } from "react";
 import type { NodeScope, NodeScopeRole } from "@/lib/node-scope/node-scope";
 import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
 import { createSignal } from "@/lib/node-scope/signal";
+import { typedInvoke } from "@/lib/node-scope/typed-invoke";
 import { typedListen } from "@/lib/node-scope/typed-listen";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 
@@ -47,12 +50,17 @@ export interface FakeNodeClientOptions {
   /** Responses by command name. A command with none rejects. */
   invoke?: Readonly<Record<string, FakeInvokeResponse>>;
   connection?: NodeConnectionState;
+  /** The negotiated domains; `null` (the default) is a pre-contract node. */
   domains?: NegotiatedDomains | null;
+  /** The hello's capability names; `null` (the default) is a node with no hello. */
+  capabilities?: Iterable<string> | null;
 }
 
 export interface FakeInvocation {
   readonly command: string;
   readonly args: Readonly<Record<string, unknown>>;
+  /** The contract fields a typed call or a domain client sent (absent for a legacy call). */
+  readonly envelope?: ContractEnvelopeFields;
 }
 
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
@@ -63,6 +71,7 @@ export class FakeNodeClient implements NodeClient {
   readonly invocations: FakeInvocation[] = [];
   readonly connection = createSignal<NodeConnectionState>("live");
   readonly domains = createSignal<NegotiatedDomains | null>(null);
+  readonly capabilities = createSignal<ReadonlySet<string> | null>(null);
   readonly terminal = {
     listenOutput: (sessionId: string, handler: (payload: unknown) => void): Unlisten =>
       this.listenRaw(`${TERMINAL_OUTPUT_EVENT_PREFIX}${sessionId}`, handler),
@@ -82,6 +91,17 @@ export class FakeNodeClient implements NodeClient {
     }
     if (options.connection) this.connection.set(options.connection);
     if (options.domains !== undefined) this.domains.set(options.domains);
+    if (options.capabilities) this.capabilities.set(new Set(options.capabilities));
+  }
+
+  /**
+   * A new connection generation's hello: new `domains` and `capabilities`
+   * objects, as a node client publishes after reconnecting to an upgraded
+   * backend.
+   */
+  setHello(hello: { domains?: NegotiatedDomains | null; capabilities?: Iterable<string> | null }) {
+    this.capabilities.set(hello.capabilities ? new Set(hello.capabilities) : null);
+    this.domains.set(hello.domains ? { ...hello.domains } : null);
   }
 
   /** Sets or replaces the response for `command`. */
@@ -90,11 +110,19 @@ export class FakeNodeClient implements NodeClient {
     return this;
   }
 
+  /** Typed `invoke` (plan item 2011), over {@link invokeRaw}. */
+  readonly invoke: NodeClient["invoke"] = typedInvoke((command, args, options) =>
+    this.invokeRaw(command, args, options),
+  );
+
   async invokeRaw<T = unknown>(
     command: string,
     args: Readonly<Record<string, unknown>> = {},
+    options?: NodeInvokeOptions,
   ): Promise<T> {
-    this.invocations.push({ command, args });
+    this.invocations.push(
+      options?.envelope ? { command, args, envelope: options.envelope } : { command, args },
+    );
     if (this.disposed) throw new Error("FakeNodeClient is disposed.");
     if (!this.responses.has(command)) {
       throw new Error(`FakeNodeClient has no response for ${command}.`);

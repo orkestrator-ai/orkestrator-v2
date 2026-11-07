@@ -17,6 +17,11 @@
  */
 import { GatewayHttpError } from "@/lib/native/gateway-http-error";
 import {
+  BACKEND_HELLO_PATH,
+  parseBackendHello,
+  type BackendHello,
+} from "@orkestrator/protocol/backend-profile";
+import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GATEWAY_KEEPALIVE_EVENT,
   GATEWAY_KEEPALIVE_EVENTS_PARAM,
@@ -70,6 +75,38 @@ const EVENT_SOURCE_CLOSED = 2;
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
 /** Chromium refuses a `keepalive` request body beyond 64 KiB. */
 const KEEPALIVE_MAX_BODY_BYTES = 64 * 1024;
+/** A hello read gives up after this long; the next connection reads again. */
+const HELLO_TIMEOUT_MS = 10_000;
+/** A larger answer is not a hello (the same bound as the desktop's check). */
+const MAX_HELLO_BYTES = 64 * 1024;
+/** The invoke envelope's contract fields, the only envelope keys a body takes. */
+const ENVELOPE_FIELDS = ["domain", "version", "critical"] as const;
+
+/** The invoke envelope's contract fields (`ContractEnvelopeFields` in the protocol). */
+export interface NodeTransportEnvelope {
+  readonly domain?: unknown;
+  readonly version?: unknown;
+  readonly critical?: unknown;
+}
+
+/** Options of one command call. */
+export interface NodeTransportInvokeOptions {
+  /**
+   * The invoke envelope's contract fields (plan items 1003 and 2011), sent
+   * next to `command` and `args`. Only `domain`, `version` and `critical` are
+   * read; the arguments always come from the call.
+   */
+  envelope?: NodeTransportEnvelope;
+}
+
+function envelopeBodyFields(envelope: NodeTransportEnvelope | undefined): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (!envelope) return fields;
+  for (const key of ENVELOPE_FIELDS) {
+    if (Object.hasOwn(envelope, key) && envelope[key] !== undefined) fields[key] = envelope[key];
+  }
+  return fields;
+}
 
 export type EventCallback<T> = (payload: T) => unknown;
 /**
@@ -197,7 +234,25 @@ type NodeTransportEndpoint =
 export type NodeTransportOptions = NodeTransportSettings & NodeTransportEndpoint;
 
 export interface NodeTransport {
-  invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
+  /**
+   * Runs a command. `options.envelope` adds the contract fields to the body;
+   * terminal input and lifecycle commands, which the input sequencer orders,
+   * are untyped and go without one.
+   */
+  invoke<T = unknown>(
+    command: string,
+    args?: Record<string, unknown>,
+    options?: NodeTransportInvokeOptions,
+  ): Promise<T>;
+  /**
+   * The node's hello (`/__orkestrator/hello` on this transport's base, so a
+   * relayed node answers its own): the parsed hello, or `null` when the node
+   * answered without one (a backend that predates it: a 404, or a page that is
+   * not a hello). Throws when it cannot tell (unreachable, timed out, a
+   * refused credential, a server error), so a transient failure is never read
+   * as a pre-contract node.
+   */
+  hello(): Promise<BackendHello | null>;
   listen<T = unknown>(event: string, callback: EventCallback<T>): () => void;
   eventStreamReady(event: string): Promise<void>;
   /**
@@ -1246,8 +1301,9 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
     command: string,
     args?: Record<string, unknown>,
     signal?: AbortSignal,
+    envelope?: NodeTransportEnvelope,
   ): Promise<T> => {
-    const body = JSON.stringify({ command, args: args ?? {} });
+    const body = JSON.stringify({ command, args: args ?? {}, ...envelopeBodyFields(envelope) });
     const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
       method: "POST",
       credentials,
@@ -1300,8 +1356,43 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
     },
   });
 
+  const hello = async (): Promise<BackendHello | null> => {
+    if (disposed) throw new Error("This node transport is disposed.");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HELLO_TIMEOUT_MS);
+    try {
+      const response = await fetch(apiUrl(BACKEND_HELLO_PATH), {
+        credentials,
+        headers: requestHeaders({ accept: "application/json" }),
+        redirect: "manual",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`The node hello failed with HTTP ${response.status}.`);
+      }
+      const text = await response.text();
+      if (text.length > MAX_HELLO_BYTES) return null;
+      try {
+        return parseBackendHello(JSON.parse(text) as unknown);
+      } catch {
+        // A 200 that is not a hello is an older backend serving its page.
+        return null;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   return {
-    async invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
+    hello,
+    async invoke<T = unknown>(
+      command: string,
+      args?: Record<string, unknown>,
+      options?: NodeTransportInvokeOptions,
+    ): Promise<T> {
       if (
         command === "terminal_snapshot_applied" &&
         typeof args?.sessionId === "string" &&
@@ -1320,7 +1411,7 @@ export function createNodeTransport(options: NodeTransportOptions): NodeTranspor
       }
       const ordered = terminalInput.invoke(command, args);
       if (ordered) return ordered as Promise<T>;
-      return invokeImmediately<T>(command, args);
+      return invokeImmediately<T>(command, args, undefined, options?.envelope);
     },
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {

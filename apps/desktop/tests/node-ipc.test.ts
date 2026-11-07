@@ -284,6 +284,7 @@ function harness() {
   }
 
   return {
+    manager,
     routes,
     calls,
     revoked,
@@ -513,6 +514,29 @@ describe("node-addressed invoke and events through main", () => {
     expect(invoke).toHaveBeenLastCalledWith("get_projects", { page: 1 }, "scope-1", { envelope });
     await backend.invoke("get_projects", { page: 2 });
     expect(invoke).toHaveBeenLastCalledWith("get_projects", { page: 2 }, "scope-1");
+  });
+
+  test("the gateway snapshot carries each node's hello for its scope (plan item 2011)", async () => {
+    const h = harness();
+    const w = h.renderer(1);
+    const reads: string[] = [];
+    let failing = false;
+    (h.manager as Record<string, unknown>).scopeHello = async (scope: string) => {
+      reads.push(scope);
+      if (failing) throw new Error("unreachable");
+      return scope.includes(":node:") ? { installationId: "bk_a", domains: {} } : null;
+    };
+    const snapshot = (await w.api.nodes.open("bk_a")) as Record<string, unknown>;
+    expect(snapshot.hello).toEqual({ installationId: "bk_a", domains: {} });
+    expect(reads).toEqual(["scope-1:node:bk_a"]);
+    // The command node's snapshot answers its own scope's (here: none, pre-contract).
+    expect(await w.api.nodes.gateway(COMMAND_NODE)).toMatchObject({
+      commandNode: true,
+      hello: null,
+    });
+    // A read that cannot tell leaves `hello` out, so the renderer keeps what it had.
+    failing = true;
+    expect(Object.hasOwn((await w.api.nodes.gateway("bk_a")) as object, "hello")).toBe(false);
   });
 
   test("open, gateway and release: a snapshot without credentials, then a released node", async () => {

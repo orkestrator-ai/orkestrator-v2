@@ -17,6 +17,7 @@ import {
   type NodeClientRegistryOptions,
 } from "./node-clients";
 import { createSignal, constantSignal } from "./signal";
+import { typedInvoke } from "./typed-invoke";
 import { typedListen } from "./typed-listen";
 import { WindowScope } from "./window-scope";
 
@@ -112,6 +113,7 @@ function fakeClientFactory() {
       url: (pathname) => `${options.transport.baseUrl}${pathname}`,
       setCredential: mock((_token: string) => {}),
       invokeRaw: async <T>(command: string) => ({ command, base: options.transport.baseUrl }) as T,
+      invoke: typedInvoke(async (command) => ({ command, base: options.transport.baseUrl })),
       listenRaw<T>(event: string, handler: (payload: T) => void) {
         const set = handlers.get(event) ?? new Set();
         handlers.set(event, set);
@@ -126,6 +128,7 @@ function fakeClientFactory() {
       terminal: { listenOutput: () => () => {}, outputReady: async () => {} },
       connection,
       domains: constantSignal(null),
+      capabilities: constantSignal(null),
       suspend() {},
       resume() {},
       dispose: mock(() => {}),
@@ -536,7 +539,10 @@ describe("two leaves", () => {
 
     expect(await leaf.invokeRaw("get_projects")).toEqual({ from: "leaf.test" });
     expect(await other.invokeRaw("get_projects")).toEqual({ from: "other.test" });
+    // Each client read its own node's hello on its own grant (plan item 2011).
     expect(calls).toEqual([
+      { url: "https://leaf.test/__orkestrator/hello", authorization: `Bearer ${tokens[LEAF]}` },
+      { url: "https://other.test/__orkestrator/hello", authorization: `Bearer ${tokens[OTHER]}` },
       { url: "https://leaf.test/__orkestrator/invoke", authorization: `Bearer ${tokens[LEAF]}` },
       { url: "https://other.test/__orkestrator/invoke", authorization: `Bearer ${tokens[OTHER]}` },
     ]);

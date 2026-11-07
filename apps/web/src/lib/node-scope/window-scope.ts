@@ -9,7 +9,8 @@
  * their own and dispose it in `afterEach`.
  */
 
-import type { BackendId } from "@orkestrator/protocol/federation";
+import type { DomainAdapterUsageRecorder } from "@orkestrator/protocol/contract/client";
+import { isProvisionalBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { NodeClient, ReadableSignal } from "@orkestrator/protocol/node-client";
 import { createWindowByteBudgets, type WindowByteBudgets } from "./byte-budget";
 import { Lifetime } from "./lifetime";
@@ -30,6 +31,8 @@ export interface NodeSelection {
 export interface WindowScopeOptions {
   /** Totals in bytes; omitted kinds use `DEFAULT_WINDOW_BYTE_BUDGETS`. */
   readonly budgets?: Partial<Record<keyof WindowByteBudgets, number>>;
+  /** Every scope's domain adapter usage recorder; defaults to the renderer ring. */
+  readonly domainUsage?: DomainAdapterUsageRecorder;
 }
 
 export interface OpenNodeScopeOptions {
@@ -47,11 +50,18 @@ export class WindowScope {
 
   private readonly lifetime = Lifetime.root("window");
   private readonly registry = new Map<BackendId, NodeScope>();
+  /**
+   * Former ids of scopes that moved to a proven one: a value captured under
+   * the provisional id before the hello answered still finds its scope.
+   */
+  private readonly aliases = new Map<BackendId, NodeScope>();
+  private readonly domainUsage: DomainAdapterUsageRecorder | undefined;
   private readonly selectionSignal: WritableSignal<NodeSelection | null>;
   private readonly scopesSignal: WritableSignal<readonly NodeScope[]>;
 
   constructor(options: WindowScopeOptions = {}) {
     this.budgets = createWindowByteBudgets(options.budgets);
+    this.domainUsage = options.domainUsage;
     this.selectionSignal = createSignal<NodeSelection | null>(null);
     this.scopesSignal = createSignal<readonly NodeScope[]>([]);
     this.selection = this.selectionSignal;
@@ -79,21 +89,53 @@ export class WindowScope {
       tier: options.tier,
       parent: this.lifetime,
       budgets: this.budgets,
+      ...(this.domainUsage ? { domainUsage: this.domainUsage } : {}),
     });
     this.registry.set(nodeId, scope);
     // Runs after the scope's services have stopped and before its stores,
     // budgets and client are released, so nothing can look a closing scope up.
     scope.onDispose("window-registry", () => {
-      if (this.registry.get(nodeId) !== scope) return;
-      this.registry.delete(nodeId);
+      for (const [alias, aliased] of Array.from(this.aliases)) {
+        if (aliased === scope) this.aliases.delete(alias);
+      }
+      if (this.registry.get(scope.nodeId) !== scope) return;
+      this.registry.delete(scope.nodeId);
       this.publishScopes();
     });
     this.publishScopes();
     return scope;
   }
 
+  /** The scope of `nodeId`, also by a command scope's former provisional id. */
   get(nodeId: BackendId): NodeScope | null {
-    return this.registry.get(nodeId) ?? null;
+    return this.registry.get(nodeId) ?? this.aliases.get(nodeId) ?? null;
+  }
+
+  /**
+   * Moves a command scope opened under a provisional id to the installation
+   * id its hello proved (plan item 2011): the registry, the byte budgets and
+   * the selection follow, and the provisional id stays an alias, so a value
+   * captured before the hello answered still finds the scope. Refused (false)
+   * when the command scope's id is already proven, `nodeId` is provisional,
+   * or another scope holds `nodeId`.
+   */
+  adoptCommandNodeId(nodeId: BackendId): boolean {
+    const scope = this.findCommandScope();
+    if (!scope || scope.disposed) return false;
+    const former = scope.nodeId;
+    if (former === nodeId) return true;
+    if (!isProvisionalBackendId(former) || isProvisionalBackendId(nodeId)) return false;
+    if (this.registry.has(nodeId)) return false;
+    scope.adoptNodeId(nodeId);
+    // Re-keyed in place, so `nodeScopes` keeps its opening order.
+    const entries = Array.from(this.registry);
+    this.registry.clear();
+    for (const [id, open] of entries) this.registry.set(id === former ? nodeId : id, open);
+    this.aliases.set(former, scope);
+    const selection = this.selectionSignal.get();
+    if (selection?.nodeId === former) this.selectionSignal.set({ ...selection, nodeId });
+    this.publishScopes();
+    return true;
   }
 
   /** The scope of the node this window is connected to. Throws if none is open. */

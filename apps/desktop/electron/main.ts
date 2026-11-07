@@ -59,6 +59,7 @@ import {
 import { DesktopNodeIpc } from "./node-ipc.js";
 import {
   NodePreviewRuntimes,
+  nodePreviewRequestOrigin,
   nodePreviewUrl,
   routeBrowserPreviews,
   type NodePreviewRuntime,
@@ -730,7 +731,10 @@ function createWindowBrowserPreviews(
   connectionId: string,
   partitionKey = connectionId,
   realm?: RealmViewOwner,
-  resolveAddress?: (url: string) => string,
+  node?: {
+    resolveAddress: (url: string) => string;
+    requestOrigin: (url: string) => string | null;
+  },
 ) {
   const partition = browserPreviewPartitionForWindow(slot, partitionKey);
   let manager: BrowserPreviewManager | null = null;
@@ -816,7 +820,7 @@ function createWindowBrowserPreviews(
     transport,
     captureStore: browserPreviewCaptureStore(),
     nativeImage,
-    ...(resolveAddress ? { resolveAddress } : {}),
+    ...(node ?? {}),
     // External browsers never inherit Electron's request hooks. They sign in
     // through the private preview origin with a one-use grant POSTed by a
     // loopback handoff page (the grant is never part of a URL), or, for a
@@ -870,8 +874,14 @@ function createNodeBrowserPreviews(
     connectionManager.getConnectionId(record.scope),
     partitionKey,
     { contents: context.contents, ViewCtor: WebContentsView },
-    // Address-bar previews load through the node's own gateway (its current route).
-    (url) => nodePreviewUrl(connectionManager?.getGatewayBaseUrl(record.scope) ?? null, url),
+    {
+      // Address-bar previews load through the node's own gateway (its current route).
+      resolveAddress: (url) =>
+        nodePreviewUrl(connectionManager?.getGatewayBaseUrl(record.scope) ?? null, url),
+      // A workspace grant is admitted only from the node's own origin or a
+      // command node's portal; the desktop's default origin is neither.
+      requestOrigin: nodePreviewRequestOrigin,
+    },
   );
   return {
     controller: previews.manager,

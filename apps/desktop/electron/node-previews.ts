@@ -37,6 +37,22 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 
 /**
+ * The `Origin` a node runtime's authorized preview requests present: the
+ * node gateway's own. The node admits a workspace grant's requests only from
+ * its own origin or an attached command node's portal origins, so the
+ * desktop's default (`https://orkestrator.dev`, which a command node's
+ * gateway allows for its durable token) is refused there. Main sets it only
+ * on requests it authorizes inside the view's own preview namespace.
+ */
+export function nodePreviewRequestOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The address a node runtime loads for an address-bar URL (4006 Finding 1):
  * always through that node's own gateway (`nodeBaseUrl`, the node scope's
  * current route), so a leaf's tab can never show this computer's loopback

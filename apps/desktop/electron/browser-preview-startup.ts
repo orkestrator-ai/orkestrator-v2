@@ -32,6 +32,11 @@ export interface InitializeBrowserPreviewsOptions {
   emitCaptureEvent?: BrowserPreviewManagerOptions["emitCaptureEvent"];
   nativeImage?: BrowserPreviewManagerOptions["nativeImage"];
   resolveAddress?: BrowserPreviewManagerOptions["resolveAddress"];
+  /**
+   * The `Origin` the views' authorized gateway requests present (see
+   * `installRemoteGatewayRequestAuth`); the desktop's default when absent.
+   */
+  requestOrigin?: (url: string) => string | null | undefined;
 }
 
 export interface BrowserPreviewRuntime {
@@ -102,6 +107,7 @@ export function initializeBrowserPreviews({
   emitCaptureEvent,
   nativeImage,
   resolveAddress,
+  requestOrigin,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
@@ -136,6 +142,7 @@ export function initializeBrowserPreviews({
       webContentsId === undefined ? undefined : manager.requestedUrlForWebContents(webContentsId),
     previewViewEnvironment: (webContentsId) =>
       webContentsId === undefined ? null : manager.environmentForWebContents(webContentsId),
+    ...(requestOrigin ? { requestOrigin } : {}),
   });
   return { manager, browserSession };
 }

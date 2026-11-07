@@ -24,6 +24,8 @@ import {
 import { uiStore } from "@/stores/uiStore";
 import { selectionOnScope } from "@/stores/windowSelectionStore";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
+import { shownEnvironmentOn } from "@/lib/federation/window-attention";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { remoteAttentionTarget, useRemoteNodeAttention } from "./useRemoteNodeAttention";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import {
@@ -121,24 +123,28 @@ function alertInputNeeded(
 }
 
 /**
- * Attention from another node with no open realm in this window. Nothing of
- * that node is on screen, so it always alerts, under the same settings and
- * coalescing as this window's own node.
+ * Attention from another node with no open realm in this window, under the
+ * same settings and coalescing as this window's own node. Only a node shown in
+ * the window's own tree can have its environment on screen; that environment
+ * stays quiet as the window's own selected one does.
  */
 function alertRemoteAttention(
+  windowScope: WindowScope,
   nodeId: string,
   { environmentId, projectId, reason }: EnvironmentAttentionEvent,
   lastCue: { current: LastCue },
 ): void {
+  const onScreen = shownEnvironmentOn(windowScope, nodeId);
   if (isInputNeededAttentionReason(reason)) {
     alertInputNeeded(
       { environmentId, projectId, reason },
-      null,
+      onScreen,
       lastCue,
       remoteAttentionTarget(nodeId, projectId, environmentId),
     );
     return;
   }
+  if (environmentId === onScreen) return;
   if (!soundSettings().agentStopped) return;
   if (!claimCue(lastCue, "agent-stopped")) return;
   void playConfiguredNotificationSound("agent-stopped");
@@ -168,8 +174,11 @@ function alertRemoteAttention(
  * approval, a plan) gets the "agent question" cue and a desktop notification
  * instead; see {@link alertInputNeeded}.
  *
- * The window's shell also alerts for other nodes it has no open realm for
- * ({@link useRemoteNodeAttention}); an open realm alerts for its own node.
+ * The window's shell also alerts for every other node it has no open realm
+ * for, through the window's attention service ({@link useRemoteNodeAttention},
+ * plan item 5001); an open realm alerts for its own node. While another node
+ * is shown in the central region, none of this node's environments is on
+ * screen.
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);
@@ -204,12 +213,17 @@ export function useNotificationSoundService(): void {
     commandNodeIdRef.current = commandNodeId;
     windowScopeRef.current = windowScope;
   }, [commandNodeId, windowScope]);
-  const visibleEnvironmentRef = useRef(selectedEnvironmentId);
+  // Another node shown in the central region hides this node's selection.
+  const otherNodeShown = useRemoteWorkspaceStore((state) => state.active !== null);
+  const visibleEnvironmentId = otherNodeShown ? null : selectedEnvironmentId;
+  const visibleEnvironmentRef = useRef(visibleEnvironmentId);
   useEffect(() => {
-    visibleEnvironmentRef.current = selectedEnvironmentId;
-  }, [selectedEnvironmentId]);
+    visibleEnvironmentRef.current = visibleEnvironmentId;
+  }, [visibleEnvironmentId]);
   const [eventDriven, setEventDriven] = useState(false);
-  useRemoteNodeAttention((nodeId, event) => alertRemoteAttention(nodeId, event, lastCueRef));
+  useRemoteNodeAttention((nodeId, event) =>
+    alertRemoteAttention(windowScopeRef.current, nodeId, event, lastCueRef),
+  );
 
   useEffect(() => {
     let disposed = false;

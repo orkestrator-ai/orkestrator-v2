@@ -1,9 +1,12 @@
 import type { EnvironmentAttentionReason } from "@orkestrator/protocol/environment-attention";
+import { isProvisionalBackendId } from "@orkestrator/protocol/federation";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import { appCommandScope } from "@/lib/node-scope-slots";
+import { portalStore } from "@/lib/portal/portal-store";
 
 /** What this client may do with desktop notifications. */
 export type DesktopNotificationPermission = NotificationPermission | "unsupported";
@@ -60,21 +63,36 @@ function environmentLabel(environmentId: string, projectId: string): string | nu
   return [project?.name, name].filter(Boolean).join(" · ") || null;
 }
 
-function openEnvironment(projectId: string, environmentId: string): void {
-  useRemoteWorkspaceStore.getState().showLocal();
-  // A local notification is this window's own node's.
+/**
+ * Opens one of this renderer's own node's environments the way every entry
+ * point opens a node (`openMachineWorkspace`, plan item 5001). In the window
+ * that is an ordinary selection; in a realm it asks the window to show this
+ * node, so the window's active node follows the click.
+ */
+function openEnvironment(projectId: string, environmentId: string, label: string | null): void {
+  // A local notification is this renderer's own node's.
   const scope = appCommandScope();
   const ui = scope.store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
-  ui.selectProjectAndEnvironment(projectId, environmentId);
-  if (
-    scope
-      .store(environmentStore)
-      .getState()
-      .environments.some((env) => env.id === environmentId && env.projectHome)
-  ) {
-    ui.setProjectBoardTab("home");
+  const projectHome = scope
+    .store(environmentStore)
+    .getState()
+    .environments.some((env) => env.id === environmentId && env.projectHome);
+  const realm = isWorkspaceRealm();
+  // The window knows this node by its installation id; a realm that has not
+  // proven one yet keeps the click to itself.
+  if (realm && isProvisionalBackendId(scope.nodeId)) {
+    ui.selectProjectAndEnvironment(projectId, environmentId);
+    if (projectHome) ui.setProjectBoardTab("home");
+    return;
   }
+  openMachineWorkspace({
+    connectionId: realm ? scope.nodeId : (portalStore.getState().selfId ?? scope.nodeId),
+    projectId,
+    environmentId,
+    ...(projectHome ? { boardTab: "home" as const } : {}),
+    title: label ?? "Environment",
+  });
 }
 
 /**
@@ -85,7 +103,8 @@ function openEnvironment(projectId: string, environmentId: string): void {
  * from another window) replaces it rather than stacking.
  *
  * Another node's environment is not in this window's stores, so `remote` names
- * it and opens it instead.
+ * it and opens it instead. Either way the click goes through
+ * `openMachineWorkspace` with the node, project and environment.
  */
 export function showQuestionDesktopNotification(input: {
   environmentId: string;
@@ -123,7 +142,7 @@ export function showQuestionDesktopNotification(input: {
       release();
       window.focus();
       if (remote) remote.open();
-      else openEnvironment(input.projectId, input.environmentId);
+      else openEnvironment(input.projectId, input.environmentId, label);
       notification.close();
     });
     return true;

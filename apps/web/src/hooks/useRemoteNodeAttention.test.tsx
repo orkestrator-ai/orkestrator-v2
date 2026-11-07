@@ -5,8 +5,13 @@ import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabil
 import * as nodeEvents from "@/lib/federation/node-events";
 import * as realNotificationSounds from "@/lib/notification-sounds";
 import { portalStore } from "@/lib/portal/portal-store";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useConfigStore } from "@/stores/configStore";
+import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 
 const playConfiguredNotificationSound = mock(async (_kind: string) => true);
 const primeNotificationSounds = mock(async () => true);
@@ -136,8 +141,24 @@ beforeEach(() => {
   setNodes(node("bk_leaf", "Leaf"));
 });
 
+const leafScopes: NodeScope[] = [];
+
+/** `bk_leaf` shown in the window's own tree (plan item 4001), on a live scope. */
+function inTreeLeaf(): FakeNodeClient {
+  const client = new FakeNodeClient({ nodeId: "bk_leaf" as BackendId });
+  leafScopes.push(getWindowScope().open({ role: "leaf", client, tier: "live" }));
+  act(() => {
+    useInTreeNodesStore.setState({ nodes: ["bk_leaf"] });
+    useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] });
+  });
+  return client;
+}
+
 afterEach(() => {
   cleanup();
+  for (const scope of leafScopes.splice(0)) scope.dispose();
+  useInTreeNodesStore.setState({ nodes: [] });
+  getWindowScope().select(null);
   subscribe.mockRestore();
   portalStore.store.setState(initialPortal, true);
   useRemoteWorkspaceStore.setState({ active: null, realms: [] });
@@ -324,5 +345,44 @@ describe("through the notification sound service", () => {
     expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
     expect(shown).toHaveLength(1);
     expect(shown[0]!.options.silent).toBe(false);
+  });
+
+  test("an in-tree leaf alerts once from its scope, not the relay, and a click opens it", async () => {
+    const client = inTreeLeaf();
+    await mounted();
+    await flush();
+    expect(live("bk_leaf")).toBeUndefined();
+    client.emit(ENVIRONMENT_ATTENTION_EVENT, attention("q1", "agent_question"));
+    client.emit(ENVIRONMENT_ATTENTION_EVENT, attention("q1", "agent_question"));
+    await flush();
+    expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.options.tag).toBe("orkestrator-question:bk_leaf:leaf-env");
+    act(() => shown[0]!.listeners.get("click")!());
+    expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+      nodeId: "bk_leaf",
+      projectId: "leaf-project",
+      environmentId: "leaf-env",
+    });
+  });
+
+  test("the shown in-tree environment stays quiet; another environment of that node sounds", async () => {
+    const client = inTreeLeaf();
+    act(() => {
+      getWindowScope().select({
+        nodeId: "bk_leaf" as BackendId,
+        projectId: "leaf-project",
+        environmentId: "leaf-env",
+      });
+      useRemoteWorkspaceStore.setState({
+        active: { nodeId: "bk_leaf", projectId: "leaf-project", environmentId: "leaf-env" },
+      });
+    });
+    await mounted();
+    await flush();
+    client.emit(ENVIRONMENT_ATTENTION_EVENT, attention("a1"));
+    expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
+    client.emit(ENVIRONMENT_ATTENTION_EVENT, attention("a2", "agent_finished", "other-env"));
+    expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-stopped");
   });
 });

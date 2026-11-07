@@ -29,6 +29,8 @@ import {
   normalizeAgentPlatforms,
 } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
+import { CONFIG_COMMANDS } from "@orkestrator/protocol/contract/domains/config";
+import { config as configDomain } from "@/lib/node-scope/domains/config";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
@@ -79,10 +81,26 @@ const PATCH_GLOBAL_CONFIG = "patch_global_config";
 
 type ConfigInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-/** `client`'s command call, keeping a call without arguments a one-argument call. */
+const CONFIG_COMMAND_NAMES: ReadonlySet<string> = new Set(CONFIG_COMMANDS.map((def) => def.name));
+
+type ConfigCommandCalls = Readonly<Record<string, (args: unknown) => Promise<unknown>>>;
+
+/**
+ * `client`'s command call. A `config` command goes through the domain client
+ * (plan item 7005): version 1 for a node that advertises the domain, with the
+ * envelope and the open settings records decoded (every key kept); today's
+ * call otherwise. Anything else (a command node setting another domain owns)
+ * is today's call. A call without arguments stays a one-argument call.
+ */
 function sender(client: BackendClient): ConfigInvoke {
-  return <T>(command: string, args?: Record<string, unknown>) =>
-    args === undefined ? client.invokeRaw<T>(command) : client.invokeRaw<T>(command, args);
+  const config = configDomain(client);
+  return <T>(command: string, args?: Record<string, unknown>) => {
+    if (CONFIG_COMMAND_NAMES.has(command)) {
+      const call = (config() as unknown as ConfigCommandCalls)[command]!;
+      return call(args ?? {}) as Promise<T>;
+    }
+    return args === undefined ? client.invokeRaw<T>(command) : client.invokeRaw<T>(command, args);
+  };
 }
 
 /**

@@ -2,6 +2,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import type { NodeClient } from "@orkestrator/protocol/node-client";
 import { useCallback } from "react";
 import { create } from "zustand";
+import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
 import type { HostDirectoryListing } from "@/lib/backend/files-sessions";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
@@ -68,7 +69,7 @@ export function listHostDirectoryOn(
   path: string | undefined,
   options: { includeFiles?: boolean; showHidden?: boolean } = {},
 ): Promise<HostDirectoryListing> {
-  return client.invokeRaw<HostDirectoryListing>("list_host_directory", {
+  return projectsDomain(client)().list_host_directory({
     ...(path ? { path } : {}),
     includeFiles: options.includeFiles ?? false,
     showHidden: options.showHidden ?? false,
@@ -81,5 +82,5 @@ export function createHostDirectoryOn(
   parent: string,
   name: string,
 ): Promise<{ path: string }> {
-  return client.invokeRaw<{ path: string }>("create_host_directory", { parent, name });
+  return projectsDomain(client)().create_host_directory({ parent, name });
 }

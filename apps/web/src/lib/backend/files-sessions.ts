@@ -37,6 +37,7 @@ import { isRecord } from "./shared";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 import { backendDomainApi } from "./domain-client";
+import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export interface GitFileChange {
@@ -213,6 +214,8 @@ export interface HostImageFile {
 const NO_ARGUMENTS = undefined as unknown as Record<string, never>;
 
 export function createFilesSessionsApi(client: BackendClient) {
+  // The host folder picker and project icons (`projects` domain, plan item 7005).
+  const hostFiles = projectsDomain(client);
   const invoke = clientInvoke(client);
   // The `environments` domain's commands here (plan item 7003).
   const environments = backendDomainApi(client, environmentsClient);
@@ -933,7 +936,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     path?: string,
     options: { includeFiles?: boolean; showHidden?: boolean } = {},
   ): Promise<HostDirectoryListing> {
-    return invoke<HostDirectoryListing>("list_host_directory", {
+    return hostFiles().list_host_directory({
       ...(path ? { path } : {}),
       includeFiles: options.includeFiles ?? false,
       showHidden: options.showHidden ?? false,
@@ -945,7 +948,7 @@ export function createFilesSessionsApi(client: BackendClient) {
    * returns its absolute path. Fails if the entry already exists.
    */
   async function createHostDirectory(parent: string, name: string): Promise<{ path: string }> {
-    return invoke<{ path: string }>("create_host_directory", { parent, name });
+    return hostFiles().create_host_directory({ parent, name });
   }
 
   /**
@@ -953,12 +956,12 @@ export function createFilesSessionsApi(client: BackendClient) {
    * its icon or favicon (`public/favicon.svg`, `app/icon.png`, ...), best first.
    */
   async function findProjectIcons(root: string): Promise<string[]> {
-    return invoke<string[]>("find_project_icons", { root });
+    return hostFiles().find_project_icons({ root });
   }
 
   /** Reads one image file (at most 5 MB) from the backend host. */
   async function readHostImageFile(path: string): Promise<HostImageFile> {
-    return invoke<HostImageFile>("read_host_image_file", { path });
+    return hostFiles().read_host_image_file({ path });
   }
 
   return {

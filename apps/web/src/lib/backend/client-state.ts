@@ -1,8 +1,5 @@
-import {
-  CLIENT_STATE_CAPABILITIES_COMMAND,
-  parseClientStateCapabilities,
-  type ClientStateCapabilities,
-} from "@orkestrator/protocol/client-state";
+import type { ClientStateCapabilities } from "@orkestrator/protocol/client-state";
+import { config as configDomain } from "@/lib/node-scope/domains/config";
 import {
   parseCoordinatorPaneLayoutRecord,
   parseCoordinatorPaneLayoutSaveResult,
@@ -19,7 +16,7 @@ import {
   type NoticeDismissalSession,
   type NoticeDismissalSnapshot,
 } from "@orkestrator/protocol/notice-dismissals";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Shared presentation state the backend owns (formerly browser-local). Every
@@ -33,16 +30,21 @@ import { clientInvoke, commandBackendClient, type BackendClient } from "./client
  * over the window's command scope.
  */
 export function createClientStateApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  // The `config` domain (plan item 7005). Its answers are still read with the
+  // protocol's parsers: an older node's are as it sent them (version 0).
+  const state = configDomain(client);
 
-  /** Unknown command on an older backend: every capability off. */
+  /**
+   * Folded into `config` version 1, which answers without asking; an older
+   * node is asked (an unreadable answer is every capability off).
+   */
   const getClientStateCapabilities = async (): Promise<ClientStateCapabilities> =>
-    parseClientStateCapabilities(await invoke(CLIENT_STATE_CAPABILITIES_COMMAND));
+    state().clientStateCapabilities();
 
   const getCoordinatorPaneLayout = async (
     projectId: string,
   ): Promise<CoordinatorPaneLayoutRecord | null> =>
-    parseCoordinatorPaneLayoutRecord(await invoke("get_coordinator_pane_layout", { projectId }));
+    parseCoordinatorPaneLayoutRecord(await state().get_coordinator_pane_layout({ projectId }));
 
   const saveCoordinatorPaneLayout = async (
     projectId: string,
@@ -50,30 +52,30 @@ export function createClientStateApi(client: BackendClient) {
     expectedRevision: number,
   ): Promise<CoordinatorPaneLayoutSaveResult | null> =>
     parseCoordinatorPaneLayoutSaveResult(
-      await invoke("save_coordinator_pane_layout", { projectId, layout, expectedRevision }),
+      await state().save_coordinator_pane_layout({ projectId, layout, expectedRevision }),
     );
 
   const checkCoordinatorUpstreamMerge = async (
     projectId: string,
   ): Promise<CoordinatorUpstreamMergeCheck | null> =>
     parseCoordinatorUpstreamMergeCheck(
-      await invoke("check_coordinator_upstream_merge", { projectId }),
+      await state().check_coordinator_upstream_merge({ projectId }),
     );
 
   const listNoticeDismissals = async (): Promise<NoticeDismissalSnapshot | null> =>
-    parseNoticeDismissalSnapshot(await invoke("list_notice_dismissals"));
+    parseNoticeDismissalSnapshot(await state().list_notice_dismissals({}));
 
   const dismissNotices = async (
     sessions: readonly NoticeDismissalSession[],
   ): Promise<NoticeDismissalSnapshot | null> =>
-    parseNoticeDismissalSnapshot(await invoke("dismiss_notices", { sessions }));
+    parseNoticeDismissalSnapshot(await state().dismiss_notices({ sessions }));
 
   const reconcileNoticeDismissals = async (
     sessionIdentity: string,
     activeOccurrenceIds: readonly string[],
   ): Promise<NoticeDismissalSnapshot | null> =>
     parseNoticeDismissalSnapshot(
-      await invoke("reconcile_notice_dismissals", { sessionIdentity, activeOccurrenceIds }),
+      await state().reconcile_notice_dismissals({ sessionIdentity, activeOccurrenceIds }),
     );
 
   return {

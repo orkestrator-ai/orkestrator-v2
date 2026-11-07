@@ -43,8 +43,9 @@ import {
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 import { backendDomainApi, machineBackendClient } from "./domain-client";
+import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export interface PrDetectionResult {
@@ -83,8 +84,9 @@ export interface RecreateEnvironmentOptions {
  * over the window's command scope.
  */
 export function createProjectsEnvironmentsApi(client: BackendClient) {
+  // The `projects` domain (plan item 7005): typed, decoded results.
+  const projects = projectsDomain(client);
   const invoke = clientInvoke(client);
-  const machineInvoke = machineInvoker(client);
   // The `environments` domain (plan item 7003): typed, decoded results.
   const environments = backendDomainApi(client, environmentsClient);
   const environmentsOn = (machine: AccountMachine) =>
@@ -140,10 +142,18 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     return response;
   }
 
+  /** `get_projects` without a known revision: always the list. */
+  function projectList(answer: Awaited<ReturnType<ReturnType<typeof projects>["get_projects"]>>) {
+    if (Array.isArray(answer)) return answer;
+    throw new Error("Invalid projects response");
+  }
+
   async function getProjects(machine?: AccountMachine): Promise<Project[]> {
-    return machine === undefined
-      ? invoke<Project[]>("get_projects")
-      : machineInvoke<Project[]>(machine, "get_projects");
+    return projectList(
+      await (
+        machine === undefined ? projects() : projectsDomain(machineBackendClient(client, machine))()
+      ).get_projects({}),
+    );
   }
 
   async function addProject(
@@ -151,7 +161,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     localPath?: string,
     cloneOnly?: boolean,
   ): Promise<Project> {
-    return invoke<Project>("add_project", {
+    return projects().add_project({
       gitUrl,
       localPath,
       ...(cloneOnly === undefined ? {} : { cloneOnly }),
@@ -159,36 +169,36 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   }
 
   async function createProjectFromScratch(localPath: string): Promise<Project> {
-    return invoke<Project>("create_project_from_scratch", { localPath });
+    return projects().create_project_from_scratch({ localPath });
   }
 
   async function listGitHubCloneAccounts(): Promise<GitHubCloneAccount[]> {
-    return invoke<GitHubCloneAccount[]>("list_github_clone_accounts");
+    return projects().list_github_clone_accounts({});
   }
 
   async function listGitHubCloneRepositories(
     owner: string,
     cursor?: string,
   ): Promise<GitHubCloneRepositoryList> {
-    return invoke<GitHubCloneRepositoryList>("list_github_clone_repositories", {
+    return projects().list_github_clone_repositories({
       owner,
       ...(cursor === undefined ? {} : { cursor }),
     });
   }
 
   async function removeProject(projectId: string): Promise<void> {
-    return invoke("remove_project", { projectId });
+    return projects().remove_project({ projectId });
   }
 
   async function reorderProjects(projectIds: string[]): Promise<Project[]> {
-    return invoke<Project[]>("reorder_projects", { projectIds });
+    return projects().reorder_projects({ projectIds });
   }
 
   async function updateProject(
     projectId: string,
     updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder" | "icon">>,
   ): Promise<Project> {
-    return invoke<Project>("update_project", { projectId, updates });
+    return projects().update_project({ projectId, updates });
   }
 
   /**
@@ -199,7 +209,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     projectIds: string[],
     folders: Record<string, string | null> = {},
   ): Promise<Project[]> {
-    return invoke<Project[]>("arrange_projects", { projectIds, folders });
+    return projects().arrange_projects({ projectIds, folders });
   }
 
   /**
@@ -212,7 +222,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     preview: ProjectArrangement,
   ): Promise<Project[]> {
     try {
-      return await invoke<Project[]>("arrange_projects_by_intent", { intent });
+      return await projects().arrange_projects_by_intent({ intent });
     } catch (error) {
       if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
         throw error;

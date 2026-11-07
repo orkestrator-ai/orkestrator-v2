@@ -25,6 +25,7 @@ import { agentServersClient } from "@orkestrator/protocol/contract/domains/agent
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
 import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./domain-client";
+import { projects as projectsDomain } from "@/lib/node-scope/domains/projects";
 /** PR detection result containing URL, state, and merge conflict status */
 
 /** Docker system statistics */
@@ -302,6 +303,8 @@ export interface GitHubCliLoginProgress {
  * over the window's command scope.
  */
 export function createDockerSkillsApi(client: BackendClient) {
+  // Git remote checks (`projects` domain, plan item 7005).
+  const gitRemotes = projectsDomain(client);
   const invoke = clientInvoke(client);
   const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
@@ -649,11 +652,11 @@ export function createDockerSkillsApi(client: BackendClient) {
   }
 
   async function validateGitUrl(url: string): Promise<boolean> {
-    return invoke<boolean>("validate_git_url", { url });
+    return gitRemotes().validate_git_url({ url });
   }
 
   async function getGitRemoteUrl(path: string): Promise<string | null> {
-    return invoke<string | null>("get_git_remote_url", { path });
+    return gitRemotes().get_git_remote_url({ path });
   }
 
   async function testDomainResolution(

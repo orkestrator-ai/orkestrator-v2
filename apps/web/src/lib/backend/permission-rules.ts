@@ -7,7 +7,9 @@ import type {
   PermissionRulesSnapshot,
 } from "@orkestrator/protocol/permission-rules";
 import { type AccountMachine } from "./agent-accounts";
-import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { config as configDomain } from "@/lib/node-scope/domains/config";
+import { commandBackendClient, type BackendClient } from "./client";
+import { machineBackendClient, withArgumentsObject } from "./domain-client";
 
 /**
  * Orkestrator's own permission rules (todo 0723). The backend owns and applies
@@ -30,8 +32,15 @@ export interface PermissionRuleChoiceInput {
  * over the window's command scope.
  */
 export function createPermissionRulesApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
-  const machineInvoke = machineInvoker(client);
+  // The `config` domain (plan item 7005). The machine-aware functions were sent
+  // through `machineInvoke`, which always passes an arguments object; their
+  // calls keep that shape.
+  const rules = configDomain(client);
+  const ownMachineRules = configDomain(withArgumentsObject(client));
+  const rulesOn = (machine: AccountMachine | undefined) =>
+    machine === undefined
+      ? ownMachineRules()
+      : configDomain(machineBackendClient(client, machine))();
 
   function listPermissionRules(
     filter: {
@@ -42,21 +51,21 @@ export function createPermissionRulesApi(client: BackendClient) {
     } = {},
     machine?: AccountMachine,
   ): Promise<PermissionRulesSnapshot> {
-    return machineInvoke(machine, "list_permission_rules", filter);
+    return rulesOn(machine).list_permission_rules(filter);
   }
 
   function deletePermissionRule(
     id: string,
     machine?: AccountMachine,
   ): Promise<{ deleted: boolean }> {
-    return machineInvoke(machine, "delete_permission_rule", { id });
+    return rulesOn(machine).delete_permission_rule({ id });
   }
 
   function deleteProjectPermissionRules(
     projectId: string,
     machine?: AccountMachine,
   ): Promise<{ deleted: number }> {
-    return machineInvoke(machine, "delete_project_permission_rules", { projectId });
+    return rulesOn(machine).delete_project_permission_rules({ projectId });
   }
 
   /** "Approve and remember": answers the request once and saves the chosen rule. */
@@ -72,7 +81,11 @@ export function createPermissionRulesApi(client: BackendClient) {
     rule?: NativeAgentPermissionRule;
     ruleSaveWarning?: string;
   }> {
-    return invoke("approve_native_agent_interaction_and_remember", { ...input });
+    return rules().approve_native_agent_interaction_and_remember({ ...input }) as Promise<{
+      outcome: AgentInteractionApplyOutcome;
+      rule?: NativeAgentPermissionRule;
+      ruleSaveWarning?: string;
+    }>;
   }
 
   /** Rules the providers keep in their own files, read-only. */
@@ -80,7 +93,7 @@ export function createPermissionRulesApi(client: BackendClient) {
     projectId?: string,
     machine?: AccountMachine,
   ): Promise<ExternalPermissionRulesSnapshot> {
-    return machineInvoke(machine, "list_external_permission_rules", projectId ? { projectId } : {});
+    return rulesOn(machine).list_external_permission_rules(projectId ? { projectId } : {});
   }
 
   return {

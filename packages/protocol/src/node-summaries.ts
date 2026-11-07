@@ -23,6 +23,7 @@ import {
   type ProjectRef,
 } from "./federation.js";
 import type { NodeView } from "./command-nodes.js";
+import type { NegotiatedDomains } from "./node-client.js";
 import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
 import { isPrMergeability } from "./pr-merge-readiness.js";
 import { normalizeProjectIcon } from "./project-icon.js";
@@ -184,6 +185,13 @@ export interface NodeSummary {
    * predates it.
    */
   buildCommit?: string | null;
+  /**
+   * The contract domains in that same hello (plan item 5006), under the same
+   * rule: `null` while not connected, and `null` for a connected node whose
+   * hello has none (a release from before domain contracts). Absent from a
+   * command node that predates it.
+   */
+  domains?: NegotiatedDomains | null;
   freshness: SummaryFreshness;
   /** When the summaries were last read from the node (command-node clock, ms). */
   loadedAt: number | null;
@@ -212,6 +220,13 @@ export interface SelfNodeSummary {
 export interface NodeSummariesResult {
   /** This command node's own identity: its environments come from the ordinary local reads. */
   selfId: BackendId;
+  /**
+   * This command node's own version and hello domains, which the sidebar
+   * compares every node with (plan item 5006). Absent from a command node
+   * that predates them.
+   */
+  selfVersion?: string;
+  selfDomains?: NegotiatedDomains;
   nodes: NodeSummary[];
   /** Present only when asked for with `includeSelf`. */
   self?: SelfNodeSummary;

@@ -1,3 +1,7 @@
+import {
+  getFleetUpdatePolicyCommand,
+  setFleetUpdatePolicyCommand,
+} from "@orkestrator/protocol/contract/domains/system/fleet-update-policy";
 import { isHostUpdateChannel } from "@orkestrator/protocol/host-maintenance";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -22,7 +26,20 @@ function optionalString(value: unknown, name: string): string | undefined {
  * executor's progress reports are deliberately not commands: they arrive only
  * on the loopback control listener (`/__orkestrator/host-updater`).
  */
+function fleetUpdates(context: CommandContext) {
+  if (!context.nodePortal) {
+    throw new Error("The command-node portal is not available in this backend.");
+  }
+  return context.nodePortal.fleetUpdates;
+}
+
 export function registerHostMaintenanceCommands(register: CommandRegistrar): void {
+  // The command node's opt-in "keep leaves on this node's version" policy
+  // (plan item 5006), which asks leaves for updates through these same commands.
+  register(getFleetUpdatePolicyCommand, (_args, context) => fleetUpdates(context).policy());
+  register(setFleetUpdatePolicyCommand, (args, context) =>
+    fleetUpdates(context).setChannel(args.channel, args.enabled),
+  );
   register("get_host_maintenance", (args, context) => {
     assertOnlyKeys(args, ["detail"], "arguments");
     return args.detail === true ? service(context).detailedSnapshot() : service(context).snapshot();

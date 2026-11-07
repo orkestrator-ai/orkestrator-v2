@@ -37,6 +37,7 @@ import {
   type NodeSummary,
   type SelfNodeSummary,
 } from "@orkestrator/protocol/node-summaries";
+import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
 import { invoke } from "@/lib/native/backend";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
@@ -48,6 +49,12 @@ export interface PortalState {
   nodes: NodeSummary[];
   /** The command node's own summary, while the workspace is on another node. */
   self: SelfNodeSummary | null;
+  /**
+   * The command node's own version and hello domains, which every machine's
+   * is compared with (plan item 5006); null until read, or from a command
+   * node that predates them.
+   */
+  commandRelease: MachineRelease | null;
   loaded: boolean;
   /** The connected backend has no command-node support (an older backend). */
   unsupported: boolean;
@@ -77,6 +84,7 @@ export class PortalStore {
     status: null,
     nodes: [],
     self: null,
+    commandRelease: null,
     loaded: false,
     unsupported: false,
     outcomesRevision: 0,
@@ -172,6 +180,11 @@ export class PortalStore {
       status: statusValue ?? state.status,
       nodes: summariesValue?.nodes ?? state.nodes,
       self: summariesValue ? (summariesValue.self ?? null) : state.self,
+      commandRelease: summariesValue
+        ? summariesValue.selfVersion
+          ? { version: summariesValue.selfVersion, domains: summariesValue.selfDomains ?? null }
+          : null
+        : state.commandRelease,
       loaded: true,
       // A backend older than the portal commands, or one without the portal.
       unsupported:

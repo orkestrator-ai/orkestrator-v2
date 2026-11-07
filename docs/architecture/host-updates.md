@@ -345,6 +345,41 @@ otherwise. Both ignore older revisions and re-read the live readings when a
 task finishes. `useHostMaintenance` does the same for the window's own
 backend, for the banner.
 
+### Keeping the fleet current
+
+Plan item 5006 ([unified federation §11.6](../reports/unified-federation.md#116-operational-mitigation-keep-the-fleet-current)):
+
+- **Version skew in the sidebar.** A machine header shows the machine's
+  version when it differs from the command node's, with the contract domains
+  it lacks (not advertised in its hello, or with a range that does not
+  overlap) or "predates contracts" for a hello without `domains`. Behind the
+  command node it is a button that opens that machine's update. The facts come
+  from `get_node_summaries`: each node's `version` and `domains` (`null` while
+  not connected, and `domains: null` for a pre-contract node), and the command
+  node's own `selfVersion` and `selfDomains`. `machineCurrency`
+  (`@orkestrator/protocol/fleet-currency`) does the comparison.
+- **Typed errors lead to the update.** A typed incompatibility error from a
+  machine (`describeIncompatibility`) carries an **Update** action
+  (`incompatibilityNotice`, `apps/web/src/lib/federation/fleet-currency.ts`):
+  the remote-action toasts and the diagnostics export.
+  `requestMachineUpdate(nodeId)` opens Settings → Machines with "Update to
+  the latest Orkestrator" (`BulkUpdateDialog`) for that machine, or its
+  updates when it cannot update from here.
+- **Update policy (opt-in).** Settings → Machines has "Keep machines on this
+  machine's version", per update channel (`get_fleet_update_policy`,
+  `set_fleet_update_policy`, `system` domain, admin access, never routed to a
+  node). For a channel that is on, the command node
+  (`FleetUpdatePolicyRunner`, `apps/backend/src/core/nodes/fleet-update-policy.ts`)
+  reads each connected leaf's `get_host_maintenance` over the node link and,
+  when the leaf on that channel is older and the command node's release is one
+  its channel ships, sends `request_host_update { version, drain: "when-idle",
+  maxWaitSeconds: 86400 }`. It never downgrades, asks for one version at most
+  once per leaf every six hours, and runs when a node connects or changes, when
+  the policy changes and every ten minutes while a channel is on. **Every
+  channel is off by default**, the report's "opt-in"; this default awaits the
+  user's confirmation (5006 Notes). The policy is stored in
+  `fleet-update-policy.json`.
+
 `HostUpdateBanner` shows a running update on every client, with Cancel. Once
 the host is back on the new version (within ten minutes of the update), it
 reloads a page served by that backend, once. `BackendVersionReminder` offers

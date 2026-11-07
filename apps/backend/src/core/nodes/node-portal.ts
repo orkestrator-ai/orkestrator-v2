@@ -6,8 +6,10 @@ import { parseBackendProfile } from "@orkestrator/protocol/backend-profile";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
+import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
+import { FleetUpdatePolicyRunner, type FleetUpdatePolicyStore } from "./fleet-update-policy.js";
 import { NodeEventRelay } from "./node-event-relay.js";
 import { NodeUnavailableError } from "./node-link.js";
 import {
@@ -70,6 +72,8 @@ export class NodePortal {
   readonly events: NodeEventRelay;
   readonly outcomes: NodeOutcomeLedger;
   readonly grants: ClientGrantService;
+  /** The opt-in "keep leaves on this node's version" policy (plan item 5006). */
+  readonly fleetUpdates: FleetUpdatePolicyRunner;
   private readonly workspaces = new Map<string, NodeWorkspace>();
   /** Runs after a routed command succeeded (environment seed files after create_environment). */
   afterRouted:
@@ -88,6 +92,9 @@ export class NodePortal {
       summaries?: ReadModelPersistence;
       /** This node's own commands, for its self summary. */
       local?: ReadModelLocal;
+      /** This node's own version and hello domains (the hello identity). */
+      selfHello?: () => Promise<{ appVersion: string; domains: NegotiatedDomains }>;
+      fleetUpdatePolicy?: FleetUpdatePolicyStore;
       outcomes?: { load(): Promise<unknown>; save(value: unknown): Promise<void> };
       fetchImpl?: typeof fetch;
       now?: () => number;
@@ -98,7 +105,15 @@ export class NodePortal {
       emit: options.emit,
       ...(options.summaries ? { persistence: options.summaries } : {}),
       ...(options.local ? { local: options.local } : {}),
+      ...(options.selfHello ? { selfHello: options.selfHello } : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.now ? { now: options.now } : {}),
+    });
+    const selfHello = options.selfHello;
+    this.fleetUpdates = new FleetUpdatePolicyRunner({
+      nodes: options.nodes,
+      ...(options.fleetUpdatePolicy ? { store: options.fleetUpdatePolicy } : {}),
+      selfVersion: async () => (selfHello ? (await selfHello()).appVersion : ""),
       ...(options.now ? { now: options.now } : {}),
     });
     this.events = new NodeEventRelay({
@@ -120,11 +135,13 @@ export class NodePortal {
     await this.outcomes.restore();
     await this.readModel.start();
     this.events.start();
+    await this.fleetUpdates.start();
   }
 
   stop(): void {
     this.readModel.stop();
     this.events.stop();
+    this.fleetUpdates.stop();
     this.grants.revokeAll();
     this.workspaces.clear();
   }

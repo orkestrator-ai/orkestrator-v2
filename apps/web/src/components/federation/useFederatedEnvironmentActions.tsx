@@ -16,6 +16,7 @@ import {
   stopFederatedEnvironment,
 } from "@/lib/federation/federated-actions";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
+import { incompatibilityNotice, updatableMachine } from "@/lib/federation/fleet-currency";
 import { useUIStore } from "@/stores";
 import { useFederation } from "./FederationProvider";
 
@@ -36,15 +37,25 @@ export interface FederatedEnvironmentActions {
   remove: () => void;
 }
 
-/** A write to another machine failed, or its answer was lost and it may have run. */
+/**
+ * A write to another machine failed, or its answer was lost and it may have
+ * run. A typed incompatibility error leads to that machine's update.
+ */
 export function reportFederatedActionError(
   label: string,
-  machineName: string,
+  machine: Pick<MachineView, "name" | "backendId" | "release">,
   error: unknown,
 ): void {
+  const machineName = machine.name;
+  const notice = incompatibilityNotice(error, updatableMachine(machine));
   if (error instanceof OutcomeUnknownError) {
     toast.warning(`${label}: outcome unknown on ${machineName}`, {
       description: error.message,
+    });
+  } else if (notice) {
+    toast.error(`${label} failed on ${machineName}`, {
+      description: notice.text,
+      ...(notice.update ? { action: notice.update } : {}),
     });
   } else {
     toast.error(`${label} failed on ${machineName}`, {
@@ -83,7 +94,7 @@ export function useFederatedEnvironmentActions(
     try {
       await action();
     } catch (error) {
-      reportFederatedActionError(label, machine.name, error);
+      reportFederatedActionError(label, machine, error);
     }
   };
 

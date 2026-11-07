@@ -872,6 +872,12 @@ export class OrkestratorBackend {
       nodes: this.nodes,
       emit,
       local: { invoke: (command, args = {}) => this.invoke(command, args) },
+      // What this node's hello announces, without the hello's storage reads.
+      selfHello: async () => ({ appVersion: APP_VERSION, domains: this.commands.helloDomains() }),
+      fleetUpdatePolicy: {
+        load: () => storage.nodes.loadFleetUpdatePolicy(),
+        save: (policy) => storage.nodes.saveFleetUpdatePolicy(policy),
+      },
       summaries: {
         load: () => storage.nodes.loadNodeSummariesCache(),
         save: (value) => storage.nodes.saveNodeSummariesCache(value),

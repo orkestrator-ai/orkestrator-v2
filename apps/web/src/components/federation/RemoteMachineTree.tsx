@@ -38,6 +38,7 @@ import {
   type SidebarDragItem,
 } from "@/components/sidebar/SidebarDragOverlay";
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
+import { incompatibilityNotice, updatableMachine } from "@/lib/federation/fleet-currency";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
@@ -102,9 +103,16 @@ export function openWebPage(url: string): void {
 }
 
 function reportWriteError(machine: MachineView, what: string, error: unknown): void {
+  // A typed incompatibility error leads to the machine's update (plan item 5006).
+  const notice = incompatibilityNotice(error, updatableMachine(machine));
   if (error instanceof OutcomeUnknownError) {
     toast.warning(`${what}: outcome unknown on ${machine.name}`, {
       description: error.message,
+    });
+  } else if (notice) {
+    toast.error(`Could not ${what.toLowerCase()} on ${machine.name}`, {
+      description: notice.text,
+      ...(notice.update ? { action: notice.update } : {}),
     });
   } else {
     toast.error(`Could not ${what.toLowerCase()} on ${machine.name}`, {

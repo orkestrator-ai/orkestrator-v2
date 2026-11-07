@@ -103,3 +103,33 @@ export function onMachineUpdatesRequest(listener: () => void): () => void {
   window.addEventListener(MACHINE_UPDATES_REQUEST_EVENT, listener);
   return () => window.removeEventListener(MACHINE_UPDATES_REQUEST_EVENT, listener);
 }
+
+const MACHINE_UPDATE_REQUEST_EVENT = "orkestrator:update-machine";
+let machineUpdatePending: string | null = null;
+
+/**
+ * Opens Settings → Machines with "Update to the latest Orkestrator" for one
+ * machine (its node identity; the command node's own for itself): the
+ * action a version-skewed machine header and a typed incompatibility error
+ * lead to (plan item 5006). A machine Settings cannot update from here opens
+ * its updates instead, which say why.
+ */
+export function requestMachineUpdate(nodeId: string): void {
+  if (typeof window === "undefined" || !nodeId) return;
+  machineUpdatePending = nodeId;
+  window.dispatchEvent(new Event(MACHINE_UPDATE_REQUEST_EVENT));
+  requestGlobalSettings("machines");
+}
+
+/** The machine a request is waiting for; reading it clears it. */
+export function takeMachineUpdateRequest(): string | null {
+  const pending = machineUpdatePending;
+  machineUpdatePending = null;
+  return pending;
+}
+
+export function onMachineUpdateRequest(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  window.addEventListener(MACHINE_UPDATE_REQUEST_EVENT, listener);
+  return () => window.removeEventListener(MACHINE_UPDATE_REQUEST_EVENT, listener);
+}

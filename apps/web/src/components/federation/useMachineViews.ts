@@ -29,6 +29,8 @@ import {
   type FederatedProject,
 } from "@/lib/federation/summaries";
 import type { Environment, Project } from "@/types";
+import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
+import type { PortalState } from "@/lib/portal/portal-store";
 import { useFederation } from "./FederationProvider";
 
 const TRANSPORT_FOR_STATE: Record<NodeConnectionState, ConnectionTransportState> = {
@@ -67,6 +69,9 @@ export function viewFromNodeSummary(node: NodeSummary): MachineView {
     environmentsByProject,
     truncated: node.truncated,
     loadedAt: node.loadedAt,
+    ...(node.version !== undefined
+      ? { release: { version: node.version, domains: node.domains ?? null } }
+      : {}),
   };
 }
 
@@ -134,7 +139,10 @@ function boundEnvironments(
  * The command node itself, from its self summary, while the window's
  * workspace (and so its full stores) is on another node.
  */
-export function viewFromSelfSummary(self: SelfNodeSummary): MachineView {
+export function viewFromSelfSummary(
+  self: SelfNodeSummary,
+  release?: MachineRelease | null,
+): MachineView {
   const environmentsByProject = new Map<string, FederatedEnvironment[]>();
   for (const environment of self.environments) {
     const list = environmentsByProject.get(environment.projectId) ?? [];
@@ -153,14 +161,35 @@ export function viewFromSelfSummary(self: SelfNodeSummary): MachineView {
     environmentsByProject,
     truncated: self.truncated,
     loadedAt: self.loadedAt,
+    ...(release ? { release } : {}),
   };
 }
 
 const BOUND_MACHINE_LOADED = 1;
 
+/**
+ * The bound machine's release, from the same command-node read as every
+ * other machine's: the command node's own, or the node summary's.
+ */
+function boundRelease(
+  boundId: BackendId | null,
+  portalState: Pick<PortalState, "selfId" | "nodes" | "commandRelease">,
+): MachineRelease | null {
+  if (!boundId) return null;
+  if (boundId === portalState.selfId) return portalState.commandRelease;
+  const node = portalState.nodes.find((entry) => entry.nodeId === boundId);
+  return node ? (viewFromNodeSummary(node).release ?? null) : null;
+}
+
 /** The machine this realm is bound to, projected from its own full stores. */
 export function useBoundMachineView(): MachineView | null {
-  const { bound } = useFederation();
+  const { bound, portalState } = useFederation();
+  const boundId = bound?.backendId ?? null;
+  const { selfId, nodes, commandRelease } = portalState;
+  const release = useMemo(
+    () => boundRelease(boundId, { selfId, nodes, commandRelease }),
+    [boundId, selfId, nodes, commandRelease],
+  );
   const projects = useProjectStore((state) => state.projects);
   const environments = useEnvironmentStore((state) => state.environments);
   const activeBuildEnvironmentIds = useBuildPipelineStore(
@@ -185,8 +214,9 @@ export function useBoundMachineView(): MachineView | null {
       truncated: false,
       // This realm's own stores are its machine's live state.
       loadedAt: BOUND_MACHINE_LOADED,
+      ...(release ? { release } : {}),
     };
-  }, [bound, environments, projects, activeBuildEnvironmentIds]);
+  }, [bound, environments, projects, activeBuildEnvironmentIds, release]);
 }
 
 /**
@@ -202,9 +232,9 @@ export function useRemoteMachineViews(): MachineView[] {
       .filter((node) => node.nodeId !== boundId)
       .map(viewFromNodeSummary);
     return portalState.self && portalState.self.nodeId !== boundId
-      ? [viewFromSelfSummary(portalState.self), ...nodes]
+      ? [viewFromSelfSummary(portalState.self, portalState.commandRelease), ...nodes]
       : nodes;
-  }, [boundId, portalState.nodes, portalState.self]);
+  }, [boundId, portalState.nodes, portalState.self, portalState.commandRelease]);
 }
 
 /**

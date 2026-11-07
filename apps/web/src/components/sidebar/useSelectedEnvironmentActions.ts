@@ -114,7 +114,7 @@ export function useSelectedEnvironmentActions({
       });
       // This window's own actions report their failures from `useEnvironments`.
       if (target.remote) {
-        reportFederatedActionError(action.label, target.remote.machine.name, result.reason);
+        reportFederatedActionError(action.label, target.remote.machine, result.reason);
       }
     });
   };

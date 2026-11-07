@@ -785,6 +785,11 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   action-bar merge dialog for the environment (`mergePrRequestStore`), so it
   exists only where that dialog can act. A section of a machine that has never been
   reached says "Not available yet.", a state its own sidebar cannot have.
+- A machine header shows the machine's version when it differs from the
+  command node's, with the domains it lacks, and leads to its update
+  (`MachineView.release`, which every adapter supplies from the command
+  node's summaries; see
+  [Keeping the fleet current](host-updates.md#keeping-the-fleet-current)).
 - Container actions are gated by the machine's own Docker availability, which
   its summary read stamps on every row (`dockerAvailable`, from a 30-second
   cache of `check_docker` answers and a bounded probe). A machine that predates

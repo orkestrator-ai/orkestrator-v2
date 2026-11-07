@@ -130,6 +130,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "unwatch_node_events",
   "get_portal_layout",
   "update_portal_layout",
+  // The command node's own policy for its leaves (plan item 5006).
+  "get_fleet_update_policy",
+  "set_fleet_update_policy",
   "open_node_workspace",
   "renew_node_workspace",
   "close_node_workspace",

@@ -41,7 +41,12 @@ import { discardNodeDetach, nodeErrorText } from "@/lib/backend/command-nodes";
 import { requestCommandHandover } from "@/lib/command-handover";
 import { arrangeMachines } from "@/lib/federation/sidebar-layout";
 import { updatePortalLayout } from "@/lib/portal/portal-layout";
-import { onMachineUpdatesRequest, takeMachineUpdatesRequest } from "@/lib/settings-navigation";
+import {
+  onMachineUpdateRequest,
+  onMachineUpdatesRequest,
+  takeMachineUpdateRequest,
+  takeMachineUpdatesRequest,
+} from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { useMachineBulkUpdateStore, type BulkUpdateOutcome } from "@/stores/machineBulkUpdateStore";
 import { describeHostUpdateJob } from "../HostUpdatesPanel";
@@ -50,6 +55,7 @@ import { BulkUpdateDialog, type BulkUpdateChoice } from "./BulkUpdateDialog";
 import { summarizeBulkUpdate, updateMachinesToLatest } from "./bulk-update";
 import { machineMaintenanceClient } from "./machine-access";
 import { ClientOptions } from "./ClientOptions";
+import { FleetUpdatePolicySection } from "./FleetUpdatePolicySection";
 import { MachineSettingsDialog } from "./MachineSettingsDialog";
 import { MachineUpdatesDialog } from "./MachineUpdatesDialog";
 import { maintenanceIssues, type MachineEntry } from "./machine-list";
@@ -84,6 +90,9 @@ export function MachinesSettings() {
   const [openingWindow, setOpeningWindow] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [confirmingBulk, setConfirmingBulk] = useState(false);
+  // A skewed machine's header or a typed incompatibility error asked to update one machine.
+  const [wantsUpdateOf, setWantsUpdateOf] = useState(takeMachineUpdateRequest);
+  const [singleUpdateKey, setSingleUpdateKey] = useState<string | null>(null);
   const bulkOutcomes = useMachineBulkUpdateStore((state) => state.outcomes);
   const bulkSnapshots = useMachineBulkUpdateStore((state) => state.snapshots);
   const bulkRunning = useMachineBulkUpdateStore((state) => state.running);
@@ -92,6 +101,14 @@ export function MachinesSettings() {
     () =>
       onMachineUpdatesRequest(() => {
         if (takeMachineUpdatesRequest()) setWantsCurrentUpdates(true);
+      }),
+    [],
+  );
+  useEffect(
+    () =>
+      onMachineUpdateRequest(() => {
+        const nodeId = takeMachineUpdateRequest();
+        if (nodeId) setWantsUpdateOf(nodeId);
       }),
     [],
   );
@@ -157,16 +174,35 @@ export function MachinesSettings() {
     });
   const allSelected = updatable.length > 0 && selectedMachines.length === updatable.length;
 
+  // The requested machine's update, once it is listed: the confirmation when it
+  // can update from here, otherwise its updates, which say why it cannot.
+  const requestedEntry = wantsUpdateOf
+    ? (entries.find((entry) => entry.role !== "device" && entry.nodeId === wantsUpdateOf) ?? null)
+    : null;
+  if (requestedEntry) {
+    setWantsUpdateOf(null);
+    if (updateBlocker(requestedEntry, summaries[requestedEntry.key]) === null) {
+      setSingleUpdateKey(requestedEntry.key);
+    } else {
+      setUpdatesKey(requestedEntry.key);
+    }
+  }
+  const singleUpdateMachine = entries.find((entry) => entry.key === singleUpdateKey) ?? null;
+
   const startBulkUpdate = (choice: BulkUpdateChoice) => {
     setConfirmingBulk(false);
-    const targets = selectedMachines.flatMap((entry) => {
+    setSelected(new Set());
+    runUpdates(selectedMachines, choice);
+  };
+
+  const runUpdates = (machinesToUpdate: readonly MachineEntry[], choice: BulkUpdateChoice) => {
+    const targets = machinesToUpdate.flatMap((entry) => {
       const client = machineMaintenanceClient(entry);
       return client ? [{ key: entry.key, client, last: entry.role === "self" }] : [];
     });
     if (targets.length === 0) return;
     const store = useMachineBulkUpdateStore.getState();
     store.start(targets.map((target) => target.key));
-    setSelected(new Set());
     // Not tied to this page: closing Settings does not stop the requests.
     void updateMachinesToLatest(
       targets,
@@ -403,6 +439,9 @@ export function MachinesSettings() {
                 </table>
               </div>
             </DndContext>
+            {!leaf && status && (nodes?.nodes.length ?? 0) > 0 ? (
+              <FleetUpdatePolicySection />
+            ) : null}
           </>
         )}
 
@@ -433,6 +472,17 @@ export function MachinesSettings() {
             open
             onOpenChange={setConfirmingBulk}
             onConfirm={startBulkUpdate}
+          />
+        ) : null}
+        {singleUpdateMachine && !confirmingBulk ? (
+          <BulkUpdateDialog
+            machines={[singleUpdateMachine]}
+            open
+            onOpenChange={(open) => !open && setSingleUpdateKey(null)}
+            onConfirm={(choice) => {
+              setSingleUpdateKey(null);
+              runUpdates([singleUpdateMachine], choice);
+            }}
           />
         ) : null}
         <AddMachineDialog

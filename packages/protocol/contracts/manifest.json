@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 997,
-    "defined": 1,
+    "commands": 999,
+    "defined": 3,
     "untyped": 996,
     "events": 44
   },
@@ -1834,6 +1834,15 @@
       "domain": "files",
       "untyped": true,
       "read": true
+    },
+    "get_fleet_update_policy": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:5bce1d81d302c0c45cf4480373c1541672ac0d40059ce2a942ec800aae208c42"
     },
     "get_git_remote_url": {
       "domain": "projects",
@@ -4063,6 +4072,15 @@
       "domain": "pipelines",
       "untyped": true,
       "read": false
+    },
+    "set_fleet_update_policy": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:32e5c0d200affadf3c4caa7760b535af201b7c984c2a7779cb81d88a1542c804",
+      "resultDigest": "sha256:5bce1d81d302c0c45cf4480373c1541672ac0d40059ce2a942ec800aae208c42"
     },
     "set_github_cli_reminder_dismissed": {
       "domain": "config",

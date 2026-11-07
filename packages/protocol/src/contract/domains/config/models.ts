@@ -21,12 +21,10 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import type { DeepMutable } from "effect/Types";
 import { mutableArray, openRecord, ownedObject } from "../../model-schema.js";
-import type { ActionDefaults } from "../../../action-defaults.js";
 import type { AgentAccountAutoSwitchSettings } from "../../../agent-account-auto-switch.js";
 import type { AgentMessagingSettings } from "../../../agent-mail.js";
-import type { AgentPlatformSettings, MultiReviewAgentSettings } from "../../../agent-settings.js";
-import type { AgentPlatform } from "../../../agent-platforms.js";
 import type { StoredDesktopConnections } from "../../../connections.js";
 import type { CoordinatorAccountSwitchGrants } from "../../../coordinator-account-switch-grant.js";
 import {
@@ -42,7 +40,6 @@ import type { WorktreeLocationSettings } from "../../../disk-usage.js";
 import type { LogDetail } from "../../../log-policy.js";
 import type { McpManagementRolloutSettings } from "../../../mcp-management.js";
 import { MULTI_REVIEW_ENGINES } from "../../../multi-review.js";
-import type { NativeAgentExecutionPolicyOverride } from "../../../native-agent.js";
 import type { NotificationSoundSettings } from "../../../notification-sounds.js";
 import {
   PERMISSION_RULE_KINDS,
@@ -59,6 +56,7 @@ import { SESSION_TITLE_GENERATION_POLICIES } from "../../../session-title-genera
 import { TERMINAL_LINK_DEFAULT_TARGETS } from "../../../terminal-link-target.js";
 import type { WebAnnotationRolloutSettings } from "../../../web-annotations.js";
 import type { WorkflowResultToolsSettings } from "../../../workflow-results.js";
+import { AgentLaunchModeSchema, AgentSettingsTierSchema } from "./agent-settings.js";
 import {
   AgentPlatformSchema,
   ContainerResourceLimitsSchema,
@@ -71,23 +69,14 @@ const optionalBoolean = Schema.optional(Schema.Boolean);
 const optionalNumber = Schema.optional(Schema.Finite);
 const optionalStrings = Schema.optional(mutableArray(Schema.String));
 
-/** `AgentLaunchMode` (`agent-settings.ts`). */
-export const AgentLaunchModeSchema = Schema.Literals(["terminal", "native"]);
-
-/**
- * `AgentSettingsTier` (`agent-settings.ts`): one tier's agent configuration,
- * the same shape at the application, repository and environment tiers. Every
- * field is optional ("inherit"). The nested parts are typed objects:
- * `normalizeAgentSettings` reads them leniently, as before.
- */
-export const AgentSettingsTierSchema = openRecord({
-  defaultAgent: Schema.optional(AgentPlatformSchema),
-  actionDefaults: Schema.optional(ownedObject<ActionDefaults>()),
-  multiReview: Schema.optional(ownedObject<MultiReviewAgentSettings>()),
-  platforms: Schema.optional(ownedObject<Partial<Record<AgentPlatform, AgentPlatformSettings>>>()),
-  executionPolicy: Schema.optional(ownedObject<NativeAgentExecutionPolicyOverride>()),
-});
-export type AgentSettingsTier = typeof AgentSettingsTierSchema.Type;
+export {
+  AgentLaunchModeSchema,
+  AgentSettingsTierSchema,
+  ClaudeNativeBackendSchema,
+  type AgentLaunchMode,
+  type AgentSettingsTier,
+  type ClaudeNativeBackend,
+} from "./agent-settings.js";
 
 /**
  * The machine settings both the stored and the renderer's global share:
@@ -202,7 +191,7 @@ export const StoredGlobalConfigSchema = openRecord({
   openCodeZenApiKey: optionalString,
   githubToken: optionalString,
 });
-export type StoredGlobalConfig = typeof StoredGlobalConfigSchema.Type;
+export type StoredGlobalConfig = DeepMutable<typeof StoredGlobalConfigSchema.Type>;
 
 /** `ApiKeySource` (`commands-validation.ts`): where the key a new container receives comes from. */
 export const ApiKeySourceSchema = Schema.Literals(["config", "host-env", "none"]);
@@ -229,7 +218,7 @@ export const GlobalConfigSchema = openRecord({
   openCodeZenApiKeyConfigured: Schema.Boolean,
   openCodeZenApiKeySource: ApiKeySourceSchema,
 });
-export type GlobalConfig = typeof GlobalConfigSchema.Type;
+export type GlobalConfig = DeepMutable<typeof GlobalConfigSchema.Type>;
 
 /** `RepositoryConfig` (models.ts): one project's settings. */
 export const RepositoryConfigSchema = openRecord({
@@ -248,7 +237,7 @@ export const RepositoryConfigSchema = openRecord({
   /** The user lets this project's coordinator send work to environments it did not create. */
   coordinatorOtherEnvironments: optionalBoolean,
 });
-export type RepositoryConfig = typeof RepositoryConfigSchema.Type;
+export type RepositoryConfig = DeepMutable<typeof RepositoryConfigSchema.Type>;
 
 /** The fields of `AppConfig` beside `global`. */
 const appConfigFields = {
@@ -264,14 +253,14 @@ export const StoredAppConfigSchema = openRecord({
   ...appConfigFields,
   global: StoredGlobalConfigSchema,
 });
-export type StoredAppConfig = typeof StoredAppConfigSchema.Type;
+export type StoredAppConfig = DeepMutable<typeof StoredAppConfigSchema.Type>;
 
 /** `RendererAppConfig`: the settings as `get_config` and every settings write answer them. */
 export const AppConfigSchema = openRecord({
   ...appConfigFields,
   global: GlobalConfigSchema,
 });
-export type AppConfig = typeof AppConfigSchema.Type;
+export type AppConfig = DeepMutable<typeof AppConfigSchema.Type>;
 
 /** `get_config`: the settings, or with a known manifest generation and revision a `ConditionalResourceSnapshot`. */
 export const ConfigReadSchema = Schema.Union([

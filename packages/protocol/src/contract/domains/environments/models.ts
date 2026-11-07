@@ -23,9 +23,9 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
-import { mutableArray, ownedObject } from "../../model-schema.js";
-import { AGENT_PLATFORMS, type AgentPlatform } from "../../../agent-platforms.js";
-import type { AgentSettingsTier } from "../../../agent-settings.js";
+import type { DeepMutable, Mutable } from "effect/Types";
+import { AgentPlatformSchema, AgentSettingsTierSchema } from "../config/agent-settings.js";
+import { mutableArray } from "../../model-schema.js";
 import {
   CONTAINER_LIFECYCLE_ERROR_CODES,
   CONTAINER_OPERATION_KINDS,
@@ -44,9 +44,8 @@ const optionalNumber = Schema.optional(Schema.Finite);
  */
 const optionalPort = Schema.optional(Schema.NullOr(Schema.Finite));
 
-export const AgentPlatformSchema = Schema.Literals(
-  AGENT_PLATFORMS as unknown as readonly [AgentPlatform, ...AgentPlatform[]],
-);
+/** The platform vocabulary and the agent settings tier are the `config` domain's. */
+export { AgentPlatformSchema, AgentSettingsTierSchema } from "../config/agent-settings.js";
 
 export const EnvironmentStatusSchema = Schema.Literals([
   "running",
@@ -132,7 +131,8 @@ export const PortMappingSchema = Schema.Struct({
   protocol: PortProtocolSchema,
   hostPortMode: Schema.optional(Schema.Literal("auto")),
 });
-export type PortMapping = typeof PortMappingSchema.Type;
+/** `PortMapping`: the model type `models.ts` and the web's types re-export (plan item 7010). */
+export type PortMapping = Mutable<typeof PortMappingSchema.Type>;
 
 export const WorktreeMoveRecordSchema = Schema.Struct({
   from: Schema.String,
@@ -149,6 +149,10 @@ export const WorktreeMoveRecordSchema = Schema.Struct({
   ),
   startedAt: Schema.String,
 });
+/** `WorktreeMoveRecord`: durable progress of an environment move (`models.ts` re-exports it). */
+export type WorktreeMoveRecord = DeepMutable<typeof WorktreeMoveRecordSchema.Type>;
+/** A submodule whose git dir lives outside the worktree; a copy re-links each one. */
+export type WorktreeMoveSubmodule = NonNullable<WorktreeMoveRecord["submodules"]>[number];
 
 export const EnvironmentDiffBaselineSchema = Schema.Struct({
   createdFromCommit: Schema.String,
@@ -240,6 +244,8 @@ export const StartupAgentSessionSnapshotSchema = Schema.Struct({
   startedAt: optionalString,
   error: optionalString,
 });
+/** `StartupAgentSessionSnapshot`: the backend-owned result of the one-shot startup launch. */
+export type StartupAgentSessionSnapshot = Mutable<typeof StartupAgentSessionSnapshotSchema.Type>;
 
 /** `InitialPromptImageAttachment`. */
 export const InitialPromptAttachmentSchema = Schema.Struct({
@@ -249,9 +255,8 @@ export const InitialPromptAttachmentSchema = Schema.Struct({
   previewUrl: optionalString,
   base64Data: Schema.String,
 });
-
-/** The agent settings tier; owned by the `config` domain (see {@link ownedObject}). */
-export const AgentSettingsTierSchema = ownedObject<AgentSettingsTier>();
+/** A file waiting to be written into the workspace before the first prompt. */
+export type InitialPromptImageAttachment = Mutable<typeof InitialPromptAttachmentSchema.Type>;
 
 /**
  * The fields of `ClientEnvironment` (`models.ts`): the stored `Environment`
@@ -343,7 +348,11 @@ export const clientEnvironmentFields = {
 export const ClientEnvironmentSchema = Schema.Struct(clientEnvironmentFields).annotate({
   identifier: "ClientEnvironment",
 });
-export type ClientEnvironment = typeof ClientEnvironmentSchema.Type;
+/**
+ * `ClientEnvironment`, mutable as the model types are: the backend's
+ * `ClientEnvironment` and the base of the web's `Environment` (plan item 7010).
+ */
+export type ClientEnvironment = DeepMutable<typeof ClientEnvironmentSchema.Type>;
 
 /**
  * One environment as `get_environment` reads it: the stored record, of which
@@ -358,7 +367,7 @@ export const EnvironmentDetailSchema = Schema.Struct({
   initialConversationMode: Schema.optional(Schema.Literals(["plan", "build"])),
   initialPromptAttachments: Schema.optional(mutableArray(InitialPromptAttachmentSchema)),
 }).annotate({ identifier: "EnvironmentDetail" });
-export type EnvironmentDetail = typeof EnvironmentDetailSchema.Type;
+export type EnvironmentDetail = DeepMutable<typeof EnvironmentDetailSchema.Type>;
 
 /** `@orkestrator/protocol/pr-monitor` `PrCheckSummary`. */
 export const PrCheckSummarySchema = Schema.Struct({

@@ -40,7 +40,9 @@ export function storedOpenCodeModelIds(
   }
   if (isRecord(repositories)) {
     for (const repository of Object.values(repositories)) {
-      if (isRecord(repository)) ids.push(repository.defaultModel, openCodeModelOf(repository));
+      // The legacy `defaultModel` is not in the current model; read it as JSON.
+      const legacy: unknown = repository;
+      if (isRecord(legacy)) ids.push(legacy.defaultModel, openCodeModelOf(legacy));
     }
   }
   return ids;

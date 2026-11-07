@@ -1,4 +1,3 @@
-import type { StartupAgentTabId } from "@orkestrator/protocol/tab-initial-prompt";
 import type { BuildPipelineRecord } from "@orkestrator/protocol/contract/domains/pipelines";
 // Re-exported rather than redeclared: the renderer orders activity reports
 // against the same vocabulary, and two copies of it drift silently.
@@ -14,10 +13,7 @@ import type {
   EnvironmentDiffBaseline,
   EnvironmentDiffBaseOverride,
 } from "@orkestrator/protocol/diff-stats";
-import type {
-  ContainerLifecycleSnapshot,
-  EnvironmentContainerLifecycle,
-} from "@orkestrator/protocol/container-lifecycle";
+import type { EnvironmentContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
@@ -25,35 +21,58 @@ import type {
   AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type {
-  CoordinatorResearchMcpServer,
-  CoordinatorWebResearch,
-} from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 // The environment vocabularies are the protocol schemas' types (plan item 7003).
+// The environment model: the protocol schemas' types (plan items 7003 and
+// 7010). `Environment` below is the stored record, backend-private; what a
+// client receives is `ClientEnvironment`.
 import type {
+  ClientEnvironment,
   EnvironmentStatus,
   PrState,
   NetworkAccessMode,
   EnvironmentType,
   EnvironmentLifecycleOperation,
   EnvironmentSetupPhase,
+  InitialPromptImageAttachment,
+  PortMapping,
   PortProtocol,
   EnvironmentUnreadReason,
+  StartupAgentSessionSnapshot,
+  WorktreeMoveRecord,
+  WorktreeMoveSubmodule,
 } from "@orkestrator/protocol/contract/domains/environments";
 export type {
+  ClientEnvironment,
   EnvironmentStatus,
   PrState,
   NetworkAccessMode,
   EnvironmentType,
   EnvironmentLifecycleOperation,
   EnvironmentSetupPhase,
+  InitialPromptImageAttachment,
+  PortMapping,
   PortProtocol,
   EnvironmentUnreadReason,
+  StartupAgentSessionSnapshot,
+  WorktreeMoveRecord,
+  WorktreeMoveSubmodule,
 };
-
+// The settings model: the `config` domain's schemas' types (plan items 7005
+// and 7010). The stored settings, credentials included, are `AppConfig` here;
+// the renderer's view (credentials redacted) is the protocol's `AppConfig`.
+export type {
+  AgentLaunchMode as AgentStyle,
+  AgentLaunchMode as ClaudeMode,
+  AgentLaunchMode as CodexMode,
+  AgentLaunchMode as OpenCodeMode,
+  ClaudeNativeBackend,
+  RepositoryConfig,
+  StoredAppConfig as AppConfig,
+} from "@orkestrator/protocol/contract/domains/config";
+export type { AgentPlatform as DefaultAgent } from "@orkestrator/protocol/agent-platforms";
 
 export type {
   AgentActivitySource,
@@ -65,56 +84,6 @@ export type {
 /** One registered project: the protocol schema's type (plan item 7005). */
 export type { Project } from "@orkestrator/protocol/contract/domains/projects";
 
-/**
- * Durable progress of an environment move. `moving`: the worktree may still
- * be at `from` (git renames it atomically; a copy to another disk goes to
- * `staging` first). `copied`: the copy is complete at `to` and Git points
- * at it. `committed`: storage also points at `to`; provider relocation and
- * source cleanup remain retryable, and filesystem rollback is forbidden.
- */
-export interface WorktreeMoveRecord {
-  from: string;
-  to: string;
-  staging?: string;
-  phase: "moving" | "copied" | "committed";
-  fromCanonical?: string;
-  fromRoot?: string;
-  removeSource?: boolean;
-  sourceIdentity?: { dev: number; ino: number };
-  sourceCleaned?: boolean;
-  /**
-   * Submodules whose git dir lives outside the worktree (under the
-   * repository's `.git/worktrees/<name>/modules`). A copy re-links each one.
-   */
-  submodules?: WorktreeMoveSubmodule[];
-  startedAt: string;
-}
-export interface WorktreeMoveSubmodule {
-  /** Path relative to the worktree root. */
-  path: string;
-  /** Absolute git dir of the submodule checkout. */
-  gitDir: string;
-}
-
-export interface PortMapping {
-  containerPort: number;
-  /** A fixed host port (1-65535), or 0 when `hostPortMode` is "auto". */
-  hostPort: number;
-  protocol: PortProtocol;
-  /**
-   * "auto": Docker assigns an ephemeral loopback host port at creation, so
-   * environments never compete for 3000/5173. Preview services follow the
-   * actual binding. Absent means a fixed `hostPort`.
-   */
-  hostPortMode?: "auto";
-}
-
-export type DefaultAgent = AgentPlatform;
-export type OpenCodeMode = "terminal" | "native";
-export type ClaudeMode = "terminal" | "native";
-export type ClaudeNativeBackend = "sdk" | "tmux";
-export type CodexMode = "terminal" | "native";
-export type AgentStyle = "terminal" | "native";
 export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ClaudeModelCatalogEntry {
@@ -211,28 +180,6 @@ export interface OpenCodeModelCatalogSnapshot {
   connectedProviderIds?: string[];
   /** When {@link connectedProviderIds} was last observed to change. */
   connectedProvidersCheckedAt?: string;
-}
-
-export interface InitialPromptImageAttachment {
-  id: string;
-  name: string;
-  /** Omitted by records written before startup file attachments were supported. */
-  type?: "image" | "file";
-  /** Ephemeral renderer preview; omitted from durable storage. */
-  previewUrl?: string;
-  base64Data: string;
-}
-
-export interface StartupAgentSessionSnapshot {
-  tabId: StartupAgentTabId;
-  agent: DefaultAgent;
-  style: AgentStyle;
-  model?: string;
-  reasoningEffort?: string;
-  providerSessionId?: string;
-  status: "starting" | "running" | "error";
-  startedAt?: string;
-  error?: string;
 }
 
 /**
@@ -515,43 +462,6 @@ export interface Environment {
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
 }
-
-/** Stable renderer-facing projection used by environment list commands. */
-export type ClientEnvironment = Omit<
-  Environment,
-  | "agentActivitySources"
-  | "frontendAgentActivityObservers"
-  | "prRecheckAfterAgentCompletionArmedAt"
-  | "initialPromptAttachments"
-  | "initialPromptPresentation"
-  | "initialConversationMode"
-  | "claudeModelCatalog"
-  | "opencodePid"
-  | "claudeBridgePid"
-  | "codexBridgePid"
-  | "cursorBridgePid"
-  | "grokBridgePid"
-  | "piBridgePid"
-  | "pendingRenamePrompt"
-  | "tabTeardownIntents"
-  | "controlRequestId"
-  | "controlRequestFingerprint"
-  | "branchRevision"
-  | "containerLifecycle"
-> & {
-  /** Safe projection of the durable container lifecycle record. */
-  containerLifecycle?: ContainerLifecycleSnapshot;
-  /**
-   * Whether the stripped `initialPromptAttachments` array holds anything.
-   *
-   * The bodies are excluded from list hydration because they are base64
-   * payloads, but the renderer still has to know whether a targeted detail read is
-   * worth making — and whether failing that read should block a launch. Without
-   * this flag every launch with a stored prompt pays for the read and is
-   * blocked by any transient failure, including the common no-attachment case.
-   */
-  hasInitialPromptAttachments?: boolean;
-};
 
 export type SessionType = "plain" | "claude" | "opencode" | "codex" | "root";
 export type SessionStatus = "connected" | "disconnected";
@@ -1059,240 +969,4 @@ export interface PersistedAgentHandoff {
   environmentId: string;
   snapshot: unknown;
   createdAt: string;
-}
-
-export interface RepositoryConfig {
-  defaultBranch: string;
-  prBaseBranch: string;
-  lastEnvironmentType?: EnvironmentType;
-  /**
-   * Legacy last-create state retained for config and older-client compatibility.
-   * Current create dialogs ignore it and resolve every control from Settings.
-   *
-   * @deprecated
-   */
-  lastEnvironmentAgentSelection?: {
-    platform: DefaultAgent;
-    mode: AgentStyle;
-  };
-  defaultPortMappings?: PortMapping[];
-  filesToCopy?: string[];
-  entryPort?: number;
-  /**
-   * This repository's agent overrides — the middle tier.
-   *
-   * Supersedes `defaultAgent`, `agentStyle` (which only Claude ever read),
-   * `claudeNativeBackend`, and the single `defaultModel`/`defaultEffort` pair
-   * two consumers disagreed about. An absent field means "inherit from the
-   * application".
-   */
-  agentSettings?: AgentSettingsTier;
-  /**
-   * The user lets this project's coordinator send work to environments it did
-   * not create. Absent (every older record) means no.
-   */
-  coordinatorOtherEnvironments?: boolean;
-}
-
-export interface AppConfig {
-  /** Versioned persisted-config migration discriminator. */
-  schemaVersion?: number;
-  version: string;
-  desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
-  global: {
-    /**
-     * Resource budget enforced on new container runtimes (Settings →
-     * Container). Absent means the built-in default for the daemon
-     * (`builtInResourceDefault`); all-`null` limits mean unrestricted.
-     * Written only by `setContainerResourceLimits`. (The older
-     * `containerResources` value was never applied and is not read.)
-     */
-    containerResourceLimits?: import("@orkestrator/protocol/container-resources").ContainerResourceLimits;
-    /** Agent systems installed and exposed in launch/review surfaces. */
-    enabledAgentPlatforms?: AgentPlatform[];
-    /**
-     * Which runtime runs new Multi Reviews (item 301). Absent means
-     * `bespoke`; `ORKESTRATOR_MULTI_REVIEW_ENGINE` overrides it for testing.
-     */
-    multiReviewEngine?: import("@orkestrator/protocol/multi-review").MultiReviewEngine;
-    /**
-     * Weakest read-only guarantee a coordinator conversation may run under.
-     *
-     * Absent means `provider-configured`: platforms whose boundary the
-     * provider or the OS holds, plus those told to deny mutations without a
-     * way for Orkestrator to verify it. `advisory` stays opt-in because there
-     * nothing outside the agent's own cooperation stops a write.
-     */
-    coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
-    /** Internal marker for the one-time coordinator safety-default migration. */
-    coordinatorProviderTierDefaultVersion?: number;
-    /**
-     * Web research a coordinator may do. Absent means the product default
-     * (`search-and-mcp`). Commands and hosted page fetches stay off in every
-     * mode; see `@orkestrator/protocol/coordinator-web-research`.
-     */
-    coordinatorWebResearch?: CoordinatorWebResearch;
-    /** Remote research MCP servers; absent means the default list (Context7). */
-    coordinatorResearchMcpServers?: CoordinatorResearchMcpServer[];
-    favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
-    containerResources: { cpuCores: number; memoryGb: number };
-    envFilePatterns: string[];
-    anthropicApiKey?: string;
-    /** Cursor API key forwarded to containerized Cursor Agent processes. */
-    cursorApiKey?: string;
-    /** OpenCode Zen (Go) plan key, used to read plan usage in Settings. */
-    openCodeZenApiKey?: string;
-    githubToken?: string;
-    /** The backend's own GitHub credential: the host's `gh auth login`, or else `githubToken`. */
-    useHostGitHubCredentials?: boolean;
-    /** What containers receive, independent of the backend's credential. Absent means none. */
-    containerGitHubCredential?: "none" | "host-cli" | "pat";
-    /**
-     * The user asked not to be reminded at startup to set up the GitHub CLI.
-     * Written only by `setGitHubCliReminderDismissed`; the settings form never
-     * sends it.
-     */
-    githubCliReminderDismissed?: boolean;
-    /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
-    sshAgentSocketPath?: string;
-    /**
-     * Auto-merge waits for failing or pending checks GitHub does not require.
-     * True or absent waits for all checks; false merges once GitHub allows it.
-     * Required checks still block. Read by `PrAutoMergeController` on this machine.
-     */
-    autoMergeRequireChecks?: boolean;
-    /**
-     * Native agent composer preference: true sends a message typed while a
-     * turn is running into that turn (steering) instead of adding it to the
-     * prompt queue. Absent or false queues. Read only by the renderer.
-     */
-    autoSteer?: boolean;
-    /**
-     * Absolute directory new projects are cloned into on this machine, for
-     * example when a project is copied here from another machine. Absent
-     * means the most common parent of the existing projects, else `~/Projects`.
-     */
-    defaultProjectsDirectory?: string;
-    /**
-     * Deliver the host's Claude Code OAuth credential into containers.
-     *
-     * Defaults to on, which is what keeps a container agent signed in. Turning
-     * it off keeps a long-lived host token out of environments that run
-     * untrusted repository code, at the cost of an in-container `claude /login`.
-     */
-    useHostClaudeCredentials?: boolean;
-    allowedDomains: string[];
-    preferredEditor?: "vscode" | "cursor";
-    /**
-     * Application-wide agent defaults — the widest of the three tiers, and the
-     * only one with a shipped fallback beneath it.
-     *
-     * Supersedes `defaultAgent`, the three `*Mode` fields,
-     * `claudeNativeBackend`, `actionDefaults`, and the four model/effort fields
-     * that had no UI at all. Platform speed is `platforms[agent].fastMode`, the
-     * same Fast/Normal axis the model picker exposes. Each action default can
-     * override that with its own `fastMode` so PR and Consolidation need not
-     * share one Fast choice. A legacy `*NativeFastModeDefault` key is migrated
-     * when it is still present; an earlier release may already have stripped it
-     * before this field existed.
-     */
-    agentSettings?: AgentSettingsTier;
-    /**
-     * OpenCode provider catalogues offered in model pickers. Filtering happens
-     * in the backend so the renderer never receives the full OpenCode
-     * catalogue. An empty list means unrestricted.
-     */
-    openCodeModelProviders?: string[];
-    /** Maximum concurrently open spawned-agent threads per native Codex session. */
-    codexMaxConcurrentThreads: number;
-    /**
-     * Longest a Claude native session may keep a background shell command
-     * running, in hours. Absent means the Claude CLI's own 2-hour ceiling.
-     */
-    claudeBackgroundCommandLimitHours?: number;
-    /** Which agent logins may write session titles. Absent is `any-signed-in`. */
-    sessionTitleGeneration?: import("@orkestrator/protocol/session-title-generation").SessionTitleGenerationPolicy;
-    terminalAppearance: {
-      fontFamily: string;
-      fontSize: number;
-      backgroundColor: string;
-    };
-    terminalScrollback: number;
-    /** Where ⌘-click on a terminal link opens; ⌘⇧-click opens the other. Absent is `external`. */
-    terminalLinkDefaultTarget?: import("@orkestrator/protocol/terminal-link-target").TerminalLinkDefaultTarget;
-    terminalHistoryEnabled?: boolean;
-    terminalHistoryRetentionMb?: number;
-    terminalHistoryGlobalRetentionMb?: number;
-    terminalHistoryRetentionDays?: number;
-    /**
-     * Experimental gate for scheduled jobs. Off (or absent) hides Settings →
-     * Schedules, refuses the schedule commands and public actions, withholds
-     * the agent and coordinator schedule tools and stops schedules firing;
-     * stored schedules are kept.
-     */
-    experimentalScheduling?: boolean;
-    localWindowGatewayTransport?: boolean;
-    /**
-     * Experimental gate for graphs in the web UI. Off (or absent) hides the
-     * action bar's Graphs and Run graph… buttons and a ticket's Run graph…;
-     * the graph commands, tools and already-open graph tabs are unaffected.
-     */
-    experimentalGraphs?: boolean;
-    /** "Save logs to disk": whether application logs are written. Applies live. */
-    debugLogging?: boolean;
-    /** Number of days production application logs remain on disk. Applies live. */
-    debugLogRetentionDays?: number;
-    /** "Log detail": levels for every process, running bridges included. Applies live. */
-    logDetail?: import("@orkestrator/protocol/log-policy").LogDetail;
-    /**
-     * Backend-owned: when raised "Log detail" reverts to `info` (ISO 8601). Every
-     * config write recomputes it; a value a client sends is ignored.
-     */
-    logDetailExpiresAt?: string;
-    /** Keep raised "Log detail" until it is changed back, instead of for 24 hours. */
-    logDetailKeepRaised?: boolean;
-    webClientEnabled?: boolean;
-    /** Audible cues for background events that need the user's attention. */
-    notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
-    /** Editable preference embedded inside Orkestrator's fixed review contract. */
-    reviewInstruction?: string;
-    /**
-     * Reviewer focus presets the launchers offer (`review-lens.ts`). Absent
-     * means the shipped five; a stored list, even an empty one, is the user's.
-     */
-    reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
-    agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
-    /** The automatic-account ticks; see `updateAgentAccountAutoSwitchSettings`. */
-    agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
-    /**
-     * The user's standing permission for this machine's coordinators to switch
-     * accounts without asking. Machine-local, never inherited; written only by
-     * `setCoordinatorAccountSwitchGrant`, the settings form never sends it.
-     */
-    coordinatorAccountSwitchGrant?: import("@orkestrator/protocol/coordinator-account-switch-grant").CoordinatorAccountSwitchGrants;
-    /**
-     * Backend-owned rollout gate for tool-mode workflow results. Internal
-     * operations setting rather than a user-facing transport choice; changes
-     * affect attempts admitted after the change only.
-     */
-    workflowResultTools?: import("@orkestrator/protocol/workflow-results").WorkflowResultToolsSettings;
-    /**
-     * Backend-owned rollout gate and kill switch for MCP configuration
-     * management. Absent means everything enabled. Turning it off never edits
-     * a saved provider file.
-     */
-    mcpManagement?: import("@orkestrator/protocol/mcp-management").McpManagementRolloutSettings;
-    /**
-     * Backend rollout switch for web annotations (`enabled` / `read-only` /
-     * `disabled`). `ORKESTRATOR_WEB_ANNOTATIONS_MODE` overrides it.
-     */
-    webAnnotations?: import("@orkestrator/protocol/web-annotations").WebAnnotationRolloutSettings;
-    /**
-     * Where new environment and development-profile worktrees are created.
-     * Written only by `update_worktree_locations`, so a settings-form save
-     * never clears it.
-     */
-    worktreeLocations?: import("@orkestrator/protocol/disk-usage").WorktreeLocationSettings;
-  };
-  repositories: Record<string, RepositoryConfig>;
 }

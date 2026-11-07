@@ -7,9 +7,14 @@
  * field. Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import type { Mutable } from "effect/Types";
 import { mutableArray } from "../../model-schema.js";
 import { AGENT_PLATFORMS, type AgentPlatform } from "../../../agent-platforms.js";
-import { AgentPlatformSchema, ContainerResourceLimitsSchema, NetworkAccessModeSchema } from "./models.js";
+import {
+  AgentPlatformSchema,
+  ContainerResourceLimitsSchema,
+  NetworkAccessModeSchema,
+} from "./models.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
@@ -234,6 +239,10 @@ export const EnvironmentSetupSessionSnapshotSchema = Schema.Struct({
   terminalRunning: Schema.Boolean,
   hasOutput: optionalBoolean,
 });
+/** `EnvironmentSetupSession`: a setup terminal's state, as the web's types re-export it. */
+export type EnvironmentSetupSessionSnapshot = Mutable<
+  typeof EnvironmentSetupSessionSnapshotSchema.Type
+>;
 
 /** `LogStorageStats` (`log-storage.ts`). */
 export const LogStorageStatsSchema = Schema.Struct({

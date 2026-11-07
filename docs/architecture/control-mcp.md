@@ -75,7 +75,7 @@ existing Codex and Claude Code setups kept working unchanged.
 
 | Profile | Tools listed | Default capabilities | Text in results |
 | --- | --- | --- | --- |
-| `voice` | the 8 voice core tools and the 4 gateway tools | all but `projects`, `settings`, `environments.destructive`, `exec` | a short speakable `say` sentence, the IDs the next call needs, a `next` hint; at most 2 KB |
+| `voice` | the 8 voice core tools, the 4 [agent voice chat](control-mcp-voice.md#agent-voice-chat) tools and the 4 gateway tools | all but `projects`, `settings`, `environments.destructive`, `exec` | a short speakable `say` sentence, the IDs the next call needs, a `next` hint; at most 2 KB |
 | `full` | the operator tools (the 18 original tools, `list_nodes`, the Multi Review tools, `create_pr`, `resolve_conflicts` and `merge_pr`), the voice core, the gateway, and one direct tool per allowed public action (the [pull request tools](#pull-requests) among them) | every capability except `host` | compact JSON |
 | `read-only` | the same shape as `full`, reads only | every capability except `host`; every mutation is refused | compact JSON |
 | `custom` | the same shape as `full` | an explicit list | compact JSON |
@@ -124,8 +124,9 @@ retried.
 
 With the full profile the default credential lists the leaf-node, review and
 PR tools alongside eight `schedule.*` direct tools; clients that defer or
-search tool definitions handle that well. The voice list stays within its 8,000-byte
-budget (12 tools, about 7.6 KB). A client that loads every tool up front is
+search tool definitions handle that well. The voice list stays within its 10,240-byte
+budget (16 tools, about 9.6 KB; it was 8,000 bytes for 12 tools before agent
+voice chat). A client that loads every tool up front is
 better served by a `voice` or `custom` credential.
 
 ## Tool tiers
@@ -134,6 +135,12 @@ better served by a `voice` or `custom` credential.
   `prompt_session`, `steer_session`, `stop_session`, `answer_question`,
   `start_work` (`control-mcp-voice.ts`). A core tool may compose several reads;
   every mutation is exactly one public action under the caller's `requestId`.
+  Beside it, the **agent voice chat** tools `agent_voice_chat_say`,
+  `agent_voice_chat_listen`, `agent_voice_chat_end` and
+  `agent_voice_chat_interrupt` (`control-mcp-agent-voice-chat.ts`), listed for
+  every operator credential that may run `session.prompt` and
+  `session.transcript` (the interrupt also needs `session.steer` and
+  `session.stop`); see [control-mcp-voice.md](control-mcp-voice.md#agent-voice-chat).
 - **Tier 1, gateway:** `find_actions(query?, group?)` (at most 15 rows, each
   with its confirmation rule and whether this credential may call it),
   `describe_action(action)` (input JSON Schema, up to two examples, wait

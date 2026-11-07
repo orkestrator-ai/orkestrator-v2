@@ -3,7 +3,7 @@ import { fromJsonSchema, type JsonSchemaType } from "@modelcontextprotocol/serve
 /**
  * Small hand-written input schemas for the voice core and gateway tools.
  *
- * The voice profile's whole `tools/list` must fit in 8,000 bytes, and a Zod
+ * The voice profile's whole `tools/list` must fit in 10,240 bytes, and a Zod
  * schema publishes `$schema` plus every bound. These tools only shape a call
  * into a public action, whose handler validates every value authoritatively,
  * so their schemas name the fields, types, enums and required set and leave

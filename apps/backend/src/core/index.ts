@@ -206,6 +206,10 @@ import {
   sessionTitleGenerationEnabled,
 } from "./session-title-service.js";
 import {
+  createAgentVoiceChatReplier,
+  type AgentVoiceChatReplier,
+} from "./agent-voice-chat-replies.js";
+import {
   dispatchMultiReviewAddressFindingsPrompt,
   recoverMissingMultiReviewAddressFindingsSession,
 } from "./multi-review-address-findings-dispatch.js";
@@ -404,6 +408,8 @@ export class OrkestratorBackend {
   private readonly scheduledJobs: ScheduledJobService;
   /** Unsubscribes the container lifecycle reactor (`container-lifecycle-events.ts`). */
   private removeContainerLifecycleListener: (() => void) | null = null;
+  /** Writes agent voice chat replies for Control MCP; created with the command context. */
+  private agentVoiceChatReplier: AgentVoiceChatReplier | null = null;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -613,6 +619,12 @@ export class OrkestratorBackend {
           process.env,
           isDefaultDataDir(options.dataDir),
         ),
+        agentVoiceChatReply: (input) => {
+          if (!this.agentVoiceChatReplier) {
+            return Promise.reject(new Error("Agent voice chat replies are unavailable"));
+          }
+          return this.agentVoiceChatReplier.reply(input);
+        },
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
@@ -704,6 +716,8 @@ export class OrkestratorBackend {
     context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
       this.workflowResults.deleteByEnvironment(environmentId);
     this.context = context;
+    // Never under `bun test`: a reply run would use this machine's real agent login.
+    this.agentVoiceChatReplier = createAgentVoiceChatReplier(context);
     context.runtime.gitHubCli.pin(resolveManagedBinary(context, "gh"));
     this.hostMaintenance.setReaders({
       impact: () => readRestartImpact(context),
@@ -3121,6 +3135,12 @@ export class OrkestratorBackend {
         } catch (error) {
           log.warn("shutdown.step-failed", { step: "native-agents", error: formatLogError(error) });
         }
+        await this.agentVoiceChatReplier?.shutdown().catch((error: unknown) => {
+          log.warn("shutdown.step-failed", {
+            step: "agent-voice-chat-replies",
+            error: formatLogError(error),
+          });
+        });
         // After the service above stops its verifiers, so none loses a provider mid-call.
         this.goalVerifierProviders.shutdown();
         try {

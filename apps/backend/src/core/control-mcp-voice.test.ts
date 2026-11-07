@@ -6,6 +6,7 @@ import { PUBLIC_ACTIONS } from "@orkestrator/protocol/public-api";
 import { PUBLIC_ACTION_INPUTS } from "@orkestrator/protocol/public-api-inputs";
 import { DIRECT_TOOL_ACTIONS, directToolName } from "./control-mcp-direct-tools.js";
 import { GATEWAY_TOOL_NAMES } from "./control-mcp-gateway.js";
+import { AGENT_VOICE_CHAT_TOOL_NAMES } from "./control-mcp-agent-voice-chat.js";
 import { seedCoordinator } from "./public-api/test-coordinator.js";
 import { ControlMcpNodeError, OPERATOR_TOOL_ACTIONS } from "./control-mcp-operator-tools.js";
 import { controlMcpHarness } from "./control-mcp-test-support.js";
@@ -39,6 +40,10 @@ const VOICE_TOOLS = [
   "stop_session",
   "answer_question",
   "start_work",
+  "agent_voice_chat_say",
+  "agent_voice_chat_listen",
+  "agent_voice_chat_end",
+  "agent_voice_chat_interrupt",
   "find_actions",
   "describe_action",
   "run_action",
@@ -123,7 +128,8 @@ describe("Control MCP profiles", () => {
 
     expect((await harness.list(voice.token)).tools.map((tool) => tool.name)).toEqual(VOICE_TOOLS);
     expect(VOICE_CORE_TOOL_NAMES).toEqual(VOICE_TOOLS.slice(0, 8));
-    expect<string[]>([...GATEWAY_TOOL_NAMES]).toEqual(VOICE_TOOLS.slice(8));
+    expect(AGENT_VOICE_CHAT_TOOL_NAMES).toEqual(VOICE_TOOLS.slice(8, 12));
+    expect<string[]>([...GATEWAY_TOOL_NAMES]).toEqual(VOICE_TOOLS.slice(12));
 
     const direct = DIRECT_TOOL_ACTIONS.map(directToolName);
     expect((await harness.list(harness.defaultToken)).tools.map((tool) => tool.name)).toEqual([

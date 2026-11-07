@@ -96,12 +96,28 @@ export const CLAUDE_SESSION_TITLE_SYSTEM_PROMPT =
 
 /** A one-model catalog whose only model has no shell and no tools. */
 export function buildCodexTitleModelCatalog(): Record<string, unknown> {
+  return buildCodexOneShotModelCatalog({
+    displayName: "Session title generator",
+    description: "Tool-free model profile for short session titles.",
+    baseInstructions: SESSION_TITLE_BASE_INSTRUCTIONS,
+  });
+}
+
+/**
+ * A one-model catalog for any one-shot, tool-free Codex run (session titles,
+ * agent voice chat replies): the model has no shell and no tools.
+ */
+export function buildCodexOneShotModelCatalog(profile: {
+  displayName: string;
+  description: string;
+  baseInstructions: string;
+}): Record<string, unknown> {
   return {
     models: [
       {
         slug: CODEX_BACKGROUND_TASK_MODEL,
-        display_name: "Session title generator",
-        description: "Tool-free model profile for short session titles.",
+        display_name: profile.displayName,
+        description: profile.description,
         default_reasoning_level: CODEX_BACKGROUND_TASK_REASONING_EFFORT,
         supported_reasoning_levels: [
           { effort: CODEX_BACKGROUND_TASK_REASONING_EFFORT, description: "Fast title generation" },
@@ -112,7 +128,7 @@ export function buildCodexTitleModelCatalog(): Record<string, unknown> {
         priority: 0,
         availability_nux: null,
         upgrade: null,
-        base_instructions: SESSION_TITLE_BASE_INSTRUCTIONS,
+        base_instructions: profile.baseInstructions,
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: "low",
@@ -147,6 +163,24 @@ export function buildCodexTitleCommandArgs(
   modelCatalogPath: string,
   outputSchemaPath: string,
 ): string[] {
+  return buildCodexOneShotCommandArgs(
+    temporaryDirectory,
+    outputPath,
+    modelCatalogPath,
+    outputSchemaPath,
+  );
+}
+
+/**
+ * `codex exec` for one isolated, tool-free run reading its prompt on stdin.
+ * Without an output schema the last message is plain text.
+ */
+export function buildCodexOneShotCommandArgs(
+  temporaryDirectory: string,
+  outputPath: string,
+  modelCatalogPath: string,
+  outputSchemaPath?: string,
+): string[] {
   return [
     "--model",
     CODEX_BACKGROUND_TASK_MODEL,
@@ -170,8 +204,7 @@ export function buildCodexTitleCommandArgs(
     "--ignore-user-config",
     "--ignore-rules",
     "--strict-config",
-    "--output-schema",
-    outputSchemaPath,
+    ...(outputSchemaPath ? ["--output-schema", outputSchemaPath] : []),
     "--output-last-message",
     outputPath,
     "-",
@@ -219,6 +252,11 @@ export async function generateCodexSessionTitle(input: SessionTitleRunInput): Pr
 }
 
 export function buildClaudeTitleCommandArgs(): string[] {
+  return buildClaudeOneShotCommandArgs(CLAUDE_SESSION_TITLE_SYSTEM_PROMPT);
+}
+
+/** `claude --print` for one isolated, tool-free run under `systemPrompt`. */
+export function buildClaudeOneShotCommandArgs(systemPrompt: string): string[] {
   return [
     "--print",
     // Capability isolation is enforced by the CLI, not by the prompt framing:
@@ -235,7 +273,7 @@ export function buildClaudeTitleCommandArgs(): string[] {
     "--model",
     "haiku",
     "--system-prompt",
-    CLAUDE_SESSION_TITLE_SYSTEM_PROMPT,
+    systemPrompt,
   ];
 }
 

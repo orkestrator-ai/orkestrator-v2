@@ -208,15 +208,14 @@ export function sessionTitleGenerationEnabled(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * The production service: the managed CLIs, launched on the active account
+ * How a production one-shot run (a session title, an agent voice chat reply)
+ * finds a login and launches its CLI: the managed CLIs, on the active account
  * exactly as that platform's bridge would be, minus the GitHub credential.
  */
-export function createSessionTitleService(context: CommandContext): SessionTitleService {
-  return new SessionTitleService({
-    policy: async () =>
-      resolveSessionTitleGenerationPolicy(
-        (await context.storage.loadConfig()).global.sessionTitleGeneration,
-      ),
+export function oneShotAgentRunDependencies(
+  context: CommandContext,
+): Pick<SessionTitleServiceDependencies, "signedIn" | "launch"> {
+  return {
     signedIn: async (strategy) => {
       const [{ readAgentSignInStatus }, { listAgentAccounts }] = await Promise.all([
         import("./agent-sign-in-status.js"),
@@ -226,7 +225,7 @@ export function createSessionTitleService(context: CommandContext): SessionTitle
         listAccounts: () => listAgentAccounts(context),
         // Only Claude and Codex are asked, and neither reads it.
         cursorStatus: async () => {
-          throw new Error("Cursor status is not used for session titles");
+          throw new Error("Cursor status is not used for one-shot runs");
         },
       });
       return status.state === "signed-in";
@@ -245,5 +244,16 @@ export function createSessionTitleService(context: CommandContext): SessionTitle
       await applyActiveAgentAccountEnvironment(context, "claude", env);
       return { executable, env };
     },
+  };
+}
+
+/** The production service, on {@link oneShotAgentRunDependencies}. */
+export function createSessionTitleService(context: CommandContext): SessionTitleService {
+  return new SessionTitleService({
+    policy: async () =>
+      resolveSessionTitleGenerationPolicy(
+        (await context.storage.loadConfig()).global.sessionTitleGeneration,
+      ),
+    ...oneShotAgentRunDependencies(context),
   });
 }

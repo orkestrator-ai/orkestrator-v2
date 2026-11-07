@@ -166,8 +166,12 @@ export function isApprovalResolution(interactionKind: string, resolutionAction: 
 /** How long a confirm token stays valid. */
 export const CONTROL_MCP_CONFIRM_TOKEN_TTL_MS = 120_000;
 
-/** Byte budget of the voice profile's serialized `tools/list`. */
-export const CONTROL_MCP_VOICE_TOOLS_BUDGET_BYTES = 8_000;
+/**
+ * Byte budget of the voice profile's serialized `tools/list`: the voice core,
+ * the four agent voice chat tools and the gateway, which a voice runtime loads
+ * once at session start (raised from 8,000 when agent voice chat was added).
+ */
+export const CONTROL_MCP_VOICE_TOOLS_BUDGET_BYTES = 10_240;
 
 /** Largest text block a voice-profile result carries. */
 export const CONTROL_MCP_VOICE_TEXT_MAX_BYTES = 2_048;

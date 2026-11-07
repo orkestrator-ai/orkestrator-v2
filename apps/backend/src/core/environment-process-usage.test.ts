@@ -47,7 +47,7 @@ describe("environment process usage", () => {
     expect(commands.has("get_environment_process_usage")).toBe(true);
   });
 
-  test("rejects unexpected arguments and loads every stored environment", async () => {
+  test("drops unexpected arguments and loads every stored environment", async () => {
     const commands = new Map<string, CommandHandler>();
     const loadEnvironments = mock(async () => [environment({ id: "env-1", name: "alpha" })]);
     const snapshot = {
@@ -62,11 +62,8 @@ describe("environment process usage", () => {
       read,
     );
 
-    await expect(
-      commands.get("get_environment_process_usage")!({ extra: true }, {} as CommandContext),
-    ).rejects.toThrow(/Unexpected arguments field: extra/);
-
-    await commands.get("get_environment_process_usage")!({}, {
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
+    await commands.get("get_environment_process_usage")!({ extra: true }, {
       storage: { loadEnvironments },
     } as unknown as CommandContext);
     expect(loadEnvironments).toHaveBeenCalledTimes(1);

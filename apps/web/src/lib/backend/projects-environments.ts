@@ -1,5 +1,6 @@
 import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
 import { hydrationActivity } from "@/lib/hydration-activity";
+import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type {
@@ -88,7 +89,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     knownGeneration?: string,
     knownRevisions: Partial<ResourceRevisionMap> = {},
   ): Promise<ResourceRevisionManifest> {
-    const response = await invoke<unknown>("get_resource_revision_manifest", {
+    const response = await systemApi(client).get_resource_revision_manifest({
       ...(knownGeneration === undefined ? {} : { knownGeneration }),
       knownRevisions,
     });
@@ -104,7 +105,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     knownRevisions: Partial<ResourceRevisionMap> = {},
     highWater?: number,
   ): Promise<ScopedResourceRevisionManifest> {
-    const response = await invoke<unknown>("get_scoped_resource_revision_manifest", {
+    const response = await systemApi(client).get_scoped_resource_revision_manifest({
       ...(knownGeneration === undefined ? {} : { knownGeneration }),
       cursor,
       knownRevisions,
@@ -119,7 +120,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   async function getScopedResourceSnapshots(
     changes: ResourceChange[],
   ): Promise<ScopedResourceSnapshotBatch> {
-    const response = await invoke<unknown>("get_scoped_resource_snapshots", { changes });
+    const response = await systemApi(client).get_scoped_resource_snapshots({ changes });
     if (
       new TextEncoder().encode(JSON.stringify(response)).byteLength >
       SCOPED_RESOURCE_SNAPSHOT_BATCH_MAX_BYTES

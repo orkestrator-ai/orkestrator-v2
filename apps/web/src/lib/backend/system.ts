@@ -1,5 +1,6 @@
+import { asSystemModel, systemApi, systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
-import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /** Current resource use on the host running the Orkestrator backend. */
 export interface SystemUsageSnapshot {
@@ -49,23 +50,26 @@ export interface EnvironmentProcessUsageSnapshot {
  * over the window's command scope.
  */
 export function createSystemApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
-  const machineInvoke = machineInvoker(client);
+  const system = () => systemApi(client);
+  /** Today's call without an arguments object (the version-0 adapter sends exactly that). */
+  const noArgs = undefined as never;
 
   /** Running Orkestrator version reported by the connected backend. */
   async function getAppVersion(machine?: AccountMachine): Promise<string> {
     return machine === undefined
-      ? invoke<string>("get_app_version")
-      : machineInvoke<string>(machine, "get_app_version");
+      ? system().get_app_version(noArgs)
+      : systemApiOn(client, machine).get_app_version({});
   }
 
   async function getSystemUsage(): Promise<SystemUsageSnapshot> {
-    return invoke<SystemUsageSnapshot>("get_system_usage");
+    return system().get_system_usage(noArgs);
   }
 
   /** Live CPU/RAM for child processes of every running environment. */
   async function getEnvironmentProcessUsage(): Promise<EnvironmentProcessUsageSnapshot> {
-    return invoke<EnvironmentProcessUsageSnapshot>("get_environment_process_usage");
+    return asSystemModel<EnvironmentProcessUsageSnapshot>(
+      system().get_environment_process_usage(noArgs),
+    );
   }
 
   return { getAppVersion, getSystemUsage, getEnvironmentProcessUsage };

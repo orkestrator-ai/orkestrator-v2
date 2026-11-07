@@ -143,12 +143,13 @@ describe("bug report service", () => {
     await expect(
       write({ reportId: "unknown", filename: "x.png", base64Data: PNG }, context),
     ).rejects.toThrow("discarded");
-    await expect(
-      write(
-        { reportId: report!.id, filename: "x.png", base64Data: PNG, worktreePath: "/tmp" },
-        context,
-      ),
-    ).rejects.toThrow();
+    // An unknown key is dropped (a defined command, plan item 7009), never honoured:
+    // the file still lands in the report's own scratch directory.
+    const stripped = (await write(
+      { reportId: report!.id, filename: "x.png", base64Data: PNG, worktreePath: "/tmp" },
+      context,
+    )) as string;
+    expect(path.dirname(stripped)).toBe(path.join(report!.scratchDir, "screenshots"));
     await expect(
       write({ reportId: report!.id, filename: "x.png", base64Data: "%%%" }, context),
     ).rejects.toThrow();

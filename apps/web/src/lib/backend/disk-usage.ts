@@ -5,8 +5,9 @@ import type {
   WorktreeLocationsSnapshot,
 } from "@orkestrator/protocol/disk-usage";
 
+import { asSystemModel, systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
-import { commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 export type {
   DevProfileDiskUsage,
@@ -23,19 +24,24 @@ export type {
  * over the window's command scope.
  */
 export function createDiskUsageApi(client: BackendClient) {
-  const machineInvoke = machineInvoker(client);
+  /** `machine`'s `system` domain; the factory's own node when it is `undefined`. */
+  const systemOn = (machine: AccountMachine) => systemApiOn(client, machine);
 
   /** Each project's Git mirror with its size, measured on each call. */
   async function listProjectGitMirrorUsage(
     machine?: AccountMachine,
   ): Promise<ProjectGitMirrorUsage[]> {
-    return machineInvoke<ProjectGitMirrorUsage[]>(machine, "list_project_git_mirror_usage");
+    return asSystemModel<ProjectGitMirrorUsage[]>(
+      systemOn(machine).list_project_git_mirror_usage({}),
+    );
   }
 
   async function listDiskUsageEnvironments(
     machine?: AccountMachine,
   ): Promise<DiskUsageEnvironmentSummary[]> {
-    return machineInvoke<DiskUsageEnvironmentSummary[]>(machine, "list_disk_usage_environments");
+    return asSystemModel<DiskUsageEnvironmentSummary[]>(
+      systemOn(machine).list_disk_usage_environments({}),
+    );
   }
 
   /** Sizes of an environment's worktree or container and its dev profiles; cached for minutes unless `refresh`. */
@@ -44,16 +50,13 @@ export function createDiskUsageApi(client: BackendClient) {
     refresh = false,
     machine?: AccountMachine,
   ): Promise<EnvironmentDiskUsage> {
-    return machineInvoke<EnvironmentDiskUsage>(machine, "get_environment_disk_usage", {
-      environmentId,
-      refresh,
-    });
+    return systemOn(machine).get_environment_disk_usage({ environmentId, refresh });
   }
 
   async function getWorktreeLocations(
     machine?: AccountMachine,
   ): Promise<WorktreeLocationsSnapshot> {
-    return machineInvoke<WorktreeLocationsSnapshot>(machine, "get_worktree_locations");
+    return systemOn(machine).get_worktree_locations({});
   }
 
   /** Replaces both settings; null clears one back to its default. */
@@ -64,11 +67,7 @@ export function createDiskUsageApi(client: BackendClient) {
     },
     machine?: AccountMachine,
   ): Promise<WorktreeLocationsSnapshot> {
-    return machineInvoke<WorktreeLocationsSnapshot>(
-      machine,
-      "update_worktree_locations",
-      locations,
-    );
+    return systemOn(machine).update_worktree_locations(locations);
   }
 
   return {

@@ -18,6 +18,7 @@ import type {
   PreferredEditor,
   ClaudeModelCatalogSnapshot,
 } from "@/types";
+import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import type { AgentExtensionCatalog } from "./files-sessions";
 import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
@@ -646,7 +647,7 @@ export function createDockerSkillsApi(client: BackendClient) {
   }
 
   async function greet(name: string): Promise<string> {
-    return invoke<string>("greet", { name });
+    return systemApi(client).greet({ name });
   }
 
   async function validateGitUrl(url: string): Promise<boolean> {

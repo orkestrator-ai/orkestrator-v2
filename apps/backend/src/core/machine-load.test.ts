@@ -578,7 +578,8 @@ describe("the get_machine_load command", () => {
     expect(createCommandRegistry().has("get_machine_load")).toBe(true);
     const handler = command();
     expect(() => handler({}, {} as CommandContext)).toThrow("not running");
-    expect(() => handler({ path: "/" }, {} as CommandContext)).toThrow(/Unexpected arguments/);
+    // A defined command drops unknown keys (plan item 7009): the sampler is still needed.
+    expect(() => handler({ path: "/" }, {} as CommandContext)).toThrow("not running");
   });
 
   test("answers from the sampler without taking a reading", async () => {

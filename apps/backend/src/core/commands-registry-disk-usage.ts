@@ -1,4 +1,10 @@
-import { assertOnlyKeys, asString } from "./commands-validation.js";
+import {
+  getEnvironmentDiskUsageCommand,
+  getWorktreeLocationsCommand,
+  listDiskUsageEnvironmentsCommand,
+  listProjectGitMirrorUsageCommand,
+  updateWorktreeLocationsCommand,
+} from "@orkestrator/protocol/contract/domains/system";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   getEnvironmentDiskUsage,
@@ -8,29 +14,22 @@ import {
 import { getWorktreeLocations, updateWorktreeLocations } from "./worktree-locations.js";
 
 export function registerDiskUsageCommands(register: CommandRegistrar): void {
-  register("list_disk_usage_environments", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
-    return listDiskUsageEnvironments(context);
-  });
-  register("list_project_git_mirror_usage", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
-    return listProjectGitMirrorUsage(context);
-  });
-  register("get_environment_disk_usage", (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "refresh"], "arguments");
+  register(listDiskUsageEnvironmentsCommand, (_args, context) =>
+    listDiskUsageEnvironments(context),
+  );
+  register(listProjectGitMirrorUsageCommand, (_args, context) =>
+    listProjectGitMirrorUsage(context),
+  );
+  register(getEnvironmentDiskUsageCommand, (args, context) => {
     if (args.refresh !== undefined && typeof args.refresh !== "boolean") {
       throw new Error("refresh must be a boolean");
     }
-    return getEnvironmentDiskUsage(asString(args.environmentId, "environmentId"), context, {
+    return getEnvironmentDiskUsage(args.environmentId, context, {
       refresh: args.refresh === true,
     });
   });
-  register("get_worktree_locations", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
-    return getWorktreeLocations(context);
-  });
-  register("update_worktree_locations", (args, context) => {
-    assertOnlyKeys(args, ["environments", "dev"], "arguments");
-    return updateWorktreeLocations(args, context);
-  });
+  register(getWorktreeLocationsCommand, (_args, context) => getWorktreeLocations(context));
+  register(updateWorktreeLocationsCommand, (args, context) =>
+    updateWorktreeLocations(args, context),
+  );
 }

@@ -4,6 +4,12 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { parseProjectArrangementIntent } from "@orkestrator/protocol/project-arrangement";
 import {
+  getResourceRevisionManifestCommand,
+  getScopedResourceRevisionManifestCommand,
+  getScopedResourceSnapshotsCommand,
+  greetCommand,
+} from "@orkestrator/protocol/contract/domains/system";
+import {
   isResourceChange,
   type ResourceChange,
   type ResourceManifestKind,
@@ -252,32 +258,34 @@ export function registerProjectCommands(
     planUsageReader,
   } = dependencies;
   register(
-    "greet",
-    ({ name }) =>
-      `Hello, ${asString(name, "name")}! You've been greeted from the Orkestrator backend!`,
+    greetCommand,
+    ({ name }) => `Hello, ${name}! You've been greeted from the Orkestrator backend!`,
   );
-  register("get_resource_revision_manifest", ({ knownGeneration, knownRevisions }, { storage }) => {
-    const parsed: Partial<ResourceRevisionMap> = {};
-    if (knownRevisions !== undefined) {
-      const revisions = asRecord(knownRevisions, "knownRevisions");
-      for (const [resource, revision] of Object.entries(revisions)) {
-        if (!isResourceManifestKind(resource)) {
-          throw new Error(`Unknown manifest resource: ${resource}`);
+  register(
+    getResourceRevisionManifestCommand,
+    ({ knownGeneration, knownRevisions }, { storage }) => {
+      const parsed: Partial<ResourceRevisionMap> = {};
+      if (knownRevisions !== undefined) {
+        const revisions = asRecord(knownRevisions, "knownRevisions");
+        for (const [resource, revision] of Object.entries(revisions)) {
+          if (!isResourceManifestKind(resource)) {
+            throw new Error(`Unknown manifest resource: ${resource}`);
+          }
+          if (!isResourceSnapshotRevision(revision)) {
+            throw new Error(`Invalid manifest revision for ${resource}`);
+          }
+          parsed[resource] = revision;
         }
-        if (!isResourceSnapshotRevision(revision)) {
-          throw new Error(`Invalid manifest revision for ${resource}`);
-        }
-        parsed[resource] = revision;
       }
-    }
-    if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
-      throw new Error("knownGeneration must be an opaque resource generation");
-    }
-    return storage.getResourceRevisionManifest(knownGeneration, parsed);
-  });
+      if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
+        throw new Error("knownGeneration must be an opaque resource generation");
+      }
+      return storage.getResourceRevisionManifest(knownGeneration, parsed);
+    },
+  );
 
   register(
-    "get_scoped_resource_revision_manifest",
+    getScopedResourceRevisionManifestCommand,
     ({ knownGeneration, cursor, highWater, knownRevisions }, { storage }) => {
       const parsed: Partial<ResourceRevisionMap> = {};
       if (knownRevisions !== undefined) {
@@ -312,7 +320,7 @@ export function registerProjectCommands(
     },
   );
 
-  register("get_scoped_resource_snapshots", async ({ changes }, context) => {
+  register(getScopedResourceSnapshotsCommand, async ({ changes }, context) => {
     if (
       !Array.isArray(changes) ||
       changes.length > 32 ||

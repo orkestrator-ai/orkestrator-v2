@@ -32,9 +32,10 @@ test("backend lifecycle persists compatibility counts, detaches on shutdown, and
   try {
     await first.init();
     expect(first.hasCommand("get_compatibility_path_usage")).toBe(true);
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
     await expect(
       first.invoke("get_compatibility_path_usage", { unexpected: true }),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({ version: 1 });
     const before = await first.invoke<CompatibilityPathUsageSnapshot>(
       "get_compatibility_path_usage",
     );

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
-import type { CommandRegistrar } from "./commands-registry-types.js";
+import { registrarFrom } from "./commands-registry-contracts.js";
 import {
   registerScheduledJobCommands,
   schedulerStatus,
@@ -11,9 +11,10 @@ type Handler = (args: Record<string, unknown>, context: CommandContext) => Promi
 
 function commands(): Map<string, Handler> {
   const registered = new Map<string, Handler>();
-  registerScheduledJobCommands(((name: string, handler: Handler) => {
-    registered.set(name, handler);
-  }) as unknown as CommandRegistrar);
+  // The commands are defined (plan item 7009): the registrar decodes their arguments.
+  registerScheduledJobCommands(
+    registrarFrom((name, handler) => registered.set(name, handler as Handler)),
+  );
   return registered;
 }
 

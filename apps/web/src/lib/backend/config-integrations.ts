@@ -49,6 +49,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
+import { systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
@@ -499,12 +500,12 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getDatabaseStats(machine?: AccountMachine): Promise<DatabaseStats> {
-    return machineInvoke<DatabaseStats>(machine, "get_database_stats");
+    return systemApiOn(client, machine).get_database_stats({});
   }
 
   /** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
   async function planDiagnosticsBundle(machine?: AccountMachine): Promise<DiagnosticsBundlePlan> {
-    return machineInvoke<DiagnosticsBundlePlan>(machine, "plan_diagnostics_bundle");
+    return systemApiOn(client, machine).plan_diagnostics_bundle({});
   }
 
   async function readDiagnosticsBundle(
@@ -512,7 +513,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     offset: number,
     machine?: AccountMachine,
   ): Promise<DiagnosticsBundleChunk> {
-    return machineInvoke<DiagnosticsBundleChunk>(machine, "read_diagnostics_bundle", {
+    return systemApiOn(client, machine).read_diagnostics_bundle({
       planId,
       offset,
     });

@@ -5,7 +5,8 @@ import type {
   ScheduledJobSummary,
   SchedulerStatus,
 } from "@orkestrator/protocol/scheduled-jobs";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { asSystemModel, systemApi } from "@/lib/node-scope/domains/system";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Scheduled jobs on the connected backend. The app acts as the operator: it
@@ -29,17 +30,17 @@ export interface ScheduledJobTimingInput {
  * over the window's command scope.
  */
 export function createScheduledJobsApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const system = () => systemApi(client);
 
   /** `scheduler` is absent from a backend that predates it. */
   function listScheduledJobs(
     filter: { projectId?: string; state?: string } = {},
   ): Promise<{ schedules: ScheduledJobSummary[]; scheduler?: SchedulerStatus }> {
-    return invoke("list_scheduled_jobs", filter);
+    return asSystemModel(system().list_scheduled_jobs(filter));
   }
 
   function getScheduledJob(scheduleId: string): Promise<ScheduledJob> {
-    return invoke("get_scheduled_job", { scheduleId });
+    return system().get_scheduled_job({ scheduleId });
   }
 
   function createScheduledJob(
@@ -49,32 +50,32 @@ export function createScheduledJobsApi(client: BackendClient) {
       requestId?: string;
     },
   ): Promise<{ schedule: ScheduledJob; replayed: boolean }> {
-    return invoke("create_scheduled_job", { ...input });
+    return system().create_scheduled_job({ ...input });
   }
 
   function updateScheduledJob(
     scheduleId: string,
     input: ScheduledJobTimingInput & { action?: ScheduleAction; expectedRevision?: number },
   ): Promise<ScheduledJob> {
-    return invoke("update_scheduled_job", { scheduleId, ...input });
+    return system().update_scheduled_job({ scheduleId, ...input });
   }
 
   function pauseScheduledJob(scheduleId: string): Promise<ScheduledJob> {
-    return invoke("pause_scheduled_job", { scheduleId });
+    return system().pause_scheduled_job({ scheduleId });
   }
 
   function resumeScheduledJob(scheduleId: string): Promise<ScheduledJob> {
-    return invoke("resume_scheduled_job", { scheduleId });
+    return system().resume_scheduled_job({ scheduleId });
   }
 
   function runScheduledJob(scheduleId: string): Promise<{ job: ScheduledJob; fire: ScheduleFire }> {
-    return invoke("run_scheduled_job", { scheduleId });
+    return system().run_scheduled_job({ scheduleId });
   }
 
   function deleteScheduledJob(
     scheduleId: string,
   ): Promise<{ scheduleId: string; deleted: boolean }> {
-    return invoke("delete_scheduled_job", { scheduleId });
+    return system().delete_scheduled_job({ scheduleId });
   }
 
   return {

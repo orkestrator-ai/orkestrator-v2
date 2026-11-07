@@ -83,15 +83,16 @@ describe("log storage commands", () => {
 });
 
 describe("database and diagnostics commands", () => {
-  test("get_database_stats reports through the backend's diagnostics and refuses arguments", () => {
+  test("get_database_stats reports through the backend's diagnostics and drops arguments", () => {
     const commands = createCommandRegistry();
     const stats = { generatedAt: "now", leaseWaits: {} };
     const context = {
       diagnostics: { databaseStats: () => stats },
     } as unknown as CommandContext;
     expect(commands.get("get_database_stats")?.({}, context) as unknown).toEqual(stats);
-    expect(() => commands.get("get_database_stats")?.({ path: "/etc" }, context)).toThrow(
-      /Unexpected arguments field: path/,
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
+    expect(commands.get("get_database_stats")?.({ path: "/etc" }, context) as unknown).toEqual(
+      stats,
     );
   });
 

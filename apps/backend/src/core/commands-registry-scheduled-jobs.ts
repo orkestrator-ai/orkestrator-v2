@@ -3,8 +3,18 @@ import type {
   SchedulerStatus,
   ScheduleState,
 } from "@orkestrator/protocol/scheduled-jobs";
-import type { CommandContext } from "./commands-context.js";
-import type { CommandRegistrar } from "./commands-registry-types.js";
+import {
+  createScheduledJobCommand,
+  deleteScheduledJobCommand,
+  getScheduledJobCommand,
+  listScheduledJobsCommand,
+  pauseScheduledJobCommand,
+  resumeScheduledJobCommand,
+  runScheduledJobCommand,
+  updateScheduledJobCommand,
+} from "@orkestrator/protocol/contract/domains/system";
+import type { CommandContext, CommandHandler, CommandInvocation } from "./commands-context.js";
+import type { CommandRegistrar, DefinedCommandOptions } from "./commands-registry-types.js";
 import type {
   ScheduleCreateInput,
   ScheduledJobService,
@@ -20,6 +30,11 @@ import type {
  * under {@link SCHEDULE_ACTOR}. A symbol key cannot cross the gateway's JSON
  * boundary, so only in-process callers (the coordinator tools, acting for the
  * coordinator their credential authenticated) can act as anyone else.
+ *
+ * The commands are defined (plan item 7009), and decoding the arguments keeps
+ * only their declared string keys, so the actor is read from the raw
+ * arguments before decoding ({@link scheduleActorRegistration}) and reaches
+ * the handler on its invocation.
  */
 export const SCHEDULE_ACTOR: unique symbol = Symbol("orkestrator.schedule-actor");
 
@@ -30,9 +45,22 @@ export function withScheduleActor(
   return Object.assign({ ...args }, { [SCHEDULE_ACTOR]: actor });
 }
 
-function actorOf(args: Record<string, unknown>): ScheduleOwner {
-  const actor = (args as { [SCHEDULE_ACTOR]?: ScheduleOwner })[SCHEDULE_ACTOR];
-  return actor ?? { kind: "operator" };
+type ScheduleInvocation = CommandInvocation & { readonly [SCHEDULE_ACTOR]?: ScheduleOwner };
+
+/** Moves an in-process caller's actor from the raw arguments onto the invocation. */
+const scheduleActorRegistration: DefinedCommandOptions = {
+  beforeDecode:
+    (run: CommandHandler): CommandHandler =>
+    (args, context, invocation) => {
+      const actor = (args as { [SCHEDULE_ACTOR]?: ScheduleOwner })[SCHEDULE_ACTOR];
+      if (actor === undefined) return run(args, context, invocation);
+      const carried: ScheduleInvocation = { ...invocation, [SCHEDULE_ACTOR]: actor };
+      return run(args, context, carried);
+    },
+};
+
+function actorOf(invocation: CommandInvocation | undefined): ScheduleOwner {
+  return (invocation as ScheduleInvocation | undefined)?.[SCHEDULE_ACTOR] ?? { kind: "operator" };
 }
 
 export const SCHEDULING_DISABLED_MESSAGE =
@@ -159,48 +187,76 @@ export function schedulerStatus(
 }
 
 export function registerScheduledJobCommands(register: CommandRegistrar): void {
-  register("list_scheduled_jobs", async (args, context) => ({
-    schedules: (await service(context)).list(actorOf(args), scheduleListFilter(args)),
-    // Additive: a renderer that predates it ignores it and shows no notice.
-    scheduler: schedulerStatus(context.registryWriterLease),
-    revision: Date.now(),
-  }));
-  register("get_scheduled_job", async (args, context) =>
-    (await service(context)).get(actorOf(args), requiredString(args, "scheduleId")),
+  const options = scheduleActorRegistration;
+  register(
+    listScheduledJobsCommand,
+    async (args, context, invocation) => ({
+      schedules: (await service(context)).list(actorOf(invocation), scheduleListFilter(args)),
+      // Additive: a renderer that predates it ignores it and shows no notice.
+      scheduler: schedulerStatus(context.registryWriterLease),
+      revision: Date.now(),
+    }),
+    options,
   );
-  register("create_scheduled_job", async (args, context) => {
-    const requestId = optionalString(args, "requestId");
-    const { job, replayed } = await (
-      await service(context)
-    ).create(actorOf(args), scheduleCreateArgs(args), requestId);
-    return { schedule: job, replayed };
-  });
-  register("update_scheduled_job", async (args, context) => {
-    const input: ScheduleUpdateInput = {
-      ...scheduleTimingArgs(args),
-      ...(args.action !== undefined
-        ? { action: args.action as ScheduleUpdateInput["action"] }
-        : {}),
-      ...(optionalInteger(args, "expectedRevision") !== undefined
-        ? { expectedRevision: optionalInteger(args, "expectedRevision") }
-        : {}),
-    };
-    return (await service(context)).update(
-      actorOf(args),
-      requiredString(args, "scheduleId"),
-      input,
-    );
-  });
-  register("pause_scheduled_job", async (args, context) =>
-    (await service(context)).pause(actorOf(args), requiredString(args, "scheduleId")),
+  register(
+    getScheduledJobCommand,
+    async (args, context, invocation) =>
+      (await service(context)).get(actorOf(invocation), requiredString(args, "scheduleId")),
+    options,
   );
-  register("resume_scheduled_job", async (args, context) =>
-    (await service(context)).resume(actorOf(args), requiredString(args, "scheduleId")),
+  register(
+    createScheduledJobCommand,
+    async (args, context, invocation) => {
+      const requestId = optionalString(args, "requestId");
+      const { job, replayed } = await (
+        await service(context)
+      ).create(actorOf(invocation), scheduleCreateArgs(args), requestId);
+      return { schedule: job, replayed };
+    },
+    options,
   );
-  register("run_scheduled_job", async (args, context) =>
-    (await service(context)).runNow(actorOf(args), requiredString(args, "scheduleId")),
+  register(
+    updateScheduledJobCommand,
+    async (args, context, invocation) => {
+      const input: ScheduleUpdateInput = {
+        ...scheduleTimingArgs(args),
+        ...(args.action !== undefined
+          ? { action: args.action as ScheduleUpdateInput["action"] }
+          : {}),
+        ...(optionalInteger(args, "expectedRevision") !== undefined
+          ? { expectedRevision: optionalInteger(args, "expectedRevision") }
+          : {}),
+      };
+      return (await service(context)).update(
+        actorOf(invocation),
+        requiredString(args, "scheduleId"),
+        input,
+      );
+    },
+    options,
   );
-  register("delete_scheduled_job", async (args, context) =>
-    (await service(context)).delete(actorOf(args), requiredString(args, "scheduleId")),
+  register(
+    pauseScheduledJobCommand,
+    async (args, context, invocation) =>
+      (await service(context)).pause(actorOf(invocation), requiredString(args, "scheduleId")),
+    options,
+  );
+  register(
+    resumeScheduledJobCommand,
+    async (args, context, invocation) =>
+      (await service(context)).resume(actorOf(invocation), requiredString(args, "scheduleId")),
+    options,
+  );
+  register(
+    runScheduledJobCommand,
+    async (args, context, invocation) =>
+      (await service(context)).runNow(actorOf(invocation), requiredString(args, "scheduleId")),
+    options,
+  );
+  register(
+    deleteScheduledJobCommand,
+    async (args, context, invocation) =>
+      (await service(context)).delete(actorOf(invocation), requiredString(args, "scheduleId")),
+    options,
   );
 }

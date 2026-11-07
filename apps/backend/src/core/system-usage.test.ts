@@ -55,8 +55,9 @@ describe("system usage", () => {
     registerSystemCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     expect(createCommandRegistry().has("get_app_version")).toBe(true);
     expect(commands.get("get_app_version")!({}, {} as CommandContext)).toBe(APP_VERSION);
-    expect(() => commands.get("get_app_version")!({ extra: true }, {} as CommandContext)).toThrow(
-      /Unexpected arguments field: extra/,
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
+    expect(commands.get("get_app_version")!({ extra: true }, {} as CommandContext)).toBe(
+      APP_VERSION,
     );
   });
 

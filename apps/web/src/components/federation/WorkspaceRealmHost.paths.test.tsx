@@ -175,11 +175,12 @@ for (const [name, makePath] of [
   ["in-tree loopback", loopbackPath],
 ] as const) {
   describe(`on the ${name} path`, () => {
-    test("the realm says ready once it listens, and opens on its request", async () => {
+    test("a realm says ready once it listens (an in-tree node has no handshake), and opens on its request", async () => {
       const path = makePath();
       path.open({ projectId: project.id, environmentId: environment.id });
       await settle();
-      expect(path.posted()).toContainEqual({ type: "ready" });
+      if (name === "realm document") expect(path.posted()).toContainEqual({ type: "ready" });
+      else expect(path.posted()).toEqual([]);
       await act(async () => resolveProjects([project]));
       await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(environment.id));
       expect(useUIStore.getState().selectedProjectId).toBe(project.id);

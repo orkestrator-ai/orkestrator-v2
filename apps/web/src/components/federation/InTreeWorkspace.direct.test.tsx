@@ -428,3 +428,45 @@ test("open: a cross-node open from inside the in-tree workspace is the window's 
   await settle();
   expect(exchanged("open")).toEqual([]);
 });
+
+test("ready: there is no handshake, and the window's title-bar requests still reach the node", async () => {
+  await openLeaf();
+  await settle();
+  expect(exchanged("ready")).toEqual([]);
+  // A title-bar popover request (plan item 5002's message) is delivered
+  // without one: the document listens from its first commit.
+  act(() => useRemoteWorkspaceStore.getState().requestRealmPanel(LEAF, "usage", true, 12));
+  await settle();
+  expect(
+    traffic.some((entry) => entry.direction === "to-realm" && entry.message.type === "panel"),
+  ).toBe(true);
+});
+
+test("done when: an in-tree node exchanges none of the navigation messages", async () => {
+  // Open, navigate, open dialogs, toggle chrome, hide and show again.
+  const scope = await openLeaf({ projectId: project.id, environmentId: environment.id });
+  loadConfig(scope);
+  await waitFor(() =>
+    expect(scope.store(uiStore).getState().selectedEnvironmentId).toBe(environment.id),
+  );
+  act(() => useUIChromeStore.getState().setSidebarOpen(false));
+  act(() => useFilesPanelChromeStore.getState().openPanel());
+  act(() => useMachineViewStore.setState({ grouping: "repository" }));
+  act(() =>
+    openMachineWorkspace({
+      connectionId: LEAF,
+      projectId: project.id,
+      dialog: "repository-settings",
+      title: project.name,
+    }),
+  );
+  await waitFor(() =>
+    expect(useAppDialogStore.getState().request?.kind).toBe("repository-settings"),
+  );
+  act(() => useRemoteWorkspaceStore.getState().showLocal());
+  act(() =>
+    openMachineWorkspace({ connectionId: LEAF, projectId: project.id, title: project.name }),
+  );
+  await settle();
+  expect(directTraffic()).toEqual([]);
+});

@@ -58,7 +58,8 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * not sent either: a hidden node is the scope's tier (plan item 4002). Nor
  * is the window's request (`select`): the node's `WorkspaceRealmHost` reads
  * `requests[nodeId]` here and applies it once the node's stores have what it
- * needs.
+ * needs. Nor is there a `ready` handshake: the document is listening once it
+ * is committed.
  */
 export interface RealmRequestsOptions {
   /** The node is shown in the window's own tree (`InTreeWorkspace`), over a loopback. */
@@ -94,6 +95,11 @@ export function useRealmRequests(
   useLayoutEffect(() => {
     latest.current = { request, sidebarOpen, filesPanelOpen, phoneLayout, grouping, shown, send };
   });
+  // In the window's tree there is no `ready` (plan item 4005): a document
+  // listens from its first commit, before this hook's passive effects send.
+  useLayoutEffect(() => {
+    if (inTree && send) ready.current = true;
+  }, [inTree, send]);
 
   const flush = useCallback(() => {
     // In the window's tree the node's host reads the request from the window's store.

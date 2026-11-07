@@ -225,7 +225,9 @@ export function WorkspaceRealmHost() {
       }),
     [channel, inTree],
   );
-  useEffect(() => channel.post({ type: "ready" }), [channel]);
+  // In the window's tree nothing waits for `ready`: the request is read from
+  // the window's store, and the node's hydration gates its dialogs (4005).
+  useEffect(() => (inTree ? undefined : channel.post({ type: "ready" })), [channel, inTree]);
   // The window asked for this node's Report a bug sheet, which runs here so
   // its agent session talks to this node.
   const bugReportSeq = useRef(resumedSeq);

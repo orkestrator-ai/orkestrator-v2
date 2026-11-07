@@ -16,6 +16,7 @@
  * | `data-saving-read-policy` | command scope | window-level: feeds the window's read policy |
  * | `pane-layout-persistence` | command scope | its store is a command-scope singleton until plan item 3013 |
  * | `build-pipeline-completion-notes` | command scope | its stores are command-scope singletons until 3011 and 3013 |
+ * | `node-snapshot` | every scope | a leaf writes its local snapshot; the command scope drops removed nodes' (4003) |
  *
  * `COMMAND_SCOPE_SERVICES` is what `App` starts for the command scope.
  * `WARM_SCOPE_SERVICES` is the light set a later warm scope starts (plan item
@@ -45,6 +46,7 @@ import {
 import { scopeBackendClient } from "@/lib/backend/client";
 import { systemApi } from "@/lib/node-scope/domains/system";
 import { isAppCommandScope } from "@/lib/node-scope-slots";
+import { nodeSnapshotService } from "@/lib/node-snapshots";
 import { paneLayoutPersistenceService } from "@/lib/pane-layout-persistence";
 import { startResourceSync, type ResourceSyncOptions } from "@/lib/resource-sync";
 import { storeResourceSyncService } from "@/lib/store-resource-sync";
@@ -123,7 +125,7 @@ export const resourceSyncService = defineScopedService("resource-sync", (scope) 
  * The light set: the main stream, its store bindings and its connectivity,
  * then the node's pane-layout persistence (the layout the bindings adopt and
  * the writes a tab change makes) and its completion notes, which open a tab in
- * that layout (plan item 3013).
+ * that layout (plan item 3013), and its local snapshot (plan item 4003).
  */
 export const WARM_SCOPE_SERVICES: readonly ScopedServiceDef[] = [
   resourceSyncService,
@@ -131,6 +133,7 @@ export const WARM_SCOPE_SERVICES: readonly ScopedServiceDef[] = [
   transportConnectivityService,
   paneLayoutPersistenceService,
   buildPipelineCompletionNotesService,
+  nodeSnapshotService,
 ];
 
 /** Everything `App` starts for the command scope, in start order. */

@@ -1,6 +1,17 @@
 import { defineLogAreas } from "./define.js";
 
 export const WEB_SYNC_LOG_AREAS = defineLogAreas({
+  "web.node-snapshot": {
+    description: "Bounded local snapshots of each node's light stores, for snapshot-first paint.",
+    events: {
+      "read-failed": "Reading a node's snapshot failed; the node opens without one.",
+      "write-failed": "Writing a node's snapshot failed; the next interval tries again.",
+      refused:
+        "A snapshot broke the content rules or the per-node byte bound; nothing was written.",
+      evicted: "Least recently used snapshots were dropped to keep the total bounds.",
+      "clear-failed": "Dropping one or every snapshot failed.",
+    },
+  },
   "web.resource-sync": {
     description: "Keeping renderer stores current with backend resources.",
     events: {

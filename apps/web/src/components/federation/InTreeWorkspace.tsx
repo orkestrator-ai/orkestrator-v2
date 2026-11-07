@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useFederation } from "./FederationProvider";
 import { NodeErrorBoundary } from "./NodeErrorBoundary";
+import { NodeSnapshotPreview, useNodeSnapshot, useScopeSnapshotSync } from "./NodeSnapshotPreview";
 import { nodeName, RealmStatus, useRealmRequests } from "./realm-requests";
 import { WorkspaceRealmHost } from "./WorkspaceRealmHost";
 
@@ -152,6 +153,11 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
     setOpened({ attempt, workspace: { ...workspace, pair, generation: workspace.generation + 1 } });
   };
 
+  // Plan item 4003: the node's local snapshot paints at once, read-only and
+  // marked stale, until the scope's first authoritative read has landed.
+  const snapshot = useNodeSnapshot(nodeId, attempt);
+  const snapshotSync = useScopeSnapshotSync(workspace?.scope ?? null);
+
   const failed = failure?.attempt === attempt ? failure.message : null;
   return (
     <div
@@ -162,12 +168,22 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
       data-testid="in-tree-workspace"
       data-node={nodeId}
     >
-      {!workspace || failed ? (
+      {!workspace && !failed && snapshot ? (
+        <NodeSnapshotPreview snapshot={snapshot} machine={machine} phase="connecting" />
+      ) : !workspace || failed ? (
         <RealmStatus
           failure={failed}
           machine={machine}
           onRetry={() => setAttempt((value) => value + 1)}
         />
+      ) : snapshotSync.state === "resyncing" ? (
+        // The views mount on authoritative data only: a stale environment
+        // would start terminals and boot restores against what it was.
+        snapshot ? (
+          <NodeSnapshotPreview snapshot={snapshot} machine={machine} phase="refreshing" />
+        ) : (
+          <RealmStatus failure={null} machine={machine} onRetry={() => undefined} />
+        )
       ) : (
         <RealmChannelContext.Provider key={workspace.generation} value={workspace.pair.realm}>
           <NodeScopeProvider scope={workspace.scope}>

@@ -18,6 +18,7 @@ import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { noteAuthoritativeRead } from "@/lib/node-scope/snapshot-sync";
 import type { StoreResourceHandlers, StoreResourceSyncContext } from "@/lib/store-resource-sync";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
@@ -67,6 +68,8 @@ function registerEnvironments(context: StoreResourceSyncContext): void {
       !context.disposed() && environments.getState().environments === environmentsAtRequest;
     if (accepted) {
       environments.getState().setEnvironments(snapshots.flat());
+      // A scope painted from its local snapshot waits for this (plan item 4003).
+      noteAuthoritativeRead(context.scope, "environment");
     } else if (!context.disposed()) {
       pass.requeue("environment");
     }

@@ -29,6 +29,7 @@ import { createDesktopNodeClient } from "@/lib/node-scope/desktop-node-client";
 import { createNodeClientRegistry, type NodeClientRegistry } from "@/lib/node-scope/node-clients";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
+import { prepareScopeSnapshot, type ScopeSnapshotPreparation } from "@/lib/node-snapshots";
 import { startScopeServices, WARM_SCOPE_SERVICES } from "@/lib/scope-services";
 
 /** How long a released in-tree scope stays open, until plan item 4002's tiers. */
@@ -43,6 +44,12 @@ export interface InTreeScopeHost {
 export interface InTreeScopeOptions {
   readonly windowScope?: WindowScope;
   readonly host?: InTreeScopeHost;
+  /**
+   * Reads the node's local snapshot while its scope opens, and hydrates the
+   * opened scope from it before its services start (plan item 4003);
+   * defaults to `prepareScopeSnapshot`. `null`: no snapshot.
+   */
+  readonly prepare?: ((nodeId: BackendId) => ScopeSnapshotPreparation) | null;
   readonly graceMs?: number;
   /** Starts the scope's services and returns the stop; defaults to `WARM_SCOPE_SERVICES`. */
   readonly startServices?: (scope: NodeScope) => () => void;
@@ -156,6 +163,21 @@ function close(map: Map<string, Entry>, nodeId: string, entry: Entry): void {
   if (entry.owned && entry.opened && !entry.opened.disposed) entry.opened.dispose();
 }
 
+/**
+ * `opening`, hydrated from the node's snapshot (read alongside, within its
+ * budget) before anything else sees the scope: its services start after this,
+ * so the first authoritative read replaces what the snapshot painted.
+ */
+async function openHydrated(
+  opening: Promise<NodeScope>,
+  preparation: ScopeSnapshotPreparation | null,
+): Promise<NodeScope> {
+  if (!preparation) return opening;
+  const [scope, snapshot] = await Promise.all([opening, preparation.snapshot]);
+  if (snapshot && !scope.disposed) preparation.hydrate(scope, snapshot);
+  return scope;
+}
+
 /** Holds `nodeId`'s scope in the window's tree; see the module comment. */
 export function holdInTreeScope(
   nodeId: string,
@@ -185,7 +207,12 @@ export function holdInTreeScope(
       graceMs: options.graceMs ?? IN_TREE_RELEASE_GRACE_MS,
       scope: (existing
         ? Promise.resolve(existing)
-        : host.openLeafScope(windowScope, nodeId as BackendId)
+        : openHydrated(
+            host.openLeafScope(windowScope, nodeId as BackendId),
+            options.prepare === undefined
+              ? prepareScopeSnapshot(nodeId as BackendId)
+              : (options.prepare?.(nodeId as BackendId) ?? null),
+          )
       ).then(
         (scope) => {
           created.opened = scope;

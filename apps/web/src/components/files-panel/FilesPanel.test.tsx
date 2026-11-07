@@ -112,13 +112,13 @@ test("two board file opens wait for home creation and retain their order", async
 });
 
 test("shows delayed announcements and a container's remote freshness without hiding the lists", async () => {
-  const { useWorktreeSnapshotStore } = await import("@/stores/worktreeSnapshotStore");
+  const { worktreeSnapshotStore } = await import("@/stores/worktreeSnapshotStore");
   appCommandStore(uiStore).setState({
     selectedEnvironmentId: "env-1",
     selectedProjectId: "project-1",
   });
   setFilesPanelTestState({ isOpen: false, activeTab: "changes" });
-  useWorktreeSnapshotStore.setState({
+  appCommandStore(worktreeSnapshotStore).setState({
     syncStatus: "current",
     entries: new Map([
       [
@@ -145,11 +145,13 @@ test("shows delayed announcements and a container's remote freshness without hid
     expect(document.querySelector("[data-freshness]") === null).toBe(true);
 
     act(() => {
-      useWorktreeSnapshotStore.getState().setSyncStatus("degraded");
-      useWorktreeSnapshotStore.getState().applyChange({
-        ...useWorktreeSnapshotStore.getState().entries.get("env-1")!,
-        remote: { state: "stale", failure: "network" },
-      });
+      appCommandStore(worktreeSnapshotStore).getState().setSyncStatus("degraded");
+      appCommandStore(worktreeSnapshotStore)
+        .getState()
+        .applyChange({
+          ...appCommandStore(worktreeSnapshotStore).getState().entries.get("env-1")!,
+          remote: { state: "stale", failure: "network" },
+        });
     });
     expect(document.querySelector('[data-freshness="degraded"]')?.textContent).toContain(
       "periodic re-read",
@@ -162,10 +164,14 @@ test("shows delayed announcements and a container's remote freshness without hid
     act(() => appCommandStore(filesPanelStore).setState({ activeTab: "all-files" }));
     expect(document.querySelector('[data-freshness="remote-stale"]') === null).toBe(true);
 
-    act(() => useWorktreeSnapshotStore.getState().setSyncStatus("current"));
+    act(() => appCommandStore(worktreeSnapshotStore).getState().setSyncStatus("current"));
     expect(document.querySelector("[data-freshness]") === null).toBe(true);
   } finally {
-    useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
+    appCommandStore(worktreeSnapshotStore).setState({
+      entries: new Map(),
+      generation: null,
+      syncStatus: "idle",
+    });
   }
 });
 

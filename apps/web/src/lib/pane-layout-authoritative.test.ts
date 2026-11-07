@@ -46,10 +46,11 @@ const {
   reconcileAuthoritativePaneLayout,
   requestPaneTabActivation,
 } = await import("./pane-layout-authoritative");
-const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
-const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
-const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
+const { buildPipelineStore } = await import("@/stores/buildPipelineStore");
+const { appCommandStore } = await import("@/test/app-command-store");
+const { environmentStore } = await import("@/stores/environmentStore");
+const { multiReviewStore } = await import("@/stores/multiReviewStore");
+const { paneLayoutStore } = await import("@/stores/paneLayoutStore");
 const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
 const {
   consumeWindowStartupAgentActivation,
@@ -131,13 +132,13 @@ beforeEach(() => {
   hydrateMultiReviewWorkflow.mockClear();
   unavailablePipelines.clear();
   unavailableWorkflows.clear();
-  useEnvironmentStore.setState({ environments: [environment()] });
-  useBuildPipelineStore.setState({
+  appCommandStore(environmentStore).setState({ environments: [environment()] });
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
-  useMultiReviewStore.setState({ workflows: new Map() });
-  usePaneLayoutStore.setState({
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -157,14 +158,14 @@ describe("collectPaneDependencyIds", () => {
     if (root.kind !== "leaf") throw new Error("expected leaf");
     root.activeTabId = "multi-review:action-1";
     hydrateMultiReviewWorkflow.mockImplementation(async (id) => {
-      useMultiReviewStore
+      appCommandStore(multiReviewStore)
         .getState()
         .replaceWorkflow({ id, environmentId: "env-1", backendRevision: 3 } as never);
     });
     for (let reconnect = 0; reconnect < 2; reconnect += 1) {
       // A new client has missed both creation events. Dependency hydration must
       // precede layout reconciliation or the only visible review tab is dropped.
-      useMultiReviewStore.setState({ workflows: new Map() });
+      appCommandStore(multiReviewStore).setState({ workflows: new Map() });
       await hydratePaneLayoutDependencies(root);
       const restored = reconcileAuthoritativePaneLayout(
         "env-1",
@@ -175,7 +176,9 @@ describe("collectPaneDependencyIds", () => {
         activeTabId: "multi-review:action-1",
         tabs: [{ id: "plain" }, { id: "multi-review:action-1", type: "multi-review" }],
       });
-      expect(useMultiReviewStore.getState().workflows.get("action-1")?.backendRevision).toBe(3);
+      expect(
+        appCommandStore(multiReviewStore).getState().workflows.get("action-1")?.backendRevision,
+      ).toBe(3);
     }
   });
   test("finds ids in a leaf", () => {
@@ -313,9 +316,9 @@ describe("hydratePaneLayoutDependencies", () => {
       },
     ]);
     for (let reload = 0; reload < 2; reload++) {
-      useBuildPipelineStore.setState({ pipelines: new Map() });
+      appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
       hydrateBuildPipeline.mockImplementationOnce(async (id) => {
-        useBuildPipelineStore.setState({
+        appCommandStore(buildPipelineStore).setState({
           pipelines: new Map([[id, { id, environmentId: "env-1" } as never]]),
         });
       });
@@ -343,9 +346,9 @@ describe("hydratePaneLayoutDependencies", () => {
       },
     ]);
     for (let reload = 0; reload < 2; reload++) {
-      useBuildPipelineStore.setState({ pipelines: new Map() });
+      appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
       hydrateBuildPipeline.mockImplementationOnce(async (id) => {
-        useBuildPipelineStore.setState({
+        appCommandStore(buildPipelineStore).setState({
           pipelines: new Map([[id, { id, environmentId: "env-1" } as never]]),
         });
       });
@@ -391,9 +394,9 @@ describe("hydratePaneLayoutDependencies", () => {
           ...createPersistedPaneLayoutInput(state),
         }),
       );
-      useBuildPipelineStore.setState({ pipelines: new Map() });
+      appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
       hydrateBuildPipeline.mockImplementationOnce(async (id) => {
-        useBuildPipelineStore.setState({
+        appCommandStore(buildPipelineStore).setState({
           pipelines: new Map([[id, { id, environmentId: "env-1" } as never]]),
         });
       });
@@ -409,7 +412,7 @@ describe("hydratePaneLayoutDependencies", () => {
   });
 
   test("loads only the records this client is missing", async () => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["known-pipeline", {} as never]]),
       buildEnvironmentIds: new Set(),
     });
@@ -519,10 +522,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -554,7 +557,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
       if (!beforeSetupCompletes) throw new Error("expected a pending layout");
 
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const handedOff = reconcileAuthoritativePaneLayout(
@@ -581,10 +584,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: undefined,
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -630,10 +633,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -660,7 +663,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       backendRoot.activeTabId = "build-pipeline-1";
 
       armBuildPipelineTabActivation("env-1", "pipeline-1");
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const restored = reconcileAuthoritativePaneLayout(
@@ -686,10 +689,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           ["pipeline-old", {} as never],
           ["pipeline-new", {} as never],
@@ -747,10 +750,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           ["pipeline-1", {} as never],
           ["pipeline-2", {} as never],
@@ -809,10 +812,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -870,7 +873,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const previousBuildTab = {
@@ -896,7 +899,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       const currentRoot = leaf("default", [previousBuildTab, newBuildTab]);
       if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
       currentRoot.activeTabId = "build-pipeline-old";
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         environments: new Map([["env-1", paneState(currentRoot)]]),
         hydration: new Map([["env-1", "done"]]),
         activeEnvironmentId: "env-1",
@@ -904,9 +907,9 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       armBuildPipelineTabActivation("env-1", "pipeline-new");
 
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipeline-new",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipeline-new");
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
       expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-new")).toBe(true);
     } finally {
@@ -922,10 +925,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -958,7 +961,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       armStartupAgentTabActivation("env-1");
       armBuildPipelineTabActivation("env-1", "pipeline-1");
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const restored = reconcileAuthoritativePaneLayout(
@@ -984,10 +987,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -1023,7 +1026,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       armStartupAgentTabActivation("env-1");
       armBuildPipelineTabActivation("env-1", "pipeline-1");
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const afterAgent = reconcileAuthoritativePaneLayout(
@@ -1057,10 +1060,10 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -1089,7 +1092,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       saved.activePaneId = "pipeline-pane";
 
       armBuildPipelineTabActivation("env-1", "pipeline-1");
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const restored = reconcileAuthoritativePaneLayout("env-1", saved, current);
@@ -1113,7 +1116,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
@@ -1130,7 +1133,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       const currentRoot = leaf("default", [setupTab, buildTab]);
       if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
       currentRoot.activeTabId = "setup";
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         environments: new Map([["env-1", paneState(currentRoot)]]),
         hydration: new Map([["env-1", "done"]]),
         activeEnvironmentId: "env-1",
@@ -1138,10 +1141,12 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       armBuildPipelineTabActivation("env-1", "pipeline-1");
 
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipeline-1",
-      );
-      expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("default");
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipeline-1");
+      expect(
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.activePaneId,
+      ).toBe("default");
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
       expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(true);
     } finally {
@@ -1156,9 +1161,9 @@ describe("reconcileAuthoritativePaneLayout", () => {
       configurable: true,
       value: { isolatedViewState: true },
     });
-    const originalSetActiveTab = usePaneLayoutStore.getState().setActiveTab;
+    const originalSetActiveTab = appCommandStore(paneLayoutStore).getState().setActiveTab;
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
@@ -1175,7 +1180,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       const currentRoot = leaf("default", [setupTab, buildTab]);
       if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
       currentRoot.activeTabId = "setup";
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         environments: new Map([["env-1", paneState(currentRoot)]]),
         hydration: new Map([["env-1", "done"]]),
         activeEnvironmentId: "env-1",
@@ -1184,10 +1189,12 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       armBuildPipelineTabActivation("env-1", "pipeline-1");
 
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe("setup");
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("setup");
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
     } finally {
-      usePaneLayoutStore.setState({ setActiveTab: originalSetActiveTab });
+      appCommandStore(paneLayoutStore).setState({ setActiveTab: originalSetActiveTab });
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
     }
@@ -1195,17 +1202,17 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
   test("focuses a requested tab when the layout carrying it is installed", () => {
     const currentRoot = leaf("default", [{ id: "tab-1", type: "plain" }]);
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([["env-1", paneState(currentRoot)]]),
     });
     requestPaneTabActivation("env-1", "agent-job-pr");
 
     flushPaneTabActivation("env-1");
-    expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).not.toBe(
-      "agent-job-pr",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId,
+    ).not.toBe("agent-job-pr");
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -1220,7 +1227,9 @@ describe("reconcileAuthoritativePaneLayout", () => {
     });
     flushPaneTabActivation("env-1");
 
-    expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("agent-job-pr");
+    expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
+      "agent-job-pr",
+    );
   });
 
   test("hands an isolated Electron window from setup to its provider-bound startup agent", () => {
@@ -1280,7 +1289,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
@@ -1319,7 +1328,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
       });
       const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
@@ -1356,7 +1365,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
@@ -1534,7 +1543,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
   });
 
   test("the latest request holds, and cancelling it leaves the tab unfocused", () => {
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -1548,7 +1557,8 @@ describe("reconcileAuthoritativePaneLayout", () => {
         ],
       ]),
     });
-    const activeTab = () => usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId;
+    const activeTab = () =>
+      appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId;
     const installed = activeTab();
 
     requestPaneTabActivation("env-1", "missing-older");
@@ -1648,7 +1658,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
   });
 
   test("refuses a snapshot for an environment this client no longer has", () => {
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
 
     expect(
       reconcileAuthoritativePaneLayout("env-1", persisted(plainRoot), paneState(plainRoot)),
@@ -1696,7 +1706,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       { id: "plain", type: "plain" },
       { id: "multi", type: "multi-review", multiReviewTabData: { workflowId: "multi-1" } },
     ]);
-    useMultiReviewStore.setState({
+    appCommandStore(multiReviewStore).setState({
       workflows: new Map([
         [
           "multi-1",
@@ -1713,7 +1723,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
       "multi",
     ]);
 
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     const dropped = reconcileAuthoritativePaneLayout("env-1", persisted(root), paneState(root));
     expect((dropped!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id)).toEqual([
       "plain",
@@ -1721,7 +1731,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
   });
 
   test("resolves a local environment against a null container", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         environment({
           environmentType: "local",
@@ -1779,10 +1789,10 @@ describe("backend-published pipeline handoff", () => {
   }
 
   function readyEnvironmentWithPipelines(...pipelineIds: string[]): void {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(pipelineIds.map((pipelineId) => [pipelineId, {} as never])),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -1791,10 +1801,10 @@ describe("backend-published pipeline handoff", () => {
   test("moves a window that did not launch the pipeline onto the backend-selected tab", () => {
     const restore = isolatedWindow();
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -1829,10 +1839,10 @@ describe("backend-published pipeline handoff", () => {
   test("does not re-steal after an armed handoff was already consumed", () => {
     const restore = isolatedWindow();
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -1873,10 +1883,10 @@ describe("backend-published pipeline handoff", () => {
   test("does not re-steal focus after a deliberate return to the setup tab", () => {
     const restore = isolatedWindow();
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -1917,10 +1927,10 @@ describe("backend-published pipeline handoff", () => {
   test("waits for setup readiness before stealing focus from a watched setup terminal", () => {
     const restore = isolatedWindow();
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -1941,7 +1951,7 @@ describe("backend-published pipeline handoff", () => {
       expect(notReady.root).toMatchObject({ activeTabId: "setup" });
       expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(false);
 
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
       const ready = reconcileAuthoritativePaneLayout("env-1", persisted(backendRoot), notReady);
@@ -1955,10 +1965,10 @@ describe("backend-published pipeline handoff", () => {
   test("does not follow a build tab merely because it is open, not authoritative", () => {
     const restore = isolatedWindow();
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -1994,16 +2004,16 @@ describe("backend-published pipeline handoff", () => {
       const buildRoot = leaf("default", [setupTab, buildTab]);
       if (buildRoot.kind !== "leaf") throw new Error("expected leaf");
       buildRoot.activeTabId = "build-pipeline-1";
-      usePaneLayoutStore.setState({
+      appCommandStore(paneLayoutStore).setState({
         environments: new Map([["env-1", paneState(setupRoot)]]),
         hydration: new Map([["env-1", "done"]]),
         activeEnvironmentId: "env-1",
       });
 
       armBuildPipelineTabActivation("env-1", "pipeline-1");
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipeline-1",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipeline-1");
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
       expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(true);
 

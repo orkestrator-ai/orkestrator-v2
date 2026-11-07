@@ -99,8 +99,9 @@ mock.module("@/lib/backend", () => ({
   updateGitHubIssueComment: updateGitHubIssueCommentMock,
 }));
 
-const { githubIssueDetailKey, MAX_CACHED_ISSUE_DETAILS, useGitHubIssuesStore } =
+const { githubIssueDetailKey, MAX_CACHED_ISSUE_DETAILS, githubIssuesStore } =
   await import("./githubIssuesStore");
+const { appCommandStore } = await import("@/test/app-command-store");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -134,7 +135,7 @@ describe("githubIssuesStore", () => {
       body: "Edited note",
       isEdited: true,
     });
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       snapshots: new Map(),
       details: new Map(),
       loadingProjects: new Set(),
@@ -147,16 +148,18 @@ describe("githubIssuesStore", () => {
   });
 
   test("loads a repository-scoped snapshot and issue discussion", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
     expect(getGitHubIssuesMock).toHaveBeenCalledWith("project-1");
     expect(getGitHubIssueMock).toHaveBeenCalledWith("project-1", 42);
-    expect(useGitHubIssuesStore.getState().snapshots.get("project-1")?.repository.fullName).toBe(
-      "acme/widget",
-    );
     expect(
-      useGitHubIssuesStore.getState().details.get(githubIssueDetailKey("project-1", 42))?.number,
+      appCommandStore(githubIssuesStore).getState().snapshots.get("project-1")?.repository.fullName,
+    ).toBe("acme/widget");
+    expect(
+      appCommandStore(githubIssuesStore)
+        .getState()
+        .details.get(githubIssueDetailKey("project-1", 42))?.number,
     ).toBe(42);
   });
 
@@ -168,13 +171,15 @@ describe("githubIssuesStore", () => {
     }));
 
     for (let issueNumber = 1; issueNumber <= MAX_CACHED_ISSUE_DETAILS; issueNumber += 1) {
-      await useGitHubIssuesStore.getState().loadIssue("project-1", issueNumber);
+      await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", issueNumber);
     }
     // Refresh issue 1 so issue 2 becomes the least-recently-written entry.
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 1);
-    await useGitHubIssuesStore.getState().loadIssue("project-1", MAX_CACHED_ISSUE_DETAILS + 1);
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 1);
+    await appCommandStore(githubIssuesStore)
+      .getState()
+      .loadIssue("project-1", MAX_CACHED_ISSUE_DETAILS + 1);
 
-    const details = useGitHubIssuesStore.getState().details;
+    const details = appCommandStore(githubIssuesStore).getState().details;
     expect(details.size).toBe(MAX_CACHED_ISSUE_DETAILS);
     expect(details.has(githubIssueDetailKey("project-1", 1))).toBe(true);
     expect(details.has(githubIssueDetailKey("project-1", 2))).toBe(false);
@@ -182,13 +187,13 @@ describe("githubIssuesStore", () => {
   });
 
   test("updates status from the authoritative response and reloads after failure", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().changeStatus("project-1", 42, "todo");
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().changeStatus("project-1", 42, "todo");
 
     expect(updateGitHubIssueStatusMock).toHaveBeenCalledWith("project-1", 42, "todo");
-    expect(useGitHubIssuesStore.getState().snapshots.get("project-1")?.issues[0]?.status).toBe(
-      "todo",
-    );
+    expect(
+      appCommandStore(githubIssuesStore).getState().snapshots.get("project-1")?.issues[0]?.status,
+    ).toBe("todo");
 
     updateGitHubIssueStatusMock.mockRejectedValueOnce(
       new Error("GitHub rejected the label update"),
@@ -196,20 +201,20 @@ describe("githubIssuesStore", () => {
     getGitHubIssuesMock.mockResolvedValueOnce(snapshot);
 
     await expect(
-      useGitHubIssuesStore.getState().changeStatus("project-1", 42, "review"),
+      appCommandStore(githubIssuesStore).getState().changeStatus("project-1", 42, "review"),
     ).rejects.toThrow("GitHub rejected the label update");
 
     expect(getGitHubIssuesMock).toHaveBeenCalledTimes(2);
-    expect(useGitHubIssuesStore.getState().snapshots.get("project-1")?.issues[0]?.status).toBe(
-      "backlog",
-    );
-    expect(useGitHubIssuesStore.getState().mutationErrors.get("status:project-1:42")).toContain(
-      "GitHub rejected",
-    );
+    expect(
+      appCommandStore(githubIssuesStore).getState().snapshots.get("project-1")?.issues[0]?.status,
+    ).toBe("backlog");
+    expect(
+      appCommandStore(githubIssuesStore).getState().mutationErrors.get("status:project-1:42"),
+    ).toContain("GitHub rejected");
   });
 
   test("ignores a stale refresh started while a status mutation is in flight", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
     const pendingStatus = deferred<GitHubIssue>();
     const staleRefresh = deferred<GitHubIssuesSnapshot>();
     const updatedIssue: GitHubIssue = {
@@ -220,19 +225,21 @@ describe("githubIssuesStore", () => {
     updateGitHubIssueStatusMock.mockImplementationOnce(() => pendingStatus.promise);
     getGitHubIssuesMock.mockImplementationOnce(() => staleRefresh.promise);
 
-    const statusRequest = useGitHubIssuesStore.getState().changeStatus("project-1", 42, "review");
-    const refreshRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
+    const statusRequest = appCommandStore(githubIssuesStore)
+      .getState()
+      .changeStatus("project-1", 42, "review");
+    const refreshRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
 
     pendingStatus.resolve(updatedIssue);
     await statusRequest;
-    expect(useGitHubIssuesStore.getState().snapshots.get("project-1")?.issues[0]?.status).toBe(
-      "review",
-    );
+    expect(
+      appCommandStore(githubIssuesStore).getState().snapshots.get("project-1")?.issues[0]?.status,
+    ).toBe("review");
 
     staleRefresh.resolve(snapshot);
     await refreshRequest;
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.get("project-1")?.issues[0]?.status).toBe("review");
     expect(state.snapshots.get("project-1")?.issues[0]?.labels).toContainEqual({
       name: "ork:review",
@@ -242,17 +249,21 @@ describe("githubIssuesStore", () => {
   });
 
   test("keeps list and detail state current after edits and comments", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
-    await useGitHubIssuesStore.getState().saveIssue("project-1", 42, {
+    await appCommandStore(githubIssuesStore).getState().saveIssue("project-1", 42, {
       title: "Updated title",
       body: "Updated body",
     });
-    await useGitHubIssuesStore.getState().addComment("project-1", 42, "A useful note");
-    await useGitHubIssuesStore.getState().editComment("project-1", 42, comment.id, "Edited note");
+    await appCommandStore(githubIssuesStore)
+      .getState()
+      .addComment("project-1", 42, "A useful note");
+    await appCommandStore(githubIssuesStore)
+      .getState()
+      .editComment("project-1", 42, comment.id, "Edited note");
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.get("project-1")?.issues[0]?.title).toBe("Updated title");
     const currentDetail = state.details.get(githubIssueDetailKey("project-1", 42));
     expect(currentDetail?.title).toBe("Updated title");
@@ -261,21 +272,23 @@ describe("githubIssuesStore", () => {
   });
 
   test("removes a successfully closed issue from the open snapshot", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().closeIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().closeIssue("project-1", 42);
 
     expect(closeGitHubIssueMock).toHaveBeenCalledWith("project-1", 42);
-    expect(useGitHubIssuesStore.getState().snapshots.get("project-1")?.issues).toEqual([]);
+    expect(
+      appCommandStore(githubIssuesStore).getState().snapshots.get("project-1")?.issues,
+    ).toEqual([]);
   });
 
   test("records project and detail loading errors and clears loading state", async () => {
     getGitHubIssuesMock.mockRejectedValueOnce("repository unavailable");
     getGitHubIssueMock.mockRejectedValueOnce({});
 
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.loadingProjects.has("project-1")).toBe(false);
     expect(state.loadingDetails.has(githubIssueDetailKey("project-1", 42))).toBe(false);
     expect(state.projectErrors.get("project-1")).toBe("repository unavailable");
@@ -285,16 +298,16 @@ describe("githubIssuesStore", () => {
   });
 
   test("ignores stale list and detail reads after a successful edit", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
     const staleList = deferred<GitHubIssuesSnapshot>();
     const staleDetail = deferred<GitHubIssueDetail>();
     getGitHubIssuesMock.mockImplementationOnce(() => staleList.promise);
     getGitHubIssueMock.mockImplementationOnce(() => staleDetail.promise);
 
-    const listRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
-    const detailRequest = useGitHubIssuesStore.getState().loadIssue("project-1", 42);
-    await useGitHubIssuesStore.getState().saveIssue("project-1", 42, {
+    const listRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    const detailRequest = appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().saveIssue("project-1", 42, {
       title: "Updated title",
       body: "Updated body",
     });
@@ -302,7 +315,7 @@ describe("githubIssuesStore", () => {
     staleDetail.resolve(detail);
     await Promise.all([listRequest, detailRequest]);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.get("project-1")?.issues[0]?.title).toBe("Updated title");
     expect(state.details.get(githubIssueDetailKey("project-1", 42))?.title).toBe("Updated title");
     expect(state.loadingProjects.has("project-1")).toBe(false);
@@ -310,8 +323,8 @@ describe("githubIssuesStore", () => {
   });
 
   test("ignores list and detail reads started while an edit is in flight", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
     const pendingEdit = deferred<GitHubIssue>();
     const staleList = deferred<GitHubIssuesSnapshot>();
     const staleDetail = deferred<GitHubIssueDetail>();
@@ -324,11 +337,11 @@ describe("githubIssuesStore", () => {
     getGitHubIssuesMock.mockImplementationOnce(() => staleList.promise);
     getGitHubIssueMock.mockImplementationOnce(() => staleDetail.promise);
 
-    const editRequest = useGitHubIssuesStore
+    const editRequest = appCommandStore(githubIssuesStore)
       .getState()
       .saveIssue("project-1", 42, { title: "Updated title", body: "Updated body" });
-    const listRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
-    const detailRequest = useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    const listRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    const detailRequest = appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
     pendingEdit.resolve(updatedIssue);
     await editRequest;
@@ -336,7 +349,7 @@ describe("githubIssuesStore", () => {
     staleDetail.resolve(detail);
     await Promise.all([listRequest, detailRequest]);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.get("project-1")?.issues[0]?.title).toBe("Updated title");
     expect(state.details.get(githubIssueDetailKey("project-1", 42))?.title).toBe("Updated title");
     expect(state.loadingProjects.has("project-1")).toBe(false);
@@ -344,28 +357,28 @@ describe("githubIssuesStore", () => {
   });
 
   test("ignores stale reads after closing an issue", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
     const staleList = deferred<GitHubIssuesSnapshot>();
     const staleDetail = deferred<GitHubIssueDetail>();
     getGitHubIssuesMock.mockImplementationOnce(() => staleList.promise);
     getGitHubIssueMock.mockImplementationOnce(() => staleDetail.promise);
 
-    const listRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
-    const detailRequest = useGitHubIssuesStore.getState().loadIssue("project-1", 42);
-    await useGitHubIssuesStore.getState().closeIssue("project-1", 42);
+    const listRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    const detailRequest = appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().closeIssue("project-1", 42);
     staleList.resolve(snapshot);
     staleDetail.resolve(detail);
     await Promise.all([listRequest, detailRequest]);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.get("project-1")?.issues).toEqual([]);
     expect(state.details.has(githubIssueDetailKey("project-1", 42))).toBe(false);
   });
 
   test("ignores list and detail reads started while close is in flight", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
     const pendingClose = deferred<GitHubIssue & { state: "closed" }>();
     const staleList = deferred<GitHubIssuesSnapshot>();
     const staleDetail = deferred<GitHubIssueDetail>();
@@ -373,9 +386,9 @@ describe("githubIssuesStore", () => {
     getGitHubIssuesMock.mockImplementationOnce(() => staleList.promise);
     getGitHubIssueMock.mockImplementationOnce(() => staleDetail.promise);
 
-    const closeRequest = useGitHubIssuesStore.getState().closeIssue("project-1", 42);
-    const listRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
-    const detailRequest = useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    const closeRequest = appCommandStore(githubIssuesStore).getState().closeIssue("project-1", 42);
+    const listRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    const detailRequest = appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
     pendingClose.resolve({ ...issue, state: "closed" });
     await closeRequest;
@@ -383,7 +396,7 @@ describe("githubIssuesStore", () => {
     staleDetail.resolve(detail);
     await Promise.all([listRequest, detailRequest]);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.get("project-1")?.issues).toEqual([]);
     expect(state.details.has(githubIssueDetailKey("project-1", 42))).toBe(false);
     expect(state.loadingProjects.has("project-1")).toBe(false);
@@ -391,8 +404,8 @@ describe("githubIssuesStore", () => {
   });
 
   test("ignores list and detail reads started while adding a comment", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
     const pendingComment = deferred<GitHubIssueComment>();
     const staleList = deferred<GitHubIssuesSnapshot>();
     const staleDetail = deferred<GitHubIssueDetail>();
@@ -400,11 +413,11 @@ describe("githubIssuesStore", () => {
     getGitHubIssuesMock.mockImplementationOnce(() => staleList.promise);
     getGitHubIssueMock.mockImplementationOnce(() => staleDetail.promise);
 
-    const commentRequest = useGitHubIssuesStore
+    const commentRequest = appCommandStore(githubIssuesStore)
       .getState()
       .addComment("project-1", 42, comment.body);
-    const listRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
-    const detailRequest = useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    const listRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    const detailRequest = appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
     pendingComment.resolve(comment);
     await commentRequest;
@@ -412,7 +425,7 @@ describe("githubIssuesStore", () => {
     staleDetail.resolve(detail);
     await Promise.all([listRequest, detailRequest]);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.get("project-1")?.issues[0]?.commentsCount).toBe(1);
     expect(state.details.get(githubIssueDetailKey("project-1", 42))?.comments).toEqual([comment]);
     expect(state.loadingProjects.has("project-1")).toBe(false);
@@ -432,8 +445,8 @@ describe("githubIssuesStore", () => {
     };
     getGitHubIssuesMock.mockResolvedValueOnce(snapshotWithComment);
     getGitHubIssueMock.mockResolvedValueOnce(detailWithComment);
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
     const pendingEdit = deferred<GitHubIssueComment>();
     const staleList = deferred<GitHubIssuesSnapshot>();
@@ -447,11 +460,11 @@ describe("githubIssuesStore", () => {
     getGitHubIssuesMock.mockImplementationOnce(() => staleList.promise);
     getGitHubIssueMock.mockImplementationOnce(() => staleDetail.promise);
 
-    const editRequest = useGitHubIssuesStore
+    const editRequest = appCommandStore(githubIssuesStore)
       .getState()
       .editComment("project-1", 42, comment.id, "Edited note");
-    const listRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
-    const detailRequest = useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    const listRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    const detailRequest = appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
 
     pendingEdit.resolve(editedComment);
     await editRequest;
@@ -459,7 +472,7 @@ describe("githubIssuesStore", () => {
     staleDetail.resolve(detailWithComment);
     await Promise.all([listRequest, detailRequest]);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.details.get(githubIssueDetailKey("project-1", 42))?.comments[0]).toEqual(
       editedComment,
     );
@@ -468,38 +481,42 @@ describe("githubIssuesStore", () => {
   });
 
   test("reports edit, close, add-comment, and edit-comment failures without losing detail state", async () => {
-    await useGitHubIssuesStore.getState().loadIssues("project-1");
-    await useGitHubIssuesStore.getState().loadIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    await appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
     updateGitHubIssueMock.mockRejectedValueOnce(new Error("edit rejected"));
     closeGitHubIssueMock.mockRejectedValueOnce(new Error("close rejected"));
     addGitHubIssueCommentMock.mockRejectedValueOnce(new Error("post rejected"));
     updateGitHubIssueCommentMock.mockRejectedValueOnce(new Error("comment stale"));
 
     await expect(
-      useGitHubIssuesStore.getState().saveIssue("project-1", 42, {
+      appCommandStore(githubIssuesStore).getState().saveIssue("project-1", 42, {
         title: "Draft",
         body: "Draft body",
       }),
     ).rejects.toThrow("edit rejected");
-    await expect(useGitHubIssuesStore.getState().closeIssue("project-1", 42)).rejects.toThrow(
-      "close rejected",
-    );
     await expect(
-      useGitHubIssuesStore.getState().addComment("project-1", 42, "Draft comment"),
+      appCommandStore(githubIssuesStore).getState().closeIssue("project-1", 42),
+    ).rejects.toThrow("close rejected");
+    await expect(
+      appCommandStore(githubIssuesStore).getState().addComment("project-1", 42, "Draft comment"),
     ).rejects.toThrow("post rejected");
     await expect(
-      useGitHubIssuesStore.getState().editComment("project-1", 42, 9001, "Draft edit"),
+      appCommandStore(githubIssuesStore)
+        .getState()
+        .editComment("project-1", 42, 9001, "Draft edit"),
     ).rejects.toThrow("comment stale");
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.details.get(githubIssueDetailKey("project-1", 42))).toEqual(detail);
     expect(state.mutationErrors.get("edit:project-1:42")).toBe("edit rejected");
     expect(state.mutationErrors.get("close:project-1:42")).toBe("close rejected");
     expect(state.mutationErrors.get("comment-add:project-1:42")).toBe("post rejected");
     expect(state.mutationErrors.get("comment-edit:project-1:9001")).toBe("comment stale");
 
-    useGitHubIssuesStore.getState().clearMutationError("edit:project-1:42");
-    expect(useGitHubIssuesStore.getState().mutationErrors.has("edit:project-1:42")).toBe(false);
+    appCommandStore(githubIssuesStore).getState().clearMutationError("edit:project-1:42");
+    expect(
+      appCommandStore(githubIssuesStore).getState().mutationErrors.has("edit:project-1:42"),
+    ).toBe(false);
   });
 
   test("guards duplicate mutations for the same issue or comment", async () => {
@@ -514,22 +531,24 @@ describe("githubIssuesStore", () => {
     addGitHubIssueCommentMock.mockImplementationOnce(() => pendingAdd.promise);
     updateGitHubIssueCommentMock.mockImplementationOnce(() => pendingCommentEdit.promise);
 
-    const firstStatus = useGitHubIssuesStore.getState().changeStatus("project-1", 42, "todo");
-    await useGitHubIssuesStore.getState().changeStatus("project-1", 42, "review");
+    const firstStatus = appCommandStore(githubIssuesStore)
+      .getState()
+      .changeStatus("project-1", 42, "todo");
+    await appCommandStore(githubIssuesStore).getState().changeStatus("project-1", 42, "review");
     pendingStatus.resolve({ ...issue, status: "todo" });
     await firstStatus;
 
-    const firstClose = useGitHubIssuesStore.getState().closeIssue("project-1", 42);
-    await useGitHubIssuesStore.getState().closeIssue("project-1", 42);
+    const firstClose = appCommandStore(githubIssuesStore).getState().closeIssue("project-1", 42);
+    await appCommandStore(githubIssuesStore).getState().closeIssue("project-1", 42);
     pendingClose.resolve({ ...issue, state: "closed" });
     await firstClose;
 
-    const firstEdit = useGitHubIssuesStore.getState().saveIssue("project-1", 42, {
+    const firstEdit = appCommandStore(githubIssuesStore).getState().saveIssue("project-1", 42, {
       title: "First",
       body: "First",
     });
     await expect(
-      useGitHubIssuesStore.getState().saveIssue("project-1", 42, {
+      appCommandStore(githubIssuesStore).getState().saveIssue("project-1", 42, {
         title: "Second",
         body: "Second",
       }),
@@ -537,18 +556,22 @@ describe("githubIssuesStore", () => {
     pendingEdit.resolve({ ...issue, title: "First", body: "First" });
     await firstEdit;
 
-    const firstAdd = useGitHubIssuesStore.getState().addComment("project-1", 42, "First");
+    const firstAdd = appCommandStore(githubIssuesStore)
+      .getState()
+      .addComment("project-1", 42, "First");
     await expect(
-      useGitHubIssuesStore.getState().addComment("project-1", 42, "Second"),
+      appCommandStore(githubIssuesStore).getState().addComment("project-1", 42, "Second"),
     ).rejects.toThrow("already being posted");
     pendingAdd.resolve(comment);
     await firstAdd;
 
-    const firstCommentEdit = useGitHubIssuesStore
+    const firstCommentEdit = appCommandStore(githubIssuesStore)
       .getState()
       .editComment("project-1", 42, comment.id, "First");
     await expect(
-      useGitHubIssuesStore.getState().editComment("project-1", 42, comment.id, "Second"),
+      appCommandStore(githubIssuesStore)
+        .getState()
+        .editComment("project-1", 42, comment.id, "Second"),
     ).rejects.toThrow("already being saved");
     pendingCommentEdit.resolve({ ...comment, body: "First" });
     await firstCommentEdit;
@@ -565,7 +588,7 @@ describe("githubIssuesStore", () => {
     const pendingDetail = deferred<GitHubIssueDetail>();
     getGitHubIssuesMock.mockImplementationOnce(() => pendingList.promise);
     getGitHubIssueMock.mockImplementationOnce(() => pendingDetail.promise);
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       snapshots: new Map([["project-2", snapshot]]),
       details: new Map([[githubIssueDetailKey("project-2", 42), detail]]),
       projectErrors: new Map([["project-1", "old error"]]),
@@ -577,14 +600,14 @@ describe("githubIssuesStore", () => {
       ]),
     });
 
-    const listRequest = useGitHubIssuesStore.getState().loadIssues("project-1");
-    const detailRequest = useGitHubIssuesStore.getState().loadIssue("project-1", 42);
-    useGitHubIssuesStore.getState().clearProject("project-1");
+    const listRequest = appCommandStore(githubIssuesStore).getState().loadIssues("project-1");
+    const detailRequest = appCommandStore(githubIssuesStore).getState().loadIssue("project-1", 42);
+    appCommandStore(githubIssuesStore).getState().clearProject("project-1");
     pendingList.resolve(snapshot);
     pendingDetail.resolve(detail);
     await Promise.all([listRequest, detailRequest]);
 
-    const state = useGitHubIssuesStore.getState();
+    const state = appCommandStore(githubIssuesStore).getState();
     expect(state.snapshots.has("project-1")).toBe(false);
     expect(state.details.has(githubIssueDetailKey("project-1", 42))).toBe(false);
     expect(state.snapshots.has("project-2")).toBe(true);

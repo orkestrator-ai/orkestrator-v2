@@ -23,8 +23,9 @@ mock.module("@/lib/backend", () => ({
   deleteComposeDraft: deleteComposeDraftMock,
 }));
 
-const { useKanbanStore } = await import("@/stores/kanbanStore");
-const { useProjectStore } = await import("@/stores/projectStore");
+const { kanbanStore } = await import("@/stores/kanbanStore");
+const { appCommandStore } = await import("@/test/app-command-store");
+const { projectStore } = await import("@/stores/projectStore");
 const { ProjectNotesView } = await import("./ProjectNotesView");
 
 afterAll(() => {
@@ -59,14 +60,14 @@ describe("ProjectNotesView", () => {
     saveComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockResolvedValue(undefined);
-    useKanbanStore.setState({
+    appCommandStore(kanbanStore).setState({
       notes: "",
       notesLoading: false,
       notesLoaded: false,
       notesError: null,
       currentNotesProjectId: null,
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -215,7 +216,7 @@ describe("ProjectNotesView", () => {
     getProjectNotesMock.mockImplementationOnce(() => refresh.promise);
     let loading!: Promise<void>;
     act(() => {
-      loading = useKanbanStore.getState().loadNotes("project-1");
+      loading = appCommandStore(kanbanStore).getState().loadNotes("project-1");
     });
     expect(editor.value).toBe("unsaved draft");
     expect(editor.disabled).toBe(false);
@@ -241,7 +242,7 @@ describe("ProjectNotesView", () => {
       fireEvent.change(editor, { target: { value: "unsaved during failure" } });
       getProjectNotesMock.mockRejectedValueOnce(new Error("refresh failed"));
       await act(async () => {
-        await useKanbanStore.getState().loadNotes("project-1");
+        await appCommandStore(kanbanStore).getState().loadNotes("project-1");
       });
       expect(screen.getByRole("alert").textContent).toContain("refresh failed");
       expect(editor.value).toBe("unsaved during failure");

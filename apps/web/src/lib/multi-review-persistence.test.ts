@@ -41,7 +41,8 @@ const {
   isMultiReviewWorkflowKnownUnavailable,
   resetMultiReviewPersistenceForTests,
 } = await import("./multi-review-persistence");
-const { multiReviewStore, useMultiReviewStore } = await import("@/stores/multiReviewStore");
+const { multiReviewStore } = await import("@/stores/multiReviewStore");
+const { appCommandStore } = await import("@/test/app-command-store");
 
 const ENVIRONMENT_ID = "env-1";
 const TIMESTAMP = "2026-01-01T00:00:00.000Z";
@@ -144,7 +145,7 @@ beforeEach(() => {
   getMultiReviewWorkflowMock.mockImplementation(async () => null);
   getMultiReviewWorkflowConditionalMock.mockReset();
   getMultiReviewWorkflowConditionalMock.mockImplementation(async () => null);
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   resetMultiReviewPersistenceForTests();
 });
 
@@ -154,8 +155,8 @@ describe("findActiveMultiReviewWorkflow", () => {
     expect(isMultiReviewWorkflow(review)).toBe(true);
     expect(isMultiReviewWorkflow(futureReview)).toBe(false);
     const incoming = JSON.parse(JSON.stringify(futureReview)) as MultiReviewWorkflow;
-    useMultiReviewStore.getState().replaceWorkflow(incoming);
-    const projected = useMultiReviewStore.getState().workflows.get(review.id);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(incoming);
+    const projected = appCommandStore(multiReviewStore).getState().workflows.get(review.id);
     expect(projected).toEqual(review);
     expect(isMultiReviewWorkflow(projected)).toBe(true);
 
@@ -167,14 +168,16 @@ describe("findActiveMultiReviewWorkflow", () => {
       updatedAt: TIMESTAMP,
       snapshot: incoming,
     };
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     getMultiReviewWorkflowMock.mockResolvedValue(persisted);
     const restored = await hydrateMultiReviewWorkflow(review.id);
     expect(restored).toEqual({ ...review, backendRevision: 8 });
     expect(isMultiReviewWorkflow(restored)).toBe(true);
-    expect<unknown>(useMultiReviewStore.getState().workflows.get(review.id)).toEqual(restored);
+    expect<unknown>(appCommandStore(multiReviewStore).getState().workflows.get(review.id)).toEqual(
+      restored,
+    );
 
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     listMultiReviewWorkflowsMock.mockResolvedValue([{ ...persisted, revision: 9 }]);
     expect(await hydrateMultiReviewWorkflowsForEnvironment(review.environmentId)).toEqual([
       { ...review, backendRevision: 9 },
@@ -193,7 +196,7 @@ describe("findActiveMultiReviewWorkflow", () => {
       snapshot: { ...futureReview, reviewers: "invalid" },
     });
     expect(await hydrateMultiReviewWorkflow(review.id)).toBeNull();
-    expect(useMultiReviewStore.getState().workflows.has(review.id)).toBe(false);
+    expect(appCommandStore(multiReviewStore).getState().workflows.has(review.id)).toBe(false);
   });
   test("reports no active workflow for an environment that has none", async () => {
     expect(await findActiveMultiReviewWorkflow(ENVIRONMENT_ID)).toBeNull();
@@ -275,7 +278,7 @@ describe("findActiveMultiReviewWorkflow", () => {
       throw new Error("backend unavailable");
     });
     await findActiveMultiReviewWorkflow(ENVIRONMENT_ID).catch(() => undefined);
-    expect(useMultiReviewStore.getState().workflows.get("wf-live")).toMatchObject({
+    expect(appCommandStore(multiReviewStore).getState().workflows.get("wf-live")).toMatchObject({
       id: "wf-live",
       phase: "reviewing",
       backendRevision: 3,
@@ -287,7 +290,7 @@ describe("findActiveMultiReviewWorkflow", () => {
       entry("wf-live", "reviewing", 12),
     ]);
     await findActiveMultiReviewWorkflow(ENVIRONMENT_ID);
-    expect(useMultiReviewStore.getState().workflows.get("wf-live")).toMatchObject({
+    expect(appCommandStore(multiReviewStore).getState().workflows.get("wf-live")).toMatchObject({
       id: "wf-live",
       phase: "reviewing",
       backendRevision: 12,
@@ -374,7 +377,7 @@ describe("per node scope (plan item 3003)", () => {
     expect(getMultiReviewWorkflowMock).not.toHaveBeenCalled();
     expect(scopeA.store(multiReviewStore).getState().workflows.has("wf-a")).toBe(true);
     expect(scopeB.store(multiReviewStore).getState().workflows.size).toBe(0);
-    expect(useMultiReviewStore.getState().workflows.size).toBe(0);
+    expect(appCommandStore(multiReviewStore).getState().workflows.size).toBe(0);
   });
 
   test("an environment listing reads the scope's node and installs into its store", async () => {

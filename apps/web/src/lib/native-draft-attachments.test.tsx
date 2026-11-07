@@ -70,7 +70,7 @@ const { NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS, useNativeComposeDraftPersistence 
 const {
   nativeComposePersistenceStore,
   unassignedNativeComposePersistenceStore,
-  useNativeComposeStore,
+  nativeComposeStore,
 } = await import("../stores/nativeComposeStore");
 const { UnassignedNativeAgentComposer } =
   await import("../components/native-agent/AgentNativeTab.helpers");
@@ -143,7 +143,7 @@ function savedAttachments(call: unknown[] | undefined): unknown {
 }
 
 function draftAttachmentsOf(sessionKey: string) {
-  return useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments;
+  return appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.attachments;
 }
 
 /**
@@ -220,7 +220,7 @@ beforeEach(() => {
   saveComposeDraft.mockImplementation(async () => undefined);
   deleteComposeDraft.mockImplementation(async () => undefined);
   getComposeDraft.mockImplementation(async () => null);
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
 });
 
 afterEach(() => {
@@ -232,7 +232,7 @@ afterEach(() => {
 
 afterAll(() => {
   cleanup();
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
@@ -447,7 +447,9 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
 
       await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
       expect(draftAttachmentsOf(sessionKey)).toEqual(expected);
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe(platform);
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.platform).toBe(
+        platform,
+      );
       const [call] = saveCallsFor(key);
       expect(savedAttachments(call)).toEqual(expected);
       expect(call?.[3]).toMatchObject({ metadata: { platform } });
@@ -536,7 +538,9 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     await waitFor(() => expect(getComposeDraft).toHaveBeenCalledWith(fallbackKey));
 
     act(() =>
-      useNativeComposeStore.getState().updateDraft(sessionKey, { attachments: [secondImage] }),
+      appCommandStore(nativeComposeStore)
+        .getState()
+        .updateDraft(sessionKey, { attachments: [secondImage] }),
     );
     fallback.resolve(
       storedDraft("agent-native", environmentId, sessionKey, {
@@ -549,7 +553,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
 
     await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
     expect(draftAttachmentsOf(sessionKey)).toEqual([secondImage]);
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("");
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe("");
     expect(savedAttachments(saveCallsFor(key)[0])).toEqual([secondImage]);
     hook.unmount();
   });
@@ -619,7 +623,9 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
     expect(draftAttachmentsOf(sessionKey)).toEqual([file, secondImage]);
     // The unknown platform is not adopted, so nothing claims a capability.
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBeUndefined();
+    expect(
+      appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.platform,
+    ).toBeUndefined();
     expect(savedAttachments(saveCallsFor(key)[0])).toEqual([file, secondImage]);
     hook.unmount();
   });
@@ -685,7 +691,7 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
    */
   function recordAttachmentHistory(sessionKey: string, restored: readonly unknown[]) {
     const history: unknown[][] = [];
-    const unsubscribe = useNativeComposeStore.subscribe((state, previous) => {
+    const unsubscribe = appCommandStore(nativeComposeStore).subscribe((state, previous) => {
       const current = state.drafts.get(sessionKey)?.attachments;
       if (current && current !== previous.drafts.get(sessionKey)?.attachments) {
         history.push(current);
@@ -851,7 +857,9 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /GPT-5\.4/ }));
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("codex"),
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.platform).toBe(
+        "codex",
+      ),
     );
 
     expect(draftAttachmentsOf(sessionKey)).toEqual([image]);

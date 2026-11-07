@@ -71,7 +71,7 @@ mock.module("@/lib/backend", () => ({
   saveProjectNotes: mock(() => Promise.resolve()),
 }));
 
-const { useKanbanStore, findTaskForEnvironment } =
+const { kanbanStore, findTaskForEnvironment } =
   (await import("../../../apps/web/src/stores/kanbanStore.ts?kanban-store-test")) as typeof import("../../../apps/web/src/stores/kanbanStore");
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 // The statics seed the app command scope's stores; the lookup reads that scope.
@@ -101,7 +101,7 @@ function createTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
 
 describe("kanbanStore", () => {
   beforeEach(() => {
-    useKanbanStore.setState({
+    appCommandStore(kanbanStore).setState({
       tasks: [],
       isLoading: false,
       currentProjectId: null,
@@ -121,7 +121,7 @@ describe("kanbanStore", () => {
   describe("updateTask with PR fields", () => {
     test("passes prUrl to updateKanbanTask", async () => {
       const task = createTask();
-      useKanbanStore.setState({ tasks: [task] });
+      appCommandStore(kanbanStore).setState({ tasks: [task] });
 
       const returnedTask = {
         ...task,
@@ -130,7 +130,7 @@ describe("kanbanStore", () => {
       };
       mockUpdateKanbanTask.mockResolvedValueOnce(returnedTask);
 
-      await useKanbanStore.getState().updateTask("task-1", {
+      await appCommandStore(kanbanStore).getState().updateTask("task-1", {
         prUrl: "https://github.com/org/repo/pull/1",
         prState: "open",
       });
@@ -148,19 +148,21 @@ describe("kanbanStore", () => {
         undefined,
       );
 
-      const updatedTask = useKanbanStore.getState().tasks.find((t) => t.id === "task-1");
+      const updatedTask = appCommandStore(kanbanStore)
+        .getState()
+        .tasks.find((t) => t.id === "task-1");
       expect(updatedTask?.prUrl).toBe("https://github.com/org/repo/pull/1");
       expect(updatedTask?.prState).toBe("open");
     });
 
     test("passes prMergeCommented to updateKanbanTask", async () => {
       const task = createTask({ prUrl: "https://github.com/org/repo/pull/1", prState: "merged" });
-      useKanbanStore.setState({ tasks: [task] });
+      appCommandStore(kanbanStore).setState({ tasks: [task] });
 
       const returnedTask = { ...task, prMergeCommented: true };
       mockUpdateKanbanTask.mockResolvedValueOnce(returnedTask);
 
-      await useKanbanStore.getState().updateTask("task-1", {
+      await appCommandStore(kanbanStore).getState().updateTask("task-1", {
         prState: "merged",
         prMergeCommented: true,
       });
@@ -181,10 +183,10 @@ describe("kanbanStore", () => {
 
     test("does not pass undefined PR fields when not in updates", async () => {
       const task = createTask();
-      useKanbanStore.setState({ tasks: [task] });
+      appCommandStore(kanbanStore).setState({ tasks: [task] });
       mockUpdateKanbanTask.mockResolvedValueOnce({ ...task, title: "Updated" });
 
-      await useKanbanStore.getState().updateTask("task-1", { title: "Updated" });
+      await appCommandStore(kanbanStore).getState().updateTask("task-1", { title: "Updated" });
 
       expect(mockUpdateKanbanTask).toHaveBeenCalledWith(
         "task-1",
@@ -207,7 +209,7 @@ describe("kanbanStore", () => {
         environmentId: "env-1",
         buildPipelineId: "pipeline-1",
       });
-      useKanbanStore.setState({ tasks: [task] });
+      appCommandStore(kanbanStore).setState({ tasks: [task] });
 
       mockUpdateKanbanTask.mockResolvedValueOnce({
         ...task,
@@ -275,7 +277,7 @@ describe("kanbanStore", () => {
         buildEnvironmentIds: new Set(["env-1", "env-2"]),
       });
 
-      await useKanbanStore.getState().clearTaskBuildStatus("task-1");
+      await appCommandStore(kanbanStore).getState().clearTaskBuildStatus("task-1");
 
       expect(mockUpdateKanbanTask).toHaveBeenCalledWith(
         "task-1",
@@ -287,7 +289,9 @@ describe("kanbanStore", () => {
         "",
       );
 
-      const updatedTask = useKanbanStore.getState().tasks.find((t) => t.id === "task-1");
+      const updatedTask = appCommandStore(kanbanStore)
+        .getState()
+        .tasks.find((t) => t.id === "task-1");
       expect(updatedTask?.environmentId).toBeUndefined();
       expect(updatedTask?.buildPipelineId).toBeUndefined();
       expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(
@@ -309,7 +313,7 @@ describe("kanbanStore", () => {
         prUrl: "https://github.com/org/repo/pull/1",
         prState: "open",
       });
-      useKanbanStore.setState({ tasks: [task] });
+      appCommandStore(kanbanStore).setState({ tasks: [task] });
 
       mockUpdateKanbanTask.mockResolvedValueOnce({
         ...task,
@@ -317,7 +321,7 @@ describe("kanbanStore", () => {
         buildPipelineId: undefined,
       });
 
-      await useKanbanStore.getState().clearTaskBuildStatus("task-1");
+      await appCommandStore(kanbanStore).getState().clearTaskBuildStatus("task-1");
 
       // prUrl/prState are passed as undefined (positions 8/9) so they are left intact.
       const [, , , , , envArg, pipelineArg, prUrlArg, prStateArg] =
@@ -330,7 +334,7 @@ describe("kanbanStore", () => {
 
     test("leaves tasks and pipelines untouched when the backend update fails", async () => {
       const task = createTask({ environmentId: "env-1", buildPipelineId: "pipeline-1" });
-      useKanbanStore.setState({ tasks: [task] });
+      appCommandStore(kanbanStore).setState({ tasks: [task] });
       appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           [
@@ -366,10 +370,12 @@ describe("kanbanStore", () => {
 
       mockUpdateKanbanTask.mockRejectedValueOnce(new Error("disk full"));
 
-      await useKanbanStore.getState().clearTaskBuildStatus("task-1");
+      await appCommandStore(kanbanStore).getState().clearTaskBuildStatus("task-1");
 
       // The error is swallowed (logged); nothing is mutated so the user can retry.
-      const unchanged = useKanbanStore.getState().tasks.find((t) => t.id === "task-1");
+      const unchanged = appCommandStore(kanbanStore)
+        .getState()
+        .tasks.find((t) => t.id === "task-1");
       expect(unchanged?.environmentId).toBe("env-1");
       expect(unchanged?.buildPipelineId).toBe("pipeline-1");
       expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(true);
@@ -382,7 +388,7 @@ describe("kanbanStore", () => {
   describe("addComment", () => {
     test("adds a comment to a task", async () => {
       const task = createTask();
-      useKanbanStore.setState({ tasks: [task] });
+      appCommandStore(kanbanStore).setState({ tasks: [task] });
 
       const taskWithComment = {
         ...task,
@@ -390,11 +396,13 @@ describe("kanbanStore", () => {
       };
       mockAddKanbanComment.mockResolvedValueOnce(taskWithComment);
 
-      await useKanbanStore.getState().addComment("task-1", "Build started");
+      await appCommandStore(kanbanStore).getState().addComment("task-1", "Build started");
 
       expect(mockAddKanbanComment).toHaveBeenCalledWith("task-1", "Build started");
 
-      const updated = useKanbanStore.getState().tasks.find((t) => t.id === "task-1");
+      const updated = appCommandStore(kanbanStore)
+        .getState()
+        .tasks.find((t) => t.id === "task-1");
       expect(updated?.comments).toHaveLength(1);
       expect(updated?.comments[0]?.text).toBe("Build started");
     });
@@ -403,7 +411,7 @@ describe("kanbanStore", () => {
 
 describe("findTaskForEnvironment", () => {
   beforeEach(() => {
-    useKanbanStore.setState({
+    appCommandStore(kanbanStore).setState({
       tasks: [],
       isLoading: false,
       currentProjectId: null,
@@ -419,7 +427,7 @@ describe("findTaskForEnvironment", () => {
 
   test("finds task by environmentId in kanban store", () => {
     const task = createTask({ environmentId: "env-1" });
-    useKanbanStore.setState({ tasks: [task] });
+    appCommandStore(kanbanStore).setState({ tasks: [task] });
 
     const result = findTaskForEnvironment("env-1", appCommandScope());
     expect(result.task).toBeDefined();
@@ -562,7 +570,7 @@ describe("findTaskForEnvironment", () => {
 
   test("prefers kanban store over pipeline store", () => {
     const task = createTask({ id: "kanban-task", environmentId: "env-1" });
-    useKanbanStore.setState({ tasks: [task] });
+    appCommandStore(kanbanStore).setState({ tasks: [task] });
 
     appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([

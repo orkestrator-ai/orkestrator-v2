@@ -133,15 +133,15 @@ mock.module("@/lib/native/clipboard", () => ({
 }));
 
 const { KanbanTaskDialog } = await import("@/components/kanban/KanbanTaskDialog");
-const { useKanbanStore } = await import("@/stores/kanbanStore");
-const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
-const { useConfigStore } = await import("@/stores/configStore");
-const { useProjectStore } = await import("@/stores/projectStore");
+const { kanbanStore } = await import("@/stores/kanbanStore");
+const { environmentStore } = await import("@/stores/environmentStore");
+const { buildPipelineStore } = await import("@/stores/buildPipelineStore");
+const { configStore } = await import("@/stores/configStore");
+const { projectStore } = await import("@/stores/projectStore");
 const { buildPipelineFixture } = await import("@/test/build-pipeline-fixture");
-const initialKanbanState = useKanbanStore.getState();
-const initialEnvironmentState = useEnvironmentStore.getState();
-const initialConfig = useConfigStore.getState().config;
+const initialKanbanState = appCommandStore(kanbanStore).getState();
+const initialEnvironmentState = appCommandStore(environmentStore).getState();
+const initialConfig = appCommandStore(configStore).getState().config;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
@@ -261,7 +261,7 @@ function deferred<T>() {
 }
 
 function installKanbanActionMocks() {
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     tasks: [],
     isLoading: false,
     currentProjectId: null,
@@ -284,22 +284,22 @@ function installKanbanActionMocks() {
 }
 
 function resetStores() {
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     ...initialKanbanState,
     tasks: [],
     notes: "",
     currentProjectId: null,
     currentNotesProjectId: null,
   });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     ...initialEnvironmentState,
     environments: [],
     deletingEnvironments: new Set(),
   });
   // The build launcher reads its defaults and its model catalog from these, so
   // a test that seeds them must not leak into the next one.
-  useConfigStore.setState({ config: initialConfig });
-  useProjectStore.setState({
+  appCommandStore(configStore).setState({ config: initialConfig });
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -311,7 +311,7 @@ function resetStores() {
       },
     ],
   });
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
@@ -1024,7 +1024,7 @@ describe("KanbanTaskDialog", () => {
     });
 
     test("says so when the change comes too late for the running build", () => {
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: pipelineWith({
           delivery: { policy: "open-pr", decidedAt: "2026-11-02T00:00:00.000Z" },
         }),
@@ -1047,7 +1047,9 @@ describe("KanbanTaskDialog", () => {
     });
 
     test("says nothing while the build still follows the ticket", () => {
-      useBuildPipelineStore.setState({ pipelines: pipelineWith({ phase: "building" }) });
+      appCommandStore(buildPipelineStore).setState({
+        pipelines: pipelineWith({ phase: "building" }),
+      });
       render(
         <KanbanTaskDialog
           task={makeTask({
@@ -1519,7 +1521,7 @@ describe("KanbanTaskDialog", () => {
       title: "Partial build task",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     updateTaskMock.mockRejectedValueOnce(new Error("storage unavailable"));
@@ -1571,7 +1573,7 @@ describe("KanbanTaskDialog", () => {
       title: "Created build task",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     render(
@@ -1601,7 +1603,7 @@ describe("KanbanTaskDialog", () => {
       title: "Build with missing image",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     addImageMock.mockRejectedValueOnce(new Error("disk full"));
@@ -1640,7 +1642,7 @@ describe("KanbanTaskDialog", () => {
     const onOpenChange = mock(() => {});
     const createdTask = makeTask({ id: "task-created", title: "Retry build" });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     startBuildMock.mockResolvedValueOnce(undefined).mockResolvedValueOnce("pipeline-retry");
@@ -1673,7 +1675,7 @@ describe("KanbanTaskDialog", () => {
       title: "Mixed harness build",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     render(
@@ -2031,29 +2033,33 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("an unfinished pipeline for the task blocks launching another build", () => {
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: "pipeline-active",
-        taskId: "task-1",
-        projectId: "project-1",
-        phase: "building",
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: "pipeline-active",
+          taskId: "task-1",
+          projectId: "project-1",
+          phase: "building",
+        }),
+      );
 
     render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     expect(buildButton().disabled).toBe(true);
 
     cleanup();
     // A pipeline that already finished is not an active build.
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: "pipeline-active",
-        taskId: "task-1",
-        projectId: "project-1",
-        phase: "complete",
-        backendRevision: 2,
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: "pipeline-active",
+          taskId: "task-1",
+          projectId: "project-1",
+          phase: "complete",
+          backendRevision: 2,
+        }),
+      );
 
     render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     expect(buildButton().disabled).toBe(false);
@@ -2107,7 +2113,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("the launcher opens on the repository and project defaults", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...initialConfig,
         global: {
@@ -2133,7 +2139,7 @@ describe("KanbanTaskDialog", () => {
         },
       },
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",

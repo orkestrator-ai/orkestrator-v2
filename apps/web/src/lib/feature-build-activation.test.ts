@@ -27,9 +27,10 @@ mock.module("@/lib/build-pipeline-persistence", () => ({
 const { activateFeatureBuildEnvironment, scheduleBuildPipelineTabActivation } =
   await import("./feature-build-activation");
 const { getWindowBuildPipelineActivation } = await import("./pane-selection-storage");
-const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
-const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const { useUIStore } = await import("@/stores/uiStore");
+const { buildPipelineStore } = await import("@/stores/buildPipelineStore");
+const { appCommandStore } = await import("@/test/app-command-store");
+const { environmentStore } = await import("@/stores/environmentStore");
+const { uiStore } = await import("@/stores/uiStore");
 
 afterAll(() => {
   for (const [path, module] of Object.entries(realModules)) {
@@ -39,17 +40,17 @@ afterAll(() => {
 
 function resetStores(): void {
   localStorage.clear();
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [],
     isLoading: false,
     error: null,
     deletingEnvironments: new Set(),
   });
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
@@ -85,8 +86,8 @@ describe("activateFeatureBuildEnvironment", () => {
       });
 
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
-      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -106,17 +107,19 @@ describe("activateFeatureBuildEnvironment", () => {
       });
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
 
-      useBuildPipelineStore.getState().replacePipeline(
-        buildPipelineFixture({
-          id: "pipeline-deferred",
-          projectId: "project-1",
-          environmentId: "env-1",
-        }),
-      );
+      appCommandStore(buildPipelineStore)
+        .getState()
+        .replacePipeline(
+          buildPipelineFixture({
+            id: "pipeline-deferred",
+            projectId: "project-1",
+            environmentId: "env-1",
+          }),
+        );
       await Promise.resolve();
 
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-deferred");
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -133,17 +136,19 @@ describe("activateFeatureBuildEnvironment", () => {
       scheduleBuildPipelineTabActivation("project-1", "pipeline-kanban");
       expect(getWindowBuildPipelineActivation("env-kanban")).toBeNull();
 
-      useBuildPipelineStore.getState().replacePipeline(
-        buildPipelineFixture({
-          id: "pipeline-kanban",
-          projectId: "project-1",
-          environmentId: "env-kanban",
-        }),
-      );
+      appCommandStore(buildPipelineStore)
+        .getState()
+        .replacePipeline(
+          buildPipelineFixture({
+            id: "pipeline-kanban",
+            projectId: "project-1",
+            environmentId: "env-kanban",
+          }),
+        );
       await Promise.resolve();
 
       expect(getWindowBuildPipelineActivation("env-kanban")).toBe("pipeline-kanban");
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-kanban");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-kanban");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

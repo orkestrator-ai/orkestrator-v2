@@ -197,7 +197,8 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-const { activeFeaturePlanning, useFeaturePlanStore } = await import("@/stores/featurePlanStore");
+const { activeFeaturePlanning, featurePlanStore } = await import("@/stores/featurePlanStore");
+const { appCommandStore } = await import("@/test/app-command-store");
 
 describe("featurePlanStore", () => {
   beforeEach(() => {
@@ -223,7 +224,7 @@ describe("featurePlanStore", () => {
     });
     mockAppendFeaturePlanMessage.mockClear();
     mockAppendFeatureStoryMessage.mockClear();
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       features: [],
       isLoading: false,
       currentProjectId: null,
@@ -235,32 +236,34 @@ describe("featurePlanStore", () => {
   });
 
   test("stores chat drafts by id and removes them when cleared", () => {
-    const store = useFeaturePlanStore.getState();
+    const store = appCommandStore(featurePlanStore).getState();
 
     store.setChatDraft("feature:feature-1", "unfinished message");
     store.setChatDraft("feature:feature-2", "another message");
 
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe(
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1")).toBe(
       "unfinished message",
     );
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-2")).toBe(
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-2")).toBe(
       "another message",
     );
 
-    useFeaturePlanStore.getState().setChatDraft("feature:feature-1", "");
+    appCommandStore(featurePlanStore).getState().setChatDraft("feature:feature-1", "");
 
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
-    expect(useFeaturePlanStore.getState().chatDrafts.has("feature:feature-1")).toBe(false);
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1")).toBe("");
+    expect(appCommandStore(featurePlanStore).getState().chatDrafts.has("feature:feature-1")).toBe(
+      false,
+    );
   });
 
   test("preserves whitespace-only drafts and safely clears a missing draft repeatedly", () => {
-    const store = useFeaturePlanStore.getState();
+    const store = appCommandStore(featurePlanStore).getState();
 
     store.setChatDraft("feature:feature-1", "   ");
     store.setChatDraft("feature:missing", "");
     store.setChatDraft("feature:missing", "");
 
-    const state = useFeaturePlanStore.getState();
+    const state = appCommandStore(featurePlanStore).getState();
     expect(state.getChatDraft("feature:feature-1")).toBe("   ");
     expect(state.chatDrafts.has("feature:feature-1")).toBe(true);
     expect(state.chatDrafts.has("feature:missing")).toBe(false);
@@ -268,9 +271,9 @@ describe("featurePlanStore", () => {
 
   test("startPlanning hands the message to the backend and refreshes the projection", async () => {
     backing = [makeFeature({ id: "feature-1", projectId: "project-1" })];
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
-    const record = await useFeaturePlanStore
+    const record = await appCommandStore(featurePlanStore)
       .getState()
       .startPlanning("feature-1", "feature", "plan this");
 
@@ -282,15 +285,15 @@ describe("featurePlanStore", () => {
       undefined,
     );
     await waitForProjection(
-      () => useFeaturePlanStore.getState().features[0]?.planning?.phase === "running",
+      () => appCommandStore(featurePlanStore).getState().features[0]?.planning?.phase === "running",
     );
   });
 
   test("startPlanning forwards a story target to the backend", async () => {
     backing = [makeFeature({ id: "feature-1", projectId: "project-1" })];
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
-    await useFeaturePlanStore
+    await appCommandStore(featurePlanStore)
       .getState()
       .startPlanning("feature-1", "story", "tighten the criteria", "story-7");
 
@@ -310,13 +313,19 @@ describe("featurePlanStore", () => {
         planning: makePlanning({ phase: "failed" }),
       }),
     ];
-    useFeaturePlanStore.setState({ currentProjectId: null });
+    appCommandStore(featurePlanStore).setState({ currentProjectId: null });
 
     expect(
-      await useFeaturePlanStore.getState().startPlanning("feature-1", "feature", "plan this"),
+      await appCommandStore(featurePlanStore)
+        .getState()
+        .startPlanning("feature-1", "feature", "plan this"),
     ).toBeDefined();
-    expect(await useFeaturePlanStore.getState().retryPlanning("feature-1")).toBeDefined();
-    expect(await useFeaturePlanStore.getState().cancelPlanning("feature-1")).toBe(true);
+    expect(
+      await appCommandStore(featurePlanStore).getState().retryPlanning("feature-1"),
+    ).toBeDefined();
+    expect(await appCommandStore(featurePlanStore).getState().cancelPlanning("feature-1")).toBe(
+      true,
+    );
 
     expect(mockGetFeaturePlans).not.toHaveBeenCalled();
   });
@@ -329,9 +338,9 @@ describe("featurePlanStore", () => {
         planning: makePlanning(),
       }),
     ];
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
-    const record = await useFeaturePlanStore
+    const record = await appCommandStore(featurePlanStore)
       .getState()
       .startPlanning("feature-1", "feature", "plan this too");
 
@@ -346,11 +355,13 @@ describe("featurePlanStore", () => {
         planning: makePlanning(),
       }),
     ];
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
-    expect(await useFeaturePlanStore.getState().cancelPlanning("feature-1")).toBe(true);
+    expect(await appCommandStore(featurePlanStore).getState().cancelPlanning("feature-1")).toBe(
+      true,
+    );
     await waitForProjection(
-      () => useFeaturePlanStore.getState().features[0]?.planning === undefined,
+      () => appCommandStore(featurePlanStore).getState().features[0]?.planning === undefined,
     );
   });
 
@@ -362,9 +373,9 @@ describe("featurePlanStore", () => {
         planning: makePlanning({ phase: "failed" }),
       }),
     ];
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
-    const record = await useFeaturePlanStore.getState().retryPlanning("feature-1");
+    const record = await appCommandStore(featurePlanStore).getState().retryPlanning("feature-1");
 
     expect(record?.phase).toBe("dispatching");
   });
@@ -373,8 +384,12 @@ describe("featurePlanStore", () => {
     mockRetryFeaturePlanning.mockRejectedValueOnce(new Error("retry unavailable"));
     mockCancelFeaturePlanning.mockRejectedValueOnce(new Error("cancel unavailable"));
 
-    expect(await useFeaturePlanStore.getState().retryPlanning("feature-1")).toBeUndefined();
-    expect(await useFeaturePlanStore.getState().cancelPlanning("feature-1")).toBe(false);
+    expect(
+      await appCommandStore(featurePlanStore).getState().retryPlanning("feature-1"),
+    ).toBeUndefined();
+    expect(await appCommandStore(featurePlanStore).getState().cancelPlanning("feature-1")).toBe(
+      false,
+    );
     expect(mockGetFeaturePlans).not.toHaveBeenCalled();
   });
 
@@ -403,21 +418,23 @@ describe("featurePlanStore", () => {
   test("a single-feature response cannot move a planning record backwards", async () => {
     const stale = makePlanning({ backendRevision: 1, phase: "dispatching" });
     backing = [makeFeature({ id: "feature-1", projectId: "project-1", planning: stale })];
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
     // The projection has since seen a newer revision of the same exchange.
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       features: [
         {
-          ...useFeaturePlanStore.getState().features[0]!,
+          ...appCommandStore(featurePlanStore).getState().features[0]!,
           planning: { ...stale, phase: "persisting", backendRevision: 4 },
         },
       ],
     });
 
     // updateFeature returns the plan as the backend had it before that bump.
-    await useFeaturePlanStore.getState().updateFeature("feature-1", { title: "renamed" });
+    await appCommandStore(featurePlanStore)
+      .getState()
+      .updateFeature("feature-1", { title: "renamed" });
 
-    const projected = useFeaturePlanStore.getState().features[0];
+    const projected = appCommandStore(featurePlanStore).getState().features[0];
     expect(projected?.title).toBe("renamed");
     expect(projected?.planning?.phase).toBe("persisting");
     expect(projected?.planning?.backendRevision).toBe(4);
@@ -431,19 +448,23 @@ describe("featurePlanStore", () => {
         planning: makePlanning({ operationId: "operation-2", backendRevision: 0 }),
       }),
     ];
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
-    useFeaturePlanStore.setState({
+    await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
+    appCommandStore(featurePlanStore).setState({
       features: [
         {
-          ...useFeaturePlanStore.getState().features[0]!,
+          ...appCommandStore(featurePlanStore).getState().features[0]!,
           planning: makePlanning({ operationId: "operation-1", backendRevision: 9 }),
         },
       ],
     });
 
-    await useFeaturePlanStore.getState().updateFeature("feature-1", { title: "renamed" });
+    await appCommandStore(featurePlanStore)
+      .getState()
+      .updateFeature("feature-1", { title: "renamed" });
 
-    expect(useFeaturePlanStore.getState().features[0]?.planning?.operationId).toBe("operation-2");
+    expect(appCommandStore(featurePlanStore).getState().features[0]?.planning?.operationId).toBe(
+      "operation-2",
+    );
   });
 
   test("loadFeatures populates features and tracks the current project", async () => {
@@ -452,9 +473,9 @@ describe("featurePlanStore", () => {
       makeFeature({ id: "b", projectId: "project-1", order: 0 }),
     ];
 
-    const loaded = await useFeaturePlanStore.getState().loadFeatures("project-1");
+    const loaded = await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
-    const state = useFeaturePlanStore.getState();
+    const state = appCommandStore(featurePlanStore).getState();
     expect(loaded).toBe(true);
     expect(state.currentProjectId).toBe("project-1");
     expect(state.isLoading).toBe(false);
@@ -465,22 +486,22 @@ describe("featurePlanStore", () => {
     const planning = makePlanning();
     backing = [makeFeature({ id: "feature-1", projectId: "project-1", planning })];
 
-    const loaded = await useFeaturePlanStore.getState().loadFeatures("project-1");
+    const loaded = await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
     expect(loaded).toBe(true);
-    expect(useFeaturePlanStore.getState().features[0]?.planning).toEqual(planning);
+    expect(appCommandStore(featurePlanStore).getState().features[0]?.planning).toEqual(planning);
   });
 
   test("loadFeatures preserves existing features and clears loading when the backend rejects", async () => {
     const existing = makeFeature({ id: "existing", projectId: "project-previous" });
-    useFeaturePlanStore.setState({ features: [existing] });
+    appCommandStore(featurePlanStore).setState({ features: [existing] });
     mockGetFeaturePlans.mockImplementationOnce(async () => {
       throw new Error("backend down");
     });
 
-    const loaded = await useFeaturePlanStore.getState().loadFeatures("project-1");
+    const loaded = await appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
 
-    const state = useFeaturePlanStore.getState();
+    const state = appCommandStore(featurePlanStore).getState();
     expect(loaded).toBe(false);
     expect(state.currentProjectId).toBe("project-1");
     expect(state.isLoading).toBe(false);
@@ -494,12 +515,12 @@ describe("featurePlanStore", () => {
       projectId === "project-1" ? firstLoad.promise : secondLoad.promise,
     );
 
-    const firstPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
-    const secondPromise = useFeaturePlanStore.getState().loadFeatures("project-2");
+    const firstPromise = appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
+    const secondPromise = appCommandStore(featurePlanStore).getState().loadFeatures("project-2");
     firstLoad.resolve([makeFeature({ id: "stale", projectId: "project-1" })]);
     expect(await firstPromise).toBe(false);
 
-    expect(useFeaturePlanStore.getState()).toMatchObject({
+    expect(appCommandStore(featurePlanStore).getState()).toMatchObject({
       currentProjectId: "project-2",
       isLoading: true,
       features: [],
@@ -508,30 +529,32 @@ describe("featurePlanStore", () => {
     secondLoad.resolve([makeFeature({ id: "current", projectId: "project-2" })]);
     expect(await secondPromise).toBe(true);
 
-    expect(useFeaturePlanStore.getState()).toMatchObject({
+    expect(appCommandStore(featurePlanStore).getState()).toMatchObject({
       currentProjectId: "project-2",
       isLoading: false,
     });
-    expect(useFeaturePlanStore.getState().features.map((feature) => feature.id)).toEqual([
-      "current",
-    ]);
+    expect(
+      appCommandStore(featurePlanStore)
+        .getState()
+        .features.map((feature) => feature.id),
+    ).toEqual(["current"]);
   });
 
   test("ignores a stale failed load while a newer project load is pending", async () => {
     const firstLoad = deferred<FeaturePlan[]>();
     const secondLoad = deferred<FeaturePlan[]>();
     const existing = makeFeature({ id: "existing", projectId: "project-previous" });
-    useFeaturePlanStore.setState({ features: [existing] });
+    appCommandStore(featurePlanStore).setState({ features: [existing] });
     mockGetFeaturePlans.mockImplementation((projectId: string) =>
       projectId === "project-1" ? firstLoad.promise : secondLoad.promise,
     );
 
-    const firstPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
-    const secondPromise = useFeaturePlanStore.getState().loadFeatures("project-2");
+    const firstPromise = appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
+    const secondPromise = appCommandStore(featurePlanStore).getState().loadFeatures("project-2");
     firstLoad.reject(new Error("stale failure"));
     expect(await firstPromise).toBe(false);
 
-    expect(useFeaturePlanStore.getState()).toMatchObject({
+    expect(appCommandStore(featurePlanStore).getState()).toMatchObject({
       currentProjectId: "project-2",
       isLoading: true,
       features: [existing],
@@ -540,13 +563,15 @@ describe("featurePlanStore", () => {
     secondLoad.resolve([makeFeature({ id: "current", projectId: "project-2" })]);
     expect(await secondPromise).toBe(true);
 
-    expect(useFeaturePlanStore.getState()).toMatchObject({
+    expect(appCommandStore(featurePlanStore).getState()).toMatchObject({
       currentProjectId: "project-2",
       isLoading: false,
     });
-    expect(useFeaturePlanStore.getState().features.map((feature) => feature.id)).toEqual([
-      "current",
-    ]);
+    expect(
+      appCommandStore(featurePlanStore)
+        .getState()
+        .features.map((feature) => feature.id),
+    ).toEqual(["current"]);
   });
 
   test("ignores an older same-project snapshot that resolves after a newer load", async () => {
@@ -556,29 +581,33 @@ describe("featurePlanStore", () => {
       .mockImplementationOnce(() => olderLoad.promise)
       .mockImplementationOnce(() => newerLoad.promise);
 
-    const olderPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
-    const newerPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
+    const olderPromise = appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
+    const newerPromise = appCommandStore(featurePlanStore).getState().loadFeatures("project-1");
     newerLoad.resolve([makeFeature({ id: "newest", title: "Current snapshot" })]);
     expect(await newerPromise).toBe(true);
     olderLoad.resolve([makeFeature({ id: "stale", title: "Old snapshot" })]);
     expect(await olderPromise).toBe(false);
 
-    expect(useFeaturePlanStore.getState()).toMatchObject({
+    expect(appCommandStore(featurePlanStore).getState()).toMatchObject({
       currentProjectId: "project-1",
       isLoading: false,
     });
-    expect(useFeaturePlanStore.getState().features.map((feature) => feature.id)).toEqual([
-      "newest",
-    ]);
+    expect(
+      appCommandStore(featurePlanStore)
+        .getState()
+        .features.map((feature) => feature.id),
+    ).toEqual(["newest"]);
   });
 
   test("createFeature returns the new id and inserts the feature sorted by order", async () => {
-    useFeaturePlanStore.setState({ features: [makeFeature({ id: "existing", order: 5 })] });
+    appCommandStore(featurePlanStore).setState({
+      features: [makeFeature({ id: "existing", order: 5 })],
+    });
 
-    const id = await useFeaturePlanStore.getState().createFeature("project-1");
+    const id = await appCommandStore(featurePlanStore).getState().createFeature("project-1");
 
     expect(id).toBeTruthy();
-    const features = useFeaturePlanStore.getState().features;
+    const features = appCommandStore(featurePlanStore).getState().features;
     expect(features.map((feature) => feature.order)).toEqual([0, 5]);
     expect(features.some((feature) => feature.id === id)).toBe(true);
   });
@@ -586,18 +615,18 @@ describe("featurePlanStore", () => {
   test("updateFeature replaces a matching feature once and restores order", async () => {
     const original = makeFeature({ id: "target", order: 2, title: "Original" });
     const other = makeFeature({ id: "other", order: 1 });
-    useFeaturePlanStore.setState({ features: [original, other] });
+    appCommandStore(featurePlanStore).setState({ features: [original, other] });
     mockUpdateFeaturePlan.mockImplementationOnce(async () =>
       makeFeature({ id: "target", order: 0, title: "Renamed", status: "stories" }),
     );
 
-    const updated = await useFeaturePlanStore.getState().updateFeature("target", {
+    const updated = await appCommandStore(featurePlanStore).getState().updateFeature("target", {
       title: "Renamed",
       status: "stories",
     });
 
     expect(updated).toMatchObject({ title: "Renamed", status: "stories" });
-    const features = useFeaturePlanStore.getState().features;
+    const features = appCommandStore(featurePlanStore).getState().features;
     expect(features.map((feature) => feature.id)).toEqual(["target", "other"]);
     expect(features.filter((feature) => feature.id === "target")).toHaveLength(1);
     const stored = features.find((feature) => feature.id === "target");
@@ -606,29 +635,31 @@ describe("featurePlanStore", () => {
 
   test("updateFeature returns undefined and leaves state unchanged when the backend rejects", async () => {
     const existing = makeFeature({ id: "existing", title: "Original" });
-    useFeaturePlanStore.setState({ features: [existing] });
+    appCommandStore(featurePlanStore).setState({ features: [existing] });
     mockUpdateFeaturePlan.mockImplementationOnce(async () => {
       throw new Error("backend down");
     });
 
-    const result = await useFeaturePlanStore
+    const result = await appCommandStore(featurePlanStore)
       .getState()
       .updateFeature("existing", { title: "Renamed" });
 
     expect(result).toBeUndefined();
-    expect(useFeaturePlanStore.getState().features).toEqual([existing]);
+    expect(appCommandStore(featurePlanStore).getState().features).toEqual([existing]);
   });
 
   test("claimFeatureBuild installs the backend's atomic reservation result", async () => {
     const existing = makeFeature({ id: "existing", status: "stories" });
     backing = [existing];
-    useFeaturePlanStore.setState({ features: [existing] });
+    appCommandStore(featurePlanStore).setState({ features: [existing] });
 
-    const result = await useFeaturePlanStore.getState().claimFeatureBuild("existing", "task-1");
+    const result = await appCommandStore(featurePlanStore)
+      .getState()
+      .claimFeatureBuild("existing", "task-1");
 
     expect(result?.claimed).toBe(true);
     expect(mockClaimFeaturePlanBuild).toHaveBeenCalledWith("existing", "task-1");
-    expect(useFeaturePlanStore.getState().features[0]).toMatchObject({
+    expect(appCommandStore(featurePlanStore).getState().features[0]).toMatchObject({
       id: "existing",
       status: "building",
       buildTaskId: "task-1",
@@ -644,12 +675,14 @@ describe("featurePlanStore", () => {
         buildTaskId: "task-winner",
       }),
     ];
-    useFeaturePlanStore.setState({ features: [projected] });
+    appCommandStore(featurePlanStore).setState({ features: [projected] });
 
-    const result = await useFeaturePlanStore.getState().claimFeatureBuild("existing", "task-loser");
+    const result = await appCommandStore(featurePlanStore)
+      .getState()
+      .claimFeatureBuild("existing", "task-loser");
 
     expect(result?.claimed).toBe(false);
-    expect(useFeaturePlanStore.getState().features[0]).toMatchObject({
+    expect(appCommandStore(featurePlanStore).getState().features[0]).toMatchObject({
       status: "building",
       buildTaskId: "task-winner",
     });
@@ -657,23 +690,23 @@ describe("featurePlanStore", () => {
 
   test("claimFeatureBuild returns undefined and preserves state when the backend rejects", async () => {
     const existing = makeFeature({ id: "existing", status: "stories" });
-    useFeaturePlanStore.setState({ features: [existing] });
+    appCommandStore(featurePlanStore).setState({ features: [existing] });
     mockClaimFeaturePlanBuild.mockRejectedValueOnce(new Error("claim unavailable"));
 
     expect(
-      await useFeaturePlanStore.getState().claimFeatureBuild("existing", "task-1"),
+      await appCommandStore(featurePlanStore).getState().claimFeatureBuild("existing", "task-1"),
     ).toBeUndefined();
-    expect(useFeaturePlanStore.getState().features).toEqual([existing]);
+    expect(appCommandStore(featurePlanStore).getState().features).toEqual([existing]);
   });
 
   test("appendMessage adds the message to the stored feature", async () => {
-    const created = await useFeaturePlanStore.getState().createFeature("project-1");
+    const created = await appCommandStore(featurePlanStore).getState().createFeature("project-1");
 
-    await useFeaturePlanStore
+    await appCommandStore(featurePlanStore)
       .getState()
       .appendMessage(created!, "assistant", "Add saved filters", "pending", "gpt-5.3-codex");
 
-    const stored = useFeaturePlanStore
+    const stored = appCommandStore(featurePlanStore)
       .getState()
       .features.find((feature) => feature.id === created);
     expect(stored?.messages.at(-1)).toMatchObject({
@@ -693,36 +726,38 @@ describe("featurePlanStore", () => {
 
   test("appendMessage returns undefined and leaves state unchanged when the backend rejects", async () => {
     const existing = makeFeature({ id: "existing" });
-    useFeaturePlanStore.setState({ features: [existing] });
+    appCommandStore(featurePlanStore).setState({ features: [existing] });
     mockAppendFeaturePlanMessage.mockImplementationOnce(async () => {
       throw new Error("backend down");
     });
 
-    const result = await useFeaturePlanStore
+    const result = await appCommandStore(featurePlanStore)
       .getState()
       .appendMessage("existing", "user", "Do not append");
 
     expect(result).toBeUndefined();
-    expect(useFeaturePlanStore.getState().features).toEqual([existing]);
+    expect(appCommandStore(featurePlanStore).getState().features).toEqual([existing]);
   });
 
   test("appendStoryMessage adds a message to the targeted story", async () => {
-    const created = await useFeaturePlanStore.getState().createFeature("project-1");
-    await useFeaturePlanStore.getState().updateFeature(created!, {
-      stories: [
-        {
-          id: "story-1",
-          title: "Story",
-          description: "desc",
-          acceptanceCriteria: [],
-          messages: [],
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-    });
+    const created = await appCommandStore(featurePlanStore).getState().createFeature("project-1");
+    await appCommandStore(featurePlanStore)
+      .getState()
+      .updateFeature(created!, {
+        stories: [
+          {
+            id: "story-1",
+            title: "Story",
+            description: "desc",
+            acceptanceCriteria: [],
+            messages: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
 
-    await useFeaturePlanStore
+    await appCommandStore(featurePlanStore)
       .getState()
       .appendStoryMessage(
         created!,
@@ -733,7 +768,7 @@ describe("featurePlanStore", () => {
         "gpt-5.3-codex",
       );
 
-    const stored = useFeaturePlanStore
+    const stored = appCommandStore(featurePlanStore)
       .getState()
       .features.find((feature) => feature.id === created);
     expect(stored?.stories[0]?.messages.at(-1)).toMatchObject({
@@ -757,16 +792,16 @@ describe("featurePlanStore", () => {
       throw new Error("backend down");
     });
 
-    const id = await useFeaturePlanStore.getState().createFeature("project-1");
+    const id = await appCommandStore(featurePlanStore).getState().createFeature("project-1");
 
     expect(id).toBeUndefined();
-    expect(useFeaturePlanStore.getState().features).toEqual([]);
+    expect(appCommandStore(featurePlanStore).getState().features).toEqual([]);
   });
 
   test("appendStoryMessage returns undefined for an unknown story", async () => {
-    const created = await useFeaturePlanStore.getState().createFeature("project-1");
+    const created = await appCommandStore(featurePlanStore).getState().createFeature("project-1");
 
-    const result = await useFeaturePlanStore
+    const result = await appCommandStore(featurePlanStore)
       .getState()
       .appendStoryMessage(created!, "missing", "user", "hi");
 

@@ -7,13 +7,13 @@ import {
 import { fixtureDetail } from "./pr-pane-detail";
 import { useLayoutEffect, type ReactNode } from "react";
 import { FilesPanelPullRequests } from "../../apps/web/src/components/files-panel/FilesPanelPullRequests";
-import { useFilesPanelStore } from "../../apps/web/src/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "../../apps/web/src/stores/filesPanelChromeStore";
 import { useUIStore } from "../../apps/web/src/stores/uiStore";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 
 /** Real transcript and panel hosts; only the unavailable GitHub endpoint is fake. */
 export function PrPaneTranscriptFrame({ children }: { children: ReactNode }) {
-  const isOpen = useFilesPanelStore((state) => state.isOpen);
+  const isOpen = useFilesPanelChromeStore((state) => state.isOpen);
   useLayoutEffect(() => {
     useUIStore.setState({ selectedEnvironmentId: "transcript-env" });
     const layout = usePaneLayoutStore.getState();
@@ -58,7 +58,7 @@ export function PrPaneTranscriptFrame({ children }: { children: ReactNode }) {
           <>
             <ResizableHandle />
             <ResizablePanel defaultSize={30} minSize={20}>
-              <button onClick={() => useFilesPanelStore.setState({ isOpen: false })}>
+              <button onClick={() => useFilesPanelChromeStore.setState({ isOpen: false })}>
                 Close PR pane
               </button>
               <FilesPanelPullRequests targetId="transcript-env" />

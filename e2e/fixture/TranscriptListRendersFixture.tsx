@@ -27,6 +27,7 @@ import { disableAutoLoadEarlier } from "../../apps/web/src/components/native-age
 import type { NativeMessage } from "../../apps/web/src/lib/chat/native-message-types";
 import { useConversationScrollTargetStore } from "../../apps/web/src/stores/conversationScrollTargetStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+import { getWindowScope } from "../../apps/web/src/lib/node-scope/app-window-scope";
 import { useNativeAgentProjectionStore } from "../../apps/web/src/stores/nativeAgentProjectionStore";
 
 const ENVIRONMENT_ID = "transcript-list-environment";
@@ -293,9 +294,15 @@ const fixture = {
     tab.stateRevision += 1;
   },
   highlight: (messageId: string, tabIndex = 0) => {
-    useConversationScrollTargetStore
-      .getState()
-      .request(ENVIRONMENT_ID, tabs[tabIndex]!.tabId, { messageId });
+    useConversationScrollTargetStore.getState().request(
+      // No node scope is rendered: the transcript reads the command node's requests.
+      {
+        nodeId: getWindowScope().commandScope().nodeId,
+        environmentId: ENVIRONMENT_ID,
+        tabId: tabs[tabIndex]!.tabId,
+      },
+      { messageId },
+    );
   },
 };
 

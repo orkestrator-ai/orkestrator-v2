@@ -7,6 +7,7 @@ import { unknownCapabilities } from "@orkestrator/protocol/change-evidence";
 import { ChangeEvidenceRecorder } from "@orkestrator/protocol/node/change-tracking/evidence-builders";
 import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
 import { registerChangeCommands } from "../apps/backend/src/core/commands-registry-changes";
+import { registrarFrom } from "../apps/backend/src/core/commands-registry-contracts";
 import type { CommandContext, CommandHandler } from "../apps/backend/src/core/commands-context";
 import {
   createHarness,
@@ -18,7 +19,8 @@ installFatalRejectionGuard({ label: "[change-tracking-browser-fixture]" });
 const h = createHarness();
 const service = h.service;
 const handlers = new Map<string, CommandHandler>();
-registerChangeCommands((name, handler) => handlers.set(name, handler));
+// Defined commands are decoded and validated as the registry does (7006).
+registerChangeCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
 const context = {
   runtime: { changeTracking: service, diffStats: { service: { isTracked: () => true } } },
 } as unknown as CommandContext;

@@ -8,6 +8,7 @@ import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { usePreviewServiceStore } from "../../apps/web/src/stores/previewServiceStore";
 import { useTerminalPortalStore } from "../../apps/web/src/stores/terminalPortalStore";
+import { getWindowScope } from "../../apps/web/src/lib/node-scope/app-window-scope";
 import {
   listenForTerminalBrowserTabRequests,
   type TerminalBrowserTabRequest,
@@ -84,8 +85,11 @@ export function TerminalLinksFixture() {
       setInternal((current) => [...current, request]);
     });
     const store = useTerminalPortalStore.getState();
+    // The fixture renders no node scope: its terminal is the command node's.
+    const nodeId = getWindowScope().commandScope().nodeId;
     const data = store.createTerminal(
       {
+        nodeId,
         environmentId: "osc-environment",
         tabId: "osc-source-tab",
         containerId: null,
@@ -112,7 +116,7 @@ export function TerminalLinksFixture() {
       stopData.dispose();
       stopSelection.dispose();
       stopListening();
-      store.disposeTerminal("osc-environment", "osc-source-tab");
+      store.disposeTerminal(nodeId, "osc-environment", "osc-source-tab");
       window.orkestrator = originalBackend;
       window.orkestratorGateway = originalGateway;
       useConfigStore.setState({ config: originalConfig });

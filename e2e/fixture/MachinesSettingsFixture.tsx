@@ -7,6 +7,7 @@ import { portalStore } from "../../apps/web/src/lib/portal/portal-store";
 import { onGlobalSettingsCloseRequest } from "../../apps/web/src/lib/settings-navigation";
 import { useAppDialogStore } from "../../apps/web/src/stores/appDialogStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+import { getWindowScope } from "../../apps/web/src/lib/node-scope/app-window-scope";
 import type { Environment } from "../../apps/web/src/types";
 import type { ConnectionList, ConnectToRemoteInput } from "@orkestrator/protocol/connections";
 import { FullscreenSettingsLayout } from "../../apps/web/src/components/settings/FullscreenSettingsLayout";
@@ -429,6 +430,7 @@ export function MachinesSettingsFixture() {
           <button
             onClick={() =>
               useAppDialogStore.getState().open({
+                nodeId: getWindowScope().commandScope().nodeId,
                 kind: "environment-settings",
                 environmentId: oldEnvironment.id,
                 section: "container",

@@ -8,7 +8,9 @@
 import type { ClientEnvironment } from "@orkestrator/protocol/contract/domains/environments";
 
 /** A stopped containerized environment with every required field. */
-export function clientEnvironmentFixture(overrides: Partial<ClientEnvironment> = {}): ClientEnvironment {
+export function clientEnvironmentFixture(
+  overrides: Partial<ClientEnvironment> = {},
+): ClientEnvironment {
   return {
     id: "env-1",
     projectId: "project-1",

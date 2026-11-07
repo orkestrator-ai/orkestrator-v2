@@ -78,7 +78,13 @@ import type {
 } from "../../../graphs/sharing.js";
 import { validateGraphTemplate, type GraphTemplateV1 } from "../../../graphs/template.js";
 import type { FieldValidation } from "../../../field-validation.js";
-import { asModel, modelRecord, type ModelSchema, mutableArray, opaqueRecord } from "../../model-schema.js";
+import {
+  asModel,
+  modelRecord,
+  type ModelSchema,
+  mutableArray,
+  opaqueRecord,
+} from "../../model-schema.js";
 
 // --------------------------------------------------------------- guards
 

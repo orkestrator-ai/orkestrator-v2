@@ -1958,6 +1958,7 @@ export class BuildPipelineLifecycle {
         await this.recovery.updateKanbanLifecycle(
           record.snapshot,
           buildPipelineKanbanUpdate("failed"),
+          { terminal: true },
         );
       } catch {
         activityLog.warn("job.failed", { scope: "deleted-pipeline-kanban-update" });

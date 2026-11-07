@@ -235,6 +235,37 @@ stage instead of guessing. A build
 from a Linear or GitHub ticket has only this copy: the launch dialog's choice
 stays with that pipeline, and its completion comment says how it was delivered.
 
+## Merged pull requests close the ticket
+
+A ticket whose linked pull request merged moves to done, from whichever column
+it is in. The rule is in `apps/backend/src/core/kanban-merge-closure.ts`, and
+every writer applies it through one storage method,
+`KanbanRepository.closeKanbanTasksForMergedPullRequests`:
+
+| Writer | When |
+| --- | --- |
+| PR monitor (`pr-monitor.ts`, the `status` reconciliation step) | It sees the environment's pull request merge, or repairs a merge it recorded before a restart. |
+| Build pipeline (`updateKanbanLifecycle`, terminal events) | The build completes, fails, is cancelled or deleted after its Ship opened a pull request that has since merged. Without this the `complete` and `failed` events would move the ticket back to review or backlog. |
+| Startup sweep (`pr-monitor-runtime.ts`, the first sync of each backend process) | A merge recorded on a ticket that never closed it: one an older build left in backlog or review, or one whose environment was deleted before the monitor applied the merge. |
+
+A merge is recorded when the ticket links a pull request in state `merged`, or,
+for a ticket with no linked pull request, when its latest pull-request comment
+is the monitor's `🎉 PR merged: <url>`. A later `🔗 PR raised` or `❌ PR closed`
+comment means other work followed. The sweep leaves in-progress tickets alone,
+because a ticket being built again keeps its earlier pull request until the new
+build raises one.
+
+The closure happens once per pull request. The ticket records the merged pull
+request that closed it (`prMergeDoneUrl`), even if it was already done when the
+merge was observed. Recording that merge leaves a done ticket’s order alone.
+The marker travels with status in sync snapshots and outbox changes, sharing
+its revision and conflict rules. A ticket the user moves back out of
+done afterwards stays where they put it, until a different pull request merges.
+Separately, a build or graph run ending (`complete`, `failed`) never moves a
+ticket that is already done: storage checks this under the same mutation lease
+as the write, so a terminal writer cannot race the monitor and reopen it.
+A new build starting still moves it to in progress.
+
 ## Views
 
 `TicketSectionsGrid` renders the sections as tiles in render order. It sizes to

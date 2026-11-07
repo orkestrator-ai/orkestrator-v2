@@ -27,6 +27,8 @@ export interface FakeTask {
   prUrl: string | null;
   prState: PrState | null;
   prMergeCommented: boolean;
+  /** The merged PR that moved the task to done; absent until one does. */
+  prMergeDoneUrl?: string | null;
   comments: string[];
 }
 
@@ -111,7 +113,7 @@ export function createLifecycleHarness(options: LifecycleHarnessOptions = {}) {
     persist: [] as Array<{ environmentId: string; detection: PrDetection }>,
     comments: [] as Array<{ taskId: string; text: string }>,
     metadata: [] as Array<{ taskId: string; updates: Record<string, unknown> }>,
-    review: [] as string[],
+    done: [] as string[],
     resume: [] as Array<{ environmentId: string; url: string; state: string }>,
     readTarget: [] as string[],
   };
@@ -191,12 +193,17 @@ export function createLifecycleHarness(options: LifecycleHarnessOptions = {}) {
           prUrl: snapshot.prUrl,
           prState: snapshot.prState,
           prMergeCommented: snapshot.prMergeCommented,
+          prMergeDoneUrl: snapshot.prMergeDoneUrl ?? null,
           hasCommentText: (text: string) => snapshot.comments.includes(text),
         };
       },
-      moveTaskToReview: async (taskId) => {
-        calls.review.push(taskId);
-        for (const task of tasks.values()) if (task.taskId === taskId) task.status = "review";
+      closeTaskForMerge: async (taskId, prUrl) => {
+        calls.done.push(taskId);
+        for (const task of tasks.values()) {
+          if (task.taskId !== taskId) continue;
+          task.status = "done";
+          task.prMergeDoneUrl = prUrl;
+        }
       },
       addTaskComment: async (taskId, text) => {
         if (failures.comment > 0) {

@@ -1,6 +1,7 @@
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { AgentRegistry } from "./agent-registry.js";
 import { seedCoordinator } from "./public-api/test-coordinator.js";
+import { seedStore } from "./storage-test-support.js";
 import { createProject } from "./storage.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
@@ -346,15 +347,18 @@ describe("aggregate MCP regressions", () => {
   test("legacy and voice lists drain over 200 leaf projects and environments", async () => {
     const mcp = await open();
     const template = (await mcp.leaf.harness.storage.getEnvironment("env-1"))!;
+    const projectsToSeed = await mcp.leaf.harness.storage.loadProjects();
+    const environmentsToSeed = await mcp.leaf.harness.storage.loadEnvironments();
     let finalProjectId = "";
     for (let index = 0; index < 201; index += 1) {
-      const project = await mcp.leaf.harness.storage.addProject({
+      const project = {
         ...createProject(`https://example.invalid/project-${index}.git`),
         name: `Project ${String(index).padStart(3, "0")}`,
         order: index + 1,
-      });
+      };
+      projectsToSeed.push(project);
       finalProjectId = project.id;
-      await mcp.leaf.harness.storage.addEnvironment({
+      environmentsToSeed.push({
         ...template,
         id: `env-page-${index}`,
         projectId: project.id,
@@ -363,6 +367,10 @@ describe("aggregate MCP regressions", () => {
         order: index + 1,
       });
     }
+    // This case exercises pagination, not project creation. Two seed writes avoid
+    // hundreds of durable fixture commits consuming the test deadline under load.
+    seedStore(mcp.leaf.harness.dataDir, "projects.json", projectsToSeed);
+    seedStore(mcp.leaf.harness.dataDir, "environments.json", environmentsToSeed);
     const projects = content(await mcp.call(mcp.token, "list_projects", { nodeId: "all" })) as {
       projects: Array<{ id: string; nodeId: string }>;
       warnings: string[];

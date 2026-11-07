@@ -1,3 +1,4 @@
+import { configureLogger, resetLogger, type LogRecord } from "@orkestrator/protocol/logger";
 import { expect, mock, spyOn, test } from "bun:test";
 import {
   PR_MONITOR_CHANGED_EVENT,
@@ -407,5 +408,88 @@ test("batch changes wake every matching snapshot entry and leave other PRs alone
     wake.mockRestore();
   } finally {
     runtime.shutdown();
+  }
+});
+
+test("the first sync closes tickets whose recorded merge never closed them, once per process", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const closeKanbanTasksForMergedPullRequests = mock(async () => ["task-1"]);
+  const context: CommandContext = {
+    runtime,
+    storage: {
+      loadEnvironments: async () => [],
+      kanban: { closeKanbanTasksForMergedPullRequests },
+    } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+  };
+  try {
+    await runtime.prMonitor.sync(context);
+    await runtime.prMonitor.sync(context);
+    // The sweep runs off the sync path; let it settle.
+    await Promise.resolve();
+    expect(closeKanbanTasksForMergedPullRequests).toHaveBeenCalledTimes(1);
+    // Called without names: every board's recorded merges.
+    expect(closeKanbanTasksForMergedPullRequests.mock.calls[0]).toEqual([]);
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+test("a startup sweep failure is logged once without blocking environment sync", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  let reject!: (error: Error) => void;
+  let entered!: () => void;
+  let logged!: () => void;
+  const started = new Promise<void>((resolve) => (entered = resolve));
+  const observed = new Promise<void>((resolve) => (logged = resolve));
+  const pending = new Promise<string[]>((_resolve, fail) => (reject = fail));
+  const records: LogRecord[] = [];
+  configureLogger({
+    sink: (output) => {
+      if (output.record?.event === "monitor.merged-tickets-close-failed") {
+        records.push(output.record);
+        logged();
+      }
+    },
+  });
+  const close = mock(() => {
+    entered();
+    return pending;
+  });
+  const loadEnvironments = mock(async () => []);
+  const context = {
+    runtime,
+    storage: {
+      loadEnvironments,
+      kanban: { closeKanbanTasksForMergedPullRequests: close },
+    } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+  } as CommandContext;
+  try {
+    // Both syncs finish even while storage's sweep is parked.
+    await runtime.prMonitor.sync(context);
+    await started;
+    await runtime.prMonitor.sync(context);
+    expect(loadEnvironments).toHaveBeenCalledTimes(2);
+    reject(new Error("closure unavailable"));
+    await observed;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      area: "pull-request",
+      level: "warn",
+      event: "monitor.merged-tickets-close-failed",
+    });
+    await runtime.prMonitor.sync(context);
+    expect(close).toHaveBeenCalledTimes(1);
+  } finally {
+    reject(new Error("test cleanup"));
+    runtime.shutdown();
+    resetLogger();
   }
 });

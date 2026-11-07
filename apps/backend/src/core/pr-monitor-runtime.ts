@@ -117,6 +117,7 @@ export class PrMonitorRuntime {
    */
   private queuedSync: { generation: number; promise: Promise<void> } | null = null;
   private warnedMissingMergeCleanup = false;
+  private recordedMergesClosed = false;
   private closedService: Pick<PrMonitorService, keyof PrMonitorService> | undefined;
   private readonly listeners = new Set<(event: PrMonitorEvent) => void>();
   /** Merge permission per credential scope and repository, refreshed hourly. */
@@ -167,6 +168,7 @@ export class PrMonitorRuntime {
   async sync(context: CommandContext): Promise<void> {
     if (this.closedService) return;
     this.bind(context);
+    this.closeRecordedMergesOnce(context.storage);
     const generation = this.syncGeneration;
     const queued = this.queuedSync;
     if (queued && queued.generation === generation) return queued.promise;
@@ -204,6 +206,28 @@ export class PrMonitorRuntime {
     this.queuedSync = { generation, promise: operation };
     this.syncQueue = operation;
     await operation;
+  }
+
+  /**
+   * Once per process, moves tickets to done whose merged pull request is
+   * recorded on them but never closed them (`kanban-merge-closure.ts`): ones
+   * an older build left in backlog or review, and ones whose environment was
+   * deleted before the monitor applied the merge. Best effort and off the
+   * sync path; a failure is retried by the next backend start.
+   */
+  private closeRecordedMergesOnce(storage: StorageService): void {
+    if (this.recordedMergesClosed) return;
+    this.recordedMergesClosed = true;
+    // Embedded command adapters may implement only the environment subset.
+    if (typeof storage.kanban?.closeKanbanTasksForMergedPullRequests !== "function") return;
+    void Promise.resolve()
+      .then(() => storage.kanban.closeKanbanTasksForMergedPullRequests())
+      .then((closed) => {
+        if (closed.length > 0) log.info("monitor.merged-tickets-closed", { count: closed.length });
+      })
+      .catch((error: unknown) => {
+        log.warn("monitor.merged-tickets-close-failed", { error: formatLogError(error) });
+      });
   }
 
   /** Discards any sync still loading storage; call before untracking or pausing. */
@@ -530,8 +554,10 @@ export class PrMonitorRuntime {
         },
         findTaskForEnvironment: (environmentId) =>
           findKanbanTaskForEnvironment(this.requireStorage(), environmentId),
-        moveTaskToReview: async (taskId) => {
-          await this.requireStorage().kanban.updateKanbanTask(taskId, { status: "review" });
+        closeTaskForMerge: async (taskId, prUrl) => {
+          await this.requireStorage().kanban.closeKanbanTasksForMergedPullRequests([
+            { taskId, prUrl },
+          ]);
         },
         addTaskComment: async (taskId, text) => {
           await this.requireStorage().kanban.addKanbanComment(taskId, text);

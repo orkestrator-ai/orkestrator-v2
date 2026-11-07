@@ -761,3 +761,50 @@ test("full outbox refuses an edit without committing board or outbox", async () 
   expect(await f.leafTicket(task.id)).toEqual(before);
   expect(readStoredValue(f.leaf.getDataDir(), "kanban-sync.json")).toEqual(store);
 });
+
+describe("merge closure identity across machines", () => {
+  for (const source of ["leaf", "command"] as const) {
+    for (const alreadyDone of [false, true]) {
+      test(`${source} merge (${alreadyDone ? "already done" : "open"}) survives a reopen on the other machine`, async () => {
+        const f = await fleet();
+        const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Merged", "");
+        if (alreadyDone) await f.command.kanban.updateKanbanTask(ticket.id, { status: "done" });
+        await f.sync.sync(LEAF_ID);
+        const origin = source === "leaf" ? f.leaf : f.command;
+        const other = source === "leaf" ? f.command : f.leaf;
+        const prUrl = "https://github.com/acme/repo/pull/1";
+        await origin.kanban.addKanbanComment(ticket.id, `🎉 PR merged: ${prUrl}`);
+        await origin.kanban.closeKanbanTasksForMergedPullRequests([{ taskId: ticket.id, prUrl }]);
+        await f.sync.sync(LEAF_ID);
+        expect(await other.kanban.getKanbanTask(ticket.id)).toMatchObject({
+          status: "done",
+          prMergeDoneUrl: prUrl,
+        });
+        await other.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
+        expect(await other.kanban.closeKanbanTasksForMergedPullRequests()).toEqual([]);
+        await f.sync.sync(LEAF_ID);
+        for (const node of [origin, other]) {
+          expect(await node.kanban.closeKanbanTasksForMergedPullRequests()).toEqual([]);
+          expect(await node.kanban.getKanbanTask(ticket.id)).toMatchObject({
+            status: "backlog",
+            prMergeDoneUrl: prUrl,
+          });
+        }
+      });
+    }
+  }
+
+  test("a new leaf ticket carries its marker in creation and preserves it through edits", async () => {
+    const f = await fleet();
+    await f.sync.sync(LEAF_ID);
+    const ticket = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "New", "");
+    const prUrl = "https://github.com/acme/repo/pull/2";
+    await f.leaf.kanban.closeKanbanTasksForMergedPullRequests([{ taskId: ticket.id, prUrl }]);
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "review" });
+    await f.sync.sync(LEAF_ID);
+    expect(await f.commandTicket(ticket.id)).toMatchObject({
+      status: "review",
+      prMergeDoneUrl: prUrl,
+    });
+  });
+});

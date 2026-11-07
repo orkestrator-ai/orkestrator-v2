@@ -361,8 +361,10 @@ export async function withService(
     if (command === "update_kanban_task") {
       const taskId = String(args.taskId);
       if (options.realKanban) {
-        const { taskId: _taskId, ...updates } = args;
-        return (await storage.kanban.updateKanbanTask(taskId, updates)) as T;
+        const { taskId: _taskId, preserveDoneStatus, ...updates } = args;
+        return (await storage.kanban.updateKanbanTask(taskId, updates, undefined, {
+          preserveDoneStatus: preserveDoneStatus === true,
+        })) as T;
       }
       const task = kanbanTasks.get(taskId) ?? {
         id: taskId,
@@ -385,6 +387,18 @@ export async function withService(
       task.comments.push({ text: String(args.text) });
       kanbanTasks.set(taskId, task);
       return undefined as T;
+    }
+    if (command === "close_kanban_task_for_merged_pr") {
+      const taskId = String(args.taskId);
+      if (options.realKanban) {
+        const moved = await storage.kanban.closeKanbanTasksForMergedPullRequests([
+          { taskId, prUrl: String(args.prUrl) },
+        ]);
+        return { closed: moved.length > 0 } as T;
+      }
+      const task = kanbanTasks.get(taskId);
+      if (task) Object.assign(task, { status: "done", prMergeDoneUrl: args.prUrl });
+      return { closed: Boolean(task) } as T;
     }
     if (command === "record_kanban_criteria_checks") {
       const task = kanbanTasks.get(String(args.taskId));

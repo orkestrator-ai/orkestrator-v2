@@ -13,6 +13,7 @@ import {
   type PrState,
 } from "@orkestrator/protocol/pr-monitor";
 import { recurringPriorityRank } from "@orkestrator/protocol/recurring-work";
+import { PR_CLOSED_COMMENT, PR_MERGED_COMMENT } from "./kanban-merge-closure.js";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
@@ -87,7 +88,7 @@ import {
  * | Obligation                         | Durable record                                   | Idempotency                         |
  * | ---------------------------------- | ------------------------------------------------ | ----------------------------------- |
  * | Environment PR fields              | environment `prUrl`/`prState` (`persistPr`)      | same value rewritten; retried by re-detection while `persistencePending` |
- * | Linked task → review (merged only) | task `status`                                    | only moves `in-progress`/unknown     |
+ * | Linked task → done (merged only)   | task `status`, `prMergeDoneUrl`                  | once per PR (`kanban-merge-closure.ts`) |
  * | Linked task PR link                | task `prUrl`/`prState`, `prMergeCommented:false` | compared before writing             |
  * | Linked task terminal comment       | task comment text (URL-specific)                 | exact text check                    |
  * | Linked task completion flag        | task `prMergeCommented:true` for that URL/state  | durable marker                      |
@@ -188,6 +189,8 @@ export interface PrMonitorKanbanTask {
   prUrl: string | null;
   prState: PrState | null;
   prMergeCommented: boolean;
+  /** The merged pull request that already moved this task to done, if any. */
+  prMergeDoneUrl: string | null;
   hasCommentText: (text: string) => boolean;
 }
 
@@ -204,7 +207,8 @@ export interface PrMonitorEffects {
   persistPr: (environmentId: string, detection: PrDetection) => Promise<void>;
   clearPr: (environmentId: string) => Promise<void>;
   findTaskForEnvironment: (environmentId: string) => Promise<PrMonitorKanbanTask | null>;
-  moveTaskToReview: (taskId: string) => Promise<void>;
+  /** Moves the task to done for this merged pull request; the store skips a task already closed by it. */
+  closeTaskForMerge: (taskId: string, prUrl: string) => Promise<void>;
   addTaskComment: (taskId: string, text: string) => Promise<void>;
   updateTaskPrMetadata: (
     taskId: string,
@@ -264,8 +268,7 @@ export interface PrMonitorServiceOptions {
   cooldownScope?: (target: PrMonitorTarget) => string | null;
 }
 
-export const PR_MERGED_COMMENT = "🎉 PR merged";
-export const PR_CLOSED_COMMENT = "❌ PR closed";
+export { PR_CLOSED_COMMENT, PR_MERGED_COMMENT };
 export const PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS = 60_000;
 
 type ReconciliationStep = "status" | "link" | "comment" | "metadata";
@@ -1608,7 +1611,7 @@ export class PrMonitorService {
   }
 
   /**
-   * Moves the linked kanban task to review, posts the merged/closed comment,
+   * Moves the linked kanban task to done, posts the merged/closed comment,
    * and records the `prMergeCommented` idempotency flag.
    *
    * Progress is tracked per (environment, url, state, task) so a failure in a
@@ -1686,11 +1689,11 @@ export class PrMonitorService {
       }
 
       if (terminalState === "merged" && !progress.has("status")) {
-        // Only advance in-progress tasks; a task already in review or done must
-        // not regress. A pipeline-located task (status unknown) is moved, which
-        // matches the renderer behaviour this replaced.
-        if (task.status === "in-progress" || task.status === null) {
-          await this.options.effects.moveTaskToReview(task.taskId);
+        // A merged pull request finishes its task, from whichever column it is
+        // in, once: a task this PR already closed and the user reopened stays
+        // open. A pipeline-located task (status unknown) is left to the store.
+        if (task.prMergeDoneUrl !== detection.url) {
+          await this.options.effects.closeTaskForMerge(task.taskId, detection.url);
           if (!this.isCurrent(entry, generation)) return false;
         }
         progress.add("status");

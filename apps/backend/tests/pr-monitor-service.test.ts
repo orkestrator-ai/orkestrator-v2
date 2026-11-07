@@ -20,6 +20,7 @@ interface HarnessTask {
   prUrl: string | null;
   prState: "open" | "merged" | "closed" | null;
   prMergeCommented: boolean;
+  prMergeDoneUrl?: string | null;
   comments: string[];
 }
 
@@ -45,7 +46,7 @@ function createHarness() {
     detectOptions: [] as PrMonitorDetectionOptions[],
     persist: [] as Array<{ environmentId: string; detection: PrDetection }>,
     clear: [] as string[],
-    review: [] as string[],
+    done: [] as string[],
     comments: [] as Array<{ taskId: string; text: string }>,
     metadata: [] as Array<{ taskId: string; updates: Record<string, unknown> }>,
   };
@@ -102,12 +103,16 @@ function createHarness() {
           prUrl: snapshot.prUrl,
           prState: snapshot.prState,
           prMergeCommented: snapshot.prMergeCommented,
+          prMergeDoneUrl: snapshot.prMergeDoneUrl ?? null,
           hasCommentText: (text: string) => snapshot.comments.includes(text),
         };
       },
-      moveTaskToReview: async (taskId) => {
-        calls.review.push(taskId);
-        if (task) task.status = "review";
+      closeTaskForMerge: async (taskId, prUrl) => {
+        calls.done.push(taskId);
+        if (task) {
+          task.status = "done";
+          task.prMergeDoneUrl = prUrl;
+        }
       },
       addTaskComment: async (taskId, text) => {
         calls.comments.push({ taskId, text });
@@ -751,7 +756,7 @@ describe("PrMonitorService", () => {
         detection: detection({ state: "merged" }),
       },
     ]);
-    expect(harness.calls.review).toEqual(["task-1"]);
+    expect(harness.calls.done).toEqual(["task-1"]);
     expect(harness.calls.comments).toEqual([
       {
         taskId: "task-1",
@@ -787,10 +792,70 @@ describe("PrMonitorService", () => {
     // The next check confirms the same merged state: no repeated side effects,
     // no second transition.
     await harness.fireNext();
-    expect(harness.calls.review).toHaveLength(1);
+    expect(harness.calls.done).toHaveLength(1);
     expect(harness.calls.comments).toHaveLength(1);
     expect(harness.calls.metadata).toHaveLength(2);
     expect(harness.transitions()).toHaveLength(1);
+  });
+
+  for (const status of ["backlog", "review", null] as const) {
+    test(`a merged detection moves a ${status ?? "pipeline-located"} task to done`, async () => {
+      const harness = createHarness();
+      harness.setTask(inProgressTask({ status }));
+      harness.setDetect(async () => detection({ state: "merged" }));
+      harness.service.sync([openPr()]);
+
+      await harness.fireNext();
+
+      expect(harness.calls.done).toEqual(["task-1"]);
+      expect(harness.calls.comments).toEqual([
+        { taskId: "task-1", text: terminalComment(PR_MERGED_COMMENT) },
+      ]);
+    });
+  }
+
+  test("a merge marks done tasks and leaves previously closed reopened tasks alone", async () => {
+    for (const task of [
+      inProgressTask({ status: "done" }),
+      inProgressTask({
+        status: "backlog",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+        prMergeCommented: true,
+        prMergeDoneUrl: "https://github.com/org/repo/pull/1",
+        comments: [terminalComment(PR_MERGED_COMMENT)],
+      }),
+    ]) {
+      const harness = createHarness();
+      harness.setTask(task);
+      harness.setDetect(async () => detection({ state: "merged" }));
+      harness.service.sync([openPr()]);
+
+      await harness.fireNext();
+
+      expect(harness.calls.done).toEqual(task.status === "done" ? ["task-1"] : []);
+    }
+  });
+
+  test("a merged replacement PR closes a task an earlier merge closed and the user reopened", async () => {
+    const harness = createHarness();
+    harness.setTask(
+      inProgressTask({
+        status: "backlog",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+        prMergeCommented: true,
+        prMergeDoneUrl: "https://github.com/org/repo/pull/1",
+      }),
+    );
+    harness.setDetect(async () =>
+      detection({ url: "https://github.com/org/repo/pull/2", state: "merged" }),
+    );
+    harness.service.sync([openPr()]);
+
+    await harness.fireNext();
+
+    expect(harness.calls.done).toEqual(["task-1"]);
   });
 
   test("announces a confirmed merge once while failed persistence is retried", async () => {
@@ -861,7 +926,8 @@ describe("PrMonitorService", () => {
 
     await harness.fireNext();
 
-    expect(harness.calls.review).toHaveLength(0);
+    // An older build recorded the merge without closing the task; the repair closes it.
+    expect(harness.calls.done).toEqual(["task-1"]);
     expect(harness.calls.comments).toHaveLength(0);
     expect(harness.calls.metadata).toHaveLength(0);
   });
@@ -881,7 +947,7 @@ describe("PrMonitorService", () => {
     await harness.fireNext();
 
     // Closed PRs never move the task.
-    expect(harness.calls.review).toHaveLength(0);
+    expect(harness.calls.done).toHaveLength(0);
     expect(harness.calls.comments).toHaveLength(0);
     expect(harness.calls.metadata).toEqual([
       {
@@ -921,7 +987,7 @@ describe("PrMonitorService", () => {
     };
 
     await harness.fireNext();
-    expect(harness.calls.review).toHaveLength(1);
+    expect(harness.calls.done).toHaveLength(1);
     expect(harness.calls.comments).toHaveLength(1);
     expect(original).toEqual([
       {
@@ -942,7 +1008,7 @@ describe("PrMonitorService", () => {
     );
 
     await harness.fireNext();
-    expect(harness.calls.review).toHaveLength(1);
+    expect(harness.calls.done).toHaveLength(1);
     expect(harness.calls.comments).toHaveLength(1);
     expect(original).toEqual([
       {
@@ -1020,7 +1086,7 @@ describe("PrMonitorService", () => {
 
     expect(harness.calls.detect).toEqual([]);
     expect(harness.calls.persist).toEqual([]);
-    expect(harness.calls.review).toEqual(["task-1"]);
+    expect(harness.calls.done).toEqual(["task-1"]);
     expect(harness.calls.comments).toEqual([
       {
         taskId: "task-1",
@@ -1582,7 +1648,7 @@ describe("PrMonitorService", () => {
     releasePersist();
     await harness.flush();
 
-    expect(harness.calls.review).toEqual([]);
+    expect(harness.calls.done).toEqual([]);
     expect(harness.calls.comments).toEqual([]);
     expect(harness.transitions()).toEqual([]);
     expect(harness.pendingDelays()).toEqual([]);
@@ -1702,7 +1768,7 @@ describe("PrMonitorService", () => {
     await harness.flush();
 
     expect(harness.service.trackedIds()).toEqual([]);
-    expect(harness.calls.review).toEqual([]);
+    expect(harness.calls.done).toEqual([]);
     expect(harness.calls.comments).toEqual([]);
     expect(harness.pendingDelays()).toEqual([]);
   });

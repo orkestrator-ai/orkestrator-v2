@@ -75,6 +75,7 @@ export async function findKanbanTaskForEnvironment(
         prUrl: null,
         prState: null,
         prMergeCommented: false,
+        prMergeDoneUrl: null,
         hasCommentText: () => false,
       };
     }
@@ -87,6 +88,7 @@ export async function findKanbanTaskForEnvironment(
     prUrl: located.prUrl ?? null,
     prState: located.prState ?? null,
     prMergeCommented: located.prMergeCommented === true,
+    prMergeDoneUrl: located.prMergeDoneUrl ?? null,
     hasCommentText: (text) => located.comments.some((comment) => comment.text === text),
   };
 }

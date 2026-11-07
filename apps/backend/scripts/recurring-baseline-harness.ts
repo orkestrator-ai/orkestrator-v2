@@ -501,7 +501,7 @@ export async function runScenario(
       persistPr: async () => undefined,
       clearPr: async () => undefined,
       findTaskForEnvironment: async () => null,
-      moveTaskToReview: async () => undefined,
+      closeTaskForMerge: async () => undefined,
       addTaskComment: async () => undefined,
       updateTaskPrMetadata: async () => undefined,
     },

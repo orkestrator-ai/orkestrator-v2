@@ -24,7 +24,10 @@ export function buildPipelinePrRaisedComment(url: string): string {
 
 /**
  * The update for one lifecycle event. `pr-raised` links the pull request
- * (`pr` is required for it); the other events ignore `pr`.
+ * (`pr` is required for it); the other events ignore `pr`. The column of the
+ * ending events (`complete`, `failed`) gives way to a merged pull request,
+ * which closes the ticket, and never reopens a done one
+ * (`kanban-merge-closure.ts`).
  */
 export function buildPipelineKanbanUpdate(
   event: GraphTicketLifecycleEvent,

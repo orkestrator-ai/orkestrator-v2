@@ -98,21 +98,38 @@ export function registerKanbanCommands(
       prState,
       prMergeCommented,
     } = args;
-    return storage.kanban.updateKanbanTask(asString(taskId, "taskId"), {
-      ...asTicketContentInput(args),
-      ...asTicketLabelsInput(args),
-      ...(typeof title === "string" ? { title } : {}),
-      ...(typeof description === "string" ? { description } : {}),
-      ...(typeof acceptanceCriteria === "string" ? { acceptanceCriteria } : {}),
-      ...(typeof status === "string" ? { status: status as never } : {}),
-      ...(typeof environmentId === "string" ? { environmentId: environmentId || undefined } : {}),
-      ...(typeof buildPipelineId === "string"
-        ? { buildPipelineId: buildPipelineId || undefined }
-        : {}),
-      ...(typeof prUrl === "string" ? { prUrl: prUrl || undefined } : {}),
-      ...(typeof prState === "string" ? { prState: prState as PrState } : {}),
-      ...(typeof prMergeCommented === "boolean" ? { prMergeCommented } : {}),
-    });
+    return storage.kanban.updateKanbanTask(
+      asString(taskId, "taskId"),
+      {
+        ...asTicketContentInput(args),
+        ...asTicketLabelsInput(args),
+        ...(typeof title === "string" ? { title } : {}),
+        ...(typeof description === "string" ? { description } : {}),
+        ...(typeof acceptanceCriteria === "string" ? { acceptanceCriteria } : {}),
+        ...(typeof status === "string" ? { status: status as never } : {}),
+        ...(typeof environmentId === "string" ? { environmentId: environmentId || undefined } : {}),
+        ...(typeof buildPipelineId === "string"
+          ? { buildPipelineId: buildPipelineId || undefined }
+          : {}),
+        ...(typeof prUrl === "string" ? { prUrl: prUrl || undefined } : {}),
+        ...(typeof prState === "string" ? { prState: prState as PrState } : {}),
+        ...(typeof prMergeCommented === "boolean" ? { prMergeCommented } : {}),
+      },
+      undefined,
+      { preserveDoneStatus: args.preserveDoneStatus === true },
+    );
+  });
+  // A ticket whose pull request merged moves to done, once per pull request
+  // (`kanban-merge-closure.ts`). Resolves to whether the ticket moved.
+  register("close_kanban_task_for_merged_pr", async (args, { storage }) => {
+    assertOnlyKeys(args, ["taskId", "prUrl"], "arguments");
+    const moved = await storage.kanban.closeKanbanTasksForMergedPullRequests([
+      {
+        taskId: asNonBlankString(args.taskId, "taskId"),
+        prUrl: asNonBlankString(args.prUrl, "prUrl"),
+      },
+    ]);
+    return { closed: moved.length > 0 };
   });
   register("record_kanban_criteria_checks", (args, { storage }) => {
     assertOnlyKeys(args, ["taskId", "checks"], "arguments");

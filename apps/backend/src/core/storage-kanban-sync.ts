@@ -230,7 +230,7 @@ export function diffTickets(before: KanbanTask, after: KanbanTask): TicketDiff {
     title: before.title !== after.title,
     content: contentKey(before) !== contentKey(after),
     checks: !isDeepStrictEqual(criteriaChecks(before), criteriaChecks(after)),
-    status: before.status !== after.status,
+    status: before.status !== after.status || before.prMergeDoneUrl !== after.prMergeDoneUrl,
     addedComments: after.comments.filter((comment) => !beforeComments.has(comment.id)),
     removedComments: before.comments
       .filter((comment) => !afterComments.has(comment.id))
@@ -407,6 +407,7 @@ export function stampTicketChange(
             ...ticketContentValue(after),
             title: after.title,
             status: after.status,
+            ...(after.prMergeDoneUrl ? { prMergeDoneUrl: after.prMergeDoneUrl } : {}),
             comments: after.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
             createdAt: after.createdAt,
           },
@@ -451,7 +452,12 @@ export function stampTicketChange(
     queue({ kind: "checks", checks: criteriaChecks(after) });
   }
   if (diff.status) {
-    queue({ kind: "set-status", value: after.status, baseRev: replica.revs.status ?? 0 });
+    queue({
+      kind: "set-status",
+      value: after.status,
+      baseRev: replica.revs.status ?? 0,
+      ...(after.prMergeDoneUrl ? { prMergeDoneUrl: after.prMergeDoneUrl } : {}),
+    });
   }
   for (const comment of diff.addedComments) {
     queue({
@@ -491,6 +497,7 @@ export function ticketSnapshot(task: KanbanTask): TicketSnapshot {
     revs: task.sync?.revs ?? {},
     title: task.title,
     status: task.status,
+    ...(task.prMergeDoneUrl ? { prMergeDoneUrl: task.prMergeDoneUrl } : {}),
     comments: task.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
     createdAt: task.createdAt,
     ...ticketContentValue(task),

@@ -57,6 +57,10 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
       "monitor.task-reconcile-failed":
         "Updating the Kanban task of a merged or closed (`state`) pull request failed.",
       "monitor.task-store-failed": "A pull request could not be recorded on its Kanban task.",
+      "monitor.merged-tickets-closed":
+        "The startup sweep moved Kanban tickets whose pull request had merged to done (`count`).",
+      "monitor.merged-tickets-close-failed":
+        "The startup sweep closing Kanban tickets whose pull request merged failed; the next backend start retries.",
       "monitor.emit-failed": "A pull request monitor event could not be emitted to its sink.",
     },
   },

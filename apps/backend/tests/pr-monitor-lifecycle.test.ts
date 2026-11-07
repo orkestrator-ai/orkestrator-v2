@@ -153,7 +153,8 @@ describe("PR monitor terminal lifecycle", () => {
     expect(harness.detections()).toBe(0);
     expect(harness.calls.comments).toEqual([{ taskId: "task-1", text: terminalComment("merged") }]);
     expect(harness.tasks.get("env-1")?.prMergeCommented).toBe(true);
-    expect(harness.calls.review).toEqual([]);
+    // The task was left in review by an older build; the repair finishes it.
+    expect(harness.calls.done).toEqual(["task-1"]);
     expect(harness.calls.resume).toEqual([{ environmentId: "env-1", url: PR1, state: "merged" }]);
     expect(harness.transitions()).toEqual([]);
 
@@ -359,7 +360,7 @@ describe("PR monitor terminal lifecycle", () => {
     await harness.advance(10 * 60_000);
 
     expect(harness.calls.comments).toEqual([{ taskId: "task-1", text: terminalComment("merged") }]);
-    expect(harness.calls.review).toEqual(["task-1"]);
+    expect(harness.calls.done).toEqual(["task-1"]);
     expect(harness.tasks.get("env-1")?.prMergeCommented).toBe(true);
     expect(harness.transitions()).toHaveLength(1);
 

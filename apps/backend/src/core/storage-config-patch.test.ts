@@ -90,7 +90,10 @@ describe("patching the global config", () => {
         await expect(patch({ patch: {}, unset: "reviewInstruction" }, context)).rejects.toThrow(
           "unset",
         );
-        await expect(patch({ patch: {}, extra: true }, context)).rejects.toThrow();
+        // An unknown key is dropped (7005, tolerant arguments): the same patch as without it.
+        await expect(patch({ patch: {}, extra: true }, context)).resolves.toEqual(
+          await patch({ patch: {} }, context),
+        );
       } finally {
         runtime.shutdown();
       }

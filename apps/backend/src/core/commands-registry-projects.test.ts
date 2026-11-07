@@ -192,5 +192,8 @@ test("summary reads bound icons before serialization without changing ordinary r
   }
   expect(await handler({}, context)).toEqual(stored);
   expect(stored.every((project) => project.icon === icon)).toBe(true);
-  await expect(handler({ summaryIcons: "yes" }, context)).rejects.toThrow("summaryIcons");
+  // The registry decodes the arguments before the handler runs, so the refusal is synchronous.
+  await expect(
+    Promise.resolve().then(() => handler({ summaryIcons: "yes" }, context)),
+  ).rejects.toThrow("summaryIcons");
 });

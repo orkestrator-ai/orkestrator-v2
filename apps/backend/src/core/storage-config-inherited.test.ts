@@ -151,8 +151,11 @@ describe("settings inherited from a command node", () => {
           },
           context,
         );
+        // The registry decodes the arguments before the handler runs, so the refusal is synchronous.
         await expect(
-          update({ global: own.global, preserveInheritedSettings: "yes" }, context),
+          Promise.resolve().then(() =>
+            update({ global: own.global, preserveInheritedSettings: "yes" }, context),
+          ),
         ).rejects.toThrow("preserveInheritedSettings");
       } finally {
         runtime.shutdown();

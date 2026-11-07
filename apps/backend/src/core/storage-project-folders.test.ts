@@ -168,7 +168,7 @@ describe("arrange_projects command", () => {
     });
   });
 
-  test("accepts an omitted folders map and rejects unknown keys or bad values", async () => {
+  test("accepts an omitted folders map, drops unknown keys and rejects bad values", async () => {
     await withBackend(async (backend) => {
       const project = await backend.invoke<Project>("add_project", {
         gitUrl: "https://example.invalid/only.git",
@@ -176,9 +176,10 @@ describe("arrange_projects command", () => {
       await expect(
         backend.invoke<Project[]>("arrange_projects", { projectIds: [project.id] }),
       ).resolves.toHaveLength(1);
+      // An unknown key is dropped (7005, tolerant arguments), as if absent.
       await expect(
-        backend.invoke("arrange_projects", { projectIds: [project.id], unexpected: 1 }),
-      ).rejects.toThrow();
+        backend.invoke<Project[]>("arrange_projects", { projectIds: [project.id], unexpected: 1 }),
+      ).resolves.toEqual([expect.objectContaining({ id: project.id, order: 0 })]);
       await expect(
         backend.invoke("arrange_projects", {
           projectIds: [project.id],

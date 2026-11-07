@@ -1666,14 +1666,16 @@ describe("bridge readiness command", () => {
             timeoutMs: 999,
           }),
         ).rejects.toThrow("between 1000 and 120000");
+        // An unknown key is dropped (7009, tolerant arguments): the declared
+        // ones are still checked.
         await expect(
           invoke("await_bridge_ready", {
             environmentId: "e1",
             agent: "codex",
-            timeoutMs: 1_000,
+            timeoutMs: 999,
             extra: true,
           }),
-        ).rejects.toThrow("Unexpected arguments field");
+        ).rejects.toThrow("between 1000 and 120000");
 
         commands.set("start_local_codex_server_cmd", async () => {
           await storage.updateEnvironment("e1", { status: "stopped" });
@@ -6243,26 +6245,30 @@ describe("pr monitor commands", () => {
           armedAt: 123,
         }),
       ).rejects.toThrow("Expected armedAt to be a string");
-      await expect(
-        invoke("disarm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-          armedAt: second,
-          extra: true,
-        }),
-      ).rejects.toThrow("Unexpected arguments field: extra");
-      await expect(
-        invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-          extra: true,
-        }),
-      ).rejects.toThrow("Unexpected arguments field: extra");
+      // An unknown key is dropped (7006, tolerant arguments): each call is
+      // the same as without it. The arm takes a fresh token, a disarm with the
+      // superseded one leaves it, and a disarm with the current one clears it.
+      const third = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        extra: true,
+      })) as string;
+      expect(third).not.toBe(second);
       expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-        second,
+        third,
+      );
+      await invoke("disarm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        armedAt: second,
+        extra: true,
+      });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        third,
       );
 
       await invoke("disarm_pr_refresh_after_agent_completion", {
         environmentId: "e1",
-        armedAt: second,
+        armedAt: third,
+        extra: true,
       });
       expect(
         (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,

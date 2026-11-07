@@ -225,8 +225,10 @@ describe("create_project_from_scratch", () => {
     const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
     await withProjectCreation(runCommand, async (invoke, _storage, root, invokeArgs) => {
       await expect(invokeArgs({ localPath: " " })).rejects.toThrow(/non-blank string/);
-      await expect(invokeArgs({ localPath: path.join(root, "new"), extra: true })).rejects.toThrow(
-        "Unexpected arguments field: extra",
+      // An unknown key is dropped (7005, tolerant arguments): the handler's own
+      // checks still refuse the target, and nothing reaches a CLI.
+      await expect(invokeArgs({ localPath: "relative/project", extra: true })).rejects.toThrow(
+        "absolute path",
       );
       await expect(invoke("relative/project")).rejects.toThrow("absolute path");
       await expect(invoke(path.parse(root).root)).rejects.toThrow("filesystem root");
@@ -1772,7 +1774,7 @@ describe("create_project_from_scratch", () => {
 });
 
 describe("GitHub clone command boundaries", () => {
-  test("registers listings and rejects extra keys and blank owners before invoking gh", async () => {
+  test("registers listings, drops extra keys and rejects blank owners before invoking gh", async () => {
     const calls: string[][] = [];
     const run: Run = mock(async (_command, args = []) => {
       calls.push(args);
@@ -1799,10 +1801,18 @@ describe("GitHub clone command boundaries", () => {
         command("list_github_clone_repositories", { owner: "  octocat_acme  " }),
       ).resolves.toEqual({ repositories: [], truncated: false });
       expect(calls.find((args) => args.includes("graphql"))).toContain("owner=octocat_acme");
+      // An unknown key is dropped (7005, tolerant arguments): the call is the
+      // same as without it.
+      await expect(command("list_github_clone_accounts", { extra: true })).resolves.toEqual([
+        { login: "octocat_acme", kind: "user" },
+      ]);
+      await expect(
+        command("list_github_clone_repositories", { owner: "acme", extra: true }),
+      ).resolves.toEqual({ repositories: [], truncated: false });
+      expect(calls.at(-1)).toContain("owner=acme");
+      expect(calls.at(-1)?.some((arg) => arg.includes("extra"))).toBe(false);
       const count = calls.length;
       for (const [name, args] of [
-        ["list_github_clone_accounts", { extra: true }],
-        ["list_github_clone_repositories", { owner: "acme", extra: true }],
         ["list_github_clone_repositories", { owner: "" }],
         ["list_github_clone_repositories", { owner: "   " }],
         ["list_github_clone_repositories", { owner: "--help" }],

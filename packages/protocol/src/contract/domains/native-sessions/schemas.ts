@@ -26,7 +26,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
-import type { Mutable } from "effect/Types";
+import type { DeepMutable, Mutable } from "effect/Types";
 import { OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
@@ -119,6 +119,8 @@ export const DomainResolutionSchema = Schema.Struct({
   ips: StringArray,
   error: Schema.NullOr(Schema.String),
 });
+/** `DomainTestResult`: the web's type for one domain check (plan item 7010). */
+export type DomainResolution = DeepMutable<typeof DomainResolutionSchema.Type>;
 
 // --- Prompt queues, drafts and handoffs ---------------------------------------
 

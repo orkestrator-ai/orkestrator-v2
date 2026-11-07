@@ -441,7 +441,15 @@ digest:
   revisions, states, kinds) and passes every other key through
   (`Schema.StructWithRest` with a rest of unknown values), typed as the
   model interface `T`; `opaqueRecord<T>()` declares none. Envelopes and small
-  results are full structs. (7001's `openStruct` is the same idea.)
+  results are full structs. The same module holds the other variants every
+  domain uses (plan item 7010, documented in its header): `openRecord(fields)`
+  (typed as the declared struct, for records whose schema is the model's
+  definition), `variantRecord<T>()` (discriminated unions), `OpenObject`,
+  `ownedObject<T>()`, `asModel<T>()` and `mutableArray()`. Where a schema is
+  the model, the protocol exports the model type (`Mutable`/`DeepMutable` of
+  the schema's type) and `apps/backend/src/core/models.ts` and
+  `apps/web/src/types/index.ts` re-export it; `tests/unit/model-type-convergence.test.ts`
+  fails when a name both files export is not the same protocol type.
 
 ### Tolerant reader and critical fields
 
@@ -668,8 +676,8 @@ export const nodeMailClient = domainClient(nodeMail, {
 - **`native-sessions`** ([7001](../../plans/unified/7001-domain-native-sessions.md)):
   all 87 commands (native agent sessions, terminal sessions and buffers, pane
   layouts, prompt queues, drafts, handoffs and the tab's host actions) are
-  defined at version 1 (min 1). Model records are open structs (`openStruct`
-  in `domains/native-sessions/schemas.ts`): the listed fields are typed and
+  defined at version 1 (min 1). Model records are open records (`openRecord`,
+  `contract/model-schema.ts`): the listed fields are typed and
   every other key survives a tolerant decode. The four spliced transcript
   reads are `encoded: true`. The client's API is one function per command,
   keyed by name, plus `handoffCapabilities()` and `syncCapabilities()`, which
@@ -834,7 +842,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   (min 1). GitHub issues are in `pull-requests` (Appendix E's grouping and
   1006's mapping; `DOMAIN_NAMES` has no `github`). The change resources and
   GitHub pull request records are model records (`modelRecord`, and
-  `variantRecord` in `domains/git/schemas.ts` for the `kind`-discriminated
+  `variantRecord` (`contract/model-schema.ts`) for the `kind`-discriminated
   change results): the routed-on fields are typed and every other key passes
   through; the GitHub issue model (`domains/pull-requests/schemas.ts`) is
   field for field, and `github.ts` and the web's `types/github.ts` take their

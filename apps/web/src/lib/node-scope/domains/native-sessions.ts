@@ -28,10 +28,11 @@ export function nativeSessions(client: BackendClient): NativeSessionsApi {
 }
 
 /**
- * A decoded result as the web's own model type. The protocol schemas
- * describe the fields every reader routes on and keep the rest
- * (`openStruct`); the web's types are richer (transcript row generics,
- * literal unions) until plan item 7010 converges them.
+ * A decoded result as the web's own model type, where the protocol schema is
+ * still a tolerant reader rather than the model (native agent sessions and
+ * prompt queues, projections, transcript rows: open records whose fields are
+ * optional, plan item 7010's pending list). The terminal session records,
+ * pane layouts and drafts are the protocol's types and need no cast.
  */
 export function asWebModel<T>(result: Promise<unknown>): Promise<T> {
   return result as Promise<T>;

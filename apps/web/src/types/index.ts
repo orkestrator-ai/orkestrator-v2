@@ -94,14 +94,8 @@ export type Environment = Omit<ClientEnvironment, "containerLifecycle"> & {
   initialPromptAttachments?: InitialPromptImageAttachment[];
 };
 
-/** Result of testing a domain for DNS resolution */
-export interface DomainTestResult {
-  domain: string;
-  valid: boolean;
-  resolvable: boolean | null;
-  ips: string[];
-  error: string | null;
-}
+/** Result of testing a domain for DNS resolution (`test_domain_resolution`). */
+export type { DomainResolution as DomainTestResult } from "@orkestrator/protocol/contract/domains/native-sessions";
 
 /** What starting an environment reports about its setup (`EnvironmentSetupStartResult`). */
 export type StartEnvironmentResult = Partial<

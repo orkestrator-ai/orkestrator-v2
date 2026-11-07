@@ -233,6 +233,7 @@ describe("handleTerminalPaste", () => {
     );
 
     const pastePromise = handleTerminalPaste({
+      writer: backend,
       containerId: null,
       worktreePath: "/tmp/worktrees/my-env",
       writeToTerminal: mockWriteToTerminal,

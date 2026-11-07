@@ -33,6 +33,44 @@ export function nodePreviewPartitionKey(nodeId: string): string {
   return `node:${nodeId}`;
 }
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
+
+/**
+ * The address a node runtime loads for an address-bar URL (4006 Finding 1):
+ * always through that node's own gateway (`nodeBaseUrl`, the node scope's
+ * current route), so a leaf's tab can never show this computer's loopback
+ * page or another node's gateway. The renderer sends the canonical address
+ * (`http://localhost:3000/x`, the desktop node client's `resolvePreviewUrl`);
+ * a gateway preview path on another origin (an attach chosen before the
+ * route was known, or before a relay-to-direct rebind) is moved onto the
+ * node's base too. Main resolves on every attach and navigation, so the
+ * address follows the scope's route. Throws while the scope has no route
+ * (parked mid-reopen); the renderer re-attaches.
+ */
+export function nodePreviewUrl(nodeBaseUrl: string | null, value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return value;
+  }
+  let port: string;
+  let target: string;
+  if (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname)) {
+    port = url.port || "80";
+    target = `${url.pathname}${url.search}${url.hash}`;
+  } else {
+    const match = GATEWAY_PREVIEW_PATH.exec(url.pathname);
+    if (!match || (url.protocol !== "http:" && url.protocol !== "https:")) return value;
+    port = match[1]!;
+    target = `${match[2] ?? "/"}${url.search}${url.hash}`;
+  }
+  if (!nodeBaseUrl)
+    throw new Error("This machine is reconnecting; its preview opens once it is back.");
+  return `${nodeBaseUrl.replace(/\/$/, "")}/__orkestrator/browser/loopback/${port}${target}`;
+}
+
 /** The part of a preview controller this module calls. */
 export interface NodePreviewController {
   destroy(tabId: string): void;

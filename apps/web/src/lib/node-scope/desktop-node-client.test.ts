@@ -134,6 +134,20 @@ describe("createDesktopNodeClient", () => {
     expect(host.raw.node).not.toHaveBeenCalled();
   });
 
+  test("a leaf's previews are addressed by the leaf, never the window's gateway (4006 Finding 1)", () => {
+    const host = fakeHost();
+    const leaf = open(host) as NodeClient & { resolvePreviewUrl?: (url: string) => string };
+    // The canonical address: main's preview runtime for the leaf (the attach
+    // names it) loads it through the leaf's own gateway. Without this the
+    // preview store fell back to the window gateway: the command node's page.
+    expect(leaf.resolvePreviewUrl?.("http://localhost:5173/app?x=1#h")).toBe(
+      "http://localhost:5173/app?x=1#h",
+    );
+    // The window's own node keeps the window gateway's addressing.
+    const command = open(host, COMMAND) as NodeClient & { resolvePreviewUrl?: unknown };
+    expect(command.resolvePreviewUrl).toBeUndefined();
+  });
+
   test("an event for node B never reaches a node-A client", () => {
     const host = fakeHost();
     const a = open(host, LEAF);

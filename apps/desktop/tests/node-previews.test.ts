@@ -14,6 +14,7 @@ import { DesktopNodeIpc } from "../electron/node-ipc";
 import {
   NodePreviewRuntimes,
   nodePreviewPartitionKey,
+  nodePreviewUrl,
   routeBrowserPreviews,
   type NodePreviewRuntime,
 } from "../electron/node-previews";
@@ -369,6 +370,33 @@ const attachInput = (tabId: string, nodeId?: string): BrowserPreviewAttachInput 
   bounds: BOUNDS,
   visible: true,
   ...(nodeId ? { nodeId } : {}),
+});
+
+describe("nodePreviewUrl (4006 Finding 1)", () => {
+  const leaf = "https://leaf.example:34221";
+  test("a loopback address loads through the node's own gateway", () => {
+    expect(nodePreviewUrl(leaf, "http://localhost:5173/app?x=1#h")).toBe(
+      `${leaf}/__orkestrator/browser/loopback/5173/app?x=1#h`,
+    );
+    expect(nodePreviewUrl(`${leaf}/`, "http://127.0.0.1/")).toBe(
+      `${leaf}/__orkestrator/browser/loopback/80/`,
+    );
+  });
+  test("another node's gateway preview path moves onto this node's gateway", () => {
+    expect(
+      nodePreviewUrl(leaf, "https://cmd.example/__orkestrator/browser/loopback/3000/x?y=2"),
+    ).toBe(`${leaf}/__orkestrator/browser/loopback/3000/x?y=2`);
+    expect(nodePreviewUrl(leaf, "https://cmd.example/__orkestrator/browser/loopback/3000")).toBe(
+      `${leaf}/__orkestrator/browser/loopback/3000/`,
+    );
+  });
+  test("anything else is left for the manager's own checks", () => {
+    expect(nodePreviewUrl(leaf, "https://example.com/")).toBe("https://example.com/");
+    expect(nodePreviewUrl(leaf, "not a url")).toBe("not a url");
+  });
+  test("a scope with no route refuses rather than load this computer's page", () => {
+    expect(() => nodePreviewUrl(null, "http://localhost:3000/")).toThrow("reconnecting");
+  });
 });
 
 describe("preview runtimes per node scope", () => {

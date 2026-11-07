@@ -59,6 +59,7 @@ import {
 import { DesktopNodeIpc } from "./node-ipc.js";
 import {
   NodePreviewRuntimes,
+  nodePreviewUrl,
   routeBrowserPreviews,
   type NodePreviewRuntime,
 } from "./node-previews.js";
@@ -729,6 +730,7 @@ function createWindowBrowserPreviews(
   connectionId: string,
   partitionKey = connectionId,
   realm?: RealmViewOwner,
+  resolveAddress?: (url: string) => string,
 ) {
   const partition = browserPreviewPartitionForWindow(slot, partitionKey);
   let manager: BrowserPreviewManager | null = null;
@@ -814,6 +816,7 @@ function createWindowBrowserPreviews(
     transport,
     captureStore: browserPreviewCaptureStore(),
     nativeImage,
+    ...(resolveAddress ? { resolveAddress } : {}),
     // External browsers never inherit Electron's request hooks. They sign in
     // through the private preview origin with a one-use grant POSTed by a
     // loopback handoff page (the grant is never part of a URL), or, for a
@@ -867,6 +870,8 @@ function createNodeBrowserPreviews(
     connectionManager.getConnectionId(record.scope),
     partitionKey,
     { contents: context.contents, ViewCtor: WebContentsView },
+    // Address-bar previews load through the node's own gateway (its current route).
+    (url) => nodePreviewUrl(connectionManager?.getGatewayBaseUrl(record.scope) ?? null, url),
   );
   return {
     controller: previews.manager,

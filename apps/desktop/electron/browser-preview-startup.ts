@@ -31,6 +31,7 @@ export interface InitializeBrowserPreviewsOptions {
   captureStore?: BrowserPreviewManagerOptions["captureStore"];
   emitCaptureEvent?: BrowserPreviewManagerOptions["emitCaptureEvent"];
   nativeImage?: BrowserPreviewManagerOptions["nativeImage"];
+  resolveAddress?: BrowserPreviewManagerOptions["resolveAddress"];
 }
 
 export interface BrowserPreviewRuntime {
@@ -100,6 +101,7 @@ export function initializeBrowserPreviews({
   captureStore,
   emitCaptureEvent,
   nativeImage,
+  resolveAddress,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
@@ -118,6 +120,7 @@ export function initializeBrowserPreviews({
     ...(captureStore ? { captureStore } : {}),
     ...(emitCaptureEvent ? { emitCaptureEvent } : {}),
     ...(nativeImage ? { nativeImage } : {}),
+    ...(resolveAddress ? { resolveAddress } : {}),
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.setPermissionRequestHandler((webContents, permission, callback, details) => {

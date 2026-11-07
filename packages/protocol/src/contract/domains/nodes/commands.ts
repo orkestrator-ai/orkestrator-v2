@@ -26,6 +26,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { openRecord } from "../../model-schema.js";
 import { defineCommand } from "../../command.js";
 import { nodesDomain } from "./domain.js";
 import {
@@ -61,7 +62,6 @@ import {
   SeedFilesSchema,
   SetupApprovalResultSchema,
   flagResult,
-  openStruct,
 } from "./schemas.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
@@ -264,7 +264,7 @@ export const forgetNodeCommand = defineCommand({
     nodeId: optionalUnknown,
     withoutDetach: optionalUnknown,
   }),
-  result: openStruct({ forgotten: Schema.Boolean, detached: Schema.Boolean }),
+  result: openRecord({ forgotten: Schema.Boolean, detached: Schema.Boolean }),
   critical: ["withoutDetach"],
 });
 
@@ -349,7 +349,7 @@ export const trustNodeHostKeyCommand = defineCommand({
   args: Schema.Struct({
     probeId: optionalUnknown,
   }),
-  result: openStruct({ added: Schema.Finite }),
+  result: openRecord({ added: Schema.Finite }),
   critical: [],
 });
 
@@ -467,7 +467,7 @@ export const renewNodeWorkspaceCommand = defineCommand({
   args: Schema.Struct({
     workspaceId: optionalUnknown,
   }),
-  result: openStruct({ expiresAt: Schema.Finite }),
+  result: openRecord({ expiresAt: Schema.Finite }),
   critical: [],
 });
 

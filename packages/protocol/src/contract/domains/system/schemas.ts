@@ -8,7 +8,7 @@
  * protocol's own interface, so the web reads typed results without a cast.
  * Records only the backend types (system and process usage, recurring-work
  * diagnostics, compatibility path usage, progressive read samples) are
- * {@link openStruct}s with the same rule.
+ * {@link openRecord}s with the same rule.
  *
  * Values a newer backend may extend (states, kinds, channels, reasons) are
  * `Schema.String`, so an older client still reads them. A field the backend
@@ -53,20 +53,7 @@ import type {
   ScheduleFire,
   SchedulerStatus,
 } from "../../../scheduled-jobs.js";
-import { modelRecord, type ModelSchema } from "../../model-schema.js";
-
-/**
- * A struct whose listed fields are checked and typed while every other key
- * passes through a decode (`Schema.StructWithRest`), typed as the plain
- * struct. For records the protocol has no interface for.
- */
-export function openStruct<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
+import { modelRecord, type ModelSchema, openRecord } from "../../model-schema.js";
 
 const Count = Schema.Finite;
 const NullableString = Schema.NullOr(Schema.String);
@@ -189,20 +176,20 @@ export const EnvironmentDiskUsageSchema: ModelSchema<EnvironmentDiskUsage> =
     environmentId: Schema.String,
     environmentType: Schema.String,
     measuredAt: Schema.String,
-    primary: openStruct({ kind: Schema.String, bytes: NullableFinite }),
-    dev: openStruct({ worktreeBytes: Count, bytes: Count }),
+    primary: openRecord({ kind: Schema.String, bytes: NullableFinite }),
+    dev: openRecord({ worktreeBytes: Count, bytes: Count }),
     totalBytes: NullableFinite,
   });
 
 export const WorktreeLocationsSnapshotSchema: ModelSchema<WorktreeLocationsSnapshot> =
   modelRecord<WorktreeLocationsSnapshot>()({
-    environments: openStruct({
+    environments: openRecord({
       configured: NullableString,
       defaultPath: Schema.String,
       effective: Schema.String,
       startupOverride: NullableString,
     }),
-    dev: openStruct({
+    dev: openRecord({
       configured: NullableString,
       defaultPath: Schema.String,
       readOnly: Schema.optionalKey(Schema.Boolean),
@@ -273,7 +260,7 @@ export const ScheduledJobDeleteResultSchema = Schema.Struct({
 // --- Usage, load and diagnostics --------------------------------------------
 
 /** Host CPU, RAM, GPU and disk use (`SystemUsageSnapshot`, backend `system-usage.ts`). */
-export const SystemUsageSnapshotSchema = openStruct({
+export const SystemUsageSnapshotSchema = openRecord({
   cpuPercent: Schema.Finite,
   ramPercent: Schema.Finite,
   gpuPercent: NullableFinite,
@@ -281,7 +268,7 @@ export const SystemUsageSnapshotSchema = openStruct({
   sampledAt: Schema.String,
 });
 
-const EnvironmentProcessUsageSchema = openStruct({
+const EnvironmentProcessUsageSchema = openRecord({
   pid: Schema.Finite,
   name: Schema.String,
   command: Schema.String,
@@ -290,7 +277,7 @@ const EnvironmentProcessUsageSchema = openStruct({
   rssKb: Schema.Finite,
 });
 
-const EnvironmentProcessGroupSchema = openStruct({
+const EnvironmentProcessGroupSchema = openRecord({
   environmentId: Schema.String,
   environmentName: Schema.String,
   projectId: Schema.String,
@@ -304,7 +291,7 @@ const EnvironmentProcessGroupSchema = openStruct({
 });
 
 /** Child processes of every running environment (`EnvironmentProcessUsageSnapshot`). */
-export const EnvironmentProcessUsageSnapshotSchema = openStruct({
+export const EnvironmentProcessUsageSnapshotSchema = openRecord({
   environments: Schema.Array(EnvironmentProcessGroupSchema),
   sampledAt: Schema.String,
   truncated: Schema.optionalKey(Schema.Boolean),
@@ -334,27 +321,27 @@ export const MachineLoadReportSchema: ModelSchema<MachineLoadReport> =
  * backend `recurring-diagnostics.ts`): the sections are listed, their entries
  * stay open records.
  */
-export const RecurringWorkDiagnosticsSchema = openStruct({
-  metrics: openStruct({}),
-  schedulers: Schema.Array(openStruct({})),
-  admission: Schema.Array(openStruct({})),
-  fetchPolicies: Schema.Array(openStruct({ name: Schema.String })),
-  signals: Schema.Array(openStruct({ name: Schema.String })),
-  sessionInvalidations: openStruct({}),
-  caches: Schema.Array(openStruct({ name: Schema.String, sources: Schema.Finite })),
+export const RecurringWorkDiagnosticsSchema = openRecord({
+  metrics: openRecord({}),
+  schedulers: Schema.Array(openRecord({})),
+  admission: Schema.Array(openRecord({})),
+  fetchPolicies: Schema.Array(openRecord({ name: Schema.String })),
+  signals: Schema.Array(openRecord({ name: Schema.String })),
+  sessionInvalidations: openRecord({}),
+  caches: Schema.Array(openRecord({ name: Schema.String, sources: Schema.Finite })),
   droppedSources: Schema.Finite,
   faultedSources: Schema.Finite,
 });
 
 /** One compatibility path's persisted usage. */
-export const CompatibilityPathUsageEntrySchema = openStruct({
+export const CompatibilityPathUsageEntrySchema = openRecord({
   count: Schema.Finite,
   firstSeenAt: Schema.String,
   lastSeenAt: Schema.String,
 });
 
 /** `get_compatibility_path_usage`: every taken path by id (`CompatibilityPathUsageSnapshot`). */
-export const CompatibilityPathUsageSnapshotSchema = openStruct({
+export const CompatibilityPathUsageSnapshotSchema = openRecord({
   version: Schema.Finite,
   // `Partial<Record<…>>` in the backend: a path never taken is absent.
   paths: Schema.Record(Schema.String, Schema.UndefinedOr(CompatibilityPathUsageEntrySchema)),
@@ -363,13 +350,13 @@ export const CompatibilityPathUsageSnapshotSchema = openStruct({
 /** Database figures; the sections stay open records (`DatabaseStats`). */
 export const DatabaseStatsSchema: ModelSchema<DatabaseStats> = modelRecord<DatabaseStats>()({
   generatedAt: Schema.String,
-  leaseWaits: openStruct({}),
+  leaseWaits: openRecord({}),
 });
 
 /** The last progressive reads' timings per domain (`ProgressiveReadMetric`). */
 export const ProgressiveReadMetricsSchema = Schema.Struct({
   samples: Schema.Array(
-    openStruct({
+    openRecord({
       domain: Schema.String,
       cacheTier: Schema.String,
       outcome: Schema.String,
@@ -392,10 +379,10 @@ export const DiagnosticsBundlePlanSchema: ModelSchema<DiagnosticsBundlePlan> =
     fileName: Schema.String,
     expiresAt: Schema.String,
     archive: DiagnosticsArchiveSchema,
-    manifest: openStruct({
+    manifest: openRecord({
       schemaVersion: Schema.Finite,
       createdAt: Schema.String,
-      entries: Schema.Array(openStruct({ path: Schema.String, bytes: Count })),
+      entries: Schema.Array(openRecord({ path: Schema.String, bytes: Count })),
     }),
   });
 
@@ -417,7 +404,7 @@ export const WorkflowSchedulingReconcileSchema = Schema.Record(
   Schema.String,
   Schema.Struct({
     reconciled: Schema.NullOr(
-      openStruct({
+      openRecord({
         scanned: Count,
         complete: Schema.Boolean,
         keys: Count,
@@ -425,7 +412,7 @@ export const WorkflowSchedulingReconcileSchema = Schema.Record(
         dropped: Count,
       }),
     ),
-    status: Schema.NullOr(openStruct({ domain: Schema.String, started: Schema.Boolean })),
+    status: Schema.NullOr(openRecord({ domain: Schema.String, started: Schema.Boolean })),
   }),
 );
 
@@ -468,6 +455,6 @@ export const ScopedResourceRevisionManifestSchema: ModelSchema<ScopedResourceRev
 export const ScopedResourceSnapshotBatchSchema: ModelSchema<ScopedResourceSnapshotBatch> =
   modelRecord<ScopedResourceSnapshotBatch>()({
     entries: Schema.Array(
-      openStruct({ resource: Schema.String, id: Schema.String, status: Schema.String }),
+      openRecord({ resource: Schema.String, id: Schema.String, status: Schema.String }),
     ),
   });

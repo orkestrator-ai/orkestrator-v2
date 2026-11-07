@@ -9,7 +9,7 @@
  * `MultiReviewActionResult`, ...) are `modelRecord<T>()`: the fields readers
  * route on are checked, every other key is kept, and the static type is the
  * protocol's own interface, so the web's casts go. Records only the backend
- * types (an environment, a tool command's JSON answer) are `openStruct`s with
+ * types (an environment, a tool command's JSON answer) are `openRecord`s with
  * the fields the handler writes, each optional unless the handler always
  * writes it, because tests fake the services with partial records and results
  * are validated there. Enumerations a newer backend may extend (lifecycle
@@ -28,22 +28,7 @@ import type {
 } from "../../../coordinator.js";
 import type { BuildPipeline } from "../../../build-pipeline.js";
 import type { MultiReviewActionResult, MultiReviewWorkflow } from "../../../multi-review.js";
-import { modelRecord } from "../../model-schema.js";
-
-/**
- * A struct whose listed fields are checked and typed while every other key
- * passes a decode (`Schema.StructWithRest`), typed as the plain struct.
- */
-export function openStruct<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
-
-/** Any JSON object, every key kept. */
-export const CoordinatorOpenObject = openStruct({});
+import { modelRecord, OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
@@ -127,7 +112,7 @@ export const CoordinatorActivitySnapshotSchema = Schema.Struct({
 /** `CoordinatorLaunchOverridesSnapshot`. */
 export const CoordinatorLaunchOverridesSnapshotSchema = Schema.Struct({
   overrides: Schema.Array(
-    openStruct({
+    openRecord({
       environmentId: Schema.String,
       tabId: Schema.String,
       model: optionalString,
@@ -138,11 +123,11 @@ export const CoordinatorLaunchOverridesSnapshotSchema = Schema.Struct({
 
 /** `CoordinatorCheckoutTurn | null`: `kind` is `conversation` or `project-home`. */
 export const CoordinatorCheckoutTurnSchema = Schema.NullOr(
-  openStruct({ kind: Schema.String, conversationId: optionalString }),
+  openRecord({ kind: Schema.String, conversationId: optionalString }),
 );
 
 /** `WatchPullRequestOutcome` (`coordinator-pr-watches.ts`). */
-export const CoordinatorPullRequestWatchSchema = openStruct({
+export const CoordinatorPullRequestWatchSchema = openRecord({
   watched: Schema.Boolean,
   added: optionalBoolean,
   reason: optionalString,
@@ -159,8 +144,8 @@ export const ProjectGitStatusSchema = modelRecord<ProjectGitStatus>()({
   headCommit: Schema.optional(NullableString),
   remoteState: optionalString,
   operationState: optionalString,
-  branches: Schema.optional(Schema.Array(CoordinatorOpenObject)),
-  lastError: Schema.optional(Schema.NullOr(CoordinatorOpenObject)),
+  branches: Schema.optional(Schema.Array(OpenObject)),
+  lastError: Schema.optional(Schema.NullOr(OpenObject)),
 });
 
 /** `ProjectGitSwitchConfirmation`: the one-time token to discard the shown state. */
@@ -175,7 +160,7 @@ export const ProjectGitSwitchConfirmationSchema = modelRecord<ProjectGitSwitchCo
 });
 
 /** `ProjectBaseBranchTip` (`project-git-service.ts`). */
-export const ProjectBaseBranchTipSchema = openStruct({
+export const ProjectBaseBranchTipSchema = openRecord({
   branch: Schema.String,
   commit: NullableString,
   ref: Schema.optional(NullableString),
@@ -185,7 +170,7 @@ export const ProjectBaseBranchTipSchema = openStruct({
 });
 
 /** `ProjectBaseContainment`: `{ contained: true }` or `{ contained: false, reason }`. */
-export const ProjectBaseContainmentSchema = openStruct({
+export const ProjectBaseContainmentSchema = openRecord({
   contained: Schema.Boolean,
   reason: optionalString,
 });
@@ -193,7 +178,7 @@ export const ProjectBaseContainmentSchema = openStruct({
 // --- Workflows and delegations --------------------------------------------------
 
 /** `Environment` (backend models.ts): a worker environment record. */
-export const CoordinatorEnvironmentSchema = openStruct({
+export const CoordinatorEnvironmentSchema = openRecord({
   id: Schema.String,
   projectId: optionalString,
   name: optionalString,
@@ -204,7 +189,7 @@ export const CoordinatorEnvironmentSchema = openStruct({
 export const NullableCoordinatorEnvironmentSchema = Schema.NullOr(CoordinatorEnvironmentSchema);
 
 /** `launch_coordinator_environment`: the worker, and whether its delegation opened. */
-export const CoordinatorEnvironmentLaunchSchema = openStruct({
+export const CoordinatorEnvironmentLaunchSchema = openRecord({
   environment: CoordinatorEnvironmentSchema,
   coordinatorDelegationOpened: Schema.Boolean,
   replayed: optionalBoolean,
@@ -235,7 +220,7 @@ export const MultiReviewActionResultSchema = modelRecord<MultiReviewActionResult
   workflow: CoordinatorMultiReviewWorkflowSchema,
   outcome: Schema.String,
   reused: Schema.Boolean,
-  ui: openStruct({
+  ui: openRecord({
     status: Schema.String,
     tabId: optionalString,
     paneId: optionalString,
@@ -254,7 +239,7 @@ export const MultiReviewActionResultSchema = modelRecord<MultiReviewActionResult
 /** Fields every receipt-backed answer may carry. */
 const receipt = { replayed: optionalBoolean, nodeId: optionalString };
 
-export const WorkerTerminalLaunchSchema = openStruct({
+export const WorkerTerminalLaunchSchema = openRecord({
   environmentId: optionalString,
   tabId: optionalString,
   tabType: optionalString,
@@ -262,14 +247,14 @@ export const WorkerTerminalLaunchSchema = openStruct({
   ...receipt,
 });
 
-export const WorkerBrowserOpenSchema = openStruct({
+export const WorkerBrowserOpenSchema = openRecord({
   environmentId: optionalString,
   url: optionalString,
-  ui: Schema.optional(CoordinatorOpenObject),
+  ui: Schema.optional(OpenObject),
   ...receipt,
 });
 
-export const WorkerTabEditSchema = openStruct({
+export const WorkerTabEditSchema = openRecord({
   environmentId: optionalString,
   tabId: optionalString,
   operation: optionalString,
@@ -278,35 +263,35 @@ export const WorkerTabEditSchema = openStruct({
 });
 
 /** The PR and Resolve tabs' launch answers (`launchWorkerPr`, `launchWorkerResolve`). */
-export const WorkerPullRequestLaunchSchema = openStruct({
+export const WorkerPullRequestLaunchSchema = openRecord({
   status: optionalString,
   tabId: optionalString,
   prUrl: optionalString,
   ...receipt,
 });
 
-export const CoordinatorFeaturePlanLaunchSchema = openStruct({
+export const CoordinatorFeaturePlanLaunchSchema = openRecord({
   featureId: optionalString,
   phase: Schema.optional(NullableString),
   reused: optionalBoolean,
   ...receipt,
 });
 
-export const CoordinatorFeaturePlanSchema = openStruct({
+export const CoordinatorFeaturePlanSchema = openRecord({
   featureId: Schema.String,
   title: optionalString,
   status: optionalString,
   summary: optionalString,
-  stories: Schema.optional(Schema.Array(openStruct({ id: Schema.String, title: optionalString }))),
+  stories: Schema.optional(Schema.Array(openRecord({ id: Schema.String, title: optionalString }))),
   planning: Schema.optional(
-    Schema.NullOr(openStruct({ phase: optionalString, failure: optionalString })),
+    Schema.NullOr(openRecord({ phase: optionalString, failure: optionalString })),
   ),
   lastReply: Schema.optional(NullableString),
   buildPipelineId: optionalString,
 });
 
 /** A request the user approves on this machine (root changes, a worker's answer). */
-export const CoordinatorApprovalRequestSchema = openStruct({
+export const CoordinatorApprovalRequestSchema = openRecord({
   environmentId: optionalString,
   tabId: optionalString,
   interactionId: optionalString,
@@ -316,20 +301,20 @@ export const CoordinatorApprovalRequestSchema = openStruct({
 });
 
 /** `RootChangesListing` (`root-changes.ts`). */
-export const RootChangesListingSchema = openStruct({
-  files: Schema.Array(CoordinatorOpenObject),
+export const RootChangesListingSchema = openRecord({
+  files: Schema.Array(OpenObject),
   truncated: Schema.Boolean,
   conflicts: Schema.Finite,
   headCommit: NullableString,
 });
 
 /** `ApplyRootChangesOutcome`: the files applied to the worker. */
-export const ApplyRootChangesOutcomeSchema = openStruct({
+export const ApplyRootChangesOutcomeSchema = openRecord({
   files: Schema.Array(Schema.String),
 });
 
 /** `stopWorkerTurn`'s answer, plus `delegationOpen` from the coordinator's command. */
-export const WorkerTurnStopSchema = openStruct({
+export const WorkerTurnStopSchema = openRecord({
   environmentId: optionalString,
   tabId: optionalString,
   agent: optionalString,
@@ -343,18 +328,18 @@ export const WorkerTurnStopSchema = openStruct({
 });
 
 /** `listWorkerCommands`: a tab's slash commands. */
-export const WorkerCommandListSchema = openStruct({
+export const WorkerCommandListSchema = openRecord({
   environmentId: optionalString,
   tabId: optionalString,
   agent: optionalString,
   catalogue: Schema.optional(Schema.Unknown),
-  commands: Schema.optional(Schema.Array(CoordinatorOpenObject)),
+  commands: Schema.optional(Schema.Array(OpenObject)),
   refresh: Schema.optional(Schema.Unknown),
   nodeId: optionalString,
 });
 
 /** `runWorkerCommand`, plus `delegationOpened` from the coordinator's command. */
-export const WorkerCommandRunSchema = openStruct({
+export const WorkerCommandRunSchema = openRecord({
   command: optionalString,
   startsTurn: optionalBoolean,
   delegationOpened: optionalBoolean,
@@ -362,12 +347,12 @@ export const WorkerCommandRunSchema = openStruct({
 });
 
 /** A build pipeline step restart (`restartHere`), with `followed` on the coordinator's. */
-export const PipelineStepRestartSchema = openStruct({
+export const PipelineStepRestartSchema = openRecord({
   pipelineId: optionalString,
   restarted: optionalBoolean,
   alreadyRestarted: optionalBoolean,
   step: Schema.optional(Schema.Unknown),
-  selection: Schema.optional(CoordinatorOpenObject),
+  selection: Schema.optional(OpenObject),
   phase: optionalString,
   error: optionalString,
   followed: optionalBoolean,
@@ -375,11 +360,11 @@ export const PipelineStepRestartSchema = openStruct({
 });
 
 /** A worker tab's goal answers (`set`/`get`/`pause`/`clear_coordinator_worker_goal`). */
-export const WorkerGoalSchema = openStruct({
+export const WorkerGoalSchema = openRecord({
   environmentId: optionalString,
   tabId: optionalString,
-  goal: Schema.optional(Schema.NullOr(CoordinatorOpenObject)),
-  history: Schema.optional(Schema.Array(CoordinatorOpenObject)),
+  goal: Schema.optional(Schema.NullOr(OpenObject)),
+  history: Schema.optional(Schema.Array(OpenObject)),
   wakeOwed: optionalBoolean,
   alreadyStopped: optionalBoolean,
   cleared: optionalBoolean,
@@ -388,34 +373,34 @@ export const WorkerGoalSchema = openStruct({
 });
 
 /** `SuborkAskResult` (`native-agent-suborks.ts`). */
-export const SuborkAskResultSchema = openStruct({
+export const SuborkAskResultSchema = openRecord({
   batchId: optionalString,
-  suborks: Schema.optional(Schema.Array(CoordinatorOpenObject)),
+  suborks: Schema.optional(Schema.Array(OpenObject)),
   next: optionalString,
 });
 
 /** One template's launch view, or the project's template list. */
-export const CoordinatorGraphTemplatesSchema = openStruct({
-  template: Schema.optional(CoordinatorOpenObject),
-  templates: Schema.optional(Schema.Array(CoordinatorOpenObject)),
+export const CoordinatorGraphTemplatesSchema = openRecord({
+  template: Schema.optional(OpenObject),
+  templates: Schema.optional(Schema.Array(OpenObject)),
   total: optionalNumber,
 });
 
 /** `start_coordinator_graph_run`: the launch (`GraphLaunchResult`) and its association. */
-export const CoordinatorGraphLaunchSchema = openStruct({
-  launch: CoordinatorOpenObject,
+export const CoordinatorGraphLaunchSchema = openRecord({
+  launch: OpenObject,
   associationId: Schema.String,
 });
 
-const GraphPosition = openStruct({
+const GraphPosition = openRecord({
   activationKey: Schema.String,
   nodeId: Schema.String,
   error: optionalString,
 });
 
 /** `coordinatorGraphRunView`, with `cancelled` on a cancel. */
-export const CoordinatorGraphRunViewSchema = openStruct({
-  run: CoordinatorOpenObject,
+export const CoordinatorGraphRunViewSchema = openRecord({
+  run: OpenObject,
   waitingFor: Schema.Array(GraphPosition),
   failed: Schema.Array(GraphPosition),
   terminal: Schema.Boolean,
@@ -423,13 +408,13 @@ export const CoordinatorGraphRunViewSchema = openStruct({
 });
 
 /** `WorkerAnswerOutcome`: `answered`, or `stale` with a reason. */
-export const WorkerAnswerOutcomeSchema = openStruct({
+export const WorkerAnswerOutcomeSchema = openRecord({
   result: Schema.String,
   reason: optionalString,
 });
 
 /** A coordinator's mail: the sent message, or the held project-home request. */
-export const CoordinatorMailResultSchema = openStruct({
+export const CoordinatorMailResultSchema = openRecord({
   id: optionalString,
   placement: optionalString,
   coordinatorDelegationOpened: optionalBoolean,
@@ -437,7 +422,7 @@ export const CoordinatorMailResultSchema = openStruct({
 });
 
 /** `send_approved_project_home_message`: `sent`, or `stale` with a reason. */
-export const ApprovedProjectHomeMessageSchema = openStruct({
+export const ApprovedProjectHomeMessageSchema = openRecord({
   result: Schema.String,
   reason: optionalString,
   messageId: optionalString,

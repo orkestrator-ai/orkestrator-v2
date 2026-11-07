@@ -5,7 +5,7 @@
  * `suborks.ts`, `pane-layout.ts`, `resource-events.ts`). Plan item 7010
  * converges the models on these.
  *
- * Model-shaped records are **open structs** ({@link openStruct}): the fields
+ * Model-shaped records are **open structs** ({@link openRecord}): the fields
  * listed are checked and typed, and every other key the backend sends is
  * kept. A domain client decodes results tolerantly, and `Schema.Struct` drops
  * the keys it does not declare, so a closed struct would silently strip the
@@ -26,23 +26,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
-
-/**
- * A struct that keeps the keys it does not declare. Its static type is the
- * declared struct's, so a model interface is assignable to it; at run time it
- * is `StructWithRest` with an `unknown` record, which decodes and encodes the
- * declared fields and passes every other key through.
- */
-export function openStruct<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
-
-/** Any JSON object, every key kept. */
-export const OpenObject = openStruct({});
+import { OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
@@ -56,7 +40,7 @@ export const Generation = Schema.Union([Schema.String, Schema.Finite]);
 // --- Terminal sessions, buffers and pane layouts ------------------------------
 
 /** `Session` (models.ts): one terminal tab's session record. */
-export const TerminalSessionSchema = openStruct({
+export const TerminalSessionSchema = openRecord({
   id: Schema.optional(Schema.String),
   environmentId: Schema.optional(Schema.String),
   containerId: Schema.optional(Schema.String),
@@ -70,7 +54,7 @@ export const TerminalSessionSchema = openStruct({
 });
 
 /** `PersistedPaneLayout` (models.ts). `root` is the renderer's own PaneNode tree. */
-export const PaneLayoutSchema = openStruct({
+export const PaneLayoutSchema = openRecord({
   version: Schema.optional(Schema.Finite),
   environmentId: Schema.optional(Schema.String),
   containerId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -112,7 +96,7 @@ export const DomainResolutionSchema = Schema.Struct({
 // --- Prompt queues, drafts and handoffs ---------------------------------------
 
 /** `PersistedPromptQueue` (models.ts). Queued messages are each agent's own shape. */
-export const PromptQueueSchema = openStruct({
+export const PromptQueueSchema = openRecord({
   queueKey: Schema.optional(Schema.String),
   environmentId: Schema.optional(Schema.String),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
@@ -125,13 +109,13 @@ export const PromptQueueSchema = openStruct({
 });
 
 /** `remove_prompt_queue_message`: the removed message (or `null`) and the queue after it. */
-export const PromptQueueRemovalSchema = openStruct({
+export const PromptQueueRemovalSchema = openRecord({
   removed: Schema.optional(Schema.Unknown),
   queue: Schema.optional(Schema.NullOr(PromptQueueSchema)),
 });
 
 /** `PersistedComposeDraft` (models.ts). `value` is each composer's own shape. */
-export const ComposeDraftSchema = openStruct({
+export const ComposeDraftSchema = openRecord({
   draftKey: Schema.optional(Schema.String),
   ownerType: Schema.optional(Schema.String),
   ownerId: Schema.optional(Schema.String),
@@ -148,7 +132,7 @@ export const ComposeDraftSchema = openStruct({
 });
 
 /** `PersistedFileDraft` (models.ts). */
-export const FileDraftSchema = openStruct({
+export const FileDraftSchema = openRecord({
   draftKey: Schema.optional(Schema.String),
   environmentId: Schema.optional(Schema.String),
   filePath: Schema.optional(Schema.String),
@@ -159,7 +143,7 @@ export const FileDraftSchema = openStruct({
 });
 
 /** `PersistedAgentHandoff` (models.ts). `snapshot` is the renderer-validated transcript. */
-export const AgentHandoffSchema = openStruct({
+export const AgentHandoffSchema = openRecord({
   version: Schema.optional(Schema.Finite),
   id: Schema.optional(Schema.String),
   environmentId: Schema.optional(Schema.String),
@@ -168,7 +152,7 @@ export const AgentHandoffSchema = openStruct({
 });
 
 /** `AGENT_HANDOFF_CAPABILITIES` (backend `agent-handoffs.ts`). */
-export const AgentHandoffCapabilitiesSchema = openStruct({
+export const AgentHandoffCapabilitiesSchema = openRecord({
   create: optionalBoolean,
   delivery: optionalBoolean,
   pruning: optionalBoolean,
@@ -213,7 +197,7 @@ const nativeAgentSessionFields = {
   updatedAt: Schema.optional(Schema.String),
 };
 
-export const NativeAgentSessionSchema = openStruct(nativeAgentSessionFields);
+export const NativeAgentSessionSchema = openRecord(nativeAgentSessionFields);
 
 /** `NativeAgentModelSubstitution` (native-agent.ts). */
 export const ModelSubstitutionSchema = Schema.Struct({
@@ -223,7 +207,7 @@ export const ModelSubstitutionSchema = Schema.Struct({
 });
 
 /** `EnsuredNativeAgentSession`: the record plus a substitution reported to the caller only. */
-export const EnsuredNativeAgentSessionSchema = openStruct({
+export const EnsuredNativeAgentSessionSchema = openRecord({
   ...nativeAgentSessionFields,
   modelSubstitution: Schema.optional(ModelSubstitutionSchema),
 });
@@ -233,14 +217,14 @@ export const EnsuredNativeAgentSessionSchema = openStruct({
  * one session. `messages` are the provider-neutral transcript rows, which the
  * renderer validates itself.
  */
-export const NativeAgentProjectionSchema = openStruct({
+export const NativeAgentProjectionSchema = openRecord({
   platform: Schema.optional(Schema.String),
   environmentId: Schema.optional(Schema.String),
   sessionId: optionalString,
   title: optionalString,
   shareUrl: Schema.optional(Schema.NullOr(Schema.String)),
   connection: Schema.optional(Schema.String),
-  turn: Schema.optional(openStruct({ phase: Schema.String })),
+  turn: Schema.optional(openRecord({ phase: Schema.String })),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
   messageWindow: optionalObject,
   interactions: Schema.optional(Schema.Array(OpenObject)),
@@ -259,7 +243,7 @@ export const NativeAgentProjectionSchema = openStruct({
 export const NullableProjectionSchema = Schema.NullOr(NativeAgentProjectionSchema);
 
 /** `NativeAgentDispatchOutcome` (native-agent.ts): accepted, rejected or unknown. */
-export const DispatchOutcomeSchema = openStruct({
+export const DispatchOutcomeSchema = openRecord({
   outcome: Schema.String,
   requestId: optionalString,
   error: optionalString,
@@ -269,7 +253,7 @@ export const DispatchOutcomeSchema = openStruct({
 });
 
 /** `NativeAgentSessionActionOutcome` (native-agent.ts), including a verified steer refusal. */
-export const SessionActionOutcomeSchema = openStruct({
+export const SessionActionOutcomeSchema = openRecord({
   outcome: Schema.String,
   instructionsIgnored: optionalBoolean,
   shareUrl: optionalString,
@@ -278,7 +262,7 @@ export const SessionActionOutcomeSchema = openStruct({
 });
 
 /** `AgentInteractionApplyOutcome` (agent-interactions.ts). */
-export const InteractionApplyOutcomeSchema = openStruct({
+export const InteractionApplyOutcomeSchema = openRecord({
   result: Schema.optional(Schema.String),
   interactionId: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
@@ -286,7 +270,7 @@ export const InteractionApplyOutcomeSchema = openStruct({
 });
 
 /** `NativeAgentResumeEntry` (native-agent.ts). */
-export const ResumeEntrySchema = openStruct({
+export const ResumeEntrySchema = openRecord({
   sessionId: Schema.optional(Schema.String),
   title: optionalString,
   createdAt: optionalString,
@@ -299,7 +283,7 @@ export const ResumeEntrySchema = openStruct({
 });
 
 /** `NativeAgentForkOutcome` (native-agent.ts). */
-export const ForkOutcomeSchema = openStruct({
+export const ForkOutcomeSchema = openRecord({
   sessionId: Schema.optional(Schema.String),
   controls: optionalObject,
   title: optionalString,
@@ -307,11 +291,11 @@ export const ForkOutcomeSchema = openStruct({
 });
 
 /** `NativeAgentAuthStatus` (native-agent.ts). */
-export const AuthStatusSchema = openStruct({
+export const AuthStatusSchema = openRecord({
   state: Schema.optional(Schema.String),
   pendingSignIn: Schema.optional(
     Schema.NullOr(
-      openStruct({ url: Schema.String, code: Schema.String, expiresAt: Schema.Finite }),
+      openRecord({ url: Schema.String, code: Schema.String, expiresAt: Schema.Finite }),
     ),
   ),
   account: optionalObject,
@@ -321,7 +305,7 @@ export const AuthStatusSchema = openStruct({
 });
 
 /** `NativeAgentToolDetails` (native-agent.ts): heavy tool fields read on expansion. */
-export const ToolDetailsSchema = openStruct({
+export const ToolDetailsSchema = openRecord({
   detailRef: Schema.optional(Schema.String),
   toolOutput: optionalString,
   toolError: optionalString,
@@ -329,26 +313,26 @@ export const ToolDetailsSchema = openStruct({
 });
 
 /** `refresh_native_agent_commands`: the outcome and the projection after it. */
-export const CommandRefreshResultSchema = openStruct({
+export const CommandRefreshResultSchema = openRecord({
   outcome: Schema.String,
   message: optionalString,
   projection: Schema.optional(NullableProjectionSchema),
 });
 
 /** `GoalCommandResult` (backend `native-agent-goal-service.ts`). */
-export const GoalCommandResultSchema = openStruct({
+export const GoalCommandResultSchema = openRecord({
   message: Schema.optional(Schema.String),
   goal: optionalObject,
 });
 
 /** The goal detail `get_native_agent_goal` reads from the session record. */
-export const GoalDetailSchema = openStruct({
+export const GoalDetailSchema = openRecord({
   goal: optionalObject,
   history: Schema.optional(Schema.Array(OpenObject)),
 });
 
 /** `NativeAgentSuborkTranscript`: one subork's stored transcript, or why there is none. */
-export const SuborkTranscriptSchema = openStruct({
+export const SuborkTranscriptSchema = openRecord({
   status: Schema.String,
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
   agent: optionalString,
@@ -359,7 +343,7 @@ export const SuborkTranscriptSchema = openStruct({
 });
 
 /** `AgentInteractionObservation` (backend `native-agent-service-shared.ts`). */
-export const InteractionObservationSchema = openStruct({
+export const InteractionObservationSchema = openRecord({
   provider: Schema.optional(Schema.String),
   kind: Schema.optional(Schema.String),
   workflowSurface: Schema.optional(Schema.Unknown),
@@ -385,7 +369,7 @@ const VersionList = Schema.Array(Schema.Int);
  * speaks. Folded into `native-sessions` version 1; kept for pre-contract
  * clients.
  */
-export const SyncCapabilitiesSchema = openStruct({
+export const SyncCapabilitiesSchema = openRecord({
   projectionSyncVersions: VersionList,
   historyPagingVersions: VersionList,
   progressiveViewVersions: Schema.optional(VersionList),
@@ -396,7 +380,7 @@ export const SyncCapabilitiesSchema = openStruct({
 });
 
 /** `NativeAgentViewIdentity` (native-agent.ts). */
-export const ViewIdentitySchema = openStruct({
+export const ViewIdentitySchema = openRecord({
   backendInstanceId: Schema.optional(Schema.String),
   environmentId: Schema.optional(Schema.String),
   platform: Schema.optional(Schema.String),
@@ -413,7 +397,7 @@ export const ViewIdentitySchema = openStruct({
  * `missing`; `unavailable`: `retryable`), and the renderer's own
  * `isNativeAgent*Update` guards check the combination.
  */
-export const ViewUpdateSchema = openStruct({
+export const ViewUpdateSchema = openRecord({
   viewVersion: Schema.optional(Schema.Finite),
   status: Schema.String,
   token: optionalString,
@@ -427,14 +411,14 @@ export const ViewUpdateSchema = openStruct({
 });
 
 /** `NativeAgentLiveUpdate` (native-agent.ts): transcript and state in one read. */
-export const LiveUpdateSchema = openStruct({
+export const LiveUpdateSchema = openRecord({
   viewVersion: Schema.optional(Schema.Finite),
   transcript: Schema.optional(ViewUpdateSchema),
   state: Schema.optional(ViewUpdateSchema),
 });
 
 /** `NativeAgentProjectionUpdate` (native-agent.ts), the sync-v1 projection read. */
-export const ProjectionUpdateSchema = openStruct({
+export const ProjectionUpdateSchema = openRecord({
   syncVersion: Schema.optional(Schema.Finite),
   status: Schema.String,
   token: optionalString,
@@ -448,7 +432,7 @@ export const ProjectionUpdateSchema = openStruct({
 });
 
 /** `NativeAgentMessagePage` (native-agent.ts): one page of older transcript rows. */
-export const MessagePageSchema = openStruct({
+export const MessagePageSchema = openRecord({
   syncVersion: Schema.optional(Schema.Finite),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
   historyEpoch: Schema.optional(Schema.String),

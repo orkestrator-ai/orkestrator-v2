@@ -5,7 +5,7 @@
  * controller-facing commands that run that work on the node
  * (`*_controller_*`).
  *
- * Model-shaped records are **open structs** ({@link openStruct}): the listed
+ * Model-shaped records are **open structs** ({@link openRecord}): the listed
  * fields are checked and typed, and every other key the backend sends is
  * kept, because a domain client decodes results tolerantly and a closed
  * `Schema.Struct` would strip the fields a record carries beyond those
@@ -16,22 +16,14 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
-
-/** A struct whose listed fields are typed and whose other keys pass through. */
-function openStruct<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
+import { openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
 const optionalFinite = Schema.optional(Schema.Finite);
 
 /** One named operator credential as Settings → MCP shows it (with its token, for Copy setup). */
-export const ControlMcpCredentialSummarySchema = openStruct({
+export const ControlMcpCredentialSummarySchema = openRecord({
   id: Schema.String,
   label: Schema.String,
   profile: Schema.String,
@@ -43,7 +35,7 @@ export const ControlMcpCredentialSummarySchema = openStruct({
 });
 
 /** The Control MCP listener and every operator credential. */
-export const ControlMcpSettingsSchema = openStruct({
+export const ControlMcpSettingsSchema = openRecord({
   enabled: Schema.Boolean,
   running: Schema.Boolean,
   url: Schema.String,
@@ -60,7 +52,7 @@ export const ControlMcpSettingsSchema = openStruct({
  * auto-merge launch is no longer authorised. A resend to an open tab spreads
  * that tab's answer.
  */
-export const NativeAgentJobLaunchResultSchema = openStruct({
+export const NativeAgentJobLaunchResultSchema = openRecord({
   status: Schema.String,
   jobId: optionalString,
   environmentId: optionalString,
@@ -73,7 +65,7 @@ export const NativeAgentJobLaunchResultSchema = openStruct({
 });
 
 /** An environment record as a node answers it: its id and the fields callers route on. */
-export const ControllerEnvironmentSchema = openStruct({
+export const ControllerEnvironmentSchema = openRecord({
   id: Schema.String,
   projectId: optionalString,
   name: optionalString,
@@ -85,7 +77,7 @@ export const ControllerEnvironmentSchema = openStruct({
 });
 
 /** A workflow snapshot (build pipeline or Multi Review): its id and where it runs. */
-export const ControllerWorkflowSnapshotSchema = openStruct({
+export const ControllerWorkflowSnapshotSchema = openRecord({
   id: Schema.String,
   projectId: optionalString,
   environmentId: optionalString,
@@ -99,7 +91,7 @@ export const ControllerWorkflowSnapshotSchema = openStruct({
 });
 
 /** Where a Multi Review's tab was opened, or why it could not be. */
-export const MultiReviewActionUiSchema = openStruct({
+export const MultiReviewActionUiSchema = openRecord({
   status: Schema.String,
   tabId: optionalString,
   paneId: optionalString,
@@ -107,7 +99,7 @@ export const MultiReviewActionUiSchema = openStruct({
 });
 
 /** The Multi Review button's answer (`MultiReviewActionResult`, `@orkestrator/protocol/multi-review`). */
-export const MultiReviewActionResultSchema = openStruct({
+export const MultiReviewActionResultSchema = openRecord({
   workflow: ControllerWorkflowSnapshotSchema,
   outcome: Schema.String,
   reused: optionalBoolean,
@@ -117,7 +109,7 @@ export const MultiReviewActionResultSchema = openStruct({
 });
 
 /** A worker surface opened or edited on a node (a terminal, browser tab or tab edit). */
-export const WorkerSurfaceResultSchema = openStruct({
+export const WorkerSurfaceResultSchema = openRecord({
   environmentId: optionalString,
   tabId: optionalString,
   tabType: optionalString,
@@ -127,7 +119,7 @@ export const WorkerSurfaceResultSchema = openStruct({
 });
 
 /** A worker action receipt (a pull request or a conflict resolution started on a worker). */
-export const WorkerActionResultSchema = openStruct({
+export const WorkerActionResultSchema = openRecord({
   status: optionalString,
   environmentId: optionalString,
   tabId: optionalString,
@@ -135,13 +127,13 @@ export const WorkerActionResultSchema = openStruct({
 });
 
 /** A fork made on the node owning the source worker, for a command node's coordinator. */
-export const ControllerForkResultSchema = openStruct({
+export const ControllerForkResultSchema = openRecord({
   environment: ControllerEnvironmentSchema,
   agent: Schema.NullOr(Schema.String),
 });
 
 /** A coordinator's fork of one of its workers, here or on another node. */
-export const CoordinatorForkResultSchema = openStruct({
+export const CoordinatorForkResultSchema = openRecord({
   environmentId: optionalString,
   name: optionalString,
   branch: optionalString,
@@ -159,7 +151,7 @@ export const CoordinatorForkResultSchema = openStruct({
 });
 
 /** A worker's changes since its base: summaries, commits and bounded diffs. */
-export const WorkerChangesSchema = openStruct({
+export const WorkerChangesSchema = openRecord({
   environmentId: optionalString,
   name: optionalString,
   environmentType: optionalString,
@@ -177,7 +169,7 @@ export const WorkerChangesSchema = openStruct({
 });
 
 /** A worker environment launched on a node by a command node's coordinator. */
-export const CoordinatorNodeLaunchResultSchema = openStruct({
+export const CoordinatorNodeLaunchResultSchema = openRecord({
   environment: Schema.Unknown,
   coordinatorDelegationOpened: Schema.Boolean,
   replayed: optionalBoolean,
@@ -192,7 +184,7 @@ export const AvailableSchema = Schema.Struct({ available: Schema.Boolean });
 export const OpenedSchema = Schema.Struct({ opened: Schema.Boolean });
 
 /** Mail sent to an agent or the coordinator on a node, as the coordinator is told. */
-export const CoordinatorNodeMailResultSchema = openStruct({
+export const CoordinatorNodeMailResultSchema = openRecord({
   nodeId: optionalString,
   node: optionalString,
   messageId: optionalString,
@@ -204,8 +196,8 @@ export const CoordinatorNodeMailResultSchema = openStruct({
 });
 
 /** Who on that node's copy of the project can be mailed. */
-export const CoordinatorNodeMailboxSchema = openStruct({
-  coordinator: openStruct({
+export const CoordinatorNodeMailboxSchema = openRecord({
+  coordinator: openRecord({
     reachable: Schema.Boolean,
     address: optionalString,
     reason: optionalString,
@@ -214,7 +206,7 @@ export const CoordinatorNodeMailboxSchema = openStruct({
 });
 
 /** A file transfer's receipt, with the coordinator's named endpoints. */
-export const AttachmentTransferResultSchema = openStruct({
+export const AttachmentTransferResultSchema = openRecord({
   status: Schema.String,
   from: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   to: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),

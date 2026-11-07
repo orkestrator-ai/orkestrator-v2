@@ -37,9 +37,7 @@ import type {
 } from "../../../github-pull-requests.js";
 import type { PrMonitorEnvironmentState, PrMonitorSnapshot } from "../../../pr-monitor.js";
 import type { ReviewPackageReference } from "../../../review-workflow.js";
-import { modelRecord } from "../../model-schema.js";
-import { openRecord } from "../git/schemas.js";
-import { mutableArray } from "../environments/models.js";
+import { modelRecord, mutableArray, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);

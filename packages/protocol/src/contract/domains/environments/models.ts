@@ -23,6 +23,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray, ownedObject } from "../../model-schema.js";
 import { AGENT_PLATFORMS, type AgentPlatform } from "../../../agent-platforms.js";
 import type { AgentSettingsTier } from "../../../agent-settings.js";
 import {
@@ -42,20 +43,6 @@ const optionalNumber = Schema.optional(Schema.Finite);
  * still reads, so `null` is accepted.
  */
 const optionalPort = Schema.optional(Schema.NullOr(Schema.Finite));
-
-/** A mutable array of `item`, so the inferred type matches the models' `T[]`. */
-export function mutableArray<S extends Schema.Top>(item: S) {
-  return Schema.mutable(Schema.Array(item));
-}
-
-/**
- * An object owned by another domain's model, decoded as an object and typed
- * as `T`. Used only where the owning domain has no schema yet (the agent
- * settings tier belongs to `config`); that domain's schema replaces it.
- */
-export function ownedObject<T extends object>(): Schema.Codec<T> {
-  return Schema.ObjectKeyword as unknown as Schema.Codec<T>;
-}
 
 export const AgentPlatformSchema = Schema.Literals(
   AGENT_PLATFORMS as unknown as readonly [AgentPlatform, ...AgentPlatform[]],

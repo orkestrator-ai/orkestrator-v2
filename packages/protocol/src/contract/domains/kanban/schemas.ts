@@ -7,7 +7,7 @@
  * (`ticket-sections.ts`) and `ConditionalResourceSnapshot`
  * (`resource-events.ts`). Plan item 7010 converges the models on these.
  *
- * Records are **open structs** (`openStruct`, `modelRecord`): the listed
+ * Records are **open structs** (`openRecord`, `modelRecord`): the listed
  * fields are checked and typed, every other key the backend sends is kept, so
  * a domain client's tolerant decode never strips a field the renderer reads.
  * A record's identity (`id`, the notes' `projectId`, the planning exchange's
@@ -23,16 +23,10 @@
  */
 import * as Schema from "effect/Schema";
 import type { FeaturePlanningRecord } from "../../../feature-planning.js";
-import { modelRecord } from "../../model-schema.js";
-import { OpenObject, openStruct } from "../native-sessions/schemas.js";
+import { modelRecord, mutableArray, OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalNumber = Schema.optional(Schema.Finite);
-
-/** A mutable array, so the inferred type matches the models' `T[]`. */
-function mutableArray<S extends Schema.Top>(item: S) {
-  return Schema.mutable(Schema.Array(item));
-}
 
 /**
  * `ConditionalResourceSnapshot<T>` (resource-events.ts): the answer to a read
@@ -62,21 +56,21 @@ export function snapshotRead<S extends Schema.Top>(snapshot: S) {
 // --- Kanban tickets -----------------------------------------------------------
 
 /** `KanbanComment`. */
-export const KanbanCommentSchema = openStruct({
+export const KanbanCommentSchema = openRecord({
   id: Schema.String,
   text: Schema.optional(Schema.String),
   createdAt: Schema.optional(Schema.String),
 }).annotate({ identifier: "KanbanComment" });
 
 /** `KanbanImage`: the stored image's metadata; its bytes are `get_kanban_image_data`. */
-export const KanbanImageSchema = openStruct({
+export const KanbanImageSchema = openRecord({
   id: Schema.String,
   filename: Schema.optional(Schema.String),
   createdAt: Schema.optional(Schema.String),
 }).annotate({ identifier: "KanbanImage" });
 
 /** `KanbanTask`: one ticket on this node's board. */
-export const KanbanTaskSchema = openStruct({
+export const KanbanTaskSchema = openRecord({
   id: Schema.String,
   projectId: Schema.optional(Schema.String),
   title: Schema.optional(Schema.String),
@@ -108,7 +102,7 @@ export const KanbanTaskSchema = openStruct({
 export const KanbanTaskListSchema = mutableArray(KanbanTaskSchema);
 
 /** `ProjectNotes`. */
-export const ProjectNotesSchema = openStruct({
+export const ProjectNotesSchema = openRecord({
   projectId: Schema.String,
   content: Schema.optional(Schema.String),
   updatedAt: Schema.optional(Schema.String),
@@ -117,7 +111,7 @@ export const ProjectNotesSchema = openStruct({
 // --- Feature plans and planning -------------------------------------------------
 
 /** `FeaturePlanMessage`. */
-export const FeaturePlanMessageSchema = openStruct({
+export const FeaturePlanMessageSchema = openRecord({
   id: Schema.String,
   // `user`, `assistant` or `system`.
   role: Schema.optional(Schema.String),
@@ -129,7 +123,7 @@ export const FeaturePlanMessageSchema = openStruct({
 }).annotate({ identifier: "FeaturePlanMessage" });
 
 /** `FeatureStoryCard`. */
-export const FeatureStoryCardSchema = openStruct({
+export const FeatureStoryCardSchema = openRecord({
   id: Schema.String,
   title: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
@@ -158,7 +152,7 @@ export const FeaturePlanningRecordSchema = modelRecord<FeaturePlanningRecord>()(
 }).annotate({ identifier: "FeaturePlanningRecord" });
 
 /** `FeaturePlan`. */
-export const FeaturePlanSchema = openStruct({
+export const FeaturePlanSchema = openRecord({
   id: Schema.String,
   projectId: Schema.optional(Schema.String),
   title: Schema.optional(Schema.String),
@@ -188,14 +182,14 @@ export const FeaturePlanBuildClaimSchema = Schema.Struct({
 // --- Linear ---------------------------------------------------------------------
 
 /** `LinearViewer`: who the stored key belongs to. Never the key. */
-export const LinearViewerSchema = openStruct({
+export const LinearViewerSchema = openRecord({
   id: Schema.String,
   name: Schema.optional(Schema.String),
   email: optionalString,
 }).annotate({ identifier: "LinearViewer" });
 
 /** `LinearConnectionStatus`. */
-export const LinearConnectionStatusSchema = openStruct({
+export const LinearConnectionStatusSchema = openRecord({
   connected: Schema.Boolean,
   hasToken: Schema.Boolean,
   viewer: Schema.optional(LinearViewerSchema),
@@ -222,12 +216,12 @@ const linearIssueFields = {
 };
 
 /** `LinearIssueListItem`. */
-export const LinearIssueListItemSchema = openStruct(linearIssueFields).annotate({
+export const LinearIssueListItemSchema = openRecord(linearIssueFields).annotate({
   identifier: "LinearIssueListItem",
 });
 
 /** `LinearIssueComment`. */
-export const LinearIssueCommentSchema = openStruct({
+export const LinearIssueCommentSchema = openRecord({
   id: Schema.String,
   body: Schema.optional(Schema.String),
   createdAt: Schema.optional(Schema.String),
@@ -236,7 +230,7 @@ export const LinearIssueCommentSchema = openStruct({
 }).annotate({ identifier: "LinearIssueComment" });
 
 /** `LinearIssueDetail`. */
-export const LinearIssueDetailSchema = openStruct({
+export const LinearIssueDetailSchema = openRecord({
   ...linearIssueFields,
   description: Schema.optional(Schema.String),
   creatorName: optionalString,
@@ -247,7 +241,7 @@ export const LinearIssueDetailSchema = openStruct({
 }).annotate({ identifier: "LinearIssueDetail" });
 
 /** `LinearCompletionCommentResult`, or the earlier post a retry found. */
-export const LinearCompletionCommentResultSchema = openStruct({
+export const LinearCompletionCommentResultSchema = openRecord({
   // `posted` or `already-posted`.
   status: Schema.String,
   commentId: Schema.optional(Schema.String),

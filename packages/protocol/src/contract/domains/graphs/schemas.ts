@@ -78,7 +78,7 @@ import type {
 } from "../../../graphs/sharing.js";
 import { validateGraphTemplate, type GraphTemplateV1 } from "../../../graphs/template.js";
 import type { FieldValidation } from "../../../field-validation.js";
-import { modelRecord, opaqueRecord, type ModelSchema } from "../../model-schema.js";
+import { asModel, modelRecord, type ModelSchema, mutableArray, opaqueRecord } from "../../model-schema.js";
 
 // --------------------------------------------------------------- guards
 
@@ -119,22 +119,9 @@ export function guardedRecord<T>(
 
 // --------------------------------------------------------------- shared parts
 
-/**
- * `schema`, typed as the protocol's own type `T` (as {@link modelRecord} types
- * a record): unions and lists the protocol declares with mutable arrays and
- * `?:` fields, so a decoded result is the interface callers already use.
- */
-function asModel<T>(schema: Schema.Top): ModelSchema<T> {
-  return schema as unknown as ModelSchema<T>;
-}
-
 const optionalString = Schema.optional(Schema.String);
-/** A list typed as a mutable array, as the protocol's interfaces declare lists. */
-export function listOf<S extends Schema.Top>(item: S) {
-  return Schema.mutable(Schema.Array(item));
-}
 
-const StringArray = listOf(Schema.String);
+const StringArray = mutableArray(Schema.String);
 const OpenObject = opaqueRecord<Record<string, unknown>>();
 const OpenObjects = Schema.Array(OpenObject);
 
@@ -538,7 +525,7 @@ export interface GraphRunEffectShape {
 
 /** `graph_run_effects`. */
 export const GraphRunEffectsResultSchema = Schema.Struct({
-  effects: listOf(
+  effects: mutableArray(
     modelRecord<GraphRunEffectShape>()({
       id: Schema.String,
       runId: Schema.String,

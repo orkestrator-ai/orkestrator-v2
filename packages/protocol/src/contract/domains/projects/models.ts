@@ -25,26 +25,11 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray, openRecord } from "../../model-schema.js";
 import type { Mutable } from "effect/Types";
-import { mutableArray } from "../environments/models.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalNullableString = Schema.optional(Schema.NullOr(Schema.String));
-
-/**
- * A struct that keeps the keys it does not declare. Its static type is the
- * declared struct's (no index signature), so the model interfaces stay
- * assignable to it; at run time it is `StructWithRest` with an `unknown`
- * record, which checks the declared fields and passes every other key through
- * a decode unchanged.
- */
-export function openRecord<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
 
 /** The project fields; also the base of a node summary's row. */
 export const projectFields = {

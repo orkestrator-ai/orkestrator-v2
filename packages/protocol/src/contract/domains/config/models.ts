@@ -21,6 +21,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray, openRecord, ownedObject } from "../../model-schema.js";
 import type { ActionDefaults } from "../../../action-defaults.js";
 import type { AgentAccountAutoSwitchSettings } from "../../../agent-account-auto-switch.js";
 import type { AgentMessagingSettings } from "../../../agent-mail.js";
@@ -62,11 +63,8 @@ import {
   AgentPlatformSchema,
   ContainerResourceLimitsSchema,
   EnvironmentTypeSchema,
-  mutableArray,
-  ownedObject,
   PortMappingSchema,
 } from "../environments/models.js";
-import { openRecord } from "../projects/models.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);

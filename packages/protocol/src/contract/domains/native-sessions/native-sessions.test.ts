@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import * as Schema from "effect/Schema";
+import { openRecord } from "../../model-schema.js";
 import { isNodeReadCommand } from "../../../command-nodes.js";
 import type { NegotiatedDomains } from "../../../node-client.js";
 import { createDomainClient, type ContractEnvelopeFields } from "../../client.js";
@@ -29,7 +30,6 @@ import {
   getNativeAgentTranscriptUpdateCommand,
   nativeSessionsClient,
   nativeSessionsDomain,
-  openStruct,
 } from "./index.js";
 
 /** Commands no workspace client calls: the interaction monitor's diagnostics. */
@@ -119,7 +119,7 @@ describe("native-sessions definitions", () => {
     if (decoded._tag === "Success") expect(decoded.success).toEqual(session);
     // A present field is still type-checked.
     expect(Schema.decodeUnknownResult(NativeAgentSessionSchema)({ key: 1 })._tag).toBe("Failure");
-    const open = openStruct({ id: Schema.String });
+    const open = openRecord({ id: Schema.String });
     expect(Schema.decodeUnknownSync(open)({ id: "a", deep: { x: [1] } })).toEqual({
       id: "a",
       deep: { x: [1] },

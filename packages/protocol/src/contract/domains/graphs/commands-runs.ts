@@ -10,6 +10,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray } from "../../model-schema.js";
 import { defineCommand } from "../../command.js";
 import { graphsDomain } from "./domain.js";
 import {
@@ -21,7 +22,6 @@ import {
   GraphRunRestartResultSchema,
   GraphRunSummarySchema,
   GraphRunTranscriptViewSchema,
-  listOf,
 } from "./schemas.js";
 
 const checked = Schema.optionalKey(Schema.Unknown);
@@ -36,7 +36,7 @@ export const graphRunsListCommand = defineCommand({
   access: "workspace",
   read: true,
   args: Schema.Struct({ environmentId: checked }),
-  result: listOf(GraphRunSummarySchema),
+  result: mutableArray(GraphRunSummarySchema),
   critical: [],
 });
 
@@ -140,7 +140,7 @@ export const graphRunPendingCommand = defineCommand({
   access: "workspace",
   read: true,
   args: Schema.Struct({ runId: checked, environmentId: checked }),
-  result: listOf(GraphRunPendingInteractionSchema),
+  result: mutableArray(GraphRunPendingInteractionSchema),
   critical: [],
 });
 

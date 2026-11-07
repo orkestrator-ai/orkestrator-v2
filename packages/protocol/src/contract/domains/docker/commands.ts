@@ -19,12 +19,9 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray } from "../../model-schema.js";
 import { defineCommand } from "../../command.js";
-import {
-  ClientEnvironmentSchema,
-  EnvironmentStatusSchema,
-  mutableArray,
-} from "../environments/models.js";
+import { ClientEnvironmentSchema, EnvironmentStatusSchema } from "../environments/models.js";
 import { dockerDomain } from "./domain.js";
 import {
   CleanupExecuteResultSchema,

@@ -23,9 +23,9 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray } from "../../model-schema.js";
 import { defineCommand } from "../../command.js";
 import { AppConfigSchema } from "../config/models.js";
-import { mutableArray } from "../environments/models.js";
 import { projectsDomain } from "./domain.js";
 import {
   AgentsMdProposalSchema,

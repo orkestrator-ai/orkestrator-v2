@@ -3,7 +3,7 @@
  * sign-in states, plan usage and usage limits, usage history, the coordinator
  * account-switch grant, OpenCode provider logins and the Cursor SDK login.
  *
- * Records are open (`modelRecord`, or {@link openStruct} for shapes that are
+ * Records are open (`modelRecord`, or {@link openRecord} for shapes that are
  * the backend's own): the declared fields (ids, states, kinds, the flags
  * callers branch on) are checked, and every other key passes a tolerant
  * decode, so a client loses nothing a newer backend adds. Enumerations a newer
@@ -40,21 +40,8 @@ import type {
 } from "../../../opencode-provider-auth.js";
 import type { PlanUsageSnapshot } from "../../../plan-usage.js";
 import type { UsageEnvironmentSummary, UsageHistoryReport } from "../../../usage-history.js";
-import { modelRecord, type ModelSchema } from "../../model-schema.js";
+import { modelRecord, type ModelSchema, OpenObject, openRecord } from "../../model-schema.js";
 
-/**
- * A struct that keeps the keys it does not declare, typed as the declared
- * struct (for the backend's own result shapes, which have no protocol type).
- */
-export function openStruct<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
-
-const OpenObject = openStruct({});
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);
 const optionalNumber = Schema.optional(Schema.Finite);
@@ -162,7 +149,7 @@ export const AgentSignInStatusSchema = modelRecord<NativeAgentAuthStatus>()({
   account: Schema.optional(OpenObject),
   providers: Schema.optional(
     Schema.Array(
-      openStruct({
+      openRecord({
         id: Schema.String,
         label: Schema.String,
         state: Schema.String,
@@ -170,14 +157,14 @@ export const AgentSignInStatusSchema = modelRecord<NativeAgentAuthStatus>()({
       }),
     ),
   ),
-  signIn: Schema.optional(openStruct({ kind: Schema.String })),
+  signIn: Schema.optional(openRecord({ kind: Schema.String })),
   signOut: optionalBoolean,
 }).annotate({ identifier: "AgentSignInStatus" });
 
 // ---------------------------------------------------------------------------
 // Usage
 
-const UsageWindowSchema = openStruct({
+const UsageWindowSchema = openRecord({
   window: Schema.String,
   label: optionalString,
   usedPercent: optionalNumber,
@@ -192,7 +179,7 @@ export const PlanUsageSnapshotSchema = modelRecord<PlanUsageSnapshot>()({
   windows: Schema.Array(UsageWindowSchema),
   plan: optionalString,
   message: optionalString,
-  paidOverage: Schema.optional(openStruct({ enabled: Schema.Boolean, inUse: optionalBoolean })),
+  paidOverage: Schema.optional(openRecord({ enabled: Schema.Boolean, inUse: optionalBoolean })),
   stale: optionalBoolean,
   fetchedAt: Schema.String,
 }).annotate({ identifier: "PlanUsageSnapshot" });
@@ -201,10 +188,10 @@ export const PlanUsageSnapshotSchema = modelRecord<PlanUsageSnapshot>()({
  * Which of a project's agent tabs stopped on a provider usage limit, and the
  * active accounts' cached quota windows (the backend's `ProjectUsageLimits`).
  */
-export const ProjectUsageLimitsSchema = openStruct({
+export const ProjectUsageLimitsSchema = openRecord({
   checkedAt: Schema.String,
   limitedTabs: Schema.Array(
-    openStruct({
+    openRecord({
       environmentId: Schema.String,
       environmentName: Schema.String,
       tabId: Schema.NullOr(Schema.String),
@@ -216,7 +203,7 @@ export const ProjectUsageLimitsSchema = openStruct({
     }),
   ),
   activeAccounts: Schema.Array(
-    openStruct({
+    openRecord({
       platform: Schema.String,
       fetchedAt: Schema.String,
       stale: Schema.Boolean,
@@ -226,7 +213,7 @@ export const ProjectUsageLimitsSchema = openStruct({
   ),
 }).annotate({ identifier: "ProjectUsageLimits" });
 
-const UsageTotalsSchema = openStruct({
+const UsageTotalsSchema = openRecord({
   totalTokens: Schema.Finite,
   costUsd: Schema.Finite,
   turns: Schema.Finite,
@@ -246,14 +233,14 @@ export const UsageHistoryReportSchema = modelRecord<UsageHistoryReport>()({
   generatedAt: Schema.String,
   fromDay: Schema.String,
   toDay: Schema.String,
-  days: Schema.Array(openStruct({ day: Schema.String, totals: UsageTotalsSchema })),
+  days: Schema.Array(openRecord({ day: Schema.String, totals: UsageTotalsSchema })),
   totals: UsageTotalsSchema,
   sessions: Schema.Finite,
   platforms: Schema.Array(
-    openStruct({ platform: Schema.String, totals: UsageTotalsSchema, sessions: Schema.Finite }),
+    openRecord({ platform: Schema.String, totals: UsageTotalsSchema, sessions: Schema.Finite }),
   ),
   models: Schema.Array(
-    openStruct({
+    openRecord({
       modelId: Schema.String,
       platform: Schema.String,
       totals: UsageTotalsSchema,
@@ -284,7 +271,7 @@ const CoordinatorAccountSwitchRecordSchema = modelRecord<CoordinatorAccountSwitc
 export const CoordinatorAccountSwitchGrantStateSchema =
   modelRecord<CoordinatorAccountSwitchGrantState>()({
     grants: Schema.Record(Schema.String, Schema.Boolean),
-    limit: openStruct({ switches: Schema.Finite, windowMinutes: Schema.Finite }),
+    limit: openRecord({ switches: Schema.Finite, windowMinutes: Schema.Finite }),
     recentSwitches: Schema.Array(CoordinatorAccountSwitchRecordSchema),
   }).annotate({ identifier: "CoordinatorAccountSwitchGrantState" });
 
@@ -296,7 +283,7 @@ const OpenCodeProviderAuthMethodSchema = modelRecord<OpenCodeProviderAuthMethod>
   type: Schema.String,
   label: Schema.String,
   prompts: Schema.Array(
-    openStruct({ type: Schema.String, key: Schema.String, message: Schema.String }),
+    openRecord({ type: Schema.String, key: Schema.String, message: Schema.String }),
   ),
 });
 
@@ -332,14 +319,14 @@ export const OpenCodeProviderLoginProgressSchema = modelRecord<OpenCodeProviderL
 // Cursor SDK login (the backend's `CursorSdkAuthStatus`/`CursorSdkLoginProgress`)
 
 /** Whether the Cursor SDK engine can run a turn, and which credential is in play (never the key). */
-export const CursorSdkAuthStatusSchema = openStruct({
+export const CursorSdkAuthStatusSchema = openRecord({
   authenticated: Schema.Boolean,
   source: Schema.String,
   email: optionalString,
   expiresAt: optionalString,
 }).annotate({ identifier: "CursorSdkAuthStatus" });
 
-export const CursorSdkLoginProgressSchema = openStruct({
+export const CursorSdkLoginProgressSchema = openRecord({
   state: Schema.String,
   loginUrl: optionalString,
   error: optionalString,

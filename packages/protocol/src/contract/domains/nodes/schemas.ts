@@ -6,7 +6,7 @@
  * ...) are `modelRecord<T>()`: the fields a reader routes on are checked and
  * every other key passes through, typed as the protocol's own interface. The
  * backend's own records (`NodeSshPromptView`, `OpenedNodeWorkspace`,
- * `ClientGrant`, `FileComparison`, ...) are open structs ({@link openStruct}):
+ * `ClientGrant`, `FileComparison`, ...) are open structs ({@link openRecord}):
  * the same rule, typed by their fields. A decode on the client is tolerant,
  * so a closed struct would strip the fields a newer backend adds.
  *
@@ -30,23 +30,11 @@ import type { NodeEventWatchResult } from "../../../node-events.js";
 import type { NodeSummariesResult } from "../../../node-summaries.js";
 import type { PortalLayout } from "../../../portal-layout.js";
 import type { ProjectCopyOptions, ProjectCopyRecord } from "../../../project-copy.js";
-import { modelRecord } from "../../model-schema.js";
-
-/**
- * A record whose listed fields are checked and typed, every other key kept
- * (`Schema.StructWithRest` with a string-keyed rest of unknown values).
- */
-export function openStruct<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
+import { modelRecord, openRecord } from "../../model-schema.js";
 
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const StringArray = Schema.Array(Schema.String);
-const AnyObject = openStruct({});
+const AnyObject = openRecord({});
 
 export const ControllerViewSchema = modelRecord<ControllerView>()({
   controllerId: Schema.String,
@@ -102,20 +90,20 @@ export const CommandHandoverResultSchema = modelRecord<CommandHandoverResult>()(
 });
 
 /** What a leaf took on when an attached command node handed command over. */
-export const AcceptCommandHandoverResultSchema = openStruct({
+export const AcceptCommandHandoverResultSchema = openRecord({
   imported: Schema.Finite,
   skipped: Schema.Finite,
   needsCredential: Schema.Finite,
   detachedControllers: Schema.Finite,
 });
 
-export const ImportDesktopConnectionsResultSchema = openStruct({
+export const ImportDesktopConnectionsResultSchema = openRecord({
   imported: Schema.Finite,
   skipped: Schema.Finite,
   needsCredential: Schema.Finite,
 });
 
-export const NodeSshPromptViewSchema = openStruct({
+export const NodeSshPromptViewSchema = openRecord({
   promptId: Schema.String,
   nodeId: Schema.String,
   kind: Schema.String,
@@ -123,10 +111,10 @@ export const NodeSshPromptViewSchema = openStruct({
   state: Schema.String,
 });
 
-export const HostKeyProbeSchema = openStruct({
+export const HostKeyProbeSchema = openRecord({
   probeId: Schema.String,
   destination: Schema.String,
-  fingerprints: Schema.Array(openStruct({ type: Schema.String, fingerprint: Schema.String })),
+  fingerprints: Schema.Array(openRecord({ type: Schema.String, fingerprint: Schema.String })),
 });
 
 export const NodeSummariesResultSchema = modelRecord<NodeSummariesResult>()({
@@ -139,8 +127,8 @@ export const NodeSummariesResultSchema = modelRecord<NodeSummariesResult>()({
  * outcome-unknown record of a write whose answer was lost.
  */
 export const RoutedResultSchema = Schema.Union([
-  openStruct({ outcome: Schema.Literal("ok"), result: Schema.Unknown }),
-  openStruct({
+  openRecord({ outcome: Schema.Literal("ok"), result: Schema.Unknown }),
+  openRecord({
     outcome: Schema.Literal("unknown"),
     requestKey: Schema.String,
     outcomeId: Schema.String,
@@ -153,7 +141,7 @@ export const NodeEventWatchResultSchema = modelRecord<NodeEventWatchResult>()({
   renewed: Schema.Boolean,
 });
 
-export const NodeOutcomeRecordSchema = openStruct({
+export const NodeOutcomeRecordSchema = openRecord({
   outcomeId: Schema.String,
   nodeId: Schema.String,
   command: Schema.String,
@@ -162,24 +150,24 @@ export const NodeOutcomeRecordSchema = openStruct({
 });
 
 /** A leaf workspace opened for a client, with its short-lived grant. */
-export const OpenedNodeWorkspaceSchema = openStruct({
+export const OpenedNodeWorkspaceSchema = openRecord({
   workspaceId: Schema.String,
   nodeId: Schema.String,
   nodeName: Schema.String,
-  grant: openStruct({ token: Schema.String, expiresAt: Schema.Finite }),
+  grant: openRecord({ token: Schema.String, expiresAt: Schema.Finite }),
   directOrigins: StringArray,
   relayBase: Schema.String,
   commandRouteKind: Schema.optional(Schema.String),
 });
 
-export const ClientGrantSchema = openStruct({
+export const ClientGrantSchema = openRecord({
   grantId: Schema.String,
   controllerId: Schema.String,
   label: Schema.String,
   expiresAt: Schema.Finite,
 });
 
-export const CreatedClientGrantSchema = openStruct({
+export const CreatedClientGrantSchema = openRecord({
   grant: ClientGrantSchema,
   token: Schema.String,
 });
@@ -197,14 +185,14 @@ export const BackendProfileSchema = modelRecord<BackendProfile>()({
 });
 
 /** An action request as the command node keeps it (the fields every kind has). */
-export const NodeActionRequestRecordSchema = openStruct({
+export const NodeActionRequestRecordSchema = openRecord({
   requestId: Schema.String,
   kind: Schema.String,
   state: Schema.String,
 });
 
 /** An unattended account switch: run, already run, or why not. */
-export const AccountSwitchOutcomeSchema = openStruct({
+export const AccountSwitchOutcomeSchema = openRecord({
   outcome: Schema.String,
   request: Schema.optional(NodeActionRequestRecordSchema),
   recent: Schema.optional(Schema.Finite),
@@ -213,7 +201,7 @@ export const AccountSwitchOutcomeSchema = openStruct({
 });
 
 /** The section an AGENTS.md request's review diffs against, read on the node owning the copy. */
-export const AgentsMdPreviewSchema = openStruct({
+export const AgentsMdPreviewSchema = openRecord({
   baseBranch: Schema.optional(Schema.String),
   baseCommit: Schema.optional(Schema.String),
   fetched: Schema.optional(Schema.Boolean),
@@ -223,7 +211,7 @@ export const AgentsMdPreviewSchema = openStruct({
 });
 
 /** A worker environment's details on its own node: the parts asked for in `include`. */
-export const EnvironmentDetailsSchema = openStruct({
+export const EnvironmentDetailsSchema = openRecord({
   environmentId: Schema.String,
   diff: Schema.optional(AnyObject),
   file: Schema.optional(AnyObject),
@@ -231,12 +219,12 @@ export const EnvironmentDetailsSchema = openStruct({
 });
 
 export const SeedFilesSchema = Schema.Array(
-  openStruct({ path: Schema.String, exists: Schema.Boolean }),
+  openRecord({ path: Schema.String, exists: Schema.Boolean }),
 );
 
 /** Keyed fingerprints of a project's files on one node (never their contents). */
 export const ProjectFileFingerprintsSchema = Schema.Array(
-  openStruct({
+  openRecord({
     path: Schema.String,
     exists: Schema.Boolean,
     file: Schema.optional(Schema.String),
@@ -246,28 +234,28 @@ export const ProjectFileFingerprintsSchema = Schema.Array(
 
 export const EnvValuesSchema = Schema.Record(Schema.String, Schema.String);
 
-export const AppliedEnvKeysSchema = openStruct({
+export const AppliedEnvKeysSchema = openRecord({
   set: NonNegativeInt,
   removed: NonNegativeInt,
 });
 
-export const FileComparisonSchema = openStruct({
+export const FileComparisonSchema = openRecord({
   nodeId: Schema.String,
   nodeName: Schema.String,
   projectId: Schema.NullOr(Schema.String),
   available: Schema.Boolean,
-  files: Schema.Array(openStruct({ path: Schema.String, status: Schema.String })),
+  files: Schema.Array(openRecord({ path: Schema.String, status: Schema.String })),
   error: Schema.optional(Schema.String),
 });
 
-export const ProjectFileComparisonSchema = openStruct({
+export const ProjectFileComparisonSchema = openRecord({
   files: StringArray,
   nodes: Schema.Array(FileComparisonSchema),
 });
 
-export const SetupApprovalResultSchema = openStruct({
+export const SetupApprovalResultSchema = openRecord({
   nodes: Schema.Array(
-    openStruct({
+    openRecord({
       nodeId: Schema.String,
       nodeName: Schema.String,
       status: Schema.String,
@@ -294,5 +282,5 @@ export const ProjectCopyRecordSchema = modelRecord<ProjectCopyRecord>()({
 
 /** `{ <flag>: boolean }` answers (`detached`, `allowed`, `discarded`, ...). */
 export function flagResult<const Key extends string>(key: Key) {
-  return openStruct({ [key]: Schema.Boolean } as { [K in Key]: typeof Schema.Boolean });
+  return openRecord({ [key]: Schema.Boolean } as { [K in Key]: typeof Schema.Boolean });
 }

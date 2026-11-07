@@ -20,6 +20,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray } from "../../model-schema.js";
 import { defineCommand } from "../../command.js";
 import { environmentsDomain } from "./domain.js";
 import {
@@ -29,7 +30,6 @@ import {
   EnvironmentSetupStartResultSchema,
   EnvironmentSnapshotRowSchema,
   EnvironmentStatusSchema,
-  mutableArray,
   RelayedPrMonitorHealthSchema,
 } from "./models.js";
 import {

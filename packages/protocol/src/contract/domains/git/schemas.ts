@@ -44,39 +44,9 @@ import type {
   EnvironmentDiffStatsChange,
   EnvironmentDiffStatsSnapshot,
 } from "../../../diff-stats.js";
-import { modelRecord, type ModelSchema } from "../../model-schema.js";
+import { modelRecord, type ModelSchema, openRecord, variantRecord } from "../../model-schema.js";
 
 type KeysOfUnion<T> = T extends unknown ? keyof T & string : never;
-
-/**
- * A record of one of the variants of `T` (a discriminated union): `fields`
- * may name a key of any variant and are validated when present; every other
- * key passes through. Like `modelRecord`, but for unions, whose `keyof` is
- * only the keys every variant shares. Declare a key only some variants carry
- * as optional.
- */
-export function variantRecord<T extends object>() {
-  return <const F extends { readonly [K in KeysOfUnion<T>]?: Schema.Top }>(
-    fields: F & { readonly [K in Exclude<keyof F, KeysOfUnion<T>>]: never },
-  ): ModelSchema<T> =>
-    Schema.StructWithRest(Schema.Struct(fields as Schema.Struct.Fields), [
-      Schema.Record(Schema.String, Schema.Unknown),
-    ]) as unknown as ModelSchema<T>;
-}
-
-/**
- * A struct that keeps the keys it does not declare: `StructWithRest` with an
- * `unknown` record at run time, typed as the declared struct (no index
- * signature), so the backend's interfaces are assignable to it. For nested
- * parts of a record that have no protocol type of their own.
- */
-export function openRecord<const Fields extends Schema.Struct.Fields>(
-  fields: Fields,
-): Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]> {
-  return Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]) as unknown as Schema.Codec<Schema.Struct<Fields>["Type"], Schema.Struct<Fields>["Encoded"]>;
-}
 
 const optionalString = Schema.optional(Schema.String);
 const optionalNullableString = Schema.optional(Schema.NullOr(Schema.String));

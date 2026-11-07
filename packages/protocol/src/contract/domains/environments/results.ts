@@ -7,13 +7,9 @@
  * field. Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray } from "../../model-schema.js";
 import { AGENT_PLATFORMS, type AgentPlatform } from "../../../agent-platforms.js";
-import {
-  AgentPlatformSchema,
-  ContainerResourceLimitsSchema,
-  mutableArray,
-  NetworkAccessModeSchema,
-} from "./models.js";
+import { AgentPlatformSchema, ContainerResourceLimitsSchema, NetworkAccessModeSchema } from "./models.js";
 
 const optionalString = Schema.optional(Schema.String);
 const optionalBoolean = Schema.optional(Schema.Boolean);

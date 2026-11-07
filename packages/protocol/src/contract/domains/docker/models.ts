@@ -16,8 +16,9 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import { mutableArray } from "../../model-schema.js";
 import { IMAGE_CAPABILITIES, type ImageCapability } from "../../../image-manifest.js";
-import { ContainerResourceLimitsSchema, mutableArray } from "../environments/models.js";
+import { ContainerResourceLimitsSchema } from "../environments/models.js";
 
 const nullableString = Schema.NullOr(Schema.String);
 const nullableNumber = Schema.NullOr(Schema.Finite);

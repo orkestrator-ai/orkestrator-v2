@@ -1,11 +1,20 @@
 /**
  * Typed renderer client for the backend web annotation service.
  *
- * Every call goes through the existing authenticated `invoke` transport. The
- * backend owns annotations; this module only shapes requests, classifies the
- * contract's typed errors, and derives stable operation identities so a
- * retry after a lost response can be recognized instead of repeated.
+ * Every call goes through the `web-annotations` domain client (plan item
+ * 7004, `@orkestrator/protocol/contract/domains/web-annotations`) over the
+ * existing authenticated `invoke` transport: a backend that advertises the
+ * domain gets the contract envelope and its results are decoded with the
+ * command's schema; a pre-contract backend (and another machine reached
+ * through the command node) gets today's call. The backend owns annotations;
+ * this module only shapes requests, classifies the contract's typed errors,
+ * and derives stable operation identities so a retry after a lost response
+ * can be recognized instead of repeated.
  */
+import {
+  webAnnotationsClient,
+  type WebAnnotationsApi,
+} from "@orkestrator/protocol/contract/domains/web-annotations";
 import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
 import {
   WEB_ANNOTATION_CAPACITY,
@@ -24,9 +33,36 @@ import {
   type WebAnnotationErrorDetail,
   type WebAnnotationRolloutMode,
 } from "@orkestrator/protocol/web-annotations";
-import { machineInvoke, type AccountMachine } from "@/lib/backend/agent-accounts";
+import { commandBackendClient, type AccountMachine } from "@/lib/backend/client";
+import { backendDomainApi, machineBackendClient } from "@/lib/backend/domain-client";
 
 export type WebAnnotationCommandName = keyof WebAnnotationCommandArgs;
+
+type WebAnnotationsApiGetter = () => WebAnnotationsApi;
+
+/** This view's backend (the command scope's client). */
+const commandScopeApi: WebAnnotationsApiGetter = backendDomainApi(
+  commandBackendClient,
+  webAnnotationsClient,
+);
+
+/** Other machines Settings asks through the command node, by node (`null`: the command node). */
+const machineApis = new Map<string | null, WebAnnotationsApiGetter>();
+const MAX_MACHINE_APIS = 64;
+
+function apiFor(machine: AccountMachine): WebAnnotationsApiGetter {
+  if (machine === undefined) return commandScopeApi;
+  let api = machineApis.get(machine);
+  if (!api) {
+    if (machineApis.size >= MAX_MACHINE_APIS) machineApis.clear();
+    api = backendDomainApi(
+      machineBackendClient(commandBackendClient, machine),
+      webAnnotationsClient,
+    );
+    machineApis.set(machine, api);
+  }
+  return api;
+}
 
 /** `machine` asks another machine through the command node, as Settings does. */
 export function webAnnotationCommand<K extends WebAnnotationCommandName>(
@@ -34,11 +70,7 @@ export function webAnnotationCommand<K extends WebAnnotationCommandName>(
   args: WebAnnotationCommandArgs[K],
   machine?: AccountMachine,
 ): Promise<WebAnnotationCommandResults[K]> {
-  return machineInvoke<WebAnnotationCommandResults[K]>(
-    machine,
-    command,
-    args as Record<string, unknown>,
-  );
+  return apiFor(machine)().run(command, args);
 }
 
 export function errorMessage(error: unknown): string {

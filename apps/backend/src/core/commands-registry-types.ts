@@ -31,7 +31,23 @@ export type DefinedCommandHandler<C extends AnyCommandDef> = (
  */
 export interface CommandRegistrar {
   (name: string, handler: CommandHandler): void;
-  <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>): void;
+  <C extends AnyCommandDef>(
+    def: C,
+    handler: DefinedCommandHandler<C>,
+    options?: DefinedCommandOptions,
+  ): void;
+}
+
+/** Options of a definition's registration. */
+export interface DefinedCommandOptions {
+  /**
+   * Wraps the call around argument decoding: `wrap(run)` receives the raw
+   * arguments, and `run` decodes them and runs the handler. The registry's
+   * version check still runs first. For a domain whose handlers refused a call
+   * before parsing it (the web annotation rollout gate, payload ceilings and
+   * outcome metrics), so that order survives the conversion.
+   */
+  readonly beforeDecode?: (run: CommandHandler) => CommandHandler;
 }
 
 /** What a registrar receives: a command name or a command definition. */

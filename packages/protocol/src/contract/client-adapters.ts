@@ -24,43 +24,47 @@
  */
 import type { DomainClientDef } from "./client.js";
 import { MAX_DOMAIN_VERSION, isDomainName, type DomainName } from "./domain.js";
-import { claudeTmuxClient } from "./domains/claude-tmux/client.js";
-import { designClient } from "./domains/design/client.js";
 import { dockerClient } from "./domains/docker/client.js";
+import { environmentsClient } from "./domains/environments/client.js";
+import { claudeTmuxClient } from "./domains/claude-tmux/client.js";
 import { agentServersClient } from "./domains/agent-servers/client.js";
 import { coordinatorClient } from "./domains/coordinator/client.js";
+import { designClient } from "./domains/design/client.js";
 import { filesClient } from "./domains/files/client.js";
 import { nativeSessionsClient } from "./domains/native-sessions/client.js";
 import { nodeFilesClient } from "./domains/node-files/client.js";
-import { nodeMailClient } from "./domains/node-mail/client.js";
 import { nodesClient } from "./domains/nodes/client.js";
+import { nodeMailClient } from "./domains/node-mail/client.js";
 import { previewsClient } from "./domains/previews/client.js";
 import { terminalsClient } from "./domains/terminals/client.js";
-import { ticketSyncClient } from "./domains/ticket-sync/client.js";
 import { systemClient } from "./domains/system/client.js";
+import { ticketSyncClient } from "./domains/ticket-sync/client.js";
 import { transcriptsClient } from "./domains/transcripts/client.js";
+import { webAnnotationsClient } from "./domains/web-annotations/client.js";
 
 /**
  * Every domain client definition. The pilot domains (plan item 1010) were the
  * first; each later domain adds its client here.
  */
 export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
-  claudeTmuxClient,
-  designClient,
   dockerClient,
-  filesClient,
-  nativeSessionsClient,
+  environmentsClient,
+  claudeTmuxClient,
   agentServersClient,
   coordinatorClient,
+  designClient,
+  filesClient,
+  nativeSessionsClient,
   nodeFilesClient,
+  nodesClient,
   nodeMailClient,
   previewsClient,
   terminalsClient,
-  nodesClient,
+  systemClient,
   ticketSyncClient,
   transcriptsClient,
+  webAnnotationsClient,
 ] as readonly DomainClientDef[]);
-  systemClient,
 
 /** The committed list, relative to the repository root. */
 export const ADAPTER_LIST_PATH = "packages/protocol/contracts/adapters.json";

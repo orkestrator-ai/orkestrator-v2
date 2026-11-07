@@ -380,3 +380,48 @@ describe("registrarFrom", () => {
     });
   });
 });
+
+describe("beforeDecode", () => {
+  test("wraps decoding: the wrapper sees the raw arguments and the decode failure", async () => {
+    for (const make of [
+      () => {
+        const { commands, register } = registry();
+        return { register, get: (name: string) => commands.get(name)! };
+      },
+      () => {
+        const sink = new Map<string, CommandHandler>();
+        return {
+          register: registrarFrom((name, handler) => sink.set(name, handler)),
+          get: (name: string) => sink.get(name)!,
+        };
+      },
+    ]) {
+      const { register, get } = make();
+      const raw: unknown[] = [];
+      let decoded: unknown;
+      register(
+        probeEcho,
+        (args) => {
+          decoded = args;
+          return { echoed: args.text };
+        },
+        {
+          beforeDecode: (run) => (args, ctx, invocation) => {
+            raw.push(args);
+            try {
+              return run(args, ctx, invocation);
+            } catch (error) {
+              throw new Error(`wrapped: ${(error as Error).message}`);
+            }
+          },
+        },
+      );
+      expect(await get("contract_probe_echo")({ text: "a", extra: 1 }, context)).toEqual({
+        echoed: "a",
+      });
+      expect(raw).toEqual([{ text: "a", extra: 1 }]);
+      expect(decoded).toEqual({ text: "a" });
+      expect(() => get("contract_probe_echo")({ text: 1 }, context)).toThrow("wrapped:");
+    }
+  });
+});

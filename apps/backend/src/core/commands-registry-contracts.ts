@@ -41,6 +41,7 @@ import type {
   CommandRegistrar,
   CommandTarget,
   DefinedCommandHandler,
+  DefinedCommandOptions,
 } from "./commands-registry-types.js";
 
 /** The registered name of a registration target. */
@@ -58,8 +59,11 @@ export function wrapRegistrar(
   register: CommandRegistrar,
   wrap: (name: string, handler: CommandHandler) => CommandHandler,
 ): CommandRegistrar {
-  const wrapped = (target: CommandTarget, handler: CommandHandler): void =>
-    registerTarget(register, target, wrap(commandTargetName(target), handler));
+  const wrapped = (
+    target: CommandTarget,
+    handler: CommandHandler,
+    options?: DefinedCommandOptions,
+  ): void => registerTarget(register, target, wrap(commandTargetName(target), handler), options);
   return wrapped as CommandRegistrar;
 }
 
@@ -71,8 +75,10 @@ export function registerTarget(
   register: CommandRegistrar,
   target: CommandTarget,
   handler: CommandHandler,
+  options?: DefinedCommandOptions,
 ): void {
   if (typeof target === "string") register(target, handler);
+  else if (options) register(target, handler as DefinedCommandHandler<AnyCommandDef>, options);
   else register(target, handler as DefinedCommandHandler<AnyCommandDef>);
 }
 
@@ -345,13 +351,19 @@ function describeIssue(
   }
 }
 
+/** `run` inside the registration's `beforeDecode` wrapper, when it has one. */
+function beforeDecode(run: CommandHandler, options: DefinedCommandOptions | undefined) {
+  return options?.beforeDecode ? options.beforeDecode(run) : run;
+}
+
 /**
  * The registry's own registrar over `commands`: it claims the name (refusing a
  * duplicate across forms), then stores a handler that checks the envelope's
  * domain version, decodes a defined command's arguments (or refuses critical
  * fields for an untyped one), and runs `guard(name, handler)`, all inside
- * `time`. `createCommandRegistry` passes the container guard and command
- * timing; a test can pass neither.
+ * `time`. A definition's `beforeDecode` option wraps the decoding and the
+ * handler, after the version check. `createCommandRegistry` passes the
+ * container guard and command timing; a test can pass neither.
  */
 export function createRegistryRegistrar(
   commands: CommandRegistry,
@@ -362,16 +374,23 @@ export function createRegistryRegistrar(
   },
 ): CommandRegistrar {
   const { validateResults, guard, time } = options;
-  const register = (target: CommandTarget, handler: CommandHandler): void => {
+  const register = (
+    target: CommandTarget,
+    handler: CommandHandler,
+    registration?: DefinedCommandOptions,
+  ): void => {
     const name = commandTargetName(target);
     commands.claim(target);
     const guarded = guard ? guard(name, handler) : handler;
     const run =
       typeof target === "string"
         ? untypedCommandHandler(name, guarded)
-        : contractCommandHandler(target, guarded as DefinedCommandHandler<AnyCommandDef>, {
-            validateResults,
-          });
+        : beforeDecode(
+            contractCommandHandler(target, guarded as DefinedCommandHandler<AnyCommandDef>, {
+              validateResults,
+            }),
+            registration,
+          );
     const call: CommandHandler = (args, context, invocation) => {
       assertInvocationVersion(invocation, commands.domainRanges, name);
       return run(args, context, invocation);
@@ -396,16 +415,23 @@ export function registrarFrom(
   options: { readonly validateResults?: boolean } = {},
 ): CommandRegistrar {
   const validateResults = options.validateResults ?? contractResultValidationDefault();
-  const register = (target: CommandTarget, handler: CommandHandler): void => {
+  const register = (
+    target: CommandTarget,
+    handler: CommandHandler,
+    registration?: DefinedCommandOptions,
+  ): void => {
     if (typeof target === "string") {
       sink(target, handler);
       return;
     }
     sink(
       target.name,
-      contractCommandHandler(target, handler as DefinedCommandHandler<AnyCommandDef>, {
-        validateResults,
-      }),
+      beforeDecode(
+        contractCommandHandler(target, handler as DefinedCommandHandler<AnyCommandDef>, {
+          validateResults,
+        }),
+        registration,
+      ),
     );
   };
   return register as CommandRegistrar;

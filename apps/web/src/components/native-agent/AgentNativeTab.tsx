@@ -29,7 +29,7 @@ import {
   nativeComposeStore,
   type NativeComposeDraftPersistValue,
 } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
@@ -110,12 +110,13 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   // and `useNativeComposeStore` read. Its compose drafts and config are that node's.
   const scope = useShimNodeScope("environment");
   const composeDrafts = scope.store(nativeComposeStore);
+  const paneLayouts = scope.store(paneLayoutStore);
   const persistLockedPane = useCallback(
     async (operation: "send" | "resume") => {
       setAwaitingDurability(true);
       setDurabilityError(null);
       setPendingDurabilityOperation(operation);
-      const environment = usePaneLayoutStore.getState().environments.get(props.data.environmentId);
+      const environment = paneLayouts.getState().environments.get(props.data.environmentId);
       const sessionKey = createSessionKey(props.data.environmentId, props.tabId);
       const submission = operation === "send" ? pendingFirstPrompt.current : null;
       if (!environment) {
@@ -141,6 +142,9 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         await flushPaneLayoutNow(
           props.data.environmentId,
           createPersistedPaneLayoutInput(environment),
+          undefined,
+          undefined,
+          scope,
         );
         // Continue in this submission's promise, even if the tab unmounted while
         // saving. Session creation and dispatch belong to this backend request;
@@ -217,7 +221,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         }
       }
     },
-    [composeDrafts, props.data.environmentId, props.tabId, scope],
+    [composeDrafts, props.data.environmentId, props.tabId, scope, paneLayouts],
   );
   const lockAndSend = useCallback(
     async (
@@ -285,7 +289,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         submissionPending: true,
         submissionError: undefined,
       });
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = paneLayouts.getState();
       const lockedPlatform = paneStore.lockTabNativePlatform(
         props.tabId,
         platform,
@@ -309,7 +313,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       }
       await persistLockedPane("send");
     },
-    [composeDrafts, persistLockedPane, props.data.environmentId, props.tabId, scope],
+    [composeDrafts, persistLockedPane, props.data.environmentId, props.tabId, scope, paneLayouts],
   );
   /**
    * Bind a coordinator conversation to the platform its first prompt chose.
@@ -354,7 +358,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       if (!selectedAdapter?.capabilities.resume) return;
       setAwaitingDurability(true);
       setDurabilityError(null);
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = paneLayouts.getState();
       const lockedPlatform = paneStore.lockTabNativePlatform(
         props.tabId,
         platform,
@@ -370,7 +374,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       setResumeRequestedPlatform(lockedPlatform);
       await persistLockedPane("resume");
     },
-    [persistLockedPane, props.data.environmentId, props.tabId],
+    [persistLockedPane, props.data.environmentId, props.tabId, paneLayouts],
   );
 
   // Stable across renders: the paste handler re-registers its document

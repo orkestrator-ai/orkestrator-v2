@@ -247,8 +247,9 @@ per scope; `scope.service(def)` returns its handle, and disposing the scope
 stops it. A service that throws on start, or whose `done` rejects, marks only
 its own scope `failed`. `App` starts `COMMAND_SCOPE_SERVICES` for the command
 scope with `startScopeServices(scope, services)`. A warm scope (plan item
-4002) starts `WARM_SCOPE_SERVICES`: the change feed, the store bindings and
-connectivity.
+4002) starts `WARM_SCOPE_SERVICES`: the change feed, the store bindings,
+connectivity, the node's pane-layout persistence and its build-pipeline
+completion notes (which open a tab in that node's pane layout, plan item 3013).
 
 | Per scope | Window-level |
 | --- | --- |

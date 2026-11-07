@@ -45,7 +45,7 @@ import {
   reloadBrowserPreview,
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import {
   ensurePreviewServiceSync,
@@ -375,8 +375,10 @@ function ManualBrowserTab({
     if (!serviceMatch) return;
     const url = currentUrl;
     const attempt = ++conversionAttempt.current;
+    // The tab's own node (the preview scope is this component's node scope).
     const liveData = () =>
-      usePaneLayoutStore
+      previewScope
+        .store(paneLayoutStore)
         .getState()
         .getAllTabs(environmentId)
         .find((tab) => tab.id === tabId)?.browserData;

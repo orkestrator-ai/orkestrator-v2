@@ -1,5 +1,6 @@
 import type { TabInfo } from "@/types/paneLayout";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import { decideDesignOpen, type DesignPlacement, type DesignTabLike } from "./design-open";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -11,9 +12,10 @@ const log = createLogger("web.design");
  * any pane is focused rather than duplicated; that is resolved before the tab
  * limit and split depth because focusing adds nothing. A new tab never
  * bypasses MAX_TABS, and an adjacent split falls back to the current pane at
- * maximum depth.
+ * maximum depth. The layout is `scope`'s node's.
  */
 export function openDesignCanvasTab(options: {
+  scope: NodeScope;
   environmentId: string;
   canvasId: string | undefined;
   placement: DesignPlacement | undefined;
@@ -25,7 +27,8 @@ export function openDesignCanvasTab(options: {
   onTabLimit: () => void;
 }): boolean {
   const { environmentId, canvasId } = options;
-  const layoutStore = usePaneLayoutStore.getState();
+  const layouts = options.scope.store(paneLayoutStore);
+  const layoutStore = layouts.getState();
   if (!canvasId || layoutStore.hydration.get(environmentId) !== "done") return false;
   const currentPaneId =
     layoutStore.environments.get(environmentId)?.activePaneId ?? options.activePaneId;
@@ -59,5 +62,5 @@ export function openDesignCanvasTab(options: {
   if (decision.placement === "split")
     return layoutStore.addTabInSplit(currentPaneId, newTab, environmentId);
   options.addTab(currentPaneId, newTab, environmentId);
-  return Boolean(usePaneLayoutStore.getState().findPaneWithTab(designTabId, environmentId));
+  return Boolean(layouts.getState().findPaneWithTab(designTabId, environmentId));
 }

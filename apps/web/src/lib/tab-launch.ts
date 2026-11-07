@@ -6,7 +6,7 @@ import {
 } from "@/lib/pane-layout-authoritative";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, type PaneLayoutState } from "@/stores/paneLayoutStore";
 import {
   tabLaunchStore,
   type TabLaunchState,
@@ -40,7 +40,10 @@ export interface TabLaunchHandle {
 
 /** One node scope's launch bookkeeping. */
 interface TabLaunches {
+  readonly scope: NodeScope;
   readonly store: StoreApi<TabLaunchState>;
+  /** The node's pane layouts, where a launched tab arrives (plan item 3013). */
+  readonly layouts: StoreApi<PaneLayoutState>;
   readonly arrivalTimers: Map<string, ReturnType<typeof setTimeout>>;
   readonly claims: Set<string>;
   /** Timers that release a claim after a double press could still land. */
@@ -60,7 +63,9 @@ function clearTabLaunches(launches: TabLaunches): void {
 
 const tabLaunches = defineScopedSlot<TabLaunches>("tab-launches", (scope) => {
   const launches: TabLaunches = {
+    scope,
     store: scope.store(tabLaunchStore),
+    layouts: scope.store(paneLayoutStore),
     arrivalTimers: new Map(),
     claims: new Set(),
     claimTimers: new Set(),
@@ -86,13 +91,13 @@ function forget(launches: TabLaunches, environmentId: string, tabId: string): vo
 
 function reconcileArrivals(launches: TabLaunches): void {
   const { launches: entriesByEnvironment, update } = launches.store.getState();
-  const layouts = usePaneLayoutStore.getState();
+  const layouts = launches.layouts.getState();
   for (const [environmentId, entries] of Array.from(entriesByEnvironment)) {
     for (const entry of entries) {
       if (entry.arrived || !layouts.findPaneWithTab(entry.tabId, environmentId)) continue;
       if (entry.settled) forget(launches, environmentId, entry.tabId);
       else update(environmentId, entry.tabId, { arrived: true });
-      if (entry.focused) flushPaneTabActivation(environmentId);
+      if (entry.focused) flushPaneTabActivation(environmentId, launches.scope);
     }
   }
 }
@@ -107,8 +112,8 @@ export function beginTabLaunch(
   launches.store.getState().add(environmentId, launch);
   // The tab that had focus no longer does, so it stops taking the user's keys.
   (document.activeElement as HTMLElement | null)?.blur?.();
-  requestPaneTabActivation(environmentId, launch.tabId);
-  launches.stopWatchingLayouts ??= usePaneLayoutStore.subscribe(() => reconcileArrivals(launches));
+  requestPaneTabActivation(environmentId, launch.tabId, scope);
+  launches.stopWatchingLayouts ??= launches.layouts.subscribe(() => reconcileArrivals(launches));
   reconcileArrivals(launches);
   const { tabId } = launch;
   const current = () =>
@@ -124,9 +129,9 @@ export function beginTabLaunch(
       if (!entry) return;
       if (landedTabId && landedTabId !== tabId) {
         // The backend reused another tab, so the placeholder has nothing to become.
-        cancelPaneTabActivation(environmentId, tabId);
+        cancelPaneTabActivation(environmentId, tabId, scope);
         forget(launches, environmentId, tabId);
-        if (entry.focused) requestPaneTabActivation(environmentId, landedTabId);
+        if (entry.focused) requestPaneTabActivation(environmentId, landedTabId, scope);
         return;
       }
       if (entry.arrived) {
@@ -137,7 +142,7 @@ export function beginTabLaunch(
       launches.arrivalTimers.set(
         timerKey(environmentId, tabId),
         setTimeout(() => {
-          cancelPaneTabActivation(environmentId, tabId);
+          cancelPaneTabActivation(environmentId, tabId, scope);
           forget(launches, environmentId, tabId);
         }, ARRIVAL_GRACE_MS),
       );
@@ -146,7 +151,7 @@ export function beginTabLaunch(
       // A launch that answered and was then refused still owns its tab.
       if (answered) return;
       answered = true;
-      if (current()?.focused) cancelPaneTabActivation(environmentId);
+      if (current()?.focused) cancelPaneTabActivation(environmentId, undefined, scope);
       forget(launches, environmentId, tabId);
     },
   };
@@ -161,7 +166,7 @@ export function cancelTabLaunchFocus(
   const launches = store.getState().launches.get(environmentId);
   if (!launches?.some((entry) => entry.focused)) return;
   store.getState().blur(environmentId);
-  cancelPaneTabActivation(environmentId);
+  cancelPaneTabActivation(environmentId, undefined, scope);
 }
 
 /** The user picked a launch's placeholder in the tab strip. */
@@ -171,7 +176,7 @@ export function focusTabLaunch(
   scope: NodeScope = appCommandScope(),
 ): void {
   tabLaunches(scope).store.getState().focus(environmentId, tabId);
-  requestPaneTabActivation(environmentId, tabId);
+  requestPaneTabActivation(environmentId, tabId, scope);
 }
 
 /**

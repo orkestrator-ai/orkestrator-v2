@@ -60,7 +60,7 @@ function activate(
   environmentId: string,
   pipelineId: string,
 ): void {
-  armBuildPipelineTabActivation(environmentId, pipelineId);
+  armBuildPipelineTabActivation(environmentId, pipelineId, scope);
   const ui = scope.store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);

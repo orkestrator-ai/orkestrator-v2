@@ -5,6 +5,8 @@ import {
 } from "@orkestrator/protocol/pane-layout";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
@@ -21,7 +23,7 @@ import {
   type PaneLayoutSelectionIntent,
 } from "@/lib/pane-layout-merge";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   PANE_LAYOUT_VERSION,
   type PaneNode,
@@ -41,6 +43,19 @@ type SavePaneLayout = (
   expectedRevision: number,
 ) => Promise<PersistedPaneLayout>;
 type LoadPaneLayout = (environmentId: string) => Promise<PersistedPaneLayout | null>;
+
+/**
+ * The pane-layout commands on `scope`'s node. On the app's command scope they
+ * are the `@/lib/backend` named exports, read per call so a suite's module
+ * mock is seen.
+ */
+function paneLayoutBackend(scope: NodeScope) {
+  return backendApiForScope(scope, createFilesSessionsApi, {
+    getPaneLayout: backend.getPaneLayout,
+    savePaneLayout: backend.savePaneLayout,
+    applyPaneLayoutIntent: backend.applyPaneLayoutIntent,
+  });
+}
 
 interface PendingPaneLayoutWrite {
   input: PersistedPaneLayoutInput;
@@ -256,12 +271,15 @@ export function adoptPersistedPaneLayout(
 export function flushPaneLayoutNow(
   environmentId: string,
   input: PersistedPaneLayoutInput,
-  save: SavePaneLayout = backend.savePaneLayout,
-  load: LoadPaneLayout = backend.getPaneLayout,
-  scope?: NodeScope,
+  saveLayout?: SavePaneLayout,
+  loadLayout?: LoadPaneLayout,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
   const activeEnqueue = persistenceSlot(scope).enqueue;
   if (activeEnqueue) return activeEnqueue(environmentId, input);
+  const api = paneLayoutBackend(scope);
+  const save = saveLayout ?? api.savePaneLayout;
+  const load = loadLayout ?? api.getPaneLayout;
   // Without the active mirror there is no trustworthy common base for a
   // three-way merge. A missing record is safe to create; an identical record
   // is already durable. Refuse to bless a divergent stale snapshot with a
@@ -334,8 +352,8 @@ function sanitizeBrowserHistoryRoot(node: PaneNode): PaneNode {
 export async function migratePaneLayoutBrowserHistory(
   environmentId: string,
   snapshot: PersistedPaneLayout,
-  save: SavePaneLayout = backend.savePaneLayout,
-  scope?: NodeScope,
+  save?: SavePaneLayout,
+  scope: NodeScope = appCommandScope(),
 ): Promise<boolean> {
   if (!isPaneNode(snapshot.root)) return false;
   const raw: PersistedPaneLayoutInput = {
@@ -351,7 +369,12 @@ export async function migratePaneLayoutBrowserHistory(
   if (JSON.stringify(raw) === JSON.stringify(desired)) return false;
   const activeEnqueue = persistenceSlot(scope).enqueue;
   if (activeEnqueue) await activeEnqueue(environmentId, desired, raw);
-  else await save(environmentId, desired, snapshot.revision);
+  else
+    await (save ?? paneLayoutBackend(scope).savePaneLayout)(
+      environmentId,
+      desired,
+      snapshot.revision,
+    );
   return true;
 }
 
@@ -361,9 +384,11 @@ export function startPaneLayoutPersistence(
 ): () => void {
   const slot = persistenceSlot(scope);
   const { writeSettledHandlers } = slot;
+  const panes = scope.store(paneLayoutStore);
+  const api = paneLayoutBackend(scope);
   const useBackendIntents = options.save === undefined && options.load === undefined;
-  const save = options.save ?? backend.savePaneLayout;
-  const load = options.load ?? backend.getPaneLayout;
+  const save = options.save ?? api.savePaneLayout;
+  const load = options.load ?? api.getPaneLayout;
   const hydrateDependencies = options.hydrateDependencies ?? hydratePaneLayoutDependencies;
   // Production mutations are dispatched in the same turn. Tests may still
   // inject a delay to exercise coalescing and conflict ordering explicitly.
@@ -444,7 +469,7 @@ export function startPaneLayoutPersistence(
     // authoritative map. Installing here would generate a redundant third write
     // and could momentarily roll that local edit back.
     const hasNewerLocalEdit = (): boolean => {
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = panes.getState();
       const current = paneStore.environments.get(environmentId);
       if (!current || paneStore.hydration.get(environmentId) !== "done") {
         return true;
@@ -456,7 +481,7 @@ export function startPaneLayoutPersistence(
     if (hasNewerLocalEdit()) return;
 
     try {
-      await hydrateDependencies(savedInput.root);
+      await hydrateDependencies(savedInput.root, scope);
     } catch (error) {
       log.warn("persist.install-skipped", { environmentId, error: formatLogError(error) });
       return;
@@ -465,13 +490,14 @@ export function startPaneLayoutPersistence(
     // container swap can land in between.
     if (hasNewerLocalEdit()) return;
 
-    const paneStore = usePaneLayoutStore.getState();
+    const paneStore = panes.getState();
     const current = paneStore.environments.get(environmentId);
     if (!current) return;
     const restored = reconcileAuthoritativePaneLayout(
       environmentId,
       { ...saved, ...savedInput },
       current,
+      scope,
     );
     if (!restored) return;
 
@@ -488,8 +514,8 @@ export function startPaneLayoutPersistence(
       revision: saved.revision,
     });
     paneStore.applyAuthoritativeLayout(environmentId, restored);
-    commitBuildPipelineSetupHandoff(environmentId, restored);
-    commitStartupAgentSetupHandoff(environmentId, restored);
+    commitBuildPipelineSetupHandoff(environmentId, restored, scope);
+    commitStartupAgentSetupHandoff(environmentId, restored, scope);
   };
 
   const persistWithRebase = async (
@@ -499,7 +525,7 @@ export function startPaneLayoutPersistence(
     selectionIntent?: PaneLayoutSelectionIntent,
   ): Promise<void> => {
     if (useBackendIntents) {
-      const saved = await backend.applyPaneLayoutIntent(
+      const saved = await api.applyPaneLayoutIntent(
         environmentId,
         writeBaseInput,
         desiredInput,
@@ -509,7 +535,7 @@ export function startPaneLayoutPersistence(
       authoritative.set(environmentId, { input: savedInput, revision: saved.revision });
       lastEnqueued.set(environmentId, JSON.stringify(savedInput));
       await installSavedLayout(environmentId, saved, savedInput, desiredInput);
-      clearStoredPaneSelection(environmentId);
+      clearStoredPaneSelection(environmentId, scope);
       return;
     }
     let desired = desiredInput;
@@ -548,7 +574,7 @@ export function startPaneLayoutPersistence(
         });
         lastEnqueued.set(environmentId, JSON.stringify(savedInput));
         await installSavedLayout(environmentId, saved, savedInput, desiredInput);
-        clearStoredPaneSelection(environmentId);
+        clearStoredPaneSelection(environmentId, scope);
         return;
       } catch (error) {
         if (!isPaneLayoutRevisionConflict(error) || attempt >= maxConflictRetries) {
@@ -791,7 +817,7 @@ export function startPaneLayoutPersistence(
   // Persistence can mount after pane hydration (for example after a renderer
   // remount). Seed the exact snapshot/revision that existing local state was
   // derived from; Zustand subscriptions only observe future transitions.
-  const initialState = usePaneLayoutStore.getState();
+  const initialState = panes.getState();
   for (const [environmentId, environment] of initialState.environments) {
     if (initialState.hydration.get(environmentId) !== "done") continue;
     const input = createPersistedPaneLayoutInput(environment);
@@ -803,7 +829,7 @@ export function startPaneLayoutPersistence(
     lastEnqueued.set(environmentId, serialized);
   }
 
-  const unsubscribe = usePaneLayoutStore.subscribe((state, previous) => {
+  const unsubscribe = panes.subscribe((state, previous) => {
     const environmentIds = new Set([
       ...state.environments.keys(),
       ...previous.environments.keys(),
@@ -836,7 +862,7 @@ export function startPaneLayoutPersistence(
       if (previousHydration === "done" && environment === previousEnvironment) continue;
 
       if (window.orkestrator?.isolatedViewState && environment !== previousEnvironment) {
-        writeWindowPaneSelection(environmentId, environment);
+        writeWindowPaneSelection(environmentId, environment, scope);
       }
 
       const input = createPersistedPaneLayoutInput(environment);
@@ -947,19 +973,11 @@ export function startPaneLayoutPersistence(
 }
 
 /**
- * Pane-layout persistence as a scoped service (plan item 3014). Its write
- * chain and adopt hook live on the scope, but it runs on the command scope
- * only: it mirrors the pane-layout store, still a command-scope singleton.
- * Plan item 3013 scopes the store and lets a live scope run its own.
+ * Pane-layout persistence as a scoped service (plan items 3014, 3013). Each
+ * scope mirrors its own pane-layout store to its own node: the write chain,
+ * the adopt hook and the window's pane selection are the scope's.
  */
 export const paneLayoutPersistenceService = defineScopedService(
   "pane-layout-persistence",
-  (scope) => {
-    if (scope.role !== "command") {
-      throw new Error(
-        "Pane-layout persistence runs on the command scope until its store is scoped.",
-      );
-    }
-    return { stop: startPaneLayoutPersistence({}, scope) };
-  },
+  (scope) => ({ stop: startPaneLayoutPersistence({}, scope) }),
 );

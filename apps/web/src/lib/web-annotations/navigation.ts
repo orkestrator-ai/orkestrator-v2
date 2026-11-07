@@ -2,23 +2,28 @@
  * App navigation for web annotations: open a thread in a browser tab's panel,
  * jump to a destination chat, or start a new agent tab. Everything goes
  * through the existing pane-layout workflow; nothing here dispatches work.
+ * Every function acts on `scope`'s node (its pane layouts, environments and
+ * annotations), the app's command scope when omitted.
  */
 import { WEB_ANNOTATION_COMMANDS } from "@orkestrator/protocol/web-annotations";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { createUuid } from "@/lib/uuid";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 import { describeWebAnnotationError, webAnnotationCommand } from "./client";
 
-function browserTabs(environmentId: string): TabInfo[] {
-  return usePaneLayoutStore
+function browserTabs(scope: NodeScope, environmentId: string): TabInfo[] {
+  return scope
+    .store(paneLayoutStore)
     .getState()
     .getAllTabs(environmentId)
     .filter((tab) => tab.type === "browser" && tab.browserData);
 }
 
-function activate(environmentId: string, tabId: string): boolean {
-  const panes = usePaneLayoutStore.getState();
+function activate(scope: NodeScope, environmentId: string, tabId: string): boolean {
+  const panes = scope.store(paneLayoutStore).getState();
   const pane = panes.findPaneWithTab(tabId, environmentId);
   if (!pane) return false;
   panes.setActiveTab(pane.id, tabId, environmentId);
@@ -35,10 +40,12 @@ export function openWebAnnotationThread(
   environmentId: string,
   annotationId: string,
   options: { preferTabId?: string } = {},
+  scope: NodeScope = appCommandScope(),
 ): boolean {
-  const panes = usePaneLayoutStore.getState();
+  const layouts = scope.store(paneLayoutStore);
+  const panes = layouts.getState();
   if (!panes.environments.get(environmentId)) return false;
-  const tabs = browserTabs(environmentId);
+  const tabs = browserTabs(scope, environmentId);
   let tab =
     tabs.find((candidate) => candidate.id === options.preferTabId) ??
     tabs.find(
@@ -57,29 +64,32 @@ export function openWebAnnotationThread(
     };
     panes.addTab(panes.getActivePaneId(environmentId), tab, environmentId);
   }
-  usePaneLayoutStore
+  layouts
     .getState()
     .updateTabBrowserAnnotationPanel(
       tab.id,
       { open: true, selectedAnnotationId: annotationId },
       environmentId,
     );
-  return activate(environmentId, tab.id);
+  return activate(scope, environmentId, tab.id);
 }
 
 /** Resolve a chat marker's request to its first annotation and open that thread. */
 export async function openWebAnnotationRequest(
   environmentId: string,
   requestId: string,
+  scope: NodeScope = appCommandScope(),
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const { request } = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestGet, {
-      environmentId,
-      requestId,
-    });
+    const { request } = await webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.requestGet,
+      { environmentId, requestId },
+      undefined,
+      scope,
+    );
     const selection = [...request.selections].sort((a, b) => a.reference - b.reference)[0];
     if (!selection) return { ok: false, error: "This request has no annotations." };
-    return openWebAnnotationThread(environmentId, selection.annotationId)
+    return openWebAnnotationThread(environmentId, selection.annotationId, {}, scope)
       ? { ok: true }
       : { ok: false, error: "The browser annotation panel could not be opened." };
   } catch (error) {
@@ -88,12 +98,20 @@ export async function openWebAnnotationRequest(
 }
 
 /** Focus an existing chat tab. False when that tab is not open in this layout. */
-export function openConversationTab(environmentId: string, tabId: string): boolean {
-  return activate(environmentId, tabId);
+export function openConversationTab(
+  environmentId: string,
+  tabId: string,
+  scope: NodeScope = appCommandScope(),
+): boolean {
+  return activate(scope, environmentId, tabId);
 }
 
-export function isConversationTabOpen(environmentId: string, tabId: string): boolean {
-  const layout = usePaneLayoutStore.getState().environments.get(environmentId);
+export function isConversationTabOpen(
+  environmentId: string,
+  tabId: string,
+  scope: NodeScope = appCommandScope(),
+): boolean {
+  const layout = scope.store(paneLayoutStore).getState().environments.get(environmentId);
   if (!layout) return false;
   return getAllLeaves(layout.root).some((leaf) => leaf.tabs.some((tab) => tab.id === tabId));
 }
@@ -102,9 +120,12 @@ export function isConversationTabOpen(environmentId: string, tabId: string): boo
  * Open a new, unassigned agent tab through the ordinary pane workflow. The
  * user picks its provider there; no annotation is sent because of it.
  */
-export function openNewAgentSession(environmentId: string): string | null {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-  const panes = usePaneLayoutStore.getState();
+export function openNewAgentSession(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): string | null {
+  const environment = scope.store(environmentStore).getState().getEnvironmentById(environmentId);
+  const panes = scope.store(paneLayoutStore).getState();
   if (!environment || !panes.environments.get(environmentId)) return null;
   const isLocal = environment.environmentType === "local";
   const id = createUuid();

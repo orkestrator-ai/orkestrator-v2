@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
-import { usePaneLayoutStore } from "@/stores";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useTerminalPortalNodeId, useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
@@ -350,7 +350,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                   onClose={() => {
                     // Closing the tab never deletes the design.
-                    const layoutStore = usePaneLayoutStore.getState();
+                    const layoutStore = launchScope.store(paneLayoutStore).getState();
                     const owner = layoutStore.findPaneWithTab(tab.id, environmentId);
                     if (owner) layoutStore.removeTab(owner.id, tab.id, environmentId);
                   }}

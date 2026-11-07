@@ -15,7 +15,8 @@ import { clientStateCapabilities } from "@/lib/client-state-capabilities";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore, useConfigStore } from "@/stores/configStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   coordinatorConversationTab,
   useActiveCoordinatorConversationStore,
@@ -81,9 +82,10 @@ function windowFocused(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
+/** The window's sound settings: those of the node it is connected to. */
 function soundSettings() {
   return normalizeNotificationSoundSettings(
-    useConfigStore.getState().config.global.notificationSounds,
+    appCommandScope().store(configStore).getState().config.global.notificationSounds,
   );
 }
 

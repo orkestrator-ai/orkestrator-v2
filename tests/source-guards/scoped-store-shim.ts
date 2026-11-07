@@ -233,6 +233,12 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/webAnnotationPreferencesStore",
     hook: "useWebAnnotationPreferencesStore",
   },
+  // Plan item 3013: a node's pane layouts, converted last.
+  {
+    store: "pane-layout",
+    module: "apps/web/src/stores/paneLayoutStore",
+    hook: "usePaneLayoutStore",
+  },
 ];
 
 /** The statics a zustand hook carries, which the shim keeps as deprecated. */

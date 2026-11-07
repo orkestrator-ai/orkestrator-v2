@@ -26,7 +26,12 @@ import {
   useNativeComposeStore,
 } from "@/stores/nativeComposeStore";
 import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  paneLayoutStore,
+  usePaneLayoutStore,
+  type PaneLayoutState,
+} from "@/stores/paneLayoutStore";
+import type { StoreApi } from "zustand/vanilla";
 import type { TabInfo } from "@/types/paneLayout";
 import { designApi, designBackendKey, failureOf } from "@/lib/design-client";
 import {
@@ -111,8 +116,8 @@ function linkTitle(link: DesignSessionLink, tab: TabInfo | undefined): string {
   );
 }
 
-function focusTab(environmentId: string, tabId: string): boolean {
-  const store = usePaneLayoutStore.getState();
+function focusTab(layouts: StoreApi<PaneLayoutState>, environmentId: string, tabId: string) {
+  const store = layouts.getState();
   const pane = store.findPaneWithTab(tabId, environmentId);
   if (!pane) return false;
   store.setActivePane(pane.id, environmentId);
@@ -174,6 +179,8 @@ function DesignAgentDialogBody({
   const createTab = terminal?.createTab ?? null;
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const composeDrafts = useScopedStoreApi(nativeComposeStore);
+  // This node's pane layouts (plan item 3013).
+  const paneLayouts = useScopedStoreApi(paneLayoutStore);
   const paneEnvironment = usePaneLayoutStore((state) => state.environments.get(environmentId));
   const hydrated = usePaneLayoutStore((state) => state.hydration.get(environmentId) === "done");
 
@@ -233,9 +240,9 @@ function DesignAgentDialogBody({
   const tabs = useMemo(() => {
     const map = new Map<string, TabInfo>();
     if (!paneEnvironment) return map;
-    for (const tab of usePaneLayoutStore.getState().getAllTabs(environmentId)) map.set(tab.id, tab);
+    for (const tab of paneLayouts.getState().getAllTabs(environmentId)) map.set(tab.id, tab);
     return map;
-  }, [environmentId, paneEnvironment]);
+  }, [environmentId, paneEnvironment, paneLayouts]);
 
   // Session identities the backend recorded during this dialog's check, ahead
   // of the projection's status sync. Each applies only while the link still
@@ -398,7 +405,7 @@ function DesignAgentDialogBody({
   };
 
   const hasAgentTab = (tabId: string) =>
-    usePaneLayoutStore
+    paneLayouts
       .getState()
       .getAllTabs(environmentId)
       .some((candidate) => candidate.id === tabId && candidate.type === "agent-native");
@@ -427,7 +434,7 @@ function DesignAgentDialogBody({
         claim: (input) => designApi.resumeSessionLink(environmentId, context.canvasId, input),
         hasTab: hasAgentTab,
         createTab,
-        focus: (tabId) => focusTab(environmentId, tabId),
+        focus: (tabId) => focusTab(paneLayouts, environmentId, tabId),
       });
       return resumed.tabId;
     } catch (reason) {
@@ -467,7 +474,7 @@ function DesignAgentDialogBody({
       if (!tabId) return;
     }
     if (!applyDraft(tabId, buildAddition())) return;
-    focusTab(environmentId, tabId);
+    focusTab(paneLayouts, environmentId, tabId);
     toast.success(
       handoff
         ? "Handoff draft added — review it before sending"
@@ -487,7 +494,7 @@ function DesignAgentDialogBody({
     const title = role === "implementation" ? "Implement design" : "Design chat";
     // No initial prompt: the design context becomes a reviewable draft.
     const created = createTab(agent, { tabId, agentLaunchMode: "native", displayTitle: title });
-    if (!created || !usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId)) {
+    if (!created || !paneLayouts.getState().findPaneWithTab(tabId, environmentId)) {
       setError("Could not open a new conversation. Close a tab or pane and try again.");
       return;
     }
@@ -521,7 +528,7 @@ function DesignAgentDialogBody({
         description: messageOf(reason),
       });
     }
-    focusTab(environmentId, tabId);
+    focusTab(paneLayouts, environmentId, tabId);
     onClose();
   };
 
@@ -766,7 +773,7 @@ function DesignAgentDialogBody({
                       size="sm"
                       disabled={pending}
                       onClick={() => {
-                        if (focusTab(environmentId, link.tabId)) onClose();
+                        if (focusTab(paneLayouts, environmentId, link.tabId)) onClose();
                       }}
                     >
                       Open

@@ -190,11 +190,13 @@ export function GraphDesignerTab({
   const [shown, setShown] = useState(isActive);
   if (isActive && !shown) setShown(true);
 
+  // This node's pane layout records the template shown (plan item 3013).
+  const updateTabGraphDesigner = usePaneLayoutStore((state) => state.updateTabGraphDesigner);
   const persistSelected = useCallback(
     (ref: GraphTemplateRef) => {
-      usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, { selected: ref }, environmentId);
+      updateTabGraphDesigner(tabId, { selected: ref }, environmentId);
     },
-    [environmentId, tabId],
+    [environmentId, tabId, updateTabGraphDesigner],
   );
 
   // The library and the template shown are backend snapshots: read them on
@@ -242,7 +244,7 @@ export function GraphDesignerTab({
 
   const newGraph = () =>
     guardDiscard("start a new graph", () => {
-      usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, {}, environmentId);
+      updateTabGraphDesigner(tabId, {}, environmentId);
       openDraft(tabId, blankGraphTemplate(), projectId);
       setJsonOpen(false);
     });
@@ -513,7 +515,7 @@ export function GraphDesignerTab({
             currentTemplate={shownTemplate}
             onOpenDraft={(template, opened) =>
               guardDiscard("open the described graph", () => {
-                usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, {}, environmentId);
+                updateTabGraphDesigner(tabId, {}, environmentId);
                 openDraft(tabId, template, projectId);
                 setJsonOpen(false);
                 opened();

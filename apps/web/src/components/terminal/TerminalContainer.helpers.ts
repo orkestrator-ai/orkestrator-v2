@@ -6,7 +6,7 @@ import {
   type Collision,
   type DroppableContainer,
 } from "@dnd-kit/core";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores";
+import { getAllLeaves, paneLayoutStore } from "@/stores";
 import type { TabType } from "@/contexts";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
@@ -206,12 +206,13 @@ export function findStartupAgentTabId(state: { root: PaneNode }): string | null 
  * A user who already clicked a non-setup tab is left alone — in either the
  * startup agent's own pane or the pane they are actually looking at, and an
  * unresolvable focused pane fails closed. Returns whether selection changed so
- * callers can treat the handoff as one-shot.
+ * callers can treat the handoff as one-shot. The layout is `scope`'s node's.
  */
 export function handoffSetupFocusToStartupAgent(
   environmentId: string,
   state: { root: PaneNode; activePaneId: string },
   startupTabId: string,
+  scope: NodeScope,
 ): boolean {
   const leaves = getAllLeaves(state.root);
   const agentLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === startupTabId));
@@ -227,7 +228,7 @@ export function handoffSetupFocusToStartupAgent(
     return false;
   }
 
-  usePaneLayoutStore.getState().setActiveTab(agentLeaf.id, startupTabId, environmentId);
+  scope.store(paneLayoutStore).getState().setActiveTab(agentLeaf.id, startupTabId, environmentId);
   return true;
 }
 

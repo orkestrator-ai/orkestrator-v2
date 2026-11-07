@@ -14,7 +14,9 @@
  * `turnBoundaries` entry's turn. See `resolveConversationScrollIndex` for the
  * full mapping.
  */
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   useConversationScrollTargetStore,
   type ConversationScrollTarget,
@@ -28,15 +30,16 @@ import {
  * earlier pending request for it is dropped.
  *
  * The request is parked for `ref.nodeId`, so only that node's chat consumes
- * it. The pane layout store looked up here is still the window's single one
- * (plan item 3013 scopes it per node).
+ * it. The pane layout is `scope`'s, the node scope `ref.nodeId` names (the
+ * app's command scope when omitted).
  */
 export function openConversationAtMessage(
   ref: ConversationScrollTargetRef,
   target: ConversationScrollTarget,
+  scope: NodeScope = appCommandScope(),
 ): boolean {
   const { environmentId, tabId } = ref;
-  const panes = usePaneLayoutStore.getState();
+  const panes = scope.store(paneLayoutStore).getState();
   const pane = panes.findPaneWithTab(tabId, environmentId);
   if (!pane) return false;
   // Park before activating so the chat sees the request in the same commit

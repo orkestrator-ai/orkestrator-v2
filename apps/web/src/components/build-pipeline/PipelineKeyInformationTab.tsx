@@ -10,7 +10,7 @@ import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { cn } from "@/lib/utils";
 import { buildPipelineStore, useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { getAllLeaves, paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData } from "@/types/paneLayout";
 import { keyInformationUpdatedLine } from "./key-information-format";
 import { PipelineIntegrateButton } from "./PipelineIntegrateButton";
@@ -138,7 +138,7 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
   const openPipeline = () => {
     if (!buildTab) return;
     const [paneId, tabId] = buildTab.split("\u0000") as [string, string];
-    const store = usePaneLayoutStore.getState();
+    const store = scope.store(paneLayoutStore).getState();
     store.setActivePane(paneId, data.environmentId);
     store.setActiveTab(paneId, tabId, data.environmentId);
   };

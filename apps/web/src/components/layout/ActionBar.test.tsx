@@ -820,7 +820,11 @@ mock.module("@/lib/backend", () => ({
 
 mock.module("@/lib/pane-layout-authoritative", () => ({
   ...realPaneLayoutAuthoritativeSnapshot,
-  requestPaneTabActivation: requestPaneTabActivationMock,
+  // The suite renders without a provider, so the scope the controller passes
+  // (plan item 3013) is the app's command scope, the real function's default:
+  // the mock records the environment and tab only.
+  requestPaneTabActivation: (environmentId: string, tabId: string) =>
+    requestPaneTabActivationMock(environmentId, tabId),
 }));
 
 // The hydrator has its own test file. Snapshot and restore per the Bun mock

@@ -212,7 +212,7 @@ import {
   useNativeComposeStore,
   type NativeComposeDraft,
 } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import {
   useNativeNoticeDismissalStore,
@@ -413,6 +413,8 @@ export function SharedNativeAgentController({
   // The node this tab's drafts live on: the scope `useNativeComposeStore` reads.
   const composeScope = useShimNodeScope(nativeComposeStore.name);
   const composeDrafts = composeScope.store(nativeComposeStore);
+  // The same node's pane layouts (plan item 3013).
+  const paneLayouts = composeScope.store(paneLayoutStore);
   const speedCompatible = modelSupportsSpeed(
     platform,
     speedCatalog,
@@ -529,7 +531,7 @@ export function SharedNativeAgentController({
         expectedProviderSessionId: replacement.requestedProviderSessionId,
         replacementProviderSessionId: replacement.replacementProviderSessionId,
       });
-      usePaneLayoutStore
+      paneLayouts
         .getState()
         .updateTabNativeSessionId(
           tabId,
@@ -538,7 +540,7 @@ export function SharedNativeAgentController({
         );
       multiReviews.getState().replaceWorkflow(workflow);
     },
-    [data.environmentId, multiReviews, tabId, composeDrafts],
+    [data.environmentId, multiReviews, tabId, composeDrafts, paneLayouts],
   );
   const draft = useNativeComposeStore((state) =>
     nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),
@@ -2881,7 +2883,7 @@ export function SharedNativeAgentController({
             annotations: restoredDraft.annotations,
           });
         }
-        const panes = usePaneLayoutStore.getState();
+        const panes = paneLayouts.getState();
         panes.addTab(
           panes.getActivePaneId(data.environmentId),
           {
@@ -2905,7 +2907,7 @@ export function SharedNativeAgentController({
         setForkInFlight(false);
       }
     },
-    [data, fork, forkSourceSessionId, forkSourceTitle, label, platform, updateDraft],
+    [data, fork, forkSourceSessionId, forkSourceTitle, label, platform, updateDraft, paneLayouts],
   );
   const handleForkAction = useCallback(
     (messageId: string, kind: MessageForkKind) => {
@@ -4063,7 +4065,7 @@ export function SharedNativeAgentController({
           }}
           annotations={draft.annotations}
           onOpenMigratedAnnotation={(annotationId) =>
-            openWebAnnotationThread(data.environmentId, annotationId)
+            openWebAnnotationThread(data.environmentId, annotationId, {}, composeScope)
           }
           onClearAnnotations={() => {
             if (queueEditPendingRef.current || draft.submissionPending) return;
@@ -4436,7 +4438,7 @@ export function SharedNativeAgentController({
                   onOpenChange={setQueueDialogOpen}
                   messages={queuedMessages}
                   onOpenWebAnnotationRequest={(requestId) =>
-                    openWebAnnotationRequest(data.environmentId, requestId)
+                    openWebAnnotationRequest(data.environmentId, requestId, composeScope)
                   }
                   onEdit={editQueuedPrompt}
                   onMove={async (fromIndex, toIndex) => {

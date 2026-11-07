@@ -228,10 +228,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXterm(
       appearance,
       options.scrollback,
-      {
-        environmentId,
-        tabId,
-      },
+      { environmentId, tabId, nodeId },
     );
 
     const portalElement = document.createElement("div");
@@ -409,7 +406,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
           DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
       },
       existing.terminal.options.scrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
-      { environmentId, tabId },
+      { environmentId, tabId, nodeId },
     );
 
     // Create new portal element

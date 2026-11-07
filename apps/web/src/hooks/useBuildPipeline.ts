@@ -16,7 +16,7 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
@@ -173,13 +173,14 @@ export function useBuildPipeline() {
       if (!pipeline.environmentId) return;
       setProjectCollapsed(pipeline.projectId, false);
       selectProjectAndEnvironment(pipeline.projectId, pipeline.environmentId);
-      const state = usePaneLayoutStore.getState().environments.get(pipeline.environmentId);
+      const panes = scope.store(paneLayoutStore).getState();
+      const state = panes.environments.get(pipeline.environmentId);
       const tab = state && findBuildTabInTree(state.root, pipeline.taskId);
       if (tab) {
-        usePaneLayoutStore.getState().setActiveTab(tab.paneId, tab.tabId, pipeline.environmentId);
+        panes.setActiveTab(tab.paneId, tab.tabId, pipeline.environmentId);
       }
     },
-    [selectProjectAndEnvironment, setProjectCollapsed],
+    [scope, selectProjectAndEnvironment, setProjectCollapsed],
   );
 
   const navigateToBuild = useCallback(

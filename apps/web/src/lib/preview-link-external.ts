@@ -6,7 +6,7 @@ import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { openServiceExternally } from "@/lib/preview-external";
 import { linkUrlSource } from "@/lib/preview-service-entry";
 import { isLoopbackUrl, requestTerminalBrowserTab } from "@/lib/terminal-links";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { ensurePreviewServiceSync, previewServiceStore } from "@/stores/previewServiceStore";
@@ -46,13 +46,12 @@ export async function openLinkExternally({
   scope = appCommandScope(),
 }: ExternalLinkRequest): Promise<void> {
   const environment = environmentId
-    ? useEnvironmentStore.getState().getEnvironmentById(environmentId)
+    ? scope.store(environmentStore).getState().getEnvironmentById(environmentId)
     : undefined;
   if (
     !environment ||
     !window.orkestrator?.browserPreview?.openServiceExternally ||
     !isLoopbackUrl(url) ||
-    // The environment store is the command node's until it is scoped.
     !isRemoteGatewayConnection()
   ) {
     return backend.openInBrowser(url);

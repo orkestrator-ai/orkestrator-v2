@@ -1,4 +1,5 @@
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData, TabInfo } from "@/types/paneLayout";
 
 /**
@@ -6,9 +7,10 @@ import type { KeyInformationTabData, TabInfo } from "@/types/paneLayout";
  * `key-information` tab. There is one tab per pipeline and view: opening it
  * again focuses that tab rather than counting a new one, so it is resolved
  * before the tab limit. Kept free of the tab view's own modules, which load
- * lazily.
+ * lazily. The layout is `scope`'s node's.
  */
 export function openKeyInformationTab(options: {
+  scope: NodeScope;
   environmentId: string;
   activePaneId: string;
   allTabs: readonly Pick<TabInfo, "id" | "type" | "keyInformationTabData">[];
@@ -19,7 +21,7 @@ export function openKeyInformationTab(options: {
 }): boolean {
   const { environmentId, target } = options;
   if (!target.pipelineId || target.environmentId !== environmentId) return false;
-  const store = usePaneLayoutStore.getState();
+  const store = options.scope.store(paneLayoutStore).getState();
   const openTab = options.allTabs.find(
     (tab) =>
       tab.type === "key-information" &&

@@ -1,10 +1,14 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { enqueuePromptQueueMessage } from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createWorkflowsApi } from "@/lib/backend/workflows";
 import { composeDraftKey, updateSavedComposeDraft } from "@/lib/compose-draft-persistence";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   buildTabInitialPromptQueueMessage,
   tabInitialPromptRequestId,
@@ -48,6 +52,7 @@ async function removeOpeningPromptDraft(
     options?: TabInitialPromptOptions;
   },
   requestId: string,
+  scope: NodeScope,
 ) {
   const sessionKey = createSessionKey(input.environmentId, input.tabId);
   const seeded = input.options?.attachments ?? [];
@@ -56,7 +61,7 @@ async function removeOpeningPromptDraft(
       (image) =>
         image.path === attachment.path && (image.id === undefined || image.id === attachment.id),
     );
-  const store = useNativeComposeStore.getState();
+  const store = scope.store(nativeComposeStore).getState();
   const draft = nativeComposeDraft(store, sessionKey);
   const restored = draft.requestId === requestId && draft.text === input.prompt;
   const attachments = draft.attachments.filter((attachment) => !isSeeded(attachment));
@@ -79,25 +84,29 @@ async function removeOpeningPromptDraft(
     mentions: unknown[];
     attachments: Array<{ id?: string; path: string }>;
     metadata?: { requestId?: string; pendingTranscriptConfirmation?: unknown };
-  }>(composeDraftKey(input.agent, input.environmentId, sessionKey), (value) => {
-    const restored = value.metadata?.requestId === requestId && value.text === input.prompt;
-    const attachments = value.attachments.filter((attachment) => !isSeeded(attachment));
-    if (!restored && attachments.length === value.attachments.length) return value;
-    return {
-      ...value,
-      attachments,
-      ...(restored
-        ? {
-            text: "",
-            metadata: {
-              ...value.metadata,
-              requestId: undefined,
-              pendingTranscriptConfirmation: undefined,
-            },
-          }
-        : {}),
-    };
-  });
+  }>(
+    composeDraftKey(input.agent, input.environmentId, sessionKey),
+    (value) => {
+      const restored = value.metadata?.requestId === requestId && value.text === input.prompt;
+      const attachments = value.attachments.filter((attachment) => !isSeeded(attachment));
+      if (!restored && attachments.length === value.attachments.length) return value;
+      return {
+        ...value,
+        attachments,
+        ...(restored
+          ? {
+              text: "",
+              metadata: {
+                ...value.metadata,
+                requestId: undefined,
+                pendingTranscriptConfirmation: undefined,
+              },
+            }
+          : {}),
+      };
+    },
+    scope,
+  );
 }
 
 /**
@@ -111,6 +120,8 @@ async function removeOpeningPromptDraft(
  * that wins the race sends the same request id, which the backend treats as
  * already dispatched. On enqueue failure the fallback stays and the error propagates.
  * Successful hand-off also clears owned draft input after pending persistence writes.
+ * The queue, the tab and the drafts are `scope`'s node's (the app's command
+ * scope when omitted).
  */
 export async function handTabInitialPromptToBackend(
   input: {
@@ -120,15 +131,21 @@ export async function handTabInitialPromptToBackend(
     prompt: string;
     options?: TabInitialPromptOptions;
   },
-  enqueue: typeof enqueuePromptQueueMessage = enqueuePromptQueueMessage,
+  enqueue?: typeof enqueuePromptQueueMessage,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
   const requestId = tabInitialPromptRequestId(input.environmentId, input.tabId);
-  await enqueue(
+  const panes = scope.store(paneLayoutStore);
+  await (
+    enqueue ??
+    backendApiForScope(scope, createWorkflowsApi, { enqueuePromptQueueMessage })
+      .enqueuePromptQueueMessage
+  )(
     promptQueueKey(input.agent, createSessionKey(input.environmentId, input.tabId)),
     input.environmentId,
     buildTabInitialPromptQueueMessage(input.agent, requestId, input.prompt, input.options),
   );
   for (const attempt of fallbacks.get(requestId) ?? []) attempt.backendOwned = true;
-  usePaneLayoutStore.getState().clearTabInitialPrompt(input.tabId, input.environmentId);
-  await removeOpeningPromptDraft(input, requestId);
+  panes.getState().clearTabInitialPrompt(input.tabId, input.environmentId);
+  await removeOpeningPromptDraft(input, requestId, scope);
 }

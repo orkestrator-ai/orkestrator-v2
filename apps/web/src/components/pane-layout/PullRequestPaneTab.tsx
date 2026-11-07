@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { filesPanelStore } from "@/stores/filesPanelStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PullRequestTabData } from "@/types/paneLayout";
 
 interface PullRequestPaneTabProps {
@@ -23,11 +23,13 @@ export function PullRequestPaneTab({
   data,
   isActive,
 }: PullRequestPaneTabProps) {
+  // The environment's node keeps its pane layout (plan item 3013).
+  const paneLayouts = useScopedStoreApi(paneLayoutStore);
   const closeTab = useCallback(() => {
-    const layout = usePaneLayoutStore.getState();
+    const layout = paneLayouts.getState();
     const owner = layout.findPaneWithTab(tabId, environmentId);
     if (owner) layout.removeTab(owner.id, tabId, environmentId);
-  }, [environmentId, tabId]);
+  }, [environmentId, paneLayouts, tabId]);
 
   // The environment's node keeps its files panel tabs.
   const filesPanel = useScopedStoreApi(filesPanelStore);
@@ -53,7 +55,7 @@ export function PullRequestPaneTab({
         layout="page"
         active={isActive}
         onSummaryLoaded={(summary) =>
-          usePaneLayoutStore
+          paneLayouts
             .getState()
             .updateTabPullRequest(tabId, { title: summary.title }, environmentId)
         }

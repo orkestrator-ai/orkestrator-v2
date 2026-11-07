@@ -52,7 +52,7 @@ import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
 import { useProjectStore } from "@/stores/projectStore";
@@ -67,6 +67,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   // This node's coordinator tab groups (plan item 3011).
   const paneLayouts = useScopedStoreApi(coordinatorPaneLayoutStore);
+  // The same node's compose drafts (plan item 3013).
+  const composeDrafts = useScopedStoreApi(nativeComposeStore);
   const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
   const {
     snapshot,
@@ -322,7 +324,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     // composers cannot use up the open-conversation limit.
     const closeUnused = unusedCoordinatorConversationIds(
       snapshot.workspace,
-      useNativeComposeStore.getState().drafts,
+      composeDrafts.getState().drafts,
       pendingLaunches,
     );
     void runAction(

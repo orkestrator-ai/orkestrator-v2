@@ -3,7 +3,7 @@ import { hostUpdateChannelOfVersion } from "@orkestrator/protocol/host-maintenan
 import { BUNDLED_APP_VERSION } from "@/lib/app-version";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { environmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { selectionOnScope } from "@/stores/windowSelectionStore";
 import type { PaneNode } from "@/types/paneLayout";
 import { recentRendererErrors } from "./renderer-errors";
@@ -39,7 +39,7 @@ export function collectBugReportClientContext(machine: {
     ? scope.store(environmentStore).getState().getEnvironmentById(selectedEnvironmentId)
     : undefined;
   const pane = selectedEnvironmentId
-    ? usePaneLayoutStore.getState().environments.get(selectedEnvironmentId)
+    ? scope.store(paneLayoutStore).getState().environments.get(selectedEnvironmentId)
     : undefined;
   const tabType = pane ? activeTabType(pane.root, pane.activePaneId) : undefined;
   return {

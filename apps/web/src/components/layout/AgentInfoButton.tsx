@@ -37,7 +37,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
 import {
   AGENT_PROVIDER_LABELS,
@@ -796,7 +796,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
         sessionId,
       },
     };
-    const panes = usePaneLayoutStore.getState();
+    const panes = nodeScope.store(paneLayoutStore).getState();
     panes.addTab(
       panes.getActivePaneId(activeSession.environmentId),
       tab,
@@ -823,7 +823,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       agentHandoffId: handoffId,
       nativeAgentData: { ...nativeData, platform: destination },
     };
-    const panes = usePaneLayoutStore.getState();
+    const panes = nodeScope.store(paneLayoutStore).getState();
     panes.addTab(
       panes.getActivePaneId(activeSession.environmentId),
       tab,

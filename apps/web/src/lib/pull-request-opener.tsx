@@ -8,11 +8,7 @@ import { armPullRequestFallback } from "./pull-request-load-fallback";
 import { openInBrowser } from "@/lib/backend";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import {
-  filesPanelStore,
-  projectRootFilesTargetId,
-  useFilesPanelStore,
-} from "@/stores/filesPanelStore";
+import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { projectStore } from "@/stores/projectStore";
 import { uiStore } from "@/stores/uiStore";
@@ -78,22 +74,19 @@ export function currentFilesPanelTargetId(scope: NodeScope = appCommandScope()):
  * changes (no selection, board tab or pane tab), so closing the panel returns
  * the user exactly where they were.
  *
- * `scope` is the node whose files panel shows it; without one, the command
- * node's (the deprecated shim, for callers with no scope yet).
+ * `scope` is the node whose files panel shows it; without one, the app's
+ * command scope (for callers with no scope yet).
  */
 export function openPullRequestInApp(
   ref: GitHubPullRequestRef,
   view?: GitHubPullRequestViewTab,
-  scope?: NodeScope,
+  scope: NodeScope = appCommandScope(),
 ): boolean {
   // Null while the window shows another node: its workspace has its own panel.
   const targetId = currentFilesPanelTargetId(scope);
   if (!targetId) return false;
   armPullRequestFallback(ref);
-  const filesPanel = scope
-    ? scope.store(filesPanelStore).getState()
-    : useFilesPanelStore.getState();
-  filesPanel.openPullRequest(targetId, ref, view);
+  scope.store(filesPanelStore).getState().openPullRequest(targetId, ref, view);
   return true;
 }
 

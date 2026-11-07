@@ -11,10 +11,12 @@ import {
   preserveRendererLocalPaneFields,
   reconcilePersistedLayout,
 } from "@/lib/pane-layout-restore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { usePaneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { paneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import {
   getNativeAgentData,
   LEGACY_PANE_LAYOUT_VERSION,
@@ -62,17 +64,35 @@ import {
 const MAX_DEPENDENCY_SCAN_DEPTH = 10;
 const MAX_PENDING_TAB_ACTIVATIONS = 64;
 
-// Backend-owned jobs publish their tabs through pane-layout reconciliation, and
-// the backend never moves selection for a launch a user started: that the tab
-// was launched here is the one thing this renderer knows and the backend does
-// not. Keep only the latest request per environment, so a later foreground
-// action supersedes an earlier one.
-const pendingTabActivations = new Map<string, string>();
-const startupAgentActivationCommits = new WeakMap<EnvironmentPaneState, string>();
-const buildPipelineActivationCommits = new WeakMap<
-  EnvironmentPaneState,
-  { environmentId: string; pipelineId: string }
->();
+/**
+ * One node's activation bookkeeping (plan item 3013). Environment and tab ids
+ * are only unique on their node, so each node scope keeps its own; every
+ * export below takes an optional trailing scope, the app's command scope when
+ * omitted.
+ */
+interface PaneActivationSlot {
+  // Backend-owned jobs publish their tabs through pane-layout reconciliation,
+  // and the backend never moves selection for a launch a user started: that
+  // the tab was launched here is the one thing this renderer knows and the
+  // backend does not. Keep only the latest request per environment, so a later
+  // foreground action supersedes an earlier one.
+  readonly pendingTabActivations: Map<string, string>;
+  readonly startupAgentActivationCommits: WeakMap<EnvironmentPaneState, string>;
+  readonly buildPipelineActivationCommits: WeakMap<
+    EnvironmentPaneState,
+    { environmentId: string; pipelineId: string }
+  >;
+}
+
+const paneActivations = defineScopedSlot<PaneActivationSlot>("pane-layout-activations", () => ({
+  pendingTabActivations: new Map(),
+  startupAgentActivationCommits: new WeakMap(),
+  buildPipelineActivationCommits: new WeakMap(),
+}));
+
+function environmentById(scope: NodeScope, environmentId: string) {
+  return scope.store(environmentStore).getState().getEnvironmentById(environmentId);
+}
 
 function boundActivationMap<T>(map: Map<string, T>): void {
   while (map.size > MAX_PENDING_TAB_ACTIVATIONS) {
@@ -144,6 +164,7 @@ function applySetupTabArrival(
  * chosen another tab.
  */
 function applyStartupAgentSetupHandoff(
+  scope: NodeScope,
   environmentId: string,
   authoritative: EnvironmentPaneState,
   selected: EnvironmentPaneState,
@@ -156,9 +177,7 @@ function applyStartupAgentSetupHandoff(
   const providerSessionId = authoritativeTab
     ? getNativeAgentData(authoritativeTab)?.sessionId
     : undefined;
-  const setupReady = environmentIsReadyForSetupHandoff(
-    useEnvironmentStore.getState().getEnvironmentById(environmentId),
-  );
+  const setupReady = environmentIsReadyForSetupHandoff(environmentById(scope, environmentId));
   // The tab lands once setup has finished, so its arrival in this window is the
   // handoff whichever client started the launch, and it can only happen once.
   const arrived =
@@ -166,7 +185,7 @@ function applyStartupAgentSetupHandoff(
     !findLeaf(current.root, (leaf) => leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID));
   if (
     !arrived &&
-    ((!providerSessionId && !setupReady) || !hasWindowStartupAgentActivation(environmentId))
+    ((!providerSessionId && !setupReady) || !hasWindowStartupAgentActivation(environmentId, scope))
   ) {
     return { state: selected, retireActivationAfterInstall: false };
   }
@@ -225,12 +244,13 @@ function paneSelectionAllowsSetupHandoff(
  * is left alone.
  */
 function paneSelectionAllowsPipelineHandoff(
+  scope: NodeScope,
   selected: EnvironmentPaneState,
   targetLeafId: string,
   environmentId: string,
   fromArmedOneShot: boolean,
 ): boolean {
-  if (wasWindowBuildPipelineSetupReadyAtArm(environmentId)) return true;
+  if (wasWindowBuildPipelineSetupReadyAtArm(environmentId, scope)) return true;
   if (paneSelectionAllowsSetupHandoff(selected, targetLeafId)) return true;
   if (!fromArmedOneShot) return false;
   const targetLeaf = findLeaf(selected.root, (leaf) => leaf.id === targetLeafId);
@@ -266,29 +286,26 @@ function authoritativeActiveBuildPipelineId(state: EnvironmentPaneState): string
  * not yanked back on every reconcile.
  */
 function unhandledBackendBuildPipelineId(
+  scope: NodeScope,
   environmentId: string,
   authoritative: EnvironmentPaneState,
 ): string | null {
   const pipelineId = authoritativeActiveBuildPipelineId(authoritative);
   if (!pipelineId) return null;
-  if (hasWindowBuildPipelineHandoffResolved(environmentId, pipelineId)) return null;
+  if (hasWindowBuildPipelineHandoffResolved(environmentId, pipelineId, scope)) return null;
   return pipelineId;
 }
 
 /** Apply this Electron window's setup-to-pipeline handoff for one pipeline. */
 function applyBuildPipelineSetupHandoff(
+  scope: NodeScope,
   environmentId: string,
   authoritative: EnvironmentPaneState,
   selected: EnvironmentPaneState,
   pipelineId: string | null,
   fromArmedOneShot: boolean,
 ): { state: EnvironmentPaneState; pipelineId: string | null } {
-  if (
-    !pipelineId ||
-    !environmentIsReadyForSetupHandoff(
-      useEnvironmentStore.getState().getEnvironmentById(environmentId),
-    )
-  ) {
+  if (!pipelineId || !environmentIsReadyForSetupHandoff(environmentById(scope, environmentId))) {
     return { state: selected, pipelineId: null };
   }
 
@@ -310,6 +327,7 @@ function applyBuildPipelineSetupHandoff(
   // landing are not user choices and still activate when this window armed.
   if (
     !paneSelectionAllowsPipelineHandoff(
+      scope,
       selected,
       authoritativeLeaf.id,
       environmentId,
@@ -324,30 +342,42 @@ function applyBuildPipelineSetupHandoff(
 }
 
 /** Consume the armed one-shot and remember that this window resolved the pipeline. */
-function retireBuildPipelineHandoff(environmentId: string, pipelineId: string): void {
-  consumeWindowBuildPipelineActivation(environmentId, pipelineId);
-  markWindowBuildPipelineHandoffResolved(environmentId, pipelineId);
+function retireBuildPipelineHandoff(
+  scope: NodeScope,
+  environmentId: string,
+  pipelineId: string,
+): void {
+  consumeWindowBuildPipelineActivation(environmentId, pipelineId, scope);
+  markWindowBuildPipelineHandoffResolved(environmentId, pipelineId, scope);
 }
 
 /** Arm the post-setup focus handoff in the Electron window that created the environment. */
-export function armStartupAgentTabActivation(environmentId: string): void {
+export function armStartupAgentTabActivation(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
   if (!window.orkestrator?.isolatedViewState) return;
-  armWindowStartupAgentActivation(environmentId);
+  armWindowStartupAgentActivation(environmentId, scope);
 }
 
 /** Cancel a handoff whose start failed or whose environment was deleted. */
-export function clearStartupAgentTabActivation(environmentId: string): void {
+export function clearStartupAgentTabActivation(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
   if (!window.orkestrator?.isolatedViewState) return;
-  clearWindowStartupAgentActivation(environmentId);
+  clearWindowStartupAgentActivation(environmentId, scope);
 }
 
 /** Arm the post-setup pipeline focus handoff in the Electron window that launched it. */
-export function armBuildPipelineTabActivation(environmentId: string, pipelineId: string): void {
+export function armBuildPipelineTabActivation(
+  environmentId: string,
+  pipelineId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
   if (!window.orkestrator?.isolatedViewState) return;
-  const setupReadyAtArm = environmentIsReadyForSetupHandoff(
-    useEnvironmentStore.getState().getEnvironmentById(environmentId),
-  );
-  armWindowBuildPipelineActivation(environmentId, pipelineId, setupReadyAtArm);
+  const setupReadyAtArm = environmentIsReadyForSetupHandoff(environmentById(scope, environmentId));
+  armWindowBuildPipelineActivation(environmentId, pipelineId, setupReadyAtArm, scope);
 
   // The setup-complete event can win the race with the start response for a
   // no-op or very short setup. If the requested tab is already present in a
@@ -356,7 +386,8 @@ export function armBuildPipelineTabActivation(environmentId: string, pipelineId:
   // already-ready environment also take this path and must activate even when
   // the window is still on a previous build or agent tab.
   if (!setupReadyAtArm) return;
-  const store = usePaneLayoutStore.getState();
+  const panes = scope.store(paneLayoutStore);
+  const store = panes.getState();
   const state = store.environments.get(environmentId);
   if (!state) return;
   const targetLeaf = findLeaf(state.root, (leaf) =>
@@ -369,26 +400,32 @@ export function armBuildPipelineTabActivation(environmentId: string, pipelineId:
   );
   if (!targetLeaf || !targetTab) return;
   store.setActiveTab(targetLeaf.id, targetTab.id, environmentId);
-  const installed = usePaneLayoutStore.getState().environments.get(environmentId);
+  const installed = panes.getState().environments.get(environmentId);
   const installedLeaf = installed
     ? findLeaf(installed.root, (leaf) => leaf.id === targetLeaf.id)
     : null;
   // setActiveTab is a silent no-op for an unknown pane or tab. Leave the
   // one-shot armed so a later authoritative frame can still finish the handoff.
   if (installedLeaf?.activeTabId !== targetTab.id) return;
-  retireBuildPipelineHandoff(environmentId, pipelineId);
+  retireBuildPipelineHandoff(scope, environmentId, pipelineId);
 }
 
 /** Cancel a pending pipeline handoff. Does not forget resolved follow records. */
-export function clearBuildPipelineTabActivation(environmentId: string): void {
+export function clearBuildPipelineTabActivation(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
   if (!window.orkestrator?.isolatedViewState) return;
-  clearWindowBuildPipelineActivation(environmentId);
+  clearWindowBuildPipelineActivation(environmentId, scope);
 }
 
 /** Forget resolved pipeline follows when their environment is deleted. */
-export function clearBuildPipelineHandoffResolutions(environmentId: string): void {
+export function clearBuildPipelineHandoffResolutions(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
   if (!window.orkestrator?.isolatedViewState) return;
-  clearWindowBuildPipelineHandoffResolutions(environmentId);
+  clearWindowBuildPipelineHandoffResolutions(environmentId, scope);
 }
 
 /**
@@ -399,17 +436,21 @@ export function clearBuildPipelineHandoffResolutions(environmentId: string): voi
 export function commitStartupAgentSetupHandoff(
   environmentId: string,
   state: EnvironmentPaneState,
+  scope: NodeScope = appCommandScope(),
 ): void {
+  const { startupAgentActivationCommits } = paneActivations(scope);
   if (startupAgentActivationCommits.get(state) !== environmentId) return;
   startupAgentActivationCommits.delete(state);
-  consumeWindowStartupAgentActivation(environmentId);
+  consumeWindowStartupAgentActivation(environmentId, scope);
 }
 
 /** Retire a pipeline handoff only after its activated layout is installed. */
 export function commitBuildPipelineSetupHandoff(
   environmentId: string,
   state: EnvironmentPaneState,
+  scope: NodeScope = appCommandScope(),
 ): void {
+  const { buildPipelineActivationCommits } = paneActivations(scope);
   const commit = buildPipelineActivationCommits.get(state);
   if (!commit || commit.environmentId !== environmentId) return;
   buildPipelineActivationCommits.delete(state);
@@ -417,7 +458,7 @@ export function commitBuildPipelineSetupHandoff(
   // armed one-shot is consumed here, so without this a later authoritative frame
   // still selecting this pipeline would re-derive it and yank a user who had
   // deliberately returned to the setup terminal.
-  retireBuildPipelineHandoff(commit.environmentId, commit.pipelineId);
+  retireBuildPipelineHandoff(scope, commit.environmentId, commit.pipelineId);
 }
 
 /**
@@ -425,9 +466,14 @@ export function commitBuildPipelineSetupHandoff(
  * already holds it and otherwise when it arrives. An ordinary selection, so it
  * persists the way a click does.
  */
-export function requestPaneTabActivation(environmentId: string, tabId: string): void {
+export function requestPaneTabActivation(
+  environmentId: string,
+  tabId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
+  const { pendingTabActivations } = paneActivations(scope);
   pendingTabActivations.delete(environmentId);
-  const store = usePaneLayoutStore.getState();
+  const store = scope.store(paneLayoutStore).getState();
   const pane = store.findPaneWithTab(tabId, environmentId);
   if (pane) {
     store.setActiveTab(pane.id, tabId, environmentId);
@@ -438,16 +484,25 @@ export function requestPaneTabActivation(environmentId: string, tabId: string): 
 }
 
 /** Withdraw a tab that was still due to take focus when it arrives. */
-export function cancelPaneTabActivation(environmentId: string, tabId?: string): void {
+export function cancelPaneTabActivation(
+  environmentId: string,
+  tabId?: string,
+  scope: NodeScope = appCommandScope(),
+): void {
+  const { pendingTabActivations } = paneActivations(scope);
   if (tabId && pendingTabActivations.get(environmentId) !== tabId) return;
   pendingTabActivations.delete(environmentId);
 }
 
 /** Focus the requested tab if the installed layout now holds it. */
-export function flushPaneTabActivation(environmentId: string): void {
+export function flushPaneTabActivation(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
+  const { pendingTabActivations } = paneActivations(scope);
   const tabId = pendingTabActivations.get(environmentId);
   if (!tabId) return;
-  const store = usePaneLayoutStore.getState();
+  const store = scope.store(paneLayoutStore).getState();
   const pane = store.findPaneWithTab(tabId, environmentId);
   if (!pane) return;
   pendingTabActivations.delete(environmentId);
@@ -552,24 +607,27 @@ export const PANE_DEPENDENCY_READ_CONCURRENCY = 4;
  * few at a time rather than all at once, so a layout with many tabs does not
  * open one connection per tab.
  */
-export async function hydratePaneLayoutDependencies(root: unknown): Promise<void> {
+export async function hydratePaneLayoutDependencies(
+  root: unknown,
+  scope: NodeScope = appCommandScope(),
+): Promise<void> {
   const { pipelineIds } = collectPaneDependencyIds(root);
   const multiReviewIds = collectMultiReviewIds(root);
+  const pipelines = scope.store(buildPipelineStore).getState().pipelines;
+  const workflows = scope.store(multiReviewStore).getState().workflows;
   const reads: Array<() => Promise<unknown>> = [
     ...[...pipelineIds]
       .filter(
         (pipelineId) =>
-          !useBuildPipelineStore.getState().pipelines.has(pipelineId) &&
-          !isBuildPipelineKnownUnavailable(pipelineId),
+          !pipelines.has(pipelineId) && !isBuildPipelineKnownUnavailable(pipelineId, scope),
       )
-      .map((pipelineId) => () => hydrateBuildPipeline(pipelineId)),
+      .map((pipelineId) => () => hydrateBuildPipeline(pipelineId, undefined, {}, scope)),
     ...[...multiReviewIds]
       .filter(
         (workflowId) =>
-          !useMultiReviewStore.getState().workflows.has(workflowId) &&
-          !isMultiReviewWorkflowKnownUnavailable(workflowId),
+          !workflows.has(workflowId) && !isMultiReviewWorkflowKnownUnavailable(workflowId, scope),
       )
-      .map((workflowId) => () => hydrateMultiReviewWorkflow(workflowId)),
+      .map((workflowId) => () => hydrateMultiReviewWorkflow(workflowId, scope)),
   ];
   if (reads.length === 0) return;
   let next = 0;
@@ -600,8 +658,9 @@ export function reconcileAuthoritativePaneLayout(
   environmentId: string,
   saved: PersistedPaneLayout,
   current: EnvironmentPaneState,
+  scope: NodeScope = appCommandScope(),
 ): EnvironmentPaneState | null {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  const environment = environmentById(scope, environmentId);
   if (!environment) return null;
 
   const isLocal = environment.environmentType === "local";
@@ -613,8 +672,10 @@ export function reconcileAuthoritativePaneLayout(
     containerId,
     isLocal,
     worktreePath: environment.worktreePath,
-    hasBuildPipeline: (pipelineId) => useBuildPipelineStore.getState().pipelines.has(pipelineId),
-    hasMultiReview: (workflowId) => useMultiReviewStore.getState().workflows.has(workflowId),
+    hasBuildPipeline: (pipelineId) =>
+      scope.store(buildPipelineStore).getState().pipelines.has(pipelineId),
+    hasMultiReview: (workflowId) =>
+      scope.store(multiReviewStore).getState().workflows.has(workflowId),
   });
   if (!restored) return null;
 
@@ -624,7 +685,7 @@ export function reconcileAuthoritativePaneLayout(
       applyStoredPaneSelection(
         preserveClientPaneSelection(restored, current),
         environmentId,
-        readWindowPaneSelection(environmentId),
+        readWindowPaneSelection(environmentId, scope),
       ),
       current,
     );
@@ -633,21 +694,25 @@ export function reconcileAuthoritativePaneLayout(
     // that did not launch the pipeline has no one-shot, so fall back to the
     // build tab the backend itself made authoritative. An armed window keeps
     // following the pipeline it started, even when the backend selects another.
-    const armedPipelineId = getWindowBuildPipelineActivation(environmentId);
+    const armedPipelineId = getWindowBuildPipelineActivation(environmentId, scope);
     const buildHandoff = applyBuildPipelineSetupHandoff(
+      scope,
       environmentId,
       restored,
       selected,
-      armedPipelineId ?? unhandledBackendBuildPipelineId(environmentId, restored),
+      armedPipelineId ?? unhandledBackendBuildPipelineId(scope, environmentId, restored),
       armedPipelineId !== null,
     );
     const startupHandoff = applyStartupAgentSetupHandoff(
+      scope,
       environmentId,
       restored,
       buildHandoff.state,
       current,
     );
     const reconciled = startupHandoff.state;
+    const { startupAgentActivationCommits, buildPipelineActivationCommits } =
+      paneActivations(scope);
     if (startupHandoff.retireActivationAfterInstall) {
       startupAgentActivationCommits.set(reconciled, environmentId);
     }

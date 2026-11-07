@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { openGraphRunTab } from "./graph-run-open-tab";
@@ -30,6 +31,7 @@ function open(tabs: TabInfo[], runId: string, maxTabs = 9) {
   );
   const onTabLimit = mock(() => {});
   const opened = openGraphRunTab({
+    scope: appCommandScope(),
     environmentId: ENVIRONMENT_ID,
     activePaneId: "pane-1",
     allTabs: tabs,

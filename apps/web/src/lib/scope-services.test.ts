@@ -40,7 +40,7 @@ import {
 } from "@/lib/store-resource-sync";
 import { getNodeConnectivity, transportConnectivityService } from "@/lib/transport-connectivity";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 
 const COMMAND_NODE = "bk_command-node" as BackendId;
@@ -144,7 +144,6 @@ class LeftoverTracker {
 
     for (const [name, store] of [
       ["ui-chrome", useUIChromeStore as unknown as { subscribe: Subscribe }],
-      ["pane-layout", usePaneLayoutStore as unknown as { subscribe: Subscribe }],
     ] as const) {
       this.trackStore(name, store);
     }
@@ -242,11 +241,19 @@ beforeEach(() => {
   windowScope = new WindowScope();
   command = windowScope.open({ role: "command", client: commandClient });
   leaf = windowScope.open({ role: "leaf", client: leafClient });
-  // Completion notes watch their own scope's pipelines (plan item 3011).
-  tracker.trackStore(
-    "build-pipeline",
-    command.store(buildPipelineStore) as unknown as { subscribe: Subscribe },
-  );
+  // Completion notes watch their own scope's pipelines (plan item 3011) and
+  // open the notes in its own pane layout, which its persistence and store
+  // bindings watch too (plan item 3013).
+  for (const scope of [command, leaf]) {
+    tracker.trackStore(
+      "build-pipeline",
+      scope.store(buildPipelineStore) as unknown as { subscribe: Subscribe },
+    );
+    tracker.trackStore(
+      "pane-layout",
+      scope.store(paneLayoutStore) as unknown as { subscribe: Subscribe },
+    );
+  }
 });
 
 afterEach(async () => {
@@ -296,7 +303,7 @@ describe("scoped services: start, stop and restart", () => {
     },
     {
       def: paneLayoutPersistenceService,
-      on: "command",
+      on: "leaf",
       expectsWhileRunning: (live) => {
         expect(live["store:pane-layout"]).toBe(1);
         expect(live["window:pagehide"]).toBe(1);
@@ -304,7 +311,7 @@ describe("scoped services: start, stop and restart", () => {
     },
     {
       def: buildPipelineCompletionNotesService,
-      on: "command",
+      on: "leaf",
       expectsWhileRunning: (live) => {
         expect(live["store:build-pipeline"]).toBe(1);
         expect(live["store:pane-layout"]).toBe(1);
@@ -375,19 +382,19 @@ describe("failure isolation", () => {
     startScopeServices(command, COMMAND_SCOPE_SERVICES);
     const stopLeaf = startScopeServices(leaf, [
       ...WARM_SCOPE_SERVICES,
-      paneLayoutPersistenceService,
+      dataSavingReadPolicyService,
     ]);
 
     expect(leaf.health.get()).toEqual({
       state: "failed",
-      failedServices: ["pane-layout-persistence"],
+      failedServices: ["data-saving-read-policy"],
     });
     expect(command.health.get()).toEqual({ state: "ok" });
     // The leaf's other services kept starting and running.
     expect(leaf.service(resourceSyncService).status).toBe("running");
     expect(leaf.service(transportConnectivityService).status).toBe("running");
     expect(logged("web.node-scope", "service.failed")[0]?.fields).toEqual({
-      service: "pane-layout-persistence",
+      service: "data-saving-read-policy",
       role: "leaf",
       error: "Error",
     });

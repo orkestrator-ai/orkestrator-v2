@@ -1,6 +1,6 @@
 import type { EnvironmentAttentionReason } from "@orkestrator/protocol/environment-attention";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
 import { appCommandScope } from "@/lib/node-scope-slots";
@@ -42,11 +42,15 @@ const COPY: Partial<Record<EnvironmentAttentionReason, string>> = {
   agent_waiting: "Agent needs your input",
 };
 
+/** A local notification is this window's own node's: its environments and projects. */
 function environmentLabel(environmentId: string, projectId: string): string | null {
-  const environment = useEnvironmentStore
+  const scope = appCommandScope();
+  const environment = scope
+    .store(environmentStore)
     .getState()
     .environments.find((candidate) => candidate.id === environmentId);
-  const project = useProjectStore
+  const project = scope
+    .store(projectStore)
     .getState()
     .projects.find((candidate) => candidate.id === projectId);
   const name =
@@ -59,11 +63,13 @@ function environmentLabel(environmentId: string, projectId: string): string | nu
 function openEnvironment(projectId: string, environmentId: string): void {
   useRemoteWorkspaceStore.getState().showLocal();
   // A local notification is this window's own node's.
-  const ui = appCommandScope().store(uiStore).getState();
+  const scope = appCommandScope();
+  const ui = scope.store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
   if (
-    useEnvironmentStore
+    scope
+      .store(environmentStore)
       .getState()
       .environments.some((env) => env.id === environmentId && env.projectHome)
   ) {

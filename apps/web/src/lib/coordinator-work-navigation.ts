@@ -17,7 +17,8 @@ import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { openConversationTab } from "@/lib/web-annotations/navigation";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, type PaneLayoutState } from "@/stores/paneLayoutStore";
+import type { StoreApi } from "zustand/vanilla";
 import { uiStore } from "@/stores/uiStore";
 import type { CoordinatorWorkTarget } from "./coordinator-work-items";
 
@@ -59,8 +60,9 @@ function selectEnvironment(scope: NodeScope, projectId: string, environmentId: s
 }
 
 /** Focuses a tab that is in the environment's layout, or asks for it once it arrives. */
-function focusTab(environmentId: string, tabId: string): void {
-  if (!openConversationTab(environmentId, tabId)) requestPaneTabActivation(environmentId, tabId);
+function focusTab(scope: NodeScope, environmentId: string, tabId: string): void {
+  if (!openConversationTab(environmentId, tabId, scope))
+    requestPaneTabActivation(environmentId, tabId, scope);
 }
 
 type ReviewTarget = Extract<CoordinatorWorkTarget, { type: "review" }>;
@@ -68,10 +70,12 @@ type ReviewTarget = Extract<CoordinatorWorkTarget, { type: "review" }>;
 /**
  * One node's open requests still waiting for their environment's layout:
  * worker tabs and reviews, by environment, and the layout subscriptions
- * while any is pending (plan item 3011). The layout they wait for is still
- * the command scope's pane-layout store (plan item 3013 scopes it).
+ * while any is pending (plan item 3011). The layout they wait for is the
+ * node's own pane-layout store (plan item 3013).
  */
 interface CoordinatorNavigationState {
+  readonly scope: NodeScope;
+  readonly layouts: StoreApi<PaneLayoutState>;
   readonly pendingWorkers: Map<string, string>;
   offWorkers: (() => void) | undefined;
   // The layout can still be hydrating when Open selects another environment.
@@ -85,6 +89,8 @@ const navigationState = defineScopedSlot<CoordinatorNavigationState>(
   "coordinator-work-navigation",
   (scope) => {
     const state: CoordinatorNavigationState = {
+      scope,
+      layouts: scope.store(paneLayoutStore),
       pendingWorkers: new Map(),
       offWorkers: undefined,
       pendingReviews: new Map(),
@@ -105,14 +111,14 @@ const navigationState = defineScopedSlot<CoordinatorNavigationState>(
 function reconcileWorkers(state: CoordinatorNavigationState): void {
   const { pendingWorkers } = state;
   for (const [environmentId, tabId] of Array.from(pendingWorkers)) {
-    const store = usePaneLayoutStore.getState();
+    const store = state.layouts.getState();
     if (
       store.hydration.get(environmentId) !== "done" ||
       !store.findPaneWithTab(tabId, environmentId)
     )
       continue;
     pendingWorkers.delete(environmentId);
-    focusTab(environmentId, tabId);
+    focusTab(state.scope, environmentId, tabId);
   }
   if (!pendingWorkers.size) {
     state.offWorkers?.();
@@ -123,7 +129,7 @@ function reconcileWorkers(state: CoordinatorNavigationState): void {
 function reconcileReviews(state: CoordinatorNavigationState): void {
   const { pendingReviews } = state;
   for (const [environmentId, target] of Array.from(pendingReviews)) {
-    const store = usePaneLayoutStore.getState();
+    const store = state.layouts.getState();
     if (store.hydration.get(environmentId) !== "done") continue;
     const paneId = store.getActivePaneId(environmentId);
     if (!paneId) continue;
@@ -147,7 +153,7 @@ function reconcileReviews(state: CoordinatorNavigationState): void {
         },
         environmentId,
       );
-    focusTab(environmentId, tabId);
+    focusTab(state.scope, environmentId, tabId);
   }
   if (!pendingReviews.size) {
     state.offReviews?.();
@@ -172,7 +178,7 @@ export function openCoordinatorWorkTarget(
         const { pendingWorkers } = state;
         pendingWorkers.set(target.environmentId, target.tabId);
         while (pendingWorkers.size > 64) pendingWorkers.delete(pendingWorkers.keys().next().value!);
-        state.offWorkers ??= usePaneLayoutStore.subscribe(() => reconcileWorkers(state));
+        state.offWorkers ??= state.layouts.subscribe(() => reconcileWorkers(state));
         reconcileWorkers(state);
       }
       return;
@@ -181,7 +187,8 @@ export function openCoordinatorWorkTarget(
       return;
     case "review": {
       selectEnvironment(scope, target.projectId, target.environmentId);
-      const tab = usePaneLayoutStore
+      const tab = scope
+        .store(paneLayoutStore)
         .getState()
         .getAllTabs(target.environmentId)
         .find(
@@ -190,13 +197,13 @@ export function openCoordinatorWorkTarget(
             item.multiReviewTabData?.workflowId === target.workflowId &&
             !item.multiReviewTabData.reviewerId,
         );
-      if (tab) focusTab(target.environmentId, tab.id);
+      if (tab) focusTab(scope, target.environmentId, tab.id);
       else {
         const state = navigationState(scope);
         const { pendingReviews } = state;
         pendingReviews.set(target.environmentId, target);
         while (pendingReviews.size > 64) pendingReviews.delete(pendingReviews.keys().next().value!);
-        state.offReviews ??= usePaneLayoutStore.subscribe(() => reconcileReviews(state));
+        state.offReviews ??= state.layouts.subscribe(() => reconcileReviews(state));
         reconcileReviews(state);
       }
       return;

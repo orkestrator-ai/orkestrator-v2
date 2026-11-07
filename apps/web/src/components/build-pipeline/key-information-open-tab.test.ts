@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { openKeyInformationTab } from "./key-information-open-tab";
@@ -38,6 +39,7 @@ function open(
   );
   const onTabLimit = mock(() => {});
   const opened = openKeyInformationTab({
+    scope: appCommandScope(),
     environmentId: ENVIRONMENT_ID,
     activePaneId: "pane-1",
     allTabs: tabs,

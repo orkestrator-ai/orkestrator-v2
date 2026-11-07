@@ -1682,8 +1682,13 @@ describe("pane-layout binding", () => {
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
 
-    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-remote");
-    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("workflow-remote");
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+      "pipeline-remote",
+      undefined,
+      {},
+      appCommandScope(),
+    );
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("workflow-remote", appCommandScope());
     expect(
       usePaneLayoutStore
         .getState()

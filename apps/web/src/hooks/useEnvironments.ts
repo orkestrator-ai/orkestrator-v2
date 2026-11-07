@@ -14,7 +14,7 @@ import {
   formatErrorContext,
   useErrorDialogStore,
   terminalSessionStore,
-  usePaneLayoutStore,
+  paneLayoutStore,
   getAllLeaves,
 } from "@/stores";
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
@@ -27,7 +27,7 @@ import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
-import { defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
+import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
 import type { ErrorContext } from "@/stores";
 import type { EnvironmentState } from "@/stores/environmentStore";
@@ -273,11 +273,17 @@ function bindSetupTerminalSession(
   });
 }
 
-/** Stop store-owned background state after authoritative deletion. */
-export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): void {
-  clearBuildPipelineTabActivation(environmentId);
-  clearBuildPipelineHandoffResolutions(environmentId);
-  clearStartupAgentTabActivation(environmentId);
+/**
+ * Stop store-owned background state after authoritative deletion, on the
+ * environment's node (the app's command scope when omitted).
+ */
+export function cleanupDeletedEnvironmentSubscriptions(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
+  clearBuildPipelineTabActivation(environmentId, scope);
+  clearBuildPipelineHandoffResolutions(environmentId, scope);
+  clearStartupAgentTabActivation(environmentId, scope);
 }
 
 /**
@@ -293,7 +299,7 @@ export function cleanupSubscriptionsRemovedByProjectSnapshot(
   const nextIds = new Set(nextEnvironments.map((environment) => environment.id));
   for (const environment of scope.store(environmentStore).getState().environments) {
     if (environment.projectId === projectId && !nextIds.has(environment.id)) {
-      cleanupDeletedEnvironmentSubscriptions(environment.id);
+      cleanupDeletedEnvironmentSubscriptions(environment.id, scope);
     }
   }
 }
@@ -328,7 +334,7 @@ export async function refreshEnvironmentSnapshot(
   ) {
     return true;
   }
-  if (!snapshot) cleanupDeletedEnvironmentSubscriptions(environmentId);
+  if (!snapshot) cleanupDeletedEnvironmentSubscriptions(environmentId, scope);
   store.applyEnvironmentSnapshot(
     environmentId,
     snapshot &&
@@ -469,8 +475,8 @@ function reconcileNodeLifecycleErrors(node: EnvironmentNode): void {
     // or a launch that can never happen auto-dispatches the original prompt the
     // next time this env is started.
     store.updateEnvironment(environment.id, { pendingAgentLaunch: false });
-    clearBuildPipelineTabActivation(environment.id);
-    clearStartupAgentTabActivation(environment.id);
+    clearBuildPipelineTabActivation(environment.id, node.scope);
+    clearStartupAgentTabActivation(environment.id, node.scope);
 
     const reported = node.reportedLifecycleErrors.get(environment.id);
     if (reported === message) {
@@ -609,8 +615,8 @@ export function applyEnvironmentSetupComplete(
     // payload omitted the environment, so a failed setup cannot leave this
     // renderer holding a launch it will never be able to perform.
     store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
-    clearBuildPipelineTabActivation(environment_id);
-    clearStartupAgentTabActivation(environment_id);
+    clearBuildPipelineTabActivation(environment_id, scope);
+    clearStartupAgentTabActivation(environment_id, scope);
   }
 }
 
@@ -700,7 +706,7 @@ export function useEnvironmentLifecycleService(): void {
       (payload) => {
         const selectedEnvironmentId = scope.store(uiStore).getState().selectedEnvironmentId;
         if (selectedEnvironmentId === payload.environment_id) {
-          const root = usePaneLayoutStore.getState().getRoot(selectedEnvironmentId);
+          const root = scope.store(paneLayoutStore).getState().getRoot(selectedEnvironmentId);
           const owningTabIsVisible = getAllLeaves(root).some((pane) => {
             const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
             const data = activeTab ? getNativeAgentData(activeTab) : null;
@@ -1043,14 +1049,14 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // rather than by a mounted tab, so nothing else stops them. Their
         // desynced probe re-arms itself on every failure, which would otherwise
         // reach for a bridge that no longer exists once a minute forever.
-        cleanupDeletedEnvironmentSubscriptions(environmentId);
+        cleanupDeletedEnvironmentSubscriptions(environmentId, scope);
         scope.store(buildPipelineStore).getState().removePipelinesForEnvironment(environmentId);
         removeEnvironmentFromStore(environmentId);
         // The backend drops this environment's pane layout with the
         // environment, so the remembered selection has nothing left to point
         // at. The bounded store would evict it eventually; dropping it now
         // keeps that budget for environments the user still has.
-        clearStoredPaneSelection(environmentId);
+        clearStoredPaneSelection(environmentId, scope);
         // The unread marker lives on the environment record, so deleting the
         // environment takes it with it — nothing to prune here any more.
         toast.success("Environment deleted");

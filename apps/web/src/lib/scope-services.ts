@@ -119,11 +119,18 @@ export const resourceSyncService = defineScopedService("resource-sync", (scope) 
   stop: startResourceSync(scopeResourceSyncOptions(scope), scope),
 }));
 
-/** The light set: the main stream, its store bindings and its connectivity. */
+/**
+ * The light set: the main stream, its store bindings and its connectivity,
+ * then the node's pane-layout persistence (the layout the bindings adopt and
+ * the writes a tab change makes) and its completion notes, which open a tab in
+ * that layout (plan item 3013).
+ */
 export const WARM_SCOPE_SERVICES: readonly ScopedServiceDef[] = [
   resourceSyncService,
   storeResourceSyncService,
   transportConnectivityService,
+  paneLayoutPersistenceService,
+  buildPipelineCompletionNotesService,
 ];
 
 /** Everything `App` starts for the command scope, in start order. */
@@ -131,8 +138,6 @@ export const COMMAND_SCOPE_SERVICES: readonly ScopedServiceDef[] = [
   ...WARM_SCOPE_SERVICES,
   dataSavingReadPolicyService,
   windowSelectionPersistenceService,
-  paneLayoutPersistenceService,
-  buildPipelineCompletionNotesService,
 ];
 
 /**

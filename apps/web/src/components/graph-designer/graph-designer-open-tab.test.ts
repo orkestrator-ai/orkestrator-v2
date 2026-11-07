@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { openGraphDesignerTab } from "./graph-designer-open-tab";
@@ -34,6 +35,7 @@ function open(options: {
   );
   const onTabLimit = mock(() => {});
   const opened = openGraphDesignerTab({
+    scope: appCommandScope(),
     environmentId: ENVIRONMENT_ID,
     activePaneId: "pane-1",
     allTabs: options.tabs,

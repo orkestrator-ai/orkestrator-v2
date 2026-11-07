@@ -2,7 +2,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
-import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
+import { useFilesPanelStore, useConfigStore, paneLayoutStore } from "@/stores";
 import { projectStore, useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
 import {
   filesPanelStore,
@@ -913,7 +913,7 @@ export function useFilesPanel() {
       if (sourcePaths.length === 0) return;
 
       const openTabs = snapshotEnvironmentId
-        ? usePaneLayoutStore.getState().getAllTabs(snapshotEnvironmentId)
+        ? scope.store(paneLayoutStore).getState().getAllTabs(snapshotEnvironmentId)
         : [];
       const openPaths = sourcePaths.filter((path) =>
         openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === path),
@@ -1004,6 +1004,7 @@ export function useFilesPanel() {
     [
       isAvailable,
       targetId,
+      scope,
       snapshotEnvironmentId,
       resolveMutationEnvironmentId,
       isLocalEnvironment,
@@ -1021,7 +1022,7 @@ export function useFilesPanel() {
       setFileActionPending(filePath);
       try {
         const openTabs = snapshotEnvironmentId
-          ? usePaneLayoutStore.getState().getAllTabs(snapshotEnvironmentId)
+          ? scope.store(paneLayoutStore).getState().getAllTabs(snapshotEnvironmentId)
           : [];
         if (openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === filePath)) {
           throw new Error("Close the file's editor tab before renaming it");
@@ -1054,6 +1055,7 @@ export function useFilesPanel() {
     [
       isAvailable,
       targetId,
+      scope,
       snapshotEnvironmentId,
       resolveMutationEnvironmentId,
       isLocalEnvironment,

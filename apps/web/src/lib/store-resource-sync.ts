@@ -17,6 +17,7 @@ import { appCommandScope, isAppCommandScope, listenInScope } from "@/lib/node-sc
 import type { ResourceKind } from "@orkestrator/protocol/resource-events";
 import { createAgentMailApi } from "@/lib/backend/agent-mail";
 import { backendApiForScope, scopeBackendClient } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import {
   configTargetsFor,
   runConfigCommand,
@@ -33,7 +34,7 @@ import {
 import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { configStore } from "@/stores/configStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { environmentStore } from "@/stores/environmentStore";
 import {
   environmentResourceHandlers,
@@ -360,216 +361,220 @@ const sessionHandlers = defineStoreResourceHandlers("sessions", "every-scope", (
   });
 });
 
-const paneLayoutHandlers = defineStoreResourceHandlers(
-  "pane-layout",
-  "command-scope",
-  (context) => {
-    const { options } = context;
-    const paneLayoutRequestGenerations = new Map<string, number>();
-    const deferredPaneLayoutRefreshes = new Map<string, DeferredPaneLayoutRefresh>();
-    const declinedPaneLayoutRefreshes = new Set<string>();
+const paneLayoutHandlers = defineStoreResourceHandlers("pane-layout", "every-scope", (context) => {
+  const { options, scope } = context;
+  // This node's pane layouts (plan item 3013), held for the registration's
+  // life: the scope outlives it.
+  const panes = scope.store(paneLayoutStore);
+  const loadPaneLayout = (environmentId: string) =>
+    (
+      options.getPaneLayout ??
+      backendApiForScope(scope, createFilesSessionsApi, { getPaneLayout }).getPaneLayout
+    )(environmentId);
+  const paneLayoutRequestGenerations = new Map<string, number>();
+  const deferredPaneLayoutRefreshes = new Map<string, DeferredPaneLayoutRefresh>();
+  const declinedPaneLayoutRefreshes = new Set<string>();
 
-    const refreshPaneLayout = async (environmentId: string): Promise<void> => {
-      const paneStore = usePaneLayoutStore.getState();
-      const hydration = paneStore.hydration.get(environmentId);
-      if (hydration === "pending") {
-        const existing = deferredPaneLayoutRefreshes.get(environmentId);
-        if (existing) return existing.promise;
+  const refreshPaneLayout = async (environmentId: string): Promise<void> => {
+    const paneStore = panes.getState();
+    const hydration = paneStore.hydration.get(environmentId);
+    if (hydration === "pending") {
+      const existing = deferredPaneLayoutRefreshes.get(environmentId);
+      if (existing) return existing.promise;
 
-        let resolve!: () => void;
-        let reject!: (error: unknown) => void;
-        const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-          resolve = resolvePromise;
-          reject = rejectPromise;
-        });
-        deferredPaneLayoutRefreshes.set(environmentId, {
-          promise,
-          resolve,
-          reject,
-        });
-        return promise;
-      }
-      if (hydration !== "done") return;
+      let resolve!: () => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      deferredPaneLayoutRefreshes.set(environmentId, {
+        promise,
+        resolve,
+        reject,
+      });
+      return promise;
+    }
+    if (hydration !== "done") return;
 
-      const environment = context.scope
-        .store(environmentStore)
-        .getState()
-        .getEnvironmentById(environmentId);
-      if (!environment) return;
-      const requestedContainerId =
-        environment.environmentType === "local" ? null : environment.containerId;
-      const requestedEnvironmentType = environment.environmentType;
-      const requestedWorktreePath = environment.worktreePath;
+    const environment = context.scope
+      .store(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
+    if (!environment) return;
+    const requestedContainerId =
+      environment.environmentType === "local" ? null : environment.containerId;
+    const requestedEnvironmentType = environment.environmentType;
+    const requestedWorktreePath = environment.worktreePath;
 
-      const generation = (paneLayoutRequestGenerations.get(environmentId) ?? 0) + 1;
-      paneLayoutRequestGenerations.set(environmentId, generation);
-      const saved = await (options.getPaneLayout ?? getPaneLayout)(environmentId);
+    const generation = (paneLayoutRequestGenerations.get(environmentId) ?? 0) + 1;
+    paneLayoutRequestGenerations.set(environmentId, generation);
+    const saved = await loadPaneLayout(environmentId);
+    if (context.disposed() || paneLayoutRequestGenerations.get(environmentId) !== generation) {
+      return;
+    }
+
+    if (saved) {
+      await hydratePaneLayoutDependencies(saved.root, scope);
       if (context.disposed() || paneLayoutRequestGenerations.get(environmentId) !== generation) {
         return;
       }
+    }
 
-      if (saved) {
-        await hydratePaneLayoutDependencies(saved.root);
-        if (context.disposed() || paneLayoutRequestGenerations.get(environmentId) !== generation) {
-          return;
-        }
-      }
+    const latestPaneStore = panes.getState();
+    const current = latestPaneStore.environments.get(environmentId);
+    const latestEnvironment = context.scope
+      .store(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
+    if (latestPaneStore.hydration.get(environmentId) !== "done" || !latestEnvironment) {
+      return;
+    }
+    const latestContainerId =
+      latestEnvironment.environmentType === "local" ? null : latestEnvironment.containerId;
+    if (
+      latestEnvironment.environmentType !== requestedEnvironmentType ||
+      latestContainerId !== requestedContainerId ||
+      latestEnvironment.worktreePath !== requestedWorktreePath ||
+      (current != null && current.containerId !== latestContainerId)
+    ) {
+      return;
+    }
 
-      const latestPaneStore = usePaneLayoutStore.getState();
-      const current = latestPaneStore.environments.get(environmentId);
-      const latestEnvironment = context.scope
-        .store(environmentStore)
-        .getState()
-        .getEnvironmentById(environmentId);
-      if (latestPaneStore.hydration.get(environmentId) !== "done" || !latestEnvironment) {
-        return;
-      }
-      const latestContainerId =
-        latestEnvironment.environmentType === "local" ? null : latestEnvironment.containerId;
-      if (
-        latestEnvironment.environmentType !== requestedEnvironmentType ||
-        latestContainerId !== requestedContainerId ||
-        latestEnvironment.worktreePath !== requestedWorktreePath ||
-        (current != null && current.containerId !== latestContainerId)
-      ) {
-        return;
-      }
+    if (!saved) return;
+    const selected = reconcileAuthoritativePaneLayout(
+      environmentId,
+      saved,
+      current ?? {
+        root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+        activePaneId: "default",
+        containerId: latestContainerId,
+      },
+      scope,
+    );
+    if (!selected) return;
 
-      if (!saved) return;
-      const selected = reconcileAuthoritativePaneLayout(
-        environmentId,
-        saved,
-        current ?? {
-          root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
-          activePaneId: "default",
-          containerId: latestContainerId,
-        },
-      );
-      if (!selected) return;
+    // Prime the persistence mirror before publishing the store update so this
+    // read-through snapshot does not become a redundant write-back.
+    const adopt = options.adoptPaneLayout ?? adoptPersistedPaneLayout;
+    if (!adopt(environmentId, selected, context.scope)) {
+      // The layout we just fetched is dropped in favour of a local write that
+      // has not landed yet. That write announces its own revision on success —
+      // but if it fails, nothing else would ever come back for this snapshot.
+      declinedPaneLayoutRefreshes.add(environmentId);
+      return;
+    }
+    declinedPaneLayoutRefreshes.delete(environmentId);
+    latestPaneStore.applyAuthoritativeLayout(environmentId, selected);
+    flushPaneTabActivation(environmentId, scope);
+    commitBuildPipelineSetupHandoff(environmentId, selected, scope);
+    commitStartupAgentSetupHandoff(environmentId, selected, scope);
+  };
 
-      // Prime the persistence mirror before publishing the store update so this
-      // read-through snapshot does not become a redundant write-back.
-      const adopt = options.adoptPaneLayout ?? adoptPersistedPaneLayout;
-      if (!adopt(environmentId, selected, context.scope)) {
-        // The layout we just fetched is dropped in favour of a local write that
-        // has not landed yet. That write announces its own revision on success —
-        // but if it fails, nothing else would ever come back for this snapshot.
-        declinedPaneLayoutRefreshes.add(environmentId);
-        return;
-      }
+  const requestPaneLayoutRefresh = (environmentId: string): void => {
+    void refreshPaneLayout(environmentId).catch((error) => {
+      log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
+    });
+  };
+
+  const stopWriteSettled = (options.onPaneLayoutWriteSettled ?? onPaneLayoutWriteSettled)(
+    (environmentId) => {
+      if (context.disposed() || !declinedPaneLayoutRefreshes.has(environmentId)) return;
       declinedPaneLayoutRefreshes.delete(environmentId);
-      latestPaneStore.applyAuthoritativeLayout(environmentId, selected);
-      flushPaneTabActivation(environmentId);
-      commitBuildPipelineSetupHandoff(environmentId, selected);
-      commitStartupAgentSetupHandoff(environmentId, selected);
-    };
+      requestPaneLayoutRefresh(environmentId);
+    },
+    context.scope,
+  );
 
-    const requestPaneLayoutRefresh = (environmentId: string): void => {
-      void refreshPaneLayout(environmentId).catch((error) => {
-        log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
-      });
-    };
+  // Setup completion is the one moment the backend deliberately moves the
+  // authoritative selection off the setup terminal and onto the build surface
+  // (build-pipeline-service `waiting-for-setup` -> `ensureBuildPipelineTab`).
+  // That handoff is published as an ordinary `pane-layout` announcement, so a
+  // client that was mid-write, mid-hydration or briefly disconnected can miss
+  // the single frame that carries it and sit on the setup tab while the agent
+  // works out of sight. Re-read the authoritative layout on the completion
+  // event itself so the handoff never depends on one frame surviving.
+  context.listen<EnvironmentSetupCompletePayload>(
+    "environment-setup-complete",
+    (payload) => {
+      if (context.disposed()) return;
+      requestPaneLayoutRefresh(payload.environment_id);
+    },
+    (error) => {
+      log.warn("setup-completion.observe-failed", { error: formatLogError(error) });
+    },
+  );
 
-    const stopWriteSettled = (options.onPaneLayoutWriteSettled ?? onPaneLayoutWriteSettled)(
-      (environmentId) => {
-        if (context.disposed() || !declinedPaneLayoutRefreshes.has(environmentId)) return;
-        declinedPaneLayoutRefreshes.delete(environmentId);
-        requestPaneLayoutRefresh(environmentId);
-      },
-      context.scope,
-    );
-
-    // Setup completion is the one moment the backend deliberately moves the
-    // authoritative selection off the setup terminal and onto the build surface
-    // (build-pipeline-service `waiting-for-setup` -> `ensureBuildPipelineTab`).
-    // That handoff is published as an ordinary `pane-layout` announcement, so a
-    // client that was mid-write, mid-hydration or briefly disconnected can miss
-    // the single frame that carries it and sit on the setup tab while the agent
-    // works out of sight. Re-read the authoritative layout on the completion
-    // event itself so the handoff never depends on one frame surviving.
-    context.listen<EnvironmentSetupCompletePayload>(
-      "environment-setup-complete",
-      (payload) => {
-        if (context.disposed()) return;
-        requestPaneLayoutRefresh(payload.environment_id);
-      },
-      (error) => {
-        log.warn("setup-completion.observe-failed", { error: formatLogError(error) });
-      },
-    );
-
-    const stopPaneStore = usePaneLayoutStore.subscribe((state, previous) => {
-      for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
-        if (
-          previous.hydration.get(environmentId) === "pending" &&
-          state.hydration.get(environmentId) === "done"
-        ) {
-          void refreshPaneLayout(environmentId)
-            .then(
-              () => deferred.resolve(),
-              (error) => deferred.reject(error),
-            )
-            .finally(() => {
-              if (deferredPaneLayoutRefreshes.get(environmentId) === deferred) {
-                deferredPaneLayoutRefreshes.delete(environmentId);
-              }
-            });
-        }
+  const stopPaneStore = panes.subscribe((state, previous) => {
+    for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
+      if (
+        previous.hydration.get(environmentId) === "pending" &&
+        state.hydration.get(environmentId) === "done"
+      ) {
+        void refreshPaneLayout(environmentId)
+          .then(
+            () => deferred.resolve(),
+            (error) => deferred.reject(error),
+          )
+          .finally(() => {
+            if (deferredPaneLayoutRefreshes.get(environmentId) === deferred) {
+              deferredPaneLayoutRefreshes.delete(environmentId);
+            }
+          });
       }
-      // An environment that left the pane store will never settle a write or
-      // finish hydrating, so its queued replays would be retained forever.
-      for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
-        if (!state.hydration.has(environmentId)) {
-          deferredPaneLayoutRefreshes.delete(environmentId);
-          deferred.resolve();
-        }
-      }
-      for (const environmentId of Array.from(declinedPaneLayoutRefreshes)) {
-        if (!state.environments.has(environmentId)) {
-          declinedPaneLayoutRefreshes.delete(environmentId);
-          paneLayoutRequestGenerations.delete(environmentId);
-        }
-      }
-    });
-
-    // The layouts phase reads the environments as the dependents phase saw
-    // them, right after the collection phases.
-    let layoutEnvironmentIds: string[] = [];
-    context.onResync("dependents", (pass) => {
-      layoutEnvironmentIds = pass.includes("pane-layout")
-        ? context.scope
-            .store(environmentStore)
-            .getState()
-            .environments.map(({ id }) => id)
-        : [];
-    });
-    context.onResync("layouts", () => {
-      const ids = layoutEnvironmentIds;
-      layoutEnvironmentIds = [];
-      return ids.map(refreshPaneLayout);
-    });
-
-    context.onResourceChanged("pane-layout", ({ id: environmentId }) => {
-      if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId))
-        return;
-      return refreshPaneLayout(environmentId).catch((error) => {
-        log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
-        throw error;
-      });
-    });
-
-    context.onStop(() => {
-      for (const deferred of deferredPaneLayoutRefreshes.values()) {
+    }
+    // An environment that left the pane store will never settle a write or
+    // finish hydrating, so its queued replays would be retained forever.
+    for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
+      if (!state.hydration.has(environmentId)) {
+        deferredPaneLayoutRefreshes.delete(environmentId);
         deferred.resolve();
       }
-      deferredPaneLayoutRefreshes.clear();
-      declinedPaneLayoutRefreshes.clear();
-      paneLayoutRequestGenerations.clear();
-      stopWriteSettled();
-      stopPaneStore();
+    }
+    for (const environmentId of Array.from(declinedPaneLayoutRefreshes)) {
+      if (!state.environments.has(environmentId)) {
+        declinedPaneLayoutRefreshes.delete(environmentId);
+        paneLayoutRequestGenerations.delete(environmentId);
+      }
+    }
+  });
+
+  // The layouts phase reads the environments as the dependents phase saw
+  // them, right after the collection phases.
+  let layoutEnvironmentIds: string[] = [];
+  context.onResync("dependents", (pass) => {
+    layoutEnvironmentIds = pass.includes("pane-layout")
+      ? context.scope
+          .store(environmentStore)
+          .getState()
+          .environments.map(({ id }) => id)
+      : [];
+  });
+  context.onResync("layouts", () => {
+    const ids = layoutEnvironmentIds;
+    layoutEnvironmentIds = [];
+    return ids.map(refreshPaneLayout);
+  });
+
+  context.onResourceChanged("pane-layout", ({ id: environmentId }) => {
+    if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId)) return;
+    return refreshPaneLayout(environmentId).catch((error) => {
+      log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
+      throw error;
     });
-  },
-);
+  });
+
+  context.onStop(() => {
+    for (const deferred of deferredPaneLayoutRefreshes.values()) {
+      deferred.resolve();
+    }
+    deferredPaneLayoutRefreshes.clear();
+    declinedPaneLayoutRefreshes.clear();
+    paneLayoutRequestGenerations.clear();
+    stopWriteSettled();
+    stopPaneStore();
+  });
+});
 
 /**
  * Every registration, in the order they bind and their resync reads start.

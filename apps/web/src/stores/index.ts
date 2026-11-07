@@ -17,7 +17,7 @@ export { filesPanelStore, useFilesPanelStore } from "./filesPanelStore";
 export { useFilesPanelChromeStore } from "./filesPanelChromeStore";
 export type { FilesPanelTab } from "./filesPanelStore";
 export { projectPullRequestsStore, useProjectPullRequestsStore } from "./projectPullRequestsStore";
-export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
+export { paneLayoutStore, usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
 export {
   createSessionKey,
   terminalSessionStore,

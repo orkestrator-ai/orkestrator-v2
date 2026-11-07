@@ -3,7 +3,7 @@ id: 3011
 title: "Convert pipeline, Kanban, feature plan, coordinator and graph stores"
 phase: 3
 plan: "§12 Phase 3.5"
-status: in-progress
+status: done
 depends_on: [3004]
 blocked_by: ""
 owner: "claude-worker"
@@ -40,7 +40,7 @@ updated: 2026-11-07
 
 - [x] Convert in this order: pipeline, Kanban, feature plan, coordinator, graphs.
 - [x] Turn pipeline persistence and feature-build activation into per-scope state (slots on the scope, [3014](3014-scoped-services-and-startup.md)'s and 3003's pattern), and make the completion-notes service watch its own scope's pipelines.
-- [ ] Run the completion-notes service on every scope. It still opens the notes tab in `paneLayoutStore`, a command-scope singleton, so it refuses a non-command scope until [3013](3013-pane-layout-store.md) scopes the pane layout.
+- [x] Run the completion-notes service on every scope. It still opens the notes tab in `paneLayoutStore`, a command-scope singleton, so it refuses a non-command scope until [3013](3013-pane-layout-store.md) scopes the pane layout. (Done in 3013: the service opens the notes in its own scope's pane layout and is in `WARM_SCOPE_SERVICES`.)
 - [x] Move `build-chat-tab-test-support.tsx` to `renderInNodeScope`, which removes its 19 static calls.
 
 ## Tests
@@ -80,3 +80,4 @@ updated: 2026-11-07
 ## Work log
 
 - 2026-11-07 (claude-worker): converted the nine stores to scoped defs with the shim hook (barrel, `SHIMMED_STORES`); their reads go through `backendApiForScope`, their module state into each instance, and the coordinator projections stop on scope dispose. Per-scope slots for `build-pipeline-persistence`, `feature-build-activation` and `coordinator-work-navigation`; completion notes watch their scope's pipelines. Moved the workflows (pipelines plus Multi Review), kanban and feature-plan registrations into `lib/workflow-resource-handlers.ts` as `every-scope`. Converted every imperative site with a scope; moved `build-chat-tab-test-support.tsx` and its eight suites to `renderInNodeScope` (`renderInBuildChat`, `pipelineStore()`). Shim baseline: `build-pipeline` 2, the other eight 0 (`update-baseline.ts --guard scoped-store-shim --guard lib-backend-command-default`). Tests: new `stores/workflow-scoped-stores.test.tsx` (26: per store two scopes and the hook under `renderInNodeScope`, barrel, reads to their own node for all nine, a pipeline launched on the command scope observed from a second scope, pending activation per scope, the moved handlers on a leaf, coordinator timers and listeners stopped on dispose); updated `store-resource-sync.test.ts`, `coordinator-work-navigation.test.ts` (+1, scope passed to `openBuild`), `kanbanStore.test.ts`, `scope-services.test.ts`. Focused runs pass: `src/components/build-pipeline` (687), graph designer, graph run, graph launch, kanban, projects and linear suites plus the graph and coordinator store tests, `src/stores`, and the persistence, activation, completion-notes, navigation, resource-sync and scope-services suites. Whole web suite earlier in the item: failures only in suites other agents were editing (uiStore split, federation sidebar). `tests/unit/source-guards.test.ts`: only the pre-existing test-guard findings fail. Web typecheck: no errors in this item's files. fmt and oxlint clean on touched files. Commits 4ea7ebf13 (stores, slots, handlers, sites, tests) and 49b4b6c1f (build tab suites in a node scope, barrel defs, docs, notes).
+- 2026-11-07 (claude-worker, plan item 3013): the open box. `buildPipelineCompletionNotesService` no longer refuses a non-command scope: `startBuildPipelineCompletionNotes(scope)` watches `scope.store(buildPipelineStore)` and opens the notes in `scope.store(paneLayoutStore)` (`openKeyInformationTab` takes the scope), and the service is in `WARM_SCOPE_SERVICES` (so also in `COMMAND_SCOPE_SERVICES`). `coordinator-work-navigation`'s slot holds the scope's own pane layout and focuses through `openConversationTab(…, scope)`/`requestPaneTabActivation(…, scope)`; the last 2 `build-pipeline` shim uses in `pane-layout-authoritative.ts` are gone. Test: `stores/paneLayoutStore.scopes.test.tsx` "a leaf's completion notes open in the leaf's own layout"; `scope-services.test.ts` runs the service on the leaf. Every box is ticked, so the item is done.

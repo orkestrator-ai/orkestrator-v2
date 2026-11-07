@@ -35,7 +35,7 @@ import { multiReviewStore, useMultiReviewStore } from "@/stores/multiReviewStore
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
@@ -1018,12 +1018,12 @@ function MultiReviewOverviewTab({
   });
   const openPrTab = useCallback(() => {
     if (!prTabId) return;
-    const layout = usePaneLayoutStore.getState();
+    const layout = workflowScope.store(paneLayoutStore).getState();
     const pane = layout.findPaneWithTab(prTabId, data.environmentId);
     if (!pane) return;
     layout.setActivePane(pane.id, data.environmentId);
     layout.setActiveTab(pane.id, prTabId, data.environmentId);
-  }, [data.environmentId, prTabId]);
+  }, [data.environmentId, prTabId, workflowScope]);
   // In the right-hand PR pane, so the review stays in view; GitHub on request.
   const viewPullRequest = useCallback(
     async (options?: { external?: boolean }) => {

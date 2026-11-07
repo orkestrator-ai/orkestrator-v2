@@ -15,9 +15,10 @@ import {
 } from "@/lib/claude-tmux-client";
 import { openLinkExternally } from "@/lib/preview-link-external";
 import { createTerminalLinkActivator } from "@/lib/terminal-links";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
-import { useConfigStore } from "@/stores";
+import { configStore, useConfigStore } from "@/stores";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   DEFAULT_TERMINAL_SCROLLBACK,
@@ -50,6 +51,8 @@ export function ClaudeTmuxInteractiveTerminal({
   className,
 }: ClaudeTmuxInteractiveTerminalProps) {
   const isMobile = useMediaQuery("(max-width: 767px)");
+  // The tab's node: its settings and files panel answer a link click.
+  const linkScope = useShimNodeScope(configStore.name);
   // Mirrored into a ref so neither the session-creating effect (whose cleanup
   // disposes the terminal and detaches the tmux session) nor the activation
   // effect has to depend on isMobile. Crossing the breakpoint must not tear
@@ -139,8 +142,14 @@ export function ClaudeTmuxInteractiveTerminal({
         activate: createTerminalLinkActivator({
           environmentId: environmentId ?? "",
           sourceTabId: tabId,
+          scope: () => linkScope,
           openExternal: (url) =>
-            openLinkExternally({ environmentId: environmentId ?? "", sourceTabId: tabId, url }),
+            openLinkExternally({
+              environmentId: environmentId ?? "",
+              sourceTabId: tabId,
+              url,
+              scope: linkScope,
+            }),
         }),
       },
       cursorBlink: true,
@@ -360,6 +369,7 @@ export function ClaudeTmuxInteractiveTerminal({
       fitAddonRef.current = null;
     };
   }, [
+    linkScope,
     tabId,
     environmentId,
     terminalAppearance.fontFamily,

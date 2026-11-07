@@ -64,6 +64,7 @@ import { useLongPressAction } from "@/hooks/useLongPressAction";
 import { handTabInitialPromptToBackend } from "@/lib/tab-initial-prompt";
 import { createUuid } from "@/lib/uuid";
 import {
+  paneLayoutStore,
   usePaneLayoutStore,
   getAllLeaves,
   type EnvironmentPaneState,
@@ -206,6 +207,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // same id on another node is not for it.
   const actionBarScope = useScopesWithCommandFallback().scope;
   const actionBarNodeId = actionBarScope.nodeId;
+  // The selected environment's pane layouts, on the same node (plan item 3013).
+  const paneLayouts = actionBarScope.store(paneLayoutStore);
   const selectedMergePrControl = selectedEnvironment
     ? mergePrControl(selectedEnvironment, {
         dockerAvailable,
@@ -433,7 +436,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const bindCreatePrLaunchTab = useCallback(
     (environmentId: string, tabId: string) => {
-      const { environments } = usePaneLayoutStore.getState();
+      const { environments } = paneLayouts.getState();
       const tabOpen = isTabOpen(environments, environmentId, tabId);
       const seenDuringPending =
         pendingSeenTabIdsRef.current.get(environmentId)?.has(tabId) ?? false;
@@ -456,7 +459,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       });
       setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
     },
-    [releaseCreatePrLaunch],
+    [releaseCreatePrLaunch, paneLayouts],
   );
 
   useEffect(() => {
@@ -485,7 +488,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   useEffect(() => {
     if (createPrLaunchClaims.size === 0) return;
     const recordPendingSeenTabs = () => {
-      const { environments } = usePaneLayoutStore.getState();
+      const { environments } = paneLayouts.getState();
       for (const [environmentId, claim] of createPrLaunchClaimsRef.current) {
         if (claim.tabId) continue;
         let seen = pendingSeenTabIdsRef.current.get(environmentId);
@@ -499,8 +502,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     };
     recordPendingSeenTabs();
-    return usePaneLayoutStore.subscribe(recordPendingSeenTabs);
-  }, [createPrLaunchClaims]);
+    return paneLayouts.subscribe(recordPendingSeenTabs);
+  }, [createPrLaunchClaims, paneLayouts]);
 
   // A claim survives its launch only while the tab that owns the work is open.
   // Closing that tab tears the session down (Codex interrupt included), so a
@@ -509,7 +512,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   useEffect(() => {
     const claims = createPrLaunchClaimsRef.current;
     if (claims.size === 0) return;
-    const { environments } = usePaneLayoutStore.getState();
+    const { environments } = paneLayouts.getState();
     let changed = false;
     for (const [environmentId, claim] of Array.from(claims)) {
       if (!claim.tabId) continue;
@@ -526,7 +529,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     if (changed) setCreatePrLaunchClaims(new Map(claims));
     // `createPrLaunchTabPresence` is the trigger, not an input: the effect reads
     // the same state it was computed from, one level below the memoized key.
-  }, [createPrLaunchTabPresence]);
+  }, [createPrLaunchTabPresence, paneLayouts]);
 
   // One timer per unacknowledged claim, keyed by that claim's own claimedAt.
   // A later Create PR in another environment must not restart this one, and an
@@ -850,19 +853,25 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       // Do not await UI lifecycle work after this hand-off. The queue mutation is
       // durable and wakes the backend dispatcher, so unmounting this ActionBar or
       // switching environments cannot delay the review until the tab is opened.
-      void handTabInitialPromptToBackend({
-        environmentId: selectedEnvironmentId,
-        tabId,
-        agent,
-        prompt: reviewPrompt,
-        options: {
-          model,
-          reasoningEffort:
-            agent === "claude" || agent === "codex" ? (reasoningEffort ?? "high") : reasoningEffort,
-          mode: "build",
-          ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
+      void handTabInitialPromptToBackend(
+        {
+          environmentId: selectedEnvironmentId,
+          tabId,
+          agent,
+          prompt: reviewPrompt,
+          options: {
+            model,
+            reasoningEffort:
+              agent === "claude" || agent === "codex"
+                ? (reasoningEffort ?? "high")
+                : reasoningEffort,
+            mode: "build",
+            ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
+          },
         },
-      })
+        undefined,
+        actionBarScope,
+      )
         .then(() => releaseLaunch())
         .catch((error) => {
           releaseLaunch({ retryable: true });
@@ -1334,11 +1343,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       .catch(() => environmentBrowserUrl ?? undefined)
       .then((initialUrl) => {
         if (initialUrl) {
-          usePaneLayoutStore.getState().updateTabBrowserUrl(tabId, initialUrl, environmentId);
+          paneLayouts.getState().updateTabBrowserUrl(tabId, initialUrl, environmentId);
         }
         launch.settled();
       });
   }, [
+    paneLayouts,
     actionBarScope,
     beginLaunchedTab,
     canCreateTab,

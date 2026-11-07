@@ -168,6 +168,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run contract:check
 
+      # The committed client adapter list matches the domain client
+      # definitions (plan item 1009); the contract CI job (1008) reads it.
+      - name: Check the domain client adapter list
+        if: ${{ !cancelled() }}
+        run: mise run contract:adapters:check
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest

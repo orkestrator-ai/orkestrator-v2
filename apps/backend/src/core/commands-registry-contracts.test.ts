@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import * as Schema from "effect/Schema";
 import { defineCommand, InvalidCommandResultError } from "@orkestrator/protocol/contract/command";
 import { defineDomain } from "@orkestrator/protocol/contract/domain";
@@ -123,12 +124,28 @@ describe("registry: definitions and names", () => {
     expect(() => register(other, () => null)).toThrow("defined with two version ranges");
   });
 
-  test("the real registry has no definitions yet", () => {
+  test("the real registry's definitions and ranges are the committed manifest's", () => {
     const commands = createCommandRegistry();
     expect(commands).toBeInstanceOf(Map);
     expect(commands.size).toBeGreaterThan(100);
-    expect(commands.contracts.size).toBe(0);
-    expect(commands.domainRanges.size).toBe(0);
+    const manifest = JSON.parse(
+      readFileSync(
+        new URL("../../../../packages/protocol/contracts/manifest.json", import.meta.url),
+        "utf8",
+      ),
+    ) as {
+      counts: { defined: number };
+      domains: Record<string, { version: number; min: number }>;
+    };
+    expect(commands.contracts.size).toBe(manifest.counts.defined);
+    expect(commands.helloDomains()).toEqual(
+      Object.fromEntries(
+        Object.entries(manifest.domains).map(([name, { version, min }]) => [
+          name,
+          { min, max: version },
+        ]),
+      ),
+    );
   });
 });
 

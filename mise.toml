@@ -189,6 +189,14 @@ description = "Snapshot the contract of every published release that has none (p
 raw_args = true
 run = "bun scripts/backfill-contract-snapshots.ts"
 
+[tasks."contract:adapters"]
+description = "Regenerate the domain client adapter list (packages/protocol/contracts/adapters.json)"
+run = "bun scripts/generate-contract-adapters.ts"
+
+[tasks."contract:adapters:check"]
+description = "Check the domain client adapter list for drift from the domain client definitions"
+run = "bun scripts/generate-contract-adapters.ts --check"
+
 [tasks.setup]
 description = "Install dependencies and build every native bridge"
 run = [

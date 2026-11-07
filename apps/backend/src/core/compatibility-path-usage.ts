@@ -3,7 +3,8 @@
  * is retired on evidence rather than a guess
  * (`docs/architecture/version-compatibility.md`).
  *
- * Each path is a fixed id from {@link COMPATIBILITY_PATH_IDS}; nothing else is
+ * Each path is a fixed id from {@link COMPATIBILITY_PATH_IDS}, or a domain
+ * client adapter's id (`domain-adapter.<source>.<domain>.v<version>`); nothing else is
  * recorded: no session, agent, URL, port or version of the other side. Hot
  * paths call {@link CompatibilityPathUsage.record}, which only bumps memory.
  * Once a sink is attached (the backend attaches its database at startup), the
@@ -13,6 +14,11 @@
  * database sink lives in `compatibility-path-usage-store.ts`, so the paths that
  * record here never import storage.
  */
+import {
+  isDomainAdapterPathId,
+  type DomainAdapterPathId,
+} from "@orkestrator/protocol/contract/client-usage";
+
 /**
  * Every counted path. Add an id when a change adds a path for an older peer
  * and remove it with the path. The register in the architecture doc names
@@ -126,7 +132,13 @@ export const COMPATIBILITY_PATH_IDS = [
   "relayed-node-event.legacy-desktop-stream",
 ] as const;
 
-export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];
+/**
+ * A fixed path id, or a domain client adapter's id
+ * (`domain-adapter.<backend|renderer>.<domain>.v<version>`, plan item 1009):
+ * one per adapter below its domain's current version, bounded by the domain
+ * names and the adapter list rather than listed here.
+ */
+export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number] | DomainAdapterPathId;
 
 /** One path's persisted usage. */
 export interface CompatibilityPathUsageEntry {
@@ -158,6 +170,11 @@ export const COMPATIBILITY_PATH_USAGE_STORE = "compatibility-path-usage";
 const FLUSH_INTERVAL_MS = 60_000;
 const KNOWN_IDS = new Set<string>(COMPATIBILITY_PATH_IDS);
 
+/** Whether `id` is a fixed path id or a well-formed domain adapter id. */
+export function isCompatibilityPathId(id: string): id is CompatibilityPathId {
+  return KNOWN_IDS.has(id) || isDomainAdapterPathId(id);
+}
+
 function isIso(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
@@ -172,7 +189,9 @@ export function normalizeCompatibilityPathUsage(
     value && typeof value === "object" ? (value as { paths?: unknown }).paths : undefined;
   if (stored && typeof stored === "object") {
     for (const [id, entry] of Object.entries(stored)) {
-      if ((!includeUnknown && !KNOWN_IDS.has(id)) || !entry || typeof entry !== "object") continue;
+      if ((!includeUnknown && !isCompatibilityPathId(id)) || !entry || typeof entry !== "object") {
+        continue;
+      }
       const { count, firstSeenAt, lastSeenAt } = entry as Record<string, unknown>;
       if (!Number.isSafeInteger(count) || (count as number) < 0) continue;
       if (!isIso(firstSeenAt) || !isIso(lastSeenAt)) continue;
@@ -219,15 +238,19 @@ export class CompatibilityPathUsage {
     private readonly flushIntervalMs = FLUSH_INTERVAL_MS,
   ) {}
 
-  /** Counts one use of a path. Never throws and never does I/O. */
-  record(id: CompatibilityPathId): void {
+  /**
+   * Counts `count` uses of a path (one by default; a renderer's upload carries
+   * several). Never throws and never does I/O.
+   */
+  record(id: CompatibilityPathId, count = 1): void {
+    if (!Number.isSafeInteger(count) || count < 1) return;
     const at = this.now().toISOString();
     const usage = this.pending.get(id);
     if (usage) {
-      usage.count += 1;
+      usage.count = Math.min(Number.MAX_SAFE_INTEGER, usage.count + count);
       usage.lastSeenAt = at;
     } else {
-      this.pending.set(id, { count: 1, firstSeenAt: at, lastSeenAt: at });
+      this.pending.set(id, { count, firstSeenAt: at, lastSeenAt: at });
     }
     this.scheduleFlush();
   }

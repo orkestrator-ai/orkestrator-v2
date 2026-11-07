@@ -521,13 +521,35 @@ export const nodeMailClient = domainClient(nodeMail, {
 - **Version 0 is the legacy adapter**: today's capability-gated behaviour
   (the per-domain `*_capabilities` commands or the hello `capabilities`) for
   nodes without a range, so callers are already version-agnostic.
-- Plan item [1009](../../plans/unified/1009-domain-clients-and-adapters.md)
-  (in progress) adds `createDomainClient(def, { call, domains })`, which picks
-  once per connection generation, caches the choice and throws a coded
-  `unsupported-version` when nothing overlaps; the committed adapter list
-  `packages/protocol/contracts/adapters.json`; and content-free usage counters
-  per (domain, adapter version). Node scopes expose it as `scope.domain(...)`
+- `createDomainClient(def, { call, domains, capabilities?, invoke?, usage? })`
+  binds a definition to one node's transport. `client.api()` picks once per
+  connection generation (per `domains` object identity; `reset()` forgets it),
+  caches the adapter and throws the coded `unsupported-version`, with the
+  node's range, when nothing overlaps. `call(def, args, envelope)` gets the
+  envelope fields `{ domain, version, critical? }` without `args` (they stay
+  under desktop IPC's 4096-character bound), and none for adapter 0, so a
+  pre-contract node gets today's body. Results are decoded tolerantly with the
+  command's schema. Adapter 0's context has the hello `capabilities`, an
+  untyped `invoke`, and `capability(command)`, which reads one of the domain's
+  `LEGACY_CAPABILITY_COMMANDS` once per generation (`null` when the node
+  predates it). Node scopes expose it as `scope.domain(...)`
   ([2011](../../plans/unified/2011-scope-domain-negotiation.md)).
+- **Adapter list.** Every domain client is defined under
+  `packages/protocol/src/contract/domains/`, one per domain, and listed in
+  `DOMAIN_CLIENTS` (`contract/client-adapters.ts`).
+  `packages/protocol/contracts/adapters.json` is its committed form (per
+  domain: `current` and `adapters`, highest first), written by
+  `mise run contract:adapters`; `mise run contract:adapters:check` fails on
+  drift and runs in CI next to `contract:check`. The contract CI job reads it.
+- **Usage counters.** Every call through an adapter below its domain's current
+  version is counted, names and numbers only. The backend's own clients count
+  into the compatibility-path counters as
+  `domain-adapter.backend.<domain>.v<version>` (`backendDomainAdapterUsage`);
+  a desktop window's renderer counts into a bounded ring
+  (`domain-adapter-usage-ring.ts`, next to the error ring) and sends new counts
+  with `record_domain_adapter_usage` to its own backend, which adds the listed
+  pairs as `domain-adapter.renderer.<domain>.v<version>`. Read them with
+  `get_compatibility_path_usage` like any other path.
 - **Retirement:** the adapter for version *v* is deleted when the support
   floor passes the first Stable release with *v + 1*, the register's usual
   rule. The legacy adapter 0 goes when the floor passes the first Stable

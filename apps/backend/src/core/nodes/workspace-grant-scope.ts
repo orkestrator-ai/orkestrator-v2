@@ -44,6 +44,7 @@ export const WORKSPACE_ADMINISTRATION_COMMANDS: ReadonlySet<string> = new Set([
   "plan_diagnostics_bundle",
   "read_diagnostics_bundle",
   "record_renderer_errors",
+  "record_domain_adapter_usage",
   "graph_capability_ceiling_set",
   // Host updates and dependency maintenance.
   "request_host_update_check",

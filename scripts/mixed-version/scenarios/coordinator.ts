@@ -7,6 +7,9 @@
  * overrides, the checkout's turn, the project's Git status), and a side
  * conversation is opened and closed. Version 1 sends the envelope and decodes
  * every answer with the command's schema; version 0 is today's untyped call.
+ * The two newest panel reads (launch overrides, the checkout's turn) are
+ * skipped by name on a release that predates them (2026-11-07: with them
+ * required, the module never applied against any published release).
  */
 import { coordinatorClient } from "@orkestrator/protocol/contract/domains/coordinator";
 import { defineScenario } from "../scenario.ts";
@@ -16,8 +19,6 @@ const COMMANDS = [
   "get_project_coordinator",
   "get_project_coordinator_view",
   "list_coordinator_activity",
-  "list_coordinator_launch_overrides",
-  "get_coordinator_checkout_turn",
   "get_project_git_status",
   "create_coordinator_conversation",
   "close_coordinator_conversation",
@@ -68,18 +69,26 @@ export default defineScenario({
 
       // Commands without arguments go as today's call without an arguments object.
       const activity = await coordinator.list_coordinator_activity(undefined as never);
-      const overrides = await coordinator.list_coordinator_launch_overrides(undefined as never);
-      const turn = await coordinator.get_coordinator_checkout_turn({ projectId });
+      const hasOverrides = node.has("list_coordinator_launch_overrides");
+      const hasTurn = node.has("get_coordinator_checkout_turn");
+      const overrides = hasOverrides
+        ? await coordinator.list_coordinator_launch_overrides(undefined as never)
+        : null;
+      const turn = hasTurn ? await coordinator.get_coordinator_checkout_turn({ projectId }) : null;
       const git = await coordinator.get_project_git_status({ projectId });
       ctx.check(
         `CO-${tag}3`,
-        "the panel's reads answer: activity, launch overrides, the checkout's turn, Git status",
+        "the panel's reads answer: activity, launch overrides, the checkout's turn, Git status (the newer two where the node has them)",
         typeof activity?.projects === "object" &&
-          Array.isArray(overrides?.overrides) &&
+          (!hasOverrides || Array.isArray(overrides?.overrides)) &&
           (turn === null || typeof turn?.kind === "string") &&
           git?.projectId === projectId,
         `turn ${turn === null ? "none" : String(turn.kind)}`,
       );
+      const skipped = [
+        ...(hasOverrides ? [] : ["list_coordinator_launch_overrides"]),
+        ...(hasTurn ? [] : ["get_coordinator_checkout_turn"]),
+      ];
 
       const before = new Set(snapshot?.workspace.conversations.map((item) => item.id) ?? []);
       const opened = await coordinator.create_coordinator_conversation({
@@ -101,7 +110,11 @@ export default defineScenario({
         side?.role === "side" &&
           (sideAfter === undefined || typeof sideAfter.closedAt === "string"),
       );
-      ctx.note(`coordinator.${tag}`, { adapter: version, conversations: before.size });
+      ctx.note(`coordinator.${tag}`, {
+        adapter: version,
+        conversations: before.size,
+        ...(skipped.length > 0 ? { skipped } : {}),
+      });
     }
   },
 });

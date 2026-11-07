@@ -2,8 +2,10 @@
  * pull-requests across versions (plan item 7006): a current renderer's
  * `pull-requests` client against each node of the pair, on a worker
  * environment. The PR-monitor snapshot answers its bare and conditional
- * forms, the post-turn PR recheck arms and then rolls back exactly that
- * arm, and auto-merge turns off and reads back off on the node itself. A node
+ * forms, the post-turn PR recheck is armed only for an open pull request
+ * with conflicts (the worker has none, so the arm answers `null`; a token,
+ * when one comes back, is rolled back exactly), and auto-merge turns off and
+ * reads back off on the node itself. A node
  * with the domain gets version 1; a pre-contract node gets today's bodies
  * through version 0.
  *
@@ -73,10 +75,13 @@ export default defineScenario({
             () => true,
             () => false,
           ));
+      // `armPrRecheckAfterAgentCompletion` arms only an open, conflicted pull
+      // request; this worker has none, so nothing is armed (2026-11-07: the
+      // first live run showed the module had assumed a token).
       ctx.check(
         `PR-${tag}3`,
-        "the post-turn recheck arms, and that exact arm is rolled back",
-        disarmed,
+        "the post-turn recheck arms nothing without a pull request; a returned arm is rolled back exactly",
+        armedAt === null || disarmed,
         typeof armedAt,
       );
 

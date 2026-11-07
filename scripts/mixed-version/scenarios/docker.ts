@@ -1,8 +1,11 @@
 /**
  * docker across versions (plan item 7003): a current renderer's `docker`
- * client against each node of the pair, reads only. Docker availability,
- * the host-reachability snapshot and the Orkestrator container list read
- * back whether or not the node's host runs Docker. Version 1 decodes every
+ * client against each node of the pair, reads only. Docker availability and
+ * the host-reachability snapshot read back whether or not the node's host
+ * runs Docker; the Orkestrator container list reads back when Docker is
+ * available and is refused (an error, not a crash) when the node cannot run
+ * the `docker` CLI, as on a host whose Docker is outside the run's
+ * constructed `PATH` (2026-11-07: the first live run). Version 1 decodes every
  * answer with the protocol schema; version 0 is today's call, answered as
  * sent. Nothing here creates, starts, stops or removes a container.
  */
@@ -34,15 +37,22 @@ export default defineScenario({
         typeof availability.available === "boolean",
       );
       const reachability = await docker.hostReachability();
-      const containers = await docker.orkestratorContainers();
+      const containers = await docker.orkestratorContainers().then(
+        (list) => ({ list }),
+        (error: unknown) => ({ refusal: String(error).slice(0, 200) }),
+      );
       ctx.check(
         `DK-${tag}3`,
-        "the reachability snapshot and the container list read back",
-        typeof reachability === "object" && reachability !== null && Array.isArray(containers),
+        "the reachability snapshot reads back, and the container list reads back (refused only without Docker)",
+        typeof reachability === "object" &&
+          reachability !== null &&
+          ("list" in containers ? Array.isArray(containers.list) : !availability.available),
+        "refusal" in containers ? containers.refusal : undefined,
       );
       ctx.note(`${node.role} docker`, {
         adapter: version,
         available: availability.available,
+        containers: "list" in containers ? containers.list.length : "refused",
         calls: Object.fromEntries(calls),
       });
     }

@@ -82,16 +82,30 @@ export default defineScenario({
       // Only from off: turning it on can read plan usage, and a pin would end.
       const mode = autoSwitchMode(snapshot.autoSwitch, "claude");
       if (has("set_agent_account_auto_switch") && (mode === undefined || mode === "off")) {
-        const off = await accounts.set_agent_account_auto_switch({
-          platform: "claude",
-          enabled: false,
-        });
-        ctx.check(
-          `AC-${tag}4`,
-          "the automatic-switching tick is written (off, as it was) without switching",
-          off.active.claude === snapshot.active.claude &&
-            (autoSwitchMode(off.autoSwitch, "claude") ?? "off") === "off",
-        );
+        const off = await accounts
+          .set_agent_account_auto_switch({ platform: "claude", enabled: false })
+          .then(
+            (answer) => ({ answer }),
+            (error: unknown) => ({ refusal: String(error) }),
+          );
+        // An attached leaf takes these ticks from its command node and refuses
+        // the write, naming it (`updateAgentAccountAutoSwitchSettings`); an
+        // older leaf may still take it. 2026-11-07: the first live run.
+        if ("refusal" in off) {
+          ctx.check(
+            `AC-${tag}4`,
+            "an attached leaf refuses the automatic-switching tick, naming its command node",
+            node.role === "leaf" && /command node/iu.test(off.refusal),
+            off.refusal.slice(0, 200),
+          );
+        } else {
+          ctx.check(
+            `AC-${tag}4`,
+            "the automatic-switching tick is written (off, as it was) without switching",
+            off.answer.active.claude === snapshot.active.claude &&
+              (autoSwitchMode(off.answer.autoSwitch, "claude") ?? "off") === "off",
+          );
+        }
       }
 
       if (has("set_preferred_agent_identity") && has("list_machine_agent_accounts")) {

@@ -32,6 +32,7 @@ import {
   operatorToolListed,
 } from "./control-mcp-operator-tools.js";
 import { registerVoiceTools } from "./control-mcp-voice.js";
+import { registerAgentVoiceChatTools } from "./control-mcp-agent-voice-chat.js";
 import { registerOperatorWorkflowTools } from "./control-mcp-operator-workflow-tools.js";
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
@@ -456,6 +457,7 @@ export async function createControlMcp(
     // but voice, whose clients load a fixed list at session start.
     registerOperatorWorkflowTools(server, operator);
     registerVoiceTools(mcp, operator);
+    registerAgentVoiceChatTools(mcp, operator);
     registerGatewayTools(mcp, operator);
     if (operator.profile !== "voice") registerDirectTools(mcp, operator);
   }

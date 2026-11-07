@@ -1,3 +1,4 @@
+import { StorageService } from "./storage.js";
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -8,6 +9,7 @@ import type {
   ControlMcpCredentialSummary,
 } from "@orkestrator/protocol/control-mcp";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { AgentVoiceChats, type AgentVoiceChatHost } from "./agent-voice-chats.js";
 import { ConfirmTokens } from "./control-mcp-confirm.js";
 import {
   ControlMcpCredentialStore,
@@ -66,6 +68,12 @@ export type ControlMcpServerOptions = {
   port?: number;
   /** Backoff for re-binding a fixed port another process holds; tests shorten it. */
   retry?: { initialDelayMs: number; maxDelayMs: number };
+  /**
+   * Writes one agent voice chat reply: the backend's one-shot replier
+   * (`agent-voice-chat-replies.ts`), or a script in tests. Omitted: every
+   * reply fails as unavailable.
+   */
+  agentVoiceChatReply?: AgentVoiceChatHost["reply"];
 };
 
 /** What `backend-instance.json` publishes about the Control MCP. */
@@ -169,6 +177,10 @@ export class ControlMcpServer {
   private credentialsLoaded = false;
   /** Per process: a restart invalidates outstanding confirm tokens. */
   private readonly confirmTokens = new ConfirmTokens();
+  /** Per listener run, in memory only: stop() ends every agent voice chat. */
+  private agentVoiceChats = new AgentVoiceChats();
+  private readonly voiceStorage: StorageService;
+  private readonly agentVoiceChatReply: AgentVoiceChatHost["reply"];
   private info: ControlMcpInfo | null = null;
   private startError: string | null = null;
   private lifecycle: Promise<void> = Promise.resolve();
@@ -195,10 +207,16 @@ export class ControlMcpServer {
     private readonly invoke: ControlMcpInvoker,
     options: ControlMcpServerOptions = {},
   ) {
+    this.voiceStorage = new StorageService(dataDir, { snapshots: false });
     this.bindAddress = options.bindAddress ?? "127.0.0.1";
     this.port = options.port ?? configuredControlMcpPort();
     this.bindRetry = options.retry ?? DEFAULT_BIND_RETRY;
     this.retryDelayMs = this.bindRetry.initialDelayMs;
+    this.agentVoiceChatReply =
+      options.agentVoiceChatReply ??
+      (async () => {
+        throw new Error("Agent voice chat replies are unavailable");
+      });
   }
 
   /** Called whenever the listener starts, stops or fails to bind. */
@@ -420,6 +438,9 @@ export class ControlMcpServer {
       const server = this.server;
       this.server = null;
       this.coordinatorCredentials.clear();
+      this.voiceStorage.close();
+      this.agentVoiceChats.dispose();
+      this.agentVoiceChats = new AgentVoiceChats();
       try {
         if (server) {
           await new Promise<void>((resolve, reject) => {
@@ -472,6 +493,11 @@ export class ControlMcpServer {
       authority: controlMcpAuthority(credential.id),
       invoke: this.invoke,
       confirmTokens: this.confirmTokens,
+      agentVoiceChats: {
+        chats: this.agentVoiceChats,
+        reply: this.agentVoiceChatReply,
+        bindInterrupt: (input) => this.voiceStorage.publicOperations.bindVoiceInterrupt(input),
+      },
       messagingEnabled,
     };
   }

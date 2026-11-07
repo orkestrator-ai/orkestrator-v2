@@ -112,10 +112,14 @@ export class SessionTitleService implements SessionTitleGenerator {
   async generate(input: {
     agent: AgentPlatform;
     source: string;
+    signal?: AbortSignal;
   }): Promise<GeneratedSessionTitle | null> {
-    if (this.shutdownController.signal.aborted || !input.source.trim()) return null;
-    if (!(await this.acquire())) return null;
-    const work = this.generateWithStrategies(input);
+    const signal = input.signal
+      ? AbortSignal.any([input.signal, this.shutdownController.signal])
+      : this.shutdownController.signal;
+    if (signal.aborted || !input.source.trim()) return null;
+    if (!(await this.acquire(signal))) return null;
+    const work = this.generateWithStrategies({ ...input, signal });
     this.active.add(work);
     try {
       return await work;
@@ -134,29 +138,33 @@ export class SessionTitleService implements SessionTitleGenerator {
   private async generateWithStrategies(input: {
     agent: AgentPlatform;
     source: string;
+    signal?: AbortSignal;
   }): Promise<GeneratedSessionTitle | null> {
     // Unreadable means unknown consent, so nothing leaves this machine.
     const policy: SessionTitleGenerationPolicy = this.deps.policy
       ? await this.deps.policy().catch(() => "off" as const)
       : DEFAULT_SESSION_TITLE_GENERATION_POLICY;
     for (const strategy of sessionTitleStrategyOrder(input.agent, policy)) {
-      if (this.shutdownController.signal.aborted) return null;
+      if (input.signal?.aborted) return null;
       if ((this.restingUntil.get(strategy) ?? 0) > this.now()) continue;
       if (!(await this.deps.signedIn(strategy).catch(() => false))) continue;
+      if (input.signal?.aborted) return null;
       try {
         const { executable, env } = await this.deps.launch(strategy);
+        if (input.signal?.aborted) return null;
         const title = await this.generators[strategy]({
           executable,
           env,
           source: input.source,
-          signal: this.shutdownController.signal,
+          signal: input.signal,
           run: this.run,
           ...(this.deps.timeoutMs !== undefined ? { timeoutMs: this.deps.timeoutMs } : {}),
         });
+        if (input.signal?.aborted) return null;
         this.restingUntil.delete(strategy);
         return { title, strategy };
       } catch (error) {
-        if (this.shutdownController.signal.aborted) return null;
+        if (input.signal?.aborted) return null;
         this.restingUntil.set(
           strategy,
           this.now() + (this.deps.failureCooldownMs ?? DEFAULT_FAILURE_COOLDOWN_MS),
@@ -173,23 +181,32 @@ export class SessionTitleService implements SessionTitleGenerator {
     return null;
   }
 
-  private acquire(): Promise<boolean> {
+  private acquire(signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
     if (this.running < (this.deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT)) {
       this.running += 1;
       return Promise.resolve(true);
     }
-    if (this.waiting.length >= (this.deps.maxQueued ?? DEFAULT_MAX_QUEUED)) {
+    if (this.waiting.length >= (this.deps.maxQueued ?? DEFAULT_MAX_QUEUED))
       return Promise.resolve(false);
-    }
     return new Promise((resolve) => {
-      this.waiting.push(() => {
-        if (this.shutdownController.signal.aborted) {
+      const cancel = () => {
+        const index = this.waiting.indexOf(wake);
+        if (index >= 0) this.waiting.splice(index, 1);
+        signal.removeEventListener("abort", cancel);
+        resolve(false);
+      };
+      const wake = () => {
+        signal.removeEventListener("abort", cancel);
+        if (signal.aborted) {
           resolve(false);
           return;
         }
         this.running += 1;
         resolve(true);
-      });
+      };
+      this.waiting.push(wake);
+      signal.addEventListener("abort", cancel, { once: true });
     });
   }
 
@@ -208,15 +225,14 @@ export function sessionTitleGenerationEnabled(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * The production service: the managed CLIs, launched on the active account
+ * How a production one-shot run (a session title, an agent voice chat reply)
+ * finds a login and launches its CLI: the managed CLIs, on the active account
  * exactly as that platform's bridge would be, minus the GitHub credential.
  */
-export function createSessionTitleService(context: CommandContext): SessionTitleService {
-  return new SessionTitleService({
-    policy: async () =>
-      resolveSessionTitleGenerationPolicy(
-        (await context.storage.loadConfig()).global.sessionTitleGeneration,
-      ),
+export function oneShotAgentRunDependencies(
+  context: CommandContext,
+): Pick<SessionTitleServiceDependencies, "signedIn" | "launch"> {
+  return {
     signedIn: async (strategy) => {
       const [{ readAgentSignInStatus }, { listAgentAccounts }] = await Promise.all([
         import("./agent-sign-in-status.js"),
@@ -226,7 +242,7 @@ export function createSessionTitleService(context: CommandContext): SessionTitle
         listAccounts: () => listAgentAccounts(context),
         // Only Claude and Codex are asked, and neither reads it.
         cursorStatus: async () => {
-          throw new Error("Cursor status is not used for session titles");
+          throw new Error("Cursor status is not used for one-shot runs");
         },
       });
       return status.state === "signed-in";
@@ -245,5 +261,16 @@ export function createSessionTitleService(context: CommandContext): SessionTitle
       await applyActiveAgentAccountEnvironment(context, "claude", env);
       return { executable, env };
     },
+  };
+}
+
+/** The production service, on {@link oneShotAgentRunDependencies}. */
+export function createSessionTitleService(context: CommandContext): SessionTitleService {
+  return new SessionTitleService({
+    policy: async () =>
+      resolveSessionTitleGenerationPolicy(
+        (await context.storage.loadConfig()).global.sessionTitleGeneration,
+      ),
+    ...oneShotAgentRunDependencies(context),
   });
 }

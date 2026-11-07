@@ -23,6 +23,7 @@ afterEach(async () => {
 
 async function open() {
   const nodes = await topology();
+  const replyPrompts: string[] = [];
   const server = new ControlMcpServer(
     nodes.command.dataDir,
     async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -30,7 +31,13 @@ async function open() {
       if (!handler) throw new Error(`Unknown backend command: ${command}`);
       return (await handler(args, nodes.command.context)) as T;
     },
-    { port: 0 },
+    {
+      port: 0,
+      agentVoiceChatReply: async ({ prompt }) => {
+        replyPrompts.push(prompt);
+        return "Remote answer.";
+      },
+    },
   );
   servers.push(server);
   await server.start();
@@ -51,7 +58,7 @@ async function open() {
       inputSchema: { properties?: object };
     }>;
   };
-  return { ...nodes, token: descriptor.token, credential, call, list };
+  return { ...nodes, token: descriptor.token, credential, call, list, replyPrompts };
 }
 
 function content(result: RpcResult): Record<string, unknown> {
@@ -63,6 +70,44 @@ function publicActionsReceived(leaf: { received: Array<{ command: string }> }): 
 }
 
 describe("Control MCP and leaf nodes", () => {
+  test("agent voice chat reads its digest from the selected leaf and tolerates failed registry reads", async () => {
+    const mcp = await open();
+    await seedCoordinator(mcp.leaf);
+    await mcp.leaf.harness.storage.updateProject(mcp.leaf.projectId, {
+      name: "Remote voice project",
+    });
+    const voice = await mcp.credential("voice");
+    const result = content(
+      await mcp.call(voice, "agent_voice_chat_say", {
+        nodeId: mcp.leafId,
+        projectId: mcp.leaf.projectId,
+        text: "Status?",
+        requestId: "remote-opening",
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(mcp.replyPrompts[0]).toContain("Project: Remote voice project");
+    expect(mcp.replyPrompts[0]).toContain("Main coordinator: claude");
+    expect(mcp.leafNode.received.some((entry) => entry.command === "get_agent_registry")).toBe(
+      true,
+    );
+    mcp.leafNode.commands.set("get_agent_registry", async () => {
+      throw new Error("registry unavailable");
+    });
+    const degraded = content(
+      await mcp.call(voice, "agent_voice_chat_say", {
+        nodeId: mcp.leafId,
+        projectId: mcp.leaf.projectId,
+        text: "Status again?",
+        requestId: "remote-degraded",
+      }),
+    );
+    expect(degraded.ok).toBe(true);
+    expect(mcp.replyPrompts[1]).toContain("agents could not be read");
+    expect(mcp.replyPrompts[1]).not.toContain("Main coordinator:");
+    expect(mcp.replyPrompts[1]).not.toContain("registry unavailable");
+  });
+
   test("lists the nodes and the node-aware tools, and find_actions finds them", async () => {
     const mcp = await open();
     const tools = await mcp.list(mcp.token);

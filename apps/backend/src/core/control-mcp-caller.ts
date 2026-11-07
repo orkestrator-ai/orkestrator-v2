@@ -20,6 +20,7 @@ import {
   nextPublicWaitDelay,
   type PublicWaitVerdict,
 } from "@orkestrator/protocol/public-api-wait";
+import type { AgentVoiceChatHost } from "./agent-voice-chats.js";
 import type { ConfirmTokens } from "./control-mcp-confirm.js";
 import { adapterError, type ControlMcpEnvelope } from "./control-mcp-results.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
@@ -49,6 +50,8 @@ export interface ControlMcpCaller {
    */
   readInvoke?: ControlMcpInvoker;
   confirmTokens: ConfirmTokens;
+  /** The listener's open agent voice chats and the model that answers them; omitted: no voice chat tools. */
+  agentVoiceChats?: AgentVoiceChatHost;
   messagingEnabled: boolean;
   /**
    * The node every public action of this call runs on (`request.node`), a

@@ -60,7 +60,7 @@ const PROFILE_TEXT: Record<ControlMcpProfile, { label: string; description: stri
   voice: {
     label: "Voice",
     description:
-      "Twelve tools shaped for spoken requests, short answers, and a spoken confirmation before risky actions. No project, settings, destructive or command-running actions.",
+      "Sixteen tools shaped for spoken requests: short answers, agent voice chat with a project that can interrupt its coordinator, and a spoken confirmation before risky actions. No project, settings, destructive or command-running actions.",
   },
   full: {
     label: "Full",

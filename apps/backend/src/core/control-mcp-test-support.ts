@@ -1,5 +1,9 @@
 import type { ControlMcpProfile } from "@orkestrator/protocol/control-mcp";
-import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
+import {
+  ControlMcpServer,
+  readControlMcpDescriptor,
+  type ControlMcpServerOptions,
+} from "./control-mcp-server.js";
 import { setup } from "./public-api/test-provider.js";
 
 /**
@@ -57,7 +61,9 @@ export async function rpc(
   };
 }
 
-export async function controlMcpHarness() {
+export async function controlMcpHarness(
+  options: Pick<ControlMcpServerOptions, "agentVoiceChatReply"> = {},
+) {
   const session = await setup();
   const server = new ControlMcpServer(
     session.harness.dataDir,
@@ -66,7 +72,7 @@ export async function controlMcpHarness() {
       if (!handler) throw new Error(`Unknown backend command: ${command}`);
       return (await handler(args, session.harness.context)) as T;
     },
-    { port: 0 },
+    { port: 0, ...options },
   );
   await server.start();
   const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);

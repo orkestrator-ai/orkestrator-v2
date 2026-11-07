@@ -271,7 +271,7 @@ function spokenMailSender(from: MailActor): string {
  * is not. Reads the stored text, because mail is usually longer than the excerpt
  * `read_session` returns; a batch names its newest message.
  */
-function spokenMailRow(text: string, textTruncated = false): string | null {
+export function spokenMailRow(text: string, textTruncated = false): string | null {
   const content = stripSystemInstructions(text);
   if (!isPeerMailCarrierContent(content, { requirePayloadFrame: true })) return null;
   // A cut row can hide whole later carriers, so neither its newest sender nor

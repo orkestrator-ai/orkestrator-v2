@@ -70,6 +70,7 @@
     "./permission-rules": "./src/permission-rules.ts",
     "./agent-interaction-deadline": "./src/agent-interaction-deadline.ts",
     "./agent-mail": "./src/agent-mail.ts",
+    "./agent-voice-chat": "./src/agent-voice-chat.ts",
     "./human-prompts": "./src/human-prompts.ts",
     "./keyboard-shortcuts": "./src/keyboard-shortcuts.ts",
     "./user-commands": "./src/user-commands.ts",

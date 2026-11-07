@@ -100,6 +100,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "node-action-requests": { kind: "document" },
   "agent-accounts": { kind: "document" },
   "public-operations/index": { kind: "document" },
+  "control-mcp-voice-interrupts": { kind: "document" },
   "environment-cleanup-ledger": { kind: "envelope", collections: ["entries"] },
   "environment-cleanup-sweeps": { kind: "document" },
   "workflow-results": { kind: "envelope", collections: ["entries"] },

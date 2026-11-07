@@ -15,7 +15,9 @@ const commandInvoke = invoke as unknown as ReturnType<typeof mock>;
 const directory = import.meta.dir;
 const modules = readdirSync(directory)
   .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
-  .filter((file) => file !== "client.ts" && file !== "shared.ts")
+  // Not command files: the client builders, shared helpers and the per-scope
+  // aggregate of every factory (`backendForScope`, plan item 4001).
+  .filter((file) => file !== "client.ts" && file !== "shared.ts" && file !== "scope-backend.ts")
   .sort();
 
 /**

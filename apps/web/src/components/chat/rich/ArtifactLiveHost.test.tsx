@@ -220,7 +220,7 @@ describe("ArtifactLiveHost (browser mode)", () => {
 
       act(() => leaf.dispose());
       expect(useArtifactLiveHostStore.getState().active).toBeNull();
-      expect(document.querySelector("[data-artifact-live-host]")).toBeNull();
+      expect(document.querySelector("[data-artifact-live-host]") === null).toBe(true);
       expect(leafClient.calls(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession)).toHaveLength(1);
     } finally {
       leaf.dispose();

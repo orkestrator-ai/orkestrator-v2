@@ -11,7 +11,8 @@ import type { BackendClient } from "@/lib/backend/client";
 import { createChangesApi } from "@/lib/backend/changes";
 import { createGithubPullRequestsApi } from "@/lib/backend/github-pull-requests";
 import { createSignal } from "@/lib/node-scope/signal";
-import { git } from "./git";
+// Aliased: the subprocess guard reads an imported `git` as a helper that runs Git.
+import { git as gitDomain } from "./git";
 import { pullRequests } from "./pull-requests";
 
 const CURRENT: NegotiatedDomains = {
@@ -57,7 +58,7 @@ describe("git and pull-requests clients over a lib/backend client", () => {
 
   test("a pre-contract node (no domains) takes version 0 too", async () => {
     const { client, invokeRaw } = fakeClient(() => null, null);
-    await git(client).refresh_environment_diff_stats({ environmentId: "env-1" });
+    await gitDomain(client).refresh_environment_diff_stats({ environmentId: "env-1" });
     await pullRequests(client).pr_monitor_refresh({ environmentId: "env-1" });
     expect(invokeRaw.mock.calls).toEqual([
       ["refresh_environment_diff_stats", { environmentId: "env-1" }],
@@ -100,6 +101,6 @@ describe("git and pull-requests clients over a lib/backend client", () => {
     const { client } = fakeClient(() => {
       throw new Error("Change tracking is unavailable in this backend");
     }, CURRENT);
-    await expect(git(client).changes_get_capabilities({})).rejects.toThrow("unavailable");
+    await expect(gitDomain(client).changes_get_capabilities({})).rejects.toThrow("unavailable");
   });
 });

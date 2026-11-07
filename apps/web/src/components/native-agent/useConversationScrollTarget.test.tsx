@@ -173,12 +173,8 @@ describe("useConversationScrollTarget", () => {
           .getState()
           .request(at("env-1", "tab-1", nodeA.nodeId), { messageId: "u-2" });
       });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(scrollToIndex).not.toHaveBeenCalled();
-      expect(
-        useConversationScrollTargetStore.getState().peek(at("env-1", "tab-1", nodeA.nodeId)),
-      ).not.toBeNull();
-
+      // Node B's own request, made after A's, is consumed: by then A's has had
+      // every chance, so its still being parked proves B's chat ignored it.
       act(() => {
         useConversationScrollTargetStore
           .getState()
@@ -187,6 +183,15 @@ describe("useConversationScrollTarget", () => {
       await waitFor(() =>
         expect(scrollToIndex).toHaveBeenCalledWith(1, { rowKey: "u-2" }, "message-link"),
       );
+      await waitFor(() =>
+        expect(
+          useConversationScrollTargetStore.getState().peek(at("env-1", "tab-1", nodeB.nodeId)),
+        ).toBeNull(),
+      );
+      expect(scrollToIndex).toHaveBeenCalledTimes(1);
+      expect(
+        useConversationScrollTargetStore.getState().peek(at("env-1", "tab-1", nodeA.nodeId)),
+      ).not.toBeNull();
     } finally {
       cleanup();
       windowScope.dispose();

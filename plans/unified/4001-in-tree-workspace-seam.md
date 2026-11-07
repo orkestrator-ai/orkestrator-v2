@@ -49,7 +49,9 @@ With a setting on for a node, its workspace renders in the window's own React tr
 
 ## Done when
 
-- [ ] A flagged leaf renders and works in-tree on desktop and browser against a live attached profile (open environment, terminal, agent tab without a billed turn, files, previews).
+- [x] A flagged leaf renders and works in-tree on the browser against a live attached profile: open environment, terminal, agent tab without a billed turn, files, and previews (a loopback dev-server tab shows "Browser tabs aren't supported here", exactly as on the window's own node). [4006](4006-multi-node-qualification.md)'s e2e, 2026-11-07.
+- [x] On the desktop: open environment, terminal, agent tab without a billed turn and files ([4006](4006-multi-node-qualification.md)'s e2e).
+- [ ] On the desktop: previews. Open: the leaf's loopback preview resolves through the command node's gateway (the desktop node client has no `resolvePreviewUrl`; 4006 Finding 1).
 
 ## Notes
 
@@ -75,3 +77,4 @@ With a setting on for a node, its workspace renders in the window's own React tr
 ## Work log
 
 - 2026-11-07 (claude-worker): built the setting, the in-tree scope holds, the realm loopback and context, `InTreeWorkspace`, `NodeErrorBoundary`, and one `WorkspaceContent`/`NodeWorkspaceLayout` for the command node, realms and in-tree nodes. Added `backendForScope` and moved the workspace components and hooks of the Done-when flows onto their node, as listed in Notes. Fixed the "for 4001" leftovers listed in Notes and recorded the deferred ones. Tests (all pass): `realm-channel.test.ts` 6, `in-tree-scopes.test.ts` 7, `inTreeNodesStore.test.ts` 3, `NodeErrorBoundary.test.tsx` 3, `InTreeWorkspace.test.tsx` 4 (in-tree for a flagged node and realm otherwise; switching both ways sends no stop/cancel/delete to either node; release after grace; open failure with Try again), `WorkspaceRealmHost.paths.test.tsx` 9 (realm-host scenarios on the page path and the loopback path, plus visibility). Focused suites: web `components/federation`, `lib/federation`, `stores`, `lib/node-scope`, `components/{terminal,native-agent,layout,browser,files-panel,projects,chat,pane-layout,agent-mail}`, `hooks`, `lib/web-annotations`; root `./tests/unit/{components,hooks,contexts,stores}` (run with `./` paths: bare paths also match the copy in `output/agent-testing/base-wt/`). Web typecheck clean, fmt and oxlint clean on touched files. Commits: ddc74ea26 (slice 1), f1e9ac62f, 6c2f86885, b4616bdf1, 92ecf1c3e and the docs/item commit.
+- 2026-11-07 (claude-worker, 4006): live check of the Done-when with `multi-node-window.spec.ts` at `72ae46d49` (in-tree by default since 6001) against `uf-4006-cmd` + `uf-4006-leaf`: browser all surfaces pass; desktop terminal, agent tab and files pass, the preview shows the command node's gateway page. Done-when box split; the desktop previews part stays open.

@@ -358,3 +358,65 @@ built (the "Recommendation on 5005" above).
   number that matters there.
 - Not measured: a real LAN or tailnet, WebKit, and the desktop (its node
   traffic goes over IPC, so 5005 does not apply to it).
+
+## 4006: six in-tree leaves in one window, switching and budgets
+
+Measured 2026-11-07 for plan item
+[4006](../../plans/unified/4006-multi-node-qualification.md) with its e2e,
+`e2e/agent-testing/multi-node-window.spec.ts`.
+
+### What ran
+
+- **Code:** branch `unified-federation-b4c9ee65814d` at `72ae46d49` (in-tree
+  by default since 6001), in a separate detached worktree with a frozen
+  install; development renderers (Vite).
+- **Host:** the same Mac, loopback only, direct routes (the browser's leaf
+  traffic went to the leaves' own origins).
+- **Nodes:** `uf-4006-cmd` (command node, renderer with
+  `VITE_ORKESTRATOR_SHIM_GUARD=throw`) and `uf-4006-leaf`, both `dev:test
+  --fixture --no-agent-credentials --headless --agent-platforms codex`, plus
+  five standalone leaves from source: six leaves, seven nodes, one started
+  local environment with a terminal tab on each.
+- **Clients:** headless Chromium on the command profile's page (1440×900),
+  and an Electron launched by the spec and connected to the command profile
+  as a remote command node (windows hidden).
+- **Measures:** click on the sidebar row to the environment's terminal
+  visible; tiers from `ScopeLifecycle.tiers`; the page's JS heap after a full
+  collection (CDP `HeapProfiler.collectGarbage`, `Runtime.getHeapUsage`).
+
+### Results
+
+| Measure | Browser (Chromium) | Desktop (Electron) |
+|---|---|---|
+| First open of a leaf (6 leaves, one after another) | 244–285 ms | 217–272 ms |
+| First open of the command node's environment | 695 ms | 579 ms |
+| Warm switch between leaves (rounds 2 and 3, 12 switches) | 175–268 ms | 174–244 ms |
+| First open of a leaf as a realm (realm path, 3 leaves) | 1.84–1.93 s | not run |
+| Reload: snapshot painted (since navigation) | 1.9 s | 0.7 s |
+| Reload: live workspace (grant held 3 s on purpose) | 5.3 s | 4.2 s |
+| JS heap after GC, six leaves warm (one shown) | 105.2 MB | 102.8 MB |
+| JS heap after GC, one shown, five back to summary | 98.1 MB | 97.0 MB |
+| Per warm scope (difference / 5) | 1.4 MB | 1.2 MB |
+| Reopen of a leaf from summary | 253 ms | 212 ms |
+| Grant lapse to new grant, no reload | 0.56 s | grant reopened; terminal input did not recover (4006 Finding 2) |
+
+- **Budgets.** With six leaves warm the lifecycle's estimate was 168 MiB
+  (4002's 24 MiB per warm scope) against a measured heap of 164–179 MiB
+  (`performance.memory`, before GC), well inside the 512 MiB (browser) and
+  1 GiB (desktop) placeholders. A budget of the estimate minus 2.5 scopes
+  suspended the three least recently shown leaves (`suspended ×3, warm ×2,
+  live`); a budget of one scope took every hidden leaf back to summary,
+  leaving only the shown one. Both hosts behaved the same.
+- **The estimate is high for warm scopes.** A warm in-tree scope cost about
+  1.2–1.4 MB of collected JS heap here (an environment with one terminal,
+  no transcript), against 24 MiB estimated. A realm cost 22–33 MB of JS heap
+  in Chromium and 340–410 MB of process memory on the desktop (above). The
+  estimate only matters where heap cannot be measured (iOS); it should be
+  re-based once an iPad is measured with transcripts open.
+- **Hidden leaves stay mounted.** All six leaves stayed mounted (warm) while
+  one was shown, and the shim guard saw no command-scope store use in any of
+  33 checks on each host.
+- **iPad: not done**, no iPad reachable from this host: six warm nodes
+  against the budget and a jetsam-free run of N switches remain unmeasured.
+- Not measured: transcripts (no provider turn), a packaged desktop build, a
+  real LAN or tailnet, WebKit.

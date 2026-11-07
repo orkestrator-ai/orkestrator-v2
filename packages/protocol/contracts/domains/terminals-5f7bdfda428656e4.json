@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "domain": "terminals",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "attach_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d88ecc9c86c1f15d2a8f29995431c92cb2b07acf40adcdcf1b0b0797f8e738a6",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "bootstrap_terminal_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
+      "resultDigest": "sha256:d4ed1dc5d626a15908af5dc5e44550a371fc6ee8b0ecdaa437016e0467cda040"
+    },
+    "cancel_user_command": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5f7317f3efd10fa0394946643f410c5f83a7a2f8707554c9eae9fce06ef755e1",
+      "resultDigest": "sha256:c54a434fa63a8e20b8bb6ffcfa0a446bf4c7900c8534fa72f58ea77b14c42d5c"
+    },
+    "close_local_terminal_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "create_local_terminal_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7f697ea9b6b5ab138079723844fb4f5c32bbbeef3d69cd61c570492ec2a7a00a",
+      "resultDigest": "sha256:6b32218ef7d9899aa737c99aa88bce7f59e8f62a929c20c8ea6dcea7fafd663d"
+    },
+    "create_terminal_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b4ef407a70e895837f38973adabe5c2475ac7ba8ebf580981f93aad8d1f8f3cc",
+      "resultDigest": "sha256:6b32218ef7d9899aa737c99aa88bce7f59e8f62a929c20c8ea6dcea7fafd663d"
+    },
+    "detach_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "get_terminal_history_page": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:789921442fb062fb12a19987ac4ea7b30dd07d6eec5e6c3af4e2009a592f9ff9",
+      "resultDigest": "sha256:3f7f07669abd21ab1881e1a740f394f284abde2524ac8e866221d5ee567b680c"
+    },
+    "get_terminal_output_buffer": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "get_terminal_output_snapshot": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:5b5275347be322f95ceb66f0ab2cf52022364f9d379f01472db4227d9cb3ef3b",
+      "resultDigest": "sha256:b43f48b142a6920025154d4f6715ae368357c19513ddcc80456401465bd3fd63"
+    },
+    "get_terminal_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:7160cdfa0359ba08fe0aaa27249cfcab372eb7fb035c87df674754b39e6920f5"
+    },
+    "get_terminal_state_snapshot": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:34b47a682826672d8717711b04836ab30c0f73a1ae4c7789d9a39b2f6f16f478"
+    },
+    "launch_terminal_job": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:2bd971a704fa0f576e834476e1f09a313a94c46512470288ce539e00c55a542a",
+      "resultDigest": "sha256:6ceff5493e2cf5e4300dfa705445f94df916d3fac571e76246a9fe4d0608b71c"
+    },
+    "list_human_prompts": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cefa532778bb66f5dae043ab276f6406ec3c8bb1df5c3f14a7bf04292b2fafc5",
+      "resultDigest": "sha256:c03d2956fcba1937a3ec1f53092569069bdee2bdb8cba0fb1d0bbb4952d40cc9"
+    },
+    "list_terminal_sessions": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
+    },
+    "list_user_commands": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:62ed4948defd42d33b8afffd41ed1e191967eb647fcbe7ed442be42ee42f4b9f"
+    },
+    "local_terminal_resize": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:475ae1bd0856a51b16605745130dfe7f38fa1d662a57b18f3e8671c81c8f4279",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
+    },
+    "local_terminal_write": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
+    },
+    "run_user_command": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:02c13b62081a577f7a57dc4ef1595d17f3620dc34eefd88c8dfe1a0b2880ff04",
+      "resultDigest": "sha256:c54a434fa63a8e20b8bb6ffcfa0a446bf4c7900c8534fa72f58ea77b14c42d5c"
+    },
+    "start_local_terminal_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "start_terminal_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "terminal_resize": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:475ae1bd0856a51b16605745130dfe7f38fa1d662a57b18f3e8671c81c8f4279",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
+    },
+    "terminal_snapshot_applied": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fd41e71572b33029a4567c6d1eedf28a5b740fc414a7bf989445ff078525b3db",
+      "resultDigest": "sha256:f01748fd6a29078bdfaf60322eb56bf57a16895ab234c0b3f10d456bbfe6a82d"
+    },
+    "terminal_snapshot_failed": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f7743f8abf376a87126ffd98c7541b16897abd1a97e54bb2bc967587a4d223c3",
+      "resultDigest": "sha256:f01748fd6a29078bdfaf60322eb56bf57a16895ab234c0b3f10d456bbfe6a82d"
+    },
+    "terminal_write": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7ad6587b65c949f60fc447e4f3d0168ab5905f12fd487b4aa47cb3cb77f3eefe",
+      "resultDigest": "sha256:76d90cb2c83ae3b61b8bbc097461347cde0a43ee1ae5e7f78e138b15dc51dec7"
+    },
+    "write_user_command_input": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fba21756dc9a5836a234b2d38ecf03df777d5592a87c5b774e9c6a7ea4a0b558",
+      "resultDigest": "sha256:c54a434fa63a8e20b8bb6ffcfa0a446bf4c7900c8534fa72f58ea77b14c42d5c"
+    }
+  }
+}

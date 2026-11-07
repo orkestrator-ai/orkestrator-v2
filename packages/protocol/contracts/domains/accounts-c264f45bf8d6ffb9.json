@@ -1,0 +1,272 @@
+{
+  "schemaVersion": 1,
+  "domain": "accounts",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "cancel_agent_account_login": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["operationId"],
+      "argsDigest": "sha256:5954757becb50d4e571ac620d28572f484aebf691603e9a628a4cc5e07040d31",
+      "resultDigest": "sha256:4543a49d95e0d570b50d02680399fe638a040a0951fa760e045fadc19b88513a"
+    },
+    "cancel_opencode_provider_login": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["operationId"],
+      "argsDigest": "sha256:5954757becb50d4e571ac620d28572f484aebf691603e9a628a4cc5e07040d31",
+      "resultDigest": "sha256:dd60a2a0ea6293fd76c6f008e959a49cefa5ea365f90144eff78a7bb9a364e0b"
+    },
+    "cursor_sdk_login_cancel": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:61f243103e1f023a0fdb68f3c530796c663abf76e8543a919de724dcd47703a5"
+    },
+    "cursor_sdk_login_start": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b92d6387c540d72ed5139522484a0a8420c8797418fe0704158e06422732dd05",
+      "resultDigest": "sha256:131f31b1bc0ed6030085c5251ea279bc4984c6cbc36a0f1b4511e2d75612ba66"
+    },
+    "cursor_sdk_login_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:3b917c76970e8269b56e8634851606bb2aeb8b5c628f1351f0b5ec331bf87aa0"
+    },
+    "cursor_sdk_logout": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:97dd3e6025da537e025be2bdc0b0319655c49c62f6ff7325cf8da2eb841e254a"
+    },
+    "get_agent_account_login": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:4543a49d95e0d570b50d02680399fe638a040a0951fa760e045fadc19b88513a"
+    },
+    "get_agent_account_usage": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b8b4f8afc299f8e289af0afa832fc9aa5ba6c3fd7c37f77556b1d6f84f82d83e",
+      "resultDigest": "sha256:b421a1ae9b36d7dc4527d8f6b519afc95e1d3ea070d40247145ebf1bc7cee3c8"
+    },
+    "get_agent_sign_in_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7512c151b1dbba076be4e1d083d2ace9ff08f917dc3d05476a730da265f3c64f",
+      "resultDigest": "sha256:aead86bb6d1b21de322f2d52d50a6db1402217914e79ceaff2d342c10b1e07bf"
+    },
+    "get_coordinator_account_switch_grant": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:7d2ff51773c95d156f18bf790610baf1ceeef8c9bae503cb5ced462ed4aa0386",
+      "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
+    },
+    "get_native_agent_session_account": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1992b740e3e4488a68e217476b8aac11910875cfb88688ecc410783f68c786bf",
+      "resultDigest": "sha256:17b77966686bcfcfb68c278b9aad0cd8a9ce642b8afe56da39351d6644d5baa9"
+    },
+    "get_opencode_provider_login": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dd60a2a0ea6293fd76c6f008e959a49cefa5ea365f90144eff78a7bb9a364e0b"
+    },
+    "get_plan_usage": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:51d005f57823a8f15d781fc9e5c7c10af4b51b4317fce939f25de71094d5bd00",
+      "resultDigest": "sha256:b421a1ae9b36d7dc4527d8f6b519afc95e1d3ea070d40247145ebf1bc7cee3c8"
+    },
+    "get_project_usage_limits": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:a965f9e4933de022b60f0a8b6c0691cdfe512febe67801f5cd8701494da34f28"
+    },
+    "get_usage_history": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:11d5791b250da1d00f45b7b9a1e3e834164609fe8e0d08f352200934f88167a9",
+      "resultDigest": "sha256:2e2faba93ca248bc5d315093d01fcecd402da80a20a894c005dc37d307824fd8"
+    },
+    "list_agent_accounts": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:2cbbe323b434cbe69a7d8fcc27f6b0c8604ce36ba492b801ad7efe347a1a811b"
+    },
+    "list_machine_agent_accounts": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:9a83af8a14e2d9c9d33f053b781c6f95d2cd3f97d7e5c36f2cd4b24818a19faa"
+    },
+    "list_opencode_provider_auth": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:bc95a9184af9873f6bc358793898c1504a2843c78d1d9b4464e969c45c877465"
+    },
+    "open_agent_sign_in_terminal": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9b6f40dd775ea897116e1fcef8daaf0ce8d7d2b62767478d3134ad4bdfc95759",
+      "resultDigest": "sha256:c33f30885f6d6be2975143cbb8dd9abf3383e6719e0bec846d2ce8426ec74577"
+    },
+    "read_host_agent_sign_ins": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:9a3dd99f0567dcceb9bb2cb7569428de66e4d4fd440eab08931919e4b22236a5"
+    },
+    "remove_agent_account": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:98ae357a6cf605008c9dcee8acb911c83a77dabb903e7c020f756370531a51fb",
+      "resultDigest": "sha256:2cbbe323b434cbe69a7d8fcc27f6b0c8604ce36ba492b801ad7efe347a1a811b"
+    },
+    "remove_opencode_provider_login": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:df1f57b8280c263ddc4b7f4e75679034b46a79c1d635663b64b76c226b31420e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "rename_agent_account": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:15ea5948783e396cbcdd6f5004c6014df894347f2383b280fdbc82e3684fdfb3",
+      "resultDigest": "sha256:2cbbe323b434cbe69a7d8fcc27f6b0c8604ce36ba492b801ad7efe347a1a811b"
+    },
+    "resume_agent_account_auto_switch": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7512c151b1dbba076be4e1d083d2ace9ff08f917dc3d05476a730da265f3c64f",
+      "resultDigest": "sha256:2cbbe323b434cbe69a7d8fcc27f6b0c8604ce36ba492b801ad7efe347a1a811b"
+    },
+    "set_active_agent_account": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:98ae357a6cf605008c9dcee8acb911c83a77dabb903e7c020f756370531a51fb",
+      "resultDigest": "sha256:2cbbe323b434cbe69a7d8fcc27f6b0c8604ce36ba492b801ad7efe347a1a811b"
+    },
+    "set_agent_account_auto_switch": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d4391729a51dd275d856f7e5a58a1af02bea7bfad9844aec127d9adbbc62d819",
+      "resultDigest": "sha256:2cbbe323b434cbe69a7d8fcc27f6b0c8604ce36ba492b801ad7efe347a1a811b"
+    },
+    "set_coordinator_account_switch_grant": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:3f0014644ea7fd62ae9a15b27c06f8e533e6dea73ebe0f5eb0b54d1bf102a46e",
+      "resultDigest": "sha256:1b5fb01b1edcc0748f85dd7cfe754e7f551aed46f05501c8b0ce3bdcc4dc9bd0"
+    },
+    "set_opencode_provider_api_key": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["metadata"],
+      "argsDigest": "sha256:92c4931a0e545ba2a71dc4a88fb8f6f4732b8ad355df53f76e25d717d65522e9",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "set_preferred_agent_identity": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:de4d75cbe39dc18c6ee98727cf0c2f18a6e99563caacfd2404dbff8bae09af9e",
+      "resultDigest": "sha256:9b9987916995346cd68220ade0d275cd05723d27421bb990e9bba9f1187ade60"
+    },
+    "start_agent_account_login": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["reauthenticate"],
+      "argsDigest": "sha256:7c939e3601ab0162ed2b5be6f6b91d590f4be75ba7651e32d6092a6ad0e02417",
+      "resultDigest": "sha256:4543a49d95e0d570b50d02680399fe638a040a0951fa760e045fadc19b88513a"
+    },
+    "start_opencode_provider_login": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["inputs"],
+      "argsDigest": "sha256:4aa955a6ec4f943d33ae5ba082ef980f8b2adf0629a20ee3c9e7806fabcdf23b",
+      "resultDigest": "sha256:dd60a2a0ea6293fd76c6f008e959a49cefa5ea365f90144eff78a7bb9a364e0b"
+    },
+    "submit_agent_account_login_code": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9efd8b4199dd7a2d04cada0c2504690b68f9d72d09dba84dbb09b335c5274e3f",
+      "resultDigest": "sha256:4543a49d95e0d570b50d02680399fe638a040a0951fa760e045fadc19b88513a"
+    },
+    "submit_opencode_provider_login_code": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9efd8b4199dd7a2d04cada0c2504690b68f9d72d09dba84dbb09b335c5274e3f",
+      "resultDigest": "sha256:dd60a2a0ea6293fd76c6f008e959a49cefa5ea365f90144eff78a7bb9a364e0b"
+    }
+  }
+}

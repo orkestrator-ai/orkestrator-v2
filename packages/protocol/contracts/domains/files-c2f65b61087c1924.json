@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "domain": "files",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "check_container_workspace_paths": {
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:fe8b579161a28e4fb40438b3b89bd720af9f7a6ce3d2c5c6e94c7d65c032c6aa",
+      "resultDigest": "sha256:a05c6ea11a955f361c01d21c132b744f55665d764e210f0ec1893c944bd3038d"
+    },
+    "copy_external_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1d2b126c1590e9b5fae79d21b14251056704c2f8dc3bf5e791713af10ae81f8f",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "create_container_folder": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ada62e2086245e85f15f1efd6c1c2edfb0a79ac51fcac1ff132a7cbc811b1401",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "create_local_folder": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ada62e2086245e85f15f1efd6c1c2edfb0a79ac51fcac1ff132a7cbc811b1401",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "delete_container_annotation_evidence": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["digest"],
+      "argsDigest": "sha256:5571f71aa415324f2ee0676352942287b9d78e45ef6a288f2ad249089ae4f916",
+      "resultDigest": "sha256:d15a311816030ea8a506fdbaf6ecc81b6bfe66a2165adae4beee7c703c71f41c"
+    },
+    "delete_container_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "delete_local_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "get_file_subtree": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:b1cd3e95ad70e98cc0783b8329ceb84c9b17d936acb43f479f1a31dad7598369",
+      "resultDigest": "sha256:ed6d3d7bdb0c55533d8550a4cea8c114e93a5a8f4d0fc81330c23ce53d86e51e"
+    },
+    "get_file_tree": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:cf9a39fdbae5ed44320066ee2b817eaa47ebbd14767f338ed2f930104f05d509",
+      "resultDigest": "sha256:970c3d5fa187aa229de1eaf65466a36c8a188d9c1caab6e0e7940249745a6672"
+    },
+    "get_local_file_subtree": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:84a1658d4eb47260d7aa21caba6b5f421e14816998389fb0dd96d56ba47fc8af",
+      "resultDigest": "sha256:ed6d3d7bdb0c55533d8550a4cea8c114e93a5a8f4d0fc81330c23ce53d86e51e"
+    },
+    "get_local_file_tree": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:590134bc3e9d601ee463eecf46115950a3ba9ea043b5b3393dfa5ad123236e25",
+      "resultDigest": "sha256:970c3d5fa187aa229de1eaf65466a36c8a188d9c1caab6e0e7940249745a6672"
+    },
+    "get_worktree_snapshot_revisions": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:41da0c7495e16c728960ca36de33e856febc8babd038f87e62bf73d7d5ee42f0",
+      "resultDigest": "sha256:c0168c65db6ac8cdcdc4185c9f490304388820d55b406020ce8d01723dbe336f"
+    },
+    "move_container_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a6969b8a1542fe26d0dab893d23391d8159197ee6d4549a8fc8d98bb87249ee2",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "move_local_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a6969b8a1542fe26d0dab893d23391d8159197ee6d4549a8fc8d98bb87249ee2",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "read_container_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:f248b624948dd4da4c95bdfc5365dd6b82cd879ef3359b5a2114b6c645e2e739",
+      "resultDigest": "sha256:91409892e8dbc67a7f35e03d9ba0f91e41e47bbacc9f46c1c767ec4300656939"
+    },
+    "read_container_file_base64": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:f248b624948dd4da4c95bdfc5365dd6b82cd879ef3359b5a2114b6c645e2e739",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "read_environment_file_base64": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "read_file_at_branch": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:48864524b033ff5f6d619f5fe7a9bb0c31c9ad160aa00eee23bd6d13ae031d5f",
+      "resultDigest": "sha256:52721c51a0f95d965869f2dbe749307b499f2c8877a4ae46f7ce555e476b349f"
+    },
+    "read_file_base64": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9a2dc87c50b80260e3ee12f536791a512b68a50e231d8a8c4213a34ee7204de7",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "read_local_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:36fcd1ad73d7e2905c6a0abb01c45d09b72c2412be7b35b90430f5689619d9ac",
+      "resultDigest": "sha256:91409892e8dbc67a7f35e03d9ba0f91e41e47bbacc9f46c1c767ec4300656939"
+    },
+    "read_local_file_at_branch": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4922751534032881ba390e9cd0c5bd672c3057a0847d4af4ad894b6f437441f9",
+      "resultDigest": "sha256:52721c51a0f95d965869f2dbe749307b499f2c8877a4ae46f7ce555e476b349f"
+    },
+    "rename_container_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:07759a31691e43ce09fa66202563c89c4da99bdadadb1b848071180970982863",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "rename_local_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:07759a31691e43ce09fa66202563c89c4da99bdadadb1b848071180970982863",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "revert_container_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e9d94538a3f1606f7e9e74c85d669a315bb8f8f8d90a35921ee74706f4378627",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "revert_local_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e9d94538a3f1606f7e9e74c85d669a315bb8f8f8d90a35921ee74706f4378627",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "write_container_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expected"],
+      "argsDigest": "sha256:5b4a77eeef07ca03327696229511f9cfddf8ae54d57e4836243361de3322758e",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "write_initial_prompt_attachments": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1a5624b882162d133f36012362f0238ccfb020b7e3a881cea2cb933136fea342",
+      "resultDigest": "sha256:f0c2e5881f856e723ffadb58cdac777a06f2997c776afd53c9099ee91a237772"
+    },
+    "write_local_file": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expected"],
+      "argsDigest": "sha256:892f8b820b20dd885060a37f0e7b9efa3d490c423d30ebb8e704197a53d52e31",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    }
+  }
+}

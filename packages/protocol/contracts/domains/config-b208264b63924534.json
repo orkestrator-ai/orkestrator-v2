@@ -1,0 +1,256 @@
+{
+  "schemaVersion": 1,
+  "domain": "config",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "approve_native_agent_interaction_and_remember": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expiresInMs"],
+      "argsDigest": "sha256:6ad29cf11191266fde40314cf59e5830287153715ef2af071bbbd29474ba0de8",
+      "resultDigest": "sha256:5dc6d0d60c095984b22d3e20f404e3da87c37ca1a7efcb790755347e31849de4"
+    },
+    "check_coordinator_upstream_merge": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:e122e9131706acd8b0343ab504e67ced23acb18bc9952296212e65e406ffd56b"
+    },
+    "decline_coordinator_upstream_merge": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:34daba8ff437717507bc8d1bf9b558ed721c58752c22e1bce9bee8e23167bc4a",
+      "resultDigest": "sha256:3d17582058056198ca6e4fc71800b3b2250f45bc8b29850cdbe749ef42eaaeb3"
+    },
+    "delete_permission_rule": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5f7317f3efd10fa0394946643f410c5f83a7a2f8707554c9eae9fce06ef755e1",
+      "resultDigest": "sha256:fa508eeaf9f6cbff2e58a05147061b3c6ae21c9effa326078682e4ff7995e89f"
+    },
+    "delete_project_permission_rules": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:aa98137882ad8c60b47dfd8bc4001cb415f7b24aa656e8aac862061aeb60fa31"
+    },
+    "dismiss_notices": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0508f8563808e33e2efb96b101aabcfad154ed72a9f8596febbdd4f32b8cc15a",
+      "resultDigest": "sha256:0ff580835abc00a37ff1faab7ea2eb191306f798ed1f70e42f3cf4444e6f7375"
+    },
+    "get_client_state_capabilities": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:25f69780329f46094b71cf041d8d7306ff7fe892235394cd0ebbd43d454934da"
+    },
+    "get_config": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:5fd12da5d5cca12609b12d4219f92281cdacce83d09a40a840f05431a73827b5",
+      "resultDigest": "sha256:e2e86c26910519d3dc103ef1709e3db1b2b8eb6302899403099c4ccb18034fe6"
+    },
+    "get_coordinator_pane_layout": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:53b5dbb5e327b66d8325b68e3be43af5890772d8b20fa51cd51df8962455b4c7"
+    },
+    "get_coordinator_upstream_auto_merge": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35"
+    },
+    "get_desktop_connections": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:ead4148734cb3d3d6776e346d7606c0aa4fbdf7170e492bdaab2276b309eb55b"
+    },
+    "get_global_config": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:073544ca496c1a29e2847a4490709898f8baf9e6395b25bd208b325868bc41e8"
+    },
+    "get_repository_config": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:6ac9b5bf2acf382cddd1134f880d99508dcb8dbc5cbd2e619af78ce347e7d025"
+    },
+    "list_external_permission_rules": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:9c80e1a487cf0d086856968b72988a7a5e05011bc02570cc4873fa643efc4c96"
+    },
+    "list_notice_dismissals": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:0ff580835abc00a37ff1faab7ea2eb191306f798ed1f70e42f3cf4444e6f7375"
+    },
+    "list_permission_rules": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:40b4fd8a020b7b6ca0faf589ccdc470ea231004ecf867cb80455f7758e422928",
+      "resultDigest": "sha256:2b1a08cae1180052f80ee733a279348113bf80f835a7ffb8ff5a4f2730758c15"
+    },
+    "patch_global_config": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["unset"],
+      "argsDigest": "sha256:d9d2ec2805142b5145d6836ef9894a8cb626660b087f3fb8707dc3d4a0112867",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "patch_repository_settings": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["unset"],
+      "argsDigest": "sha256:0df0c5d4da03a7363c3f6ea2881f630ea4d44f28fdb969a3cbc77c83c5b1653d",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "reconcile_notice_dismissals": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:be8aa134d12b8ca06ed9b6160a48a2c4e5bcef6db010f4e992123200ec39dafc",
+      "resultDigest": "sha256:0ff580835abc00a37ff1faab7ea2eb191306f798ed1f70e42f3cf4444e6f7375"
+    },
+    "save_config": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:29c09ee81e49f7333d7299670e1d8b86616a5cf7fc98e77fdbbaa13d707e260a",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "save_coordinator_pane_layout": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:6e3915861eabbfd8746925d7450cb865b0f6e83de5bd44af72482f4574918a2a",
+      "resultDigest": "sha256:cd91870532a9827c51de0d7225fa3b6f827b9f48673d3417b365131d251823bc"
+    },
+    "save_desktop_connections": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:be31969ba59a036f0b82f722ef33966a7b1f77e625a58976fa40ce4c8b03c9a3",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "set_anthropic_api_key": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "set_coordinator_upstream_auto_merge": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bca4f45dbb83ab40a27f53d342457dd1dbd397a416aa18e8e6d607d3c89d5daa",
+      "resultDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35"
+    },
+    "set_cursor_api_key": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "set_github_cli_reminder_dismissed": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:58550adbce345e1852d146122acefd98ecaf98edf34fafd1c0031582bd521043",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "set_github_token": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7009a8d59b90b62ab3c4699375d29e33847e46bd9f55b933d8532e74cf5e0be9",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "set_opencode_zen_api_key": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:adb51eb53a995589b66c1689ff2dda370872caf40af68fb0c3d2443d0121cc78",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "update_global_config": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["preserveInheritedSettings"],
+      "argsDigest": "sha256:418776fac180e0d0e5638510682576e8d4e02d9dea3094146059d517464b95f4",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "update_notification_sound_settings": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2ad3430306348be73279c9dd0ad5283c4578ed8c572f59700b407ba75476b466",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    },
+    "update_repository_config": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aa23803e28cf28fe8c52c8c564368012503896f02356fb23ec851ce4e163a98a",
+      "resultDigest": "sha256:158d2efbe9624561b23135f5118f732ef84675e16dccc74bc6154dc036517e22"
+    }
+  }
+}

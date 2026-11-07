@@ -1,0 +1,350 @@
+{
+  "schemaVersion": 1,
+  "domain": "pull-requests",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "add_github_issue_comment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:258bacacfa530b54fc04941025670236c8bc036f62392017d2096e2aa83f58fc",
+      "resultDigest": "sha256:b725a8af09153e31635a94d7d27a443e73c5ea1c12a4af2cfebfc0e3126e8eff"
+    },
+    "add_github_pull_request_comment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:296376db05fcf1968edac0455858b3fd6d96a441dfdb310e972f9070d4e718a3",
+      "resultDigest": "sha256:714290e945f594127ff6173eb4cdd242571b89866beeef889f03a7cb5826d6ca"
+    },
+    "add_github_pull_request_review_comment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:61d1aa172329a1e4375721a0bfc7c622213ddac2fb237686b8b4aa221d6bc68f",
+      "resultDigest": "sha256:dc02753006b6860f3571a510136c8ceece90baea28ac0674446f104021ef96bc"
+    },
+    "arm_pr_refresh_after_agent_completion": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:362381171b4aa3f27c7bc0d59d8d2a7df605528b13af2492cb13ad7b8a0b3032"
+    },
+    "change_github_pull_request_label": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1f4b3b4372261753d0085989be823c47ff6728a3f1f0209a8ec91a60d03c4a7a",
+      "resultDigest": "sha256:7fbf3ca22f139dbeaf4efb0811c38a6df708e3ae79887494ad5871791afa511e"
+    },
+    "close_github_issue": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a217cd99b3584df19ee536eee79e3e30d3fe7eb39e1e63f00232b64979f83204",
+      "resultDigest": "sha256:2a295292405ba04aecb529a92fd9c7f30bd0f7183338c6d8f009103328ab9259"
+    },
+    "detect_pr": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8164b2e63ed63abaeafc94c3781173830c8267d2fff19498f4dd1bdac3c1ae7b",
+      "resultDigest": "sha256:ab20556819a5af12c7158169ba957856fc0f25c3efcd804c8cc873cf4b606862"
+    },
+    "detect_pr_local": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:76d9c9a67c0887d35b829fcedfc2cbece2717294c940ad77125c0c44d96e50c4",
+      "resultDigest": "sha256:ab20556819a5af12c7158169ba957856fc0f25c3efcd804c8cc873cf4b606862"
+    },
+    "disarm_pr_refresh_after_agent_completion": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e80854490486322ef1d5bada24a1ef35cd7b6a2d010d685f34aa9a30488305c6",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "generate_review_package": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["additionalLimitations", "expectedHead", "validationPlan"],
+      "argsDigest": "sha256:eba20bfd97d2d317aeb6fc8fbca64ce37ab986e1e8cd4b925cd562aa8a53bffe",
+      "resultDigest": "sha256:d0fc70455ea614a6ab2b7a025a85c50c5c8f5366f8c6ba65c10676706b3cf67a"
+    },
+    "get_github_issue": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a217cd99b3584df19ee536eee79e3e30d3fe7eb39e1e63f00232b64979f83204",
+      "resultDigest": "sha256:64baf231666ad97674de74ff8e6367c55a491b3e8155f66289a41cd015c628c2"
+    },
+    "get_github_issues": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:2f0dcbbdb816a73d0c0599f20d619007892d5461914f565a3b5dd07fef9608bf"
+    },
+    "get_github_pull_request": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9fc2a21bbb4038b3d76a1027356507ea2340d65085e90dff42dd67104bff8a0d",
+      "resultDigest": "sha256:3a3a27fedba9f53c57b7cabaa63828085f3c5dcd8074e4d61d65353e61b4fc16"
+    },
+    "get_github_pull_request_files": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9fc2a21bbb4038b3d76a1027356507ea2340d65085e90dff42dd67104bff8a0d",
+      "resultDigest": "sha256:5725cd90a44a2ece5698e5ac4e80966b72287c58fcae7b005f70711bcd359145"
+    },
+    "get_github_pull_request_timeline": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9fc2a21bbb4038b3d76a1027356507ea2340d65085e90dff42dd67104bff8a0d",
+      "resultDigest": "sha256:65756669fc097a5a3f6b91128a60634e45d503a51a72b0ff0dfd4284427dcac8"
+    },
+    "get_pr_monitor_state": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:41da0c7495e16c728960ca36de33e856febc8babd038f87e62bf73d7d5ee42f0",
+      "resultDigest": "sha256:16aa2fac17e327e5c7813c3ca155f056845ae7e15e7b7c9282c7b8a707ae096f"
+    },
+    "list_github_pull_requests": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1de8ddee1dbb13170f8acf113548028fb979bee74f61298bbf7414163319a38e",
+      "resultDigest": "sha256:7604033bc50d1a1911ee44714645d0556f0a05ec077f2b06d1a47c0624d10a29"
+    },
+    "list_github_repository_assignable_users": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:16acd5e6bb91732aaf9584745ca2f396298767a21a41fd5f0c5a65a2e93eb654",
+      "resultDigest": "sha256:e227fc8d4a849c30d0e82eae18fb64a0cd430d4d1313cc6528664ee5e94336c5"
+    },
+    "list_github_repository_labels": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:16acd5e6bb91732aaf9584745ca2f396298767a21a41fd5f0c5a65a2e93eb654",
+      "resultDigest": "sha256:7fbf3ca22f139dbeaf4efb0811c38a6df708e3ae79887494ad5871791afa511e"
+    },
+    "merge_environment_pr": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [
+        "autoMergeEnabledAt",
+        "deleteBranch",
+        "expectedHeadSha",
+        "expectedPrUrl",
+        "method"
+      ],
+      "argsDigest": "sha256:8b6b416ffc6aff3adfc9c9091122793f03bbaf46fe6fb6fc4677a0de185ff15d",
+      "resultDigest": "sha256:746fac72534eb344fc8d665d5ad2007bccbdf98291be40bdce50e87e73d85891"
+    },
+    "merge_github_pull_request": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedHeadSha"],
+      "argsDigest": "sha256:b634821f5268f544d40849e85691341008ada3e72cc12b1f49a9e65e3fd629ad",
+      "resultDigest": "sha256:85c44f95d5a5bea4c5f6018f116eb0993597f12194abfb88cf3e6735b1b4f802"
+    },
+    "merge_pr": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["deleteBranch", "method"],
+      "argsDigest": "sha256:d1c8462ea7f141d3c336820024377ac7170d2b0d3ddc91296454c9d93c052b78",
+      "resultDigest": "sha256:f83f03c2072cf3964fe6889c7bd48e9e98cb060b446ff252a89679445d000719"
+    },
+    "merge_pr_local": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["deleteBranch", "method"],
+      "argsDigest": "sha256:144b2125777aab743bf1579b4b598c46a14f3def1c9599c729b62c5a30c8b183",
+      "resultDigest": "sha256:f83f03c2072cf3964fe6889c7bd48e9e98cb060b446ff252a89679445d000719"
+    },
+    "post_github_completion_comment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:dbd4afd4d7262ed6da83b1dab27fec5992d435fcecafc7450ded1dcd8800e79b",
+      "resultDigest": "sha256:89af5d2e48f4518d5f15d5b03e76b92e661f49e6a22f7b5f428f7f64b3955873"
+    },
+    "pr_monitor_agent_turn_completed": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "pr_monitor_probe_environment": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "pr_monitor_refresh": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "pr_monitor_watch": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b5adbf99127571b8f084442ada8c314725d03ead3f403d712b32733418b25ff7",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "reply_github_pull_request_review_thread": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d85c9c5181e042ce505a030d9b94b2ae5135bf5c4021da384b1e16a9682105e8",
+      "resultDigest": "sha256:dc02753006b6860f3571a510136c8ceece90baea28ac0674446f104021ef96bc"
+    },
+    "set_environment_auto_merge": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fbc344e2e462e38ac2a7916f4560e1468168c2d00e0334704ae9e823a4b79b5f",
+      "resultDigest": "sha256:a097aa8283a67af977e9ab404845aba5333b781ab49e55d808aa693bc913400d"
+    },
+    "set_github_pull_request_file_viewed": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:35440473c9f5d5590d8adde7f0dc0cc90009a4fa0f55a6e9dec43c102f2de6bc",
+      "resultDigest": "sha256:39a119124240edf7b9857acb6906ee5e6074b1af869b67dbf4e2aae031189249"
+    },
+    "set_github_pull_request_labels": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5a8dbc7a345e2276f2a9f27c38d877ae5795047b4741a3d9231e2718c75bd56c",
+      "resultDigest": "sha256:7fbf3ca22f139dbeaf4efb0811c38a6df708e3ae79887494ad5871791afa511e"
+    },
+    "set_github_pull_request_reviewers": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bed1412a2a674e1c7d3623194586dabc1858104d07cbc73e635f1cc4686be607",
+      "resultDigest": "sha256:3a3a27fedba9f53c57b7cabaa63828085f3c5dcd8074e4d61d65353e61b4fc16"
+    },
+    "set_github_pull_request_thread_resolved": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:76be743e52200652d03a9f753e99908a9d5acb54ae1d1899c85e5af5cca5e7b6",
+      "resultDigest": "sha256:feebba62c13f4b47d8a5d541599e2dac80202c6ffc44dd61484d903b49af7814"
+    },
+    "submit_github_pull_request_review": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["comments", "commitId"],
+      "argsDigest": "sha256:e7b9e34e2d78451c0104e1fc7cb8308440627236eb99351a556a9cbe6b1f2626",
+      "resultDigest": "sha256:2c28bc10054ea530890dd40cb2596ca9d8acb831231b24b238c7a31ba883fbbc"
+    },
+    "update_github_issue": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ae24744de677dfed494e5ba9a137fcc8006d2741cbad7be2b348023bcb3363d1",
+      "resultDigest": "sha256:2a295292405ba04aecb529a92fd9c7f30bd0f7183338c6d8f009103328ab9259"
+    },
+    "update_github_issue_comment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:218d6c75510b1023d41de1088dfc1a9b4d1d76bab3e66dfea9e241f4a7843a7d",
+      "resultDigest": "sha256:b725a8af09153e31635a94d7d27a443e73c5ea1c12a4af2cfebfc0e3126e8eff"
+    },
+    "update_github_issue_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:454a07868c4d5982bd7e8ddda36d6e59abfb295d84201b5b9adc7d60ed9e6345",
+      "resultDigest": "sha256:2a295292405ba04aecb529a92fd9c7f30bd0f7183338c6d8f009103328ab9259"
+    },
+    "update_github_pull_request_comment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f994bb1509b4ad556f555b29f7775b0c54fe749e999dc590740922f53deb8ea1",
+      "resultDigest": "sha256:714290e945f594127ff6173eb4cdd242571b89866beeef889f03a7cb5826d6ca"
+    },
+    "update_github_pull_request_state": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0d2020fc46aae1afdc824528ce57c20a57b78a50ca26b6f1d98231ec019aa6bf",
+      "resultDigest": "sha256:3a3a27fedba9f53c57b7cabaa63828085f3c5dcd8074e4d61d65353e61b4fc16"
+    },
+    "verify_environment_pr": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:91534a2e1c4457ad94a931b7520d9e4f206362df68d67a732f3b52a9f08c5825",
+      "resultDigest": "sha256:5908c0e22fafe059894c98cfd2f2969e640fbe9c8ab335996a4b7db2c2df05d8"
+    },
+    "verify_review_package": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5c5b50ce46e9dc80b8ab1e96184e6675efbbdbaf8320062215f4f2492501f5ee",
+      "resultDigest": "sha256:54b71dd19f0e5856d11318e0a669ca4f31548b5191ea794021bf4a8112ee69fa"
+    }
+  }
+}

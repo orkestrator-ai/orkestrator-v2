@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "domain": "public-api",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "public_action": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": ["node", "relayedAuthority"],
+      "argsDigest": "sha256:bb01ba0620344056575129be5e476e5e8ab72ecb04068f66824cfc63beb3c987",
+      "resultDigest": "sha256:d9845eccb449721bb9c4e44cfb06f65d2597a2dee0fb846652d39ef610a1970b"
+    }
+  }
+}

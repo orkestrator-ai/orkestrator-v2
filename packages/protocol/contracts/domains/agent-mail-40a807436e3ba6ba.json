@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "domain": "agent-mail",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "ack_agent_mail": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c6258be441341c6b6c0c46fb5f0a5e63d7d804786b4b6250782755a106a60070",
+      "resultDigest": "sha256:5a45d3f6ad300754c1c195b5a23e0850fc73ac128ef2f193d98089bc877bd6de"
+    },
+    "discard_agent_mail_inject": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c6258be441341c6b6c0c46fb5f0a5e63d7d804786b4b6250782755a106a60070",
+      "resultDigest": "sha256:5a45d3f6ad300754c1c195b5a23e0850fc73ac128ef2f193d98089bc877bd6de"
+    },
+    "get_agent_mail_conversation": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:51beb17748644ee1407f9dcf24a9fa4e5d61038d5fc0dba4b5f2d69b8beda55d",
+      "resultDigest": "sha256:fb0bbbca1165331df3b5893a4d202065ebf2404271f8bb377c2b117426997eb6"
+    },
+    "get_agent_mail_inbox_snapshot": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:51ff3cfdc367d6cfbe26905ca4a22907137b1b45ba8e1c418e6c9dc301759f66"
+    },
+    "get_agent_mail_mailbox": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1c0578f6702fb0e14848053de2f5241c033998f6a6f6a8b75dbc8d47c8b778d5",
+      "resultDigest": "sha256:78b2b5f614e90d7e79cfd132eab0eabec6040b47029d4ca25c9d0d6c68229b28"
+    },
+    "get_agent_mail_mailboxes": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:faf62b30c86fe68144427b37b8993a8e34e743e93fedc41381b651d6daa87392",
+      "resultDigest": "sha256:c773f706769e021da7935fb6af8c43b77e8953cc589e65179df9a5a795e50af7"
+    },
+    "get_agent_mail_message": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c6258be441341c6b6c0c46fb5f0a5e63d7d804786b4b6250782755a106a60070",
+      "resultDigest": "sha256:5a45d3f6ad300754c1c195b5a23e0850fc73ac128ef2f193d98089bc877bd6de"
+    },
+    "get_agent_mail_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1ab6a67b3ba40546981857935cc2a806d0f8c066b7b15307b0c4c37e48fed0e5",
+      "resultDigest": "sha256:d6e2350091f177d62f828763eb803c994337f43d2e1895549d6a1f5e09273c89"
+    },
+    "get_agent_mail_summary": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:2f8ec8eab9e1b4f3099f001b9a0b87bd1f6a714749532543eec463eebbe815ce"
+    },
+    "get_agent_messaging_settings": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:fdf5cdffb44aff01948c2caae4d7408f69590a8f750dfcaea9ed450710aeb527"
+    },
+    "get_agent_registry": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:3dba83aa14c5501911c76c8ba85b4f72b1c94259f9739a926bdcff18a14b00d5",
+      "resultDigest": "sha256:623c2922e7720320a0317b9e59b20610914d7a3317d6481bdb233bb25e5b3d58"
+    },
+    "list_agent_mail_conversations": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:2b26563406f95c47f184ffd21dd2bfe4b827b03683bdc00136c76263d4272f76",
+      "resultDigest": "sha256:717607dd3e3eeb252899342930561971a5492896748b48f156574a8c2dcf05fc"
+    },
+    "list_agent_mail_inbox": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1c0578f6702fb0e14848053de2f5241c033998f6a6f6a8b75dbc8d47c8b778d5",
+      "resultDigest": "sha256:78b2b5f614e90d7e79cfd132eab0eabec6040b47029d4ca25c9d0d6c68229b28"
+    },
+    "list_agent_mail_sent": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a0d6eec5c947629e71bf200b1665dc49c0cfd7eafc115c639076208931c66e3d",
+      "resultDigest": "sha256:91ce627160ffe2e214011ed2f777a7b0e9769219e9ff404516babe523cc72b36"
+    },
+    "list_agent_mailboxes": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": ["strictProjectScope"],
+      "argsDigest": "sha256:3e7a9f4ac3d4842c508eb1f4051220fba9ee3f763ff4568b4ffaf9236a79dfa0",
+      "resultDigest": "sha256:d63452c2d4f3632a1f8a8934e16cac0c7370414a5401e8c982e77872d91c27f7"
+    },
+    "mark_agent_mail_conversation_seen": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b90610b7238dd3569fb5e10b91375227229957cf34e7703ff71bb5ad112e5f15",
+      "resultDigest": "sha256:5a13fd05efeef388e86c02ef50d4e57b6144b1d24b1ae04ea76805e5400074ef"
+    },
+    "mark_agent_mail_seen": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c6258be441341c6b6c0c46fb5f0a5e63d7d804786b4b6250782755a106a60070",
+      "resultDigest": "sha256:5a45d3f6ad300754c1c195b5a23e0850fc73ac128ef2f193d98089bc877bd6de"
+    },
+    "mute_agent_mail": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c292110c538d2d63dec246496e087a2b856000219666021245f1c0f78bb81ecb",
+      "resultDigest": "sha256:8863433b059b8b00b57014eb4a2d84a53b4ec8bd1db7d19025197963e6e80401"
+    },
+    "retry_agent_mail_inject": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["now"],
+      "argsDigest": "sha256:f8ea9090521df8bbe92bf3ea0301c20df5da4e3261eb138a76b29d8155cbbf90",
+      "resultDigest": "sha256:5a45d3f6ad300754c1c195b5a23e0850fc73ac128ef2f193d98089bc877bd6de"
+    },
+    "send_agent_mail": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:9c2d35dca7c6a70c49d508825860ca51ee791e08e76b638d3ce9f754bdc422d7",
+      "resultDigest": "sha256:5a45d3f6ad300754c1c195b5a23e0850fc73ac128ef2f193d98089bc877bd6de"
+    },
+    "send_external_agent_mail": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["requestId"],
+      "argsDigest": "sha256:609948fe5ab75fe8b4e872c506ef884b6c4ded6c5db4cb32f098b1cac5be9de0",
+      "resultDigest": "sha256:5a45d3f6ad300754c1c195b5a23e0850fc73ac128ef2f193d98089bc877bd6de"
+    },
+    "set_agent_messaging_paused": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f8ce696e4a640719e82003ef1c65e934df8d03d68c61b8211433cd8bf5ba9df1",
+      "resultDigest": "sha256:0d6c2c2b6b1fdc2eb033664e8d0c5861843d46d746fef35752f013675cd240ed"
+    },
+    "update_agent_messaging_settings": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2ad3430306348be73279c9dd0ad5283c4578ed8c572f59700b407ba75476b466",
+      "resultDigest": "sha256:fdf5cdffb44aff01948c2caae4d7408f69590a8f750dfcaea9ed450710aeb527"
+    }
+  }
+}

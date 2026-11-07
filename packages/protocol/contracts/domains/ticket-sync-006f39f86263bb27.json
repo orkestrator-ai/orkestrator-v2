@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "domain": "ticket-sync",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "ack_ticket_sync_outbox": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:70b5065abe4a2361b551c88a52219926b38766c8bc9ba8088b40e04b2269966f",
+      "resultDigest": "sha256:6a3ef05aa407237fd680e097e8035b004f08af83af86a298f1185dc400666c7f"
+    },
+    "apply_ticket_sync": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["liveIds", "reset"],
+      "argsDigest": "sha256:20b586a7940fc8a1ff56fe55e6c4e7527357a26eb6815b57bae44771705056de",
+      "resultDigest": "sha256:8a62babc0519cc8dc63a8493a1025d0e86913952348111019aab4e16dc0748da"
+    },
+    "collect_ticket_sync_outbox": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fb947d220e7c3b7f03a29f233c2166c8831ea7c8a89afb2fb4b80c76d6b15186",
+      "resultDigest": "sha256:5fbc85c5b15ade60178130b302a22ac05bff0c3c3654ac996b3abfdc02e6777c"
+    },
+    "coordinator_node_ticket": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c3b58ad40364e0acbbb0e4b1b585ad53c31bf0199064aee9e06035d6b68c574e",
+      "resultDigest": "sha256:2715d376dfaa55be3f538ef2e1527d3f2a689c3d9bcd54824c48fd695171dd73"
+    },
+    "get_ticket_sync_cursor": {
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:eed485fb1202008a5928b06d200efdbe447d75ba13fa6c3571b2304310db4868",
+      "resultDigest": "sha256:1112b3b3289793c369b899a78855583de75e0d052116ffadf2b03162a82d4ee9"
+    },
+    "get_ticket_sync_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:8b3c01e4df3f8057515b4e0c8c931bd9e7a0bfc56e89b20a2ca2aa57adda4487"
+    },
+    "sync_node_tickets": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a2705767c2f751f084f53c07e3e1db9ecfc15b7b59936221d92beb6fd3cd38e3",
+      "resultDigest": "sha256:9a0482ace141f84f24637318e6b5f05bd3381e2e972d60685b85e5dd7fefcad7"
+    }
+  }
+}

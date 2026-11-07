@@ -1,0 +1,304 @@
+{
+  "schemaVersion": 1,
+  "domain": "web-annotations",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "web_annotation_archive": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:50a3c3c4d10274c43751bcab38e05c904452c8548fa74255048da0638291f067",
+      "resultDigest": "sha256:6eaa859c35ab47fce3849fbf6bc58a1d8b1199bb88d5695dfca4bfa633eca317"
+    },
+    "web_annotation_asset_get": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4e9060f35b312dbd66677c11b9f65c49b9a6e5c905a3b541e74cbdf3a774fb8a",
+      "resultDigest": "sha256:604ee173c8e3fe2a7ec9e8dfd945c8153a34e21ea335c79d43f7e26686301405"
+    },
+    "web_annotation_asset_stage": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5cff57b06cda8dfa66dd4ae64f7d9223bfa2537bba99f4696d8aaa9127fcfb89",
+      "resultDigest": "sha256:6d6d1daf74473ac835f03579cf184b16d29593afb5f5d9faf8ce7f9df504a711"
+    },
+    "web_annotation_capture": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7a8c6fd74ed6fa51d1e86eb504b5e373ff6e16277490222144722db53a3d1a43",
+      "resultDigest": "sha256:cab05b8a16a7e77e7bffbac54f0abad0c6dc932b0a4c47974db753a8941fc864"
+    },
+    "web_annotation_capture_replace": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:13bd324dfb12cbd7de3c08bb669688c5c5478f66f26fbeb24a3c52b1e1322fe2",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotation_create": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:14fbdd273c6503750016ef1d51593986d13b3b29b5adbed9df5f9fe039983442",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotation_delete": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6a0fe69df4083e927bf212d43a0b7686997212a1721590e17e8c9155d5ab5ab8",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotation_destinations": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c601f615f2f2230a5cdd00f9dc32b0db76599e43ba6706e8834de57e140f29e",
+      "resultDigest": "sha256:de3a9ae48148f28a77520902de323c38ad7f6eb748ddd58a02e9266b99767cc4"
+    },
+    "web_annotation_draft_delete": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e7c589d456f30551ee600142d1ac1089113327cbdaf4bfbf699a6dda5bcee8cf",
+      "resultDigest": "sha256:7add65bf85bae65a30159bd0b1a90f066759159576ef544ac0700d8c74035906"
+    },
+    "web_annotation_draft_get": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:458f1643892da5b3ce252f582d01a08a55620c1bd2326aecf93e4f167b28189b",
+      "resultDigest": "sha256:6cd5786d8948b941c068c3b9ce661acc9c27bd5909981e7c87b94fac294224c6"
+    },
+    "web_annotation_draft_save": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:30beb936cb822c6f5bf69355e283ec88682dd37faeab65ab67f04f24b548c004",
+      "resultDigest": "sha256:89c10b8f812523ebb64d4f861c3f2a1c31321bb2f1007984f5e036f544977e27"
+    },
+    "web_annotation_entries": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4a8856263206ea7ccf023155d6fa256a8b0ad4df63d6a91454fd08d9f323f3fb",
+      "resultDigest": "sha256:f0a09ebeff679f015cce4869e9992fb13bc37c802f5b7528d3f97327e750b377"
+    },
+    "web_annotation_entry_append": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:db4287854bd1a8b8637ad89cbdcd52022158e68c696457283ca356002e7830ea",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotation_entry_edit": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:aabf425b8d5fbb34811e24fd365d1d52482d01b71e6c49b0dae7b272fde21c5a",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotation_get": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:cdafd54c98eae2d3e40233d8733da1153f86d149916aa93b7e8290df3bcf566c",
+      "resultDigest": "sha256:5571aba5db947f2029850070c8336cf4ec477b5e16ea0a2317c61be4bcef670d"
+    },
+    "web_annotation_operation_receipt": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:464e99ee0b5db6658f72095c639baeb9fa98b7096820196c4bbbaf0c3e5ca22f",
+      "resultDigest": "sha256:b32d1f1a3b64db864cf4c31014f9f80423e537b8a9aaffe82b5ae9538cc82dda"
+    },
+    "web_annotation_reopen": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:1748632d261fd1dbabafac4a3149d7e6dd1e43f203134fec5081b51167596af2",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotation_request_cancel": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:db343c39cfbffde5d8c7b4d470894558b331ae4cdccc698b06a79c433dfc0ae6",
+      "resultDigest": "sha256:405b0cb58caa7ddbb4915ffc2aac31f449cbe93bc74b2e04ff91113f97a63a79"
+    },
+    "web_annotation_request_follow_up": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b9e92865e1ca7cb01017a1bf6d4af8b0e786e15d8f0a9753431916f247c30766",
+      "resultDigest": "sha256:cbca79eafa17a66379c999b7ea56159e8f611b573ef50782626a42976324c864"
+    },
+    "web_annotation_request_get": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b9e92865e1ca7cb01017a1bf6d4af8b0e786e15d8f0a9753431916f247c30766",
+      "resultDigest": "sha256:e2f39314770b6b92c65cc92032ad922e01fd7ce1bf18c9a4db7d82bf5c65387c"
+    },
+    "web_annotation_request_prepare": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["retargetOf", "textOnly"],
+      "argsDigest": "sha256:12c7659d5dc100529921767bd5c83b8b19c495fe563247b41c00de591d1f4e71",
+      "resultDigest": "sha256:449e90b2c7f051ce5a06a416c6b0f89667c99296a5686cd7007ef221c18c0c64"
+    },
+    "web_annotation_request_recover": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:326ea9361147175f03cfda186889660be2dd114a38c40375327322f9590fb5f2",
+      "resultDigest": "sha256:9838d931c432741708c81d99695337902bc0d00b72df1ed5d3d44ee9fc101b46"
+    },
+    "web_annotation_request_response": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b9e92865e1ca7cb01017a1bf6d4af8b0e786e15d8f0a9753431916f247c30766",
+      "resultDigest": "sha256:99483e7c01675d58b6141a118177232e5bf5239a0926e935a765bc514e48ee04"
+    },
+    "web_annotation_request_send": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f0b10563fd18dcd381ad7a221418b5989af34af66abaa7835fc520d620792814",
+      "resultDigest": "sha256:1bf35ed35984afed3c38c8baa12b8d64c8902dae2e87a15eb7632edff3943369"
+    },
+    "web_annotation_requests": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:420353d6eac4c630eee49fb4274c2d41e742f34bcbf54108256aa476c1bb45d1",
+      "resultDigest": "sha256:64a618c9aa59be137d96c25fcf63754bbbd054aee9839f7fbc760befea809cba"
+    },
+    "web_annotation_resolve": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedResultRevision"],
+      "argsDigest": "sha256:07bbe9de53b7336f0d89f809539675fb04abe5739ab3f02dcca8528f114842c1",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotation_result_capture": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ab8c5e6b6bead2f67d35e064b68b045037bbc68e3ee544167da9a99228a3ea62",
+      "resultDigest": "sha256:5dee01d06a9537a370d94de81c96fd1e1db7b559bd6dda7715df2c924fa668fb"
+    },
+    "web_annotation_update": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:25f7400ae7c44fa38655bda0b10f8e818b668b77e0b8a032be6320c1de23752a",
+      "resultDigest": "sha256:2c9b9cbeba9e45354d13a8323e68ef01977b18865b94a11596c8776cbb9b3750"
+    },
+    "web_annotations_capabilities": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e5a27e4879ae6a85340d4a6401fc8de5e074ad486e19a259f86a81f7c96ea768",
+      "resultDigest": "sha256:c61100310c248dddaf1ab22ede54ab13079eb99534fbd357c19d3464b044acfb"
+    },
+    "web_annotations_changes": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8f31cbac005c6b335feef4ff0e638e1032572c561f7003087ce8e76fff02f4dc",
+      "resultDigest": "sha256:d9fbf627833c0114346e313ddb55c51dd31f7e8d2bc7f4cfbf3a57523f877851"
+    },
+    "web_annotations_list": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:37acca3d2290467addba4d71fe045a5e17b0792bf2a7b56e41958a5936d4991d",
+      "resultDigest": "sha256:5f9fad80b060832df96d5dac3c0ff56581edb2e5f5fc4d6382f16fd951930623"
+    },
+    "web_annotations_metrics": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:20a72553c4c4a173fc321b6fc3e903d9dffcf024df03fc026d4709a14b869b29"
+    },
+    "web_annotations_migrate": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c601f615f2f2230a5cdd00f9dc32b0db76599e43ba6706e8834de57e140f29e",
+      "resultDigest": "sha256:2e52c734a4fbd3cbb2efae3836f89b1292de660fd0a3d6f37e59050d72c7a740"
+    },
+    "web_annotations_migration_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0c601f615f2f2230a5cdd00f9dc32b0db76599e43ba6706e8834de57e140f29e",
+      "resultDigest": "sha256:2e52c734a4fbd3cbb2efae3836f89b1292de660fd0a3d6f37e59050d72c7a740"
+    },
+    "web_annotations_reconcile_draft": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c29535b151faadb7ed3d4b7b72533e965a6ce4460704540421cf030b06707b1e",
+      "resultDigest": "sha256:5212f002fbe78a1ef8bbbcaef61cf2117f15430b06907d933132897af218ffb1"
+    },
+    "web_annotations_rollout": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:f8a5819849dd599cfefe4db0a0fadba48b04a016162da47ce3f742e195af3e91"
+    },
+    "web_annotations_rollout_set": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:da08cb7629475cd41de000c1e44e320b6c8f7cde41a2f93ed017dd3c58152c18",
+      "resultDigest": "sha256:f8a5819849dd599cfefe4db0a0fadba48b04a016162da47ce3f742e195af3e91"
+    }
+  }
+}

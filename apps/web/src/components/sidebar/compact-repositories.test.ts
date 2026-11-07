@@ -88,6 +88,21 @@ describe("the list", () => {
     expect(repository!.icon).toBeUndefined();
   });
 
+  test("a repository not on the command node takes the first icon in machine order", () => {
+    const [repository] = compactRepositories(
+      [
+        machine("command", [{ id: "c", name: "other", hint: "github.com/acme/other" }]),
+        machine("first", [{ id: "f", name: "app", hint: HINT }]),
+        machine("second", [{ id: "s", name: "app", hint: HINT, icon: "second-icon" }]),
+        machine("third", [{ id: "t", name: "app", hint: HINT, icon: "third-icon" }]),
+      ],
+      LAYOUT,
+      "command",
+    ).filter((entry) => entry.repository === HINT);
+    expect(repository!.opens).toMatchObject({ machine: { backendId: "first" } });
+    expect(repository!.icon).toBe("second-icon");
+  });
+
   test("a repository with no icon on the command node shows the house tile", () => {
     const [repository] = compactRepositories(
       [

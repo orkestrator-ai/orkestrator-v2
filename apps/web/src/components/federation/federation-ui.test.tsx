@@ -479,7 +479,7 @@ test("a repository heading shows the command node's own icon for the project, ou
 });
 
 test.each([false, true])(
-  "a repository heading keeps the house when only an unrelated command-node project has an icon (matching project: %s)",
+  "a repository heading ignores an unrelated command-node project's icon (matching project on the command node: %s)",
   async (hasMatchingProject) => {
     installTwoMachines();
     const remote = machineView({ bound: true });
@@ -529,11 +529,163 @@ test.each([false, true])(
     const color = hasMatchingProject ? "violet" : "teal";
     await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe(color));
     expect(home.classList).toContain(`border-${color}-500`);
-    expect(home.querySelector("svg.lucide-house") === null).toBe(false);
-    expect(home.querySelector("svg")!.classList).toContain(`text-${color}-500`);
-    expect(within(home).queryByTestId("project-icon") === null).toBe(true);
+    if (hasMatchingProject) {
+      // The command node's copy has no icon: its house, not another machine's icon.
+      expect(home.querySelector("svg.lucide-house") === null).toBe(false);
+      expect(home.querySelector("svg")!.classList).toContain(`text-${color}-500`);
+      expect(within(home).queryByTestId("project-icon") === null).toBe(true);
+    } else {
+      // Not on the command node: the first machine with an icon for it.
+      expect(within(home).getByTestId("project-icon").getAttribute("src")).toBe(
+        "data:image/png;base64,cmVtb3Rl",
+      );
+    }
   },
 );
+
+test("a repository not on the command node takes the first icon in machine order", async () => {
+  installTwoMachines();
+  const hint = "github.com/acme/app";
+  const withoutIcon = machineView();
+  withoutIcon.projects[0]!.repositoryHint = hint;
+  const memberOf = (backendId: BackendId, icon: string) => ({
+    ref: projectRef(backendId, "project-1"),
+    key: projectKey(projectRef(backendId, "project-1")),
+    name: "app",
+    order: 0,
+    repositoryHint: hint,
+    icon,
+  });
+  const second = machineView({
+    connectionId: "b",
+    backendId: "bk_b" as BackendId,
+    name: "Machine B",
+    colorToken: "rose",
+    projects: [memberOf("bk_b" as BackendId, "data:image/png;base64,c2Vjb25k")],
+  });
+  const third = machineView({
+    connectionId: "c",
+    backendId: "bk_c" as BackendId,
+    name: "Machine C",
+    colorToken: "amber",
+    projects: [memberOf("bk_c" as BackendId, "data:image/png;base64,dGhpcmQ=")],
+  });
+  const commandNode = machineView({
+    connectionId: "bk_self",
+    backendId: "bk_self" as BackendId,
+    name: "Command node",
+    colorToken: "violet",
+    projects: [],
+    environmentsByProject: new Map(),
+  });
+  renderWithFederation(
+    <MergedProjectList
+      machines={[withoutIcon, second, third, commandNode]}
+      shownIds={new Set(["a", "b", "c"])}
+      mode="repository"
+      renderBoundProject={() => null}
+      onBoundEnvironmentDragEnd={() => undefined}
+    />,
+  );
+  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+  const home = within(heading).getByTestId("command-node-home-icon");
+  await waitFor(() =>
+    expect(within(home).getByTestId("project-icon").getAttribute("src")).toBe(
+      "data:image/png;base64,c2Vjb25k",
+    ),
+  );
+  // The outline still names the machine the heading opens on.
+  expect(home.getAttribute("data-machine-color")).toBe("teal");
+});
+
+test("a repository heading's menu acts on the project it opens, in that machine's workspace", async () => {
+  installTwoMachines();
+  const open = spyOn(window, "open").mockImplementation(() => null);
+  try {
+    const machine = machineView();
+    machine.projects[0]!.repositoryHint = "github.com/acme/app";
+    renderWithFederation(
+      <MergedProjectList
+        machines={[machine]}
+        shownIds={new Set(["a"])}
+        mode="repository"
+        renderBoundProject={() => null}
+        onBoundEnvironmentDragEnd={() => undefined}
+      />,
+    );
+    const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+    const openMenu = async () => {
+      await act(async () => {
+        fireEvent.contextMenu(heading);
+      });
+      return screen.findByRole("menu");
+    };
+    const menu = await openMenu();
+    expect(within(menu).getByText("On Machine A")).toBeTruthy();
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      "Open Coordinator",
+      "Open Board",
+      "Open Repo on GitHub",
+      "Repository Settings",
+      "New Environment",
+      "Collapse",
+    ]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open Repo on GitHub" }));
+    expect(open).toHaveBeenCalledWith(
+      "https://github.com/acme/app",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    fireEvent.click(
+      within(await openMenu()).getByRole("menuitem", { name: "Repository Settings" }),
+    );
+    await waitFor(() =>
+      expect(useRemoteWorkspaceStore.getState().requests.a?.request).toEqual({
+        type: "select",
+        projectId: "project-1",
+        dialog: "repository-settings",
+      }),
+    );
+
+    fireEvent.click(within(await openMenu()).getByRole("menuitem", { name: "Collapse" }));
+    await waitFor(() =>
+      expect(document.querySelector("[data-project-folder-content]") === null).toBe(true),
+    );
+    expect(within(await openMenu()).getByRole("menuitem", { name: "Expand" })).toBeTruthy();
+  } finally {
+    open.mockRestore();
+  }
+});
+
+test("a repository heading's menu disables writes while its machine is unavailable", async () => {
+  installTwoMachines();
+  const machine = machineView({ transport: "unreachable" });
+  machine.projects[0]!.repositoryHint = "github.com/acme/app";
+  renderWithFederation(
+    <MergedProjectList
+      machines={[machine]}
+      shownIds={new Set(["a"])}
+      mode="repository"
+      renderBoundProject={() => null}
+      onBoundEnvironmentDragEnd={() => undefined}
+    />,
+  );
+  await act(async () => {
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Open acme/app on Machine A" }));
+  });
+  const menu = await screen.findByRole("menu");
+  for (const name of ["Repository Settings", "New Environment"]) {
+    expect(within(menu).getByRole("menuitem", { name }).getAttribute("data-disabled")).toBe("");
+  }
+  expect(
+    within(menu).getByRole("menuitem", { name: "Open Board" }).hasAttribute("data-disabled"),
+  ).toBe(false);
+});
 
 test("a repository with one visible environment uses singular summary labels and excludes project homes", async () => {
   const machine = machineView();

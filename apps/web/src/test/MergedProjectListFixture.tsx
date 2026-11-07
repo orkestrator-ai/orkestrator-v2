@@ -69,6 +69,16 @@ const remote = machine("bk_remote", "Remote", [
 ]);
 const command = machine("bk_self", "Command", [["local", hintA, null]]);
 
+/** A 16×16 PNG for `?icons`, set on a project of a repository the command node has no copy of. */
+const REMOTE_ICON =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAARElEQVR42mN4KOtBEmKgu4ZfGIAoDZhsKmnAVIEpQoEGrL7EFGTAYxhWcQY8xmOVYsBvPKYsA37jMS1hIGg8miW0T3wA0g6cMPq26OIAAAAASUVORK5CYII=";
+const remoteWithIcons: MachineView = {
+  ...remote,
+  projects: remote.projects.map((project) =>
+    project.repositoryHint === hintB ? { ...project, icon: REMOTE_ICON } : project,
+  ),
+};
+
 function install() {
   let layout = {
     ...emptyPortalLayout(),
@@ -135,10 +145,11 @@ export function MergedProjectListFixture() {
   const { type: _type, ...request } = latest ?? { type: "select" };
   const params = new URLSearchParams(location.search);
   const shownIds = new Set(params.has("fallback") ? ["bk_remote"] : ["bk_remote", "bk_self"]);
-  // `?empty`: no machine has a project yet.
+  // `?empty`: no machine has a project yet. `?icons`: team-b, which only
+  // Remote has, carries an icon there.
   const machines = params.has("empty")
     ? [remote, command].map((view) => ({ ...view, projects: [], environmentsByProject: new Map() }))
-    : [remote, command];
+    : [params.has("icons") ? remoteWithIcons : remote, command];
   return (
     <main className="max-w-lg p-4">
       <output data-testid="updates">{JSON.stringify(state.updates)}</output>

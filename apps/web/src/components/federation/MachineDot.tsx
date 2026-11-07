@@ -143,16 +143,16 @@ export function MachineHomeIcon({
 /**
  * A repository group's leading home, two text lines tall, outlined in the
  * command node's colour while it has a copy of the repository, else that of
- * the machine running the coordinator (`repositoryTileColor`). The command
- * node's own icon for the project replaces the home and fills the outline edge
- * to edge, clipped to its rounded corners.
+ * the machine running the coordinator (`repositoryTileColor`). The
+ * repository's icon (`repositoryIcon`) replaces the home and fills the outline
+ * edge to edge, clipped to its rounded corners.
  */
 export function CommandNodeHomeIcon({
   colorToken,
   projectIcon,
 }: {
   colorToken: string | undefined;
-  /** The command node's icon for this repository's project. */
+  /** The repository's icon, from `repositoryIcon`. */
   projectIcon?: string | null;
 }) {
   const icon = normalizeProjectIcon(projectIcon);

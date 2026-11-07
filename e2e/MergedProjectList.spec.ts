@@ -102,9 +102,10 @@ test("the chevron collapses without navigating and the heading reorders with Spa
   await page.keyboard.press("ArrowDown");
   await expect(folder(page, hintA)).toHaveAttribute("style", /translate3d\(0px, [1-9]/);
   // Movement paints before DndContext publishes its new drop target.
-  await expect(heading(page, "team-b/shared/app", "Remote").locator("..")).toHaveClass(
-    /border-primary\/70/,
-  );
+  // The heading's frame, past the context-menu trigger around the heading.
+  await expect(
+    heading(page, "team-b/shared/app", "Remote").locator("xpath=ancestor::div[1]"),
+  ).toHaveClass(/border-primary\/70/);
   await page.keyboard.press("Space");
   await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
     "data-project-folder",

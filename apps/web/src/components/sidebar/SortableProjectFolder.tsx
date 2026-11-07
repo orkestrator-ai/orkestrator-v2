@@ -2,14 +2,29 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowDownAZ, ChevronRight, Folder, FolderOpen, FolderMinus, Pencil } from "lucide-react";
+import {
+  ArrowDownAZ,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Folder,
+  FolderMinus,
+  FolderOpen,
+  LayoutGrid,
+  MessagesSquare,
+  Pencil,
+  Plus,
+  Settings2,
+} from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { GithubIcon } from "@/components/icons/GithubIcon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,13 +42,30 @@ import { MAX_PROJECT_FOLDER_NAME_LENGTH } from "@orkestrator/protocol/project-fo
 import { parseProjectFolderDragId, projectFolderDragId } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
 
+/**
+ * What a repository heading's context menu can do. Every entry acts on the
+ * member the heading opens, on the machine it names.
+ */
+export interface RepositoryMenuActions {
+  /** The machine of the member the entries act on. */
+  machineName: string;
+  /** The member's machine accepts writes; settings and creation need it. */
+  writable: boolean;
+  /** What a click on the heading opens; absent where the coordinator is gated. */
+  openCoordinator?: () => void;
+  openBoard: () => void;
+  openGithub?: () => void;
+  openSettings: () => void;
+  newEnvironment: () => void;
+}
+
 interface SortableProjectFolderProps {
   name: string;
   sortableId?: string;
   projectCount: number;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  /** Folder actions; a list without them (a repository group) has no menu. */
+  /** Folder actions; a repository group has `repositoryMenu` instead. */
   onRename?: (nextName: string) => void | Promise<void>;
   onSort?: () => void | Promise<void>;
   onUngroup?: () => void | Promise<void>;
@@ -53,6 +85,8 @@ interface SortableProjectFolderProps {
   selected?: boolean;
   /** Destination named by the repository navigation control. */
   openMachineName?: string;
+  /** A repository group's context menu. */
+  repositoryMenu?: RepositoryMenuActions;
   children: ReactNode;
 }
 
@@ -80,6 +114,7 @@ export function SortableProjectFolder({
   onOpen,
   selected = false,
   openMachineName,
+  repositoryMenu,
   children,
 }: SortableProjectFolderProps) {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -138,7 +173,7 @@ export function SortableProjectFolder({
   const FolderIcon = isCollapsed ? Folder : FolderOpen;
   // "owner/repo": the owner recedes so the repository name leads.
   const ownerEnd = repository ? label.lastIndexOf("/") + 1 : 0;
-  const hasMenu = Boolean(onRename || onSort || onUngroup);
+  const hasMenu = Boolean(onRename || onSort || onUngroup || repositoryMenu);
 
   // The whole heading is the drag handle. A repository heading also opens on
   // click, so its keyboard drag starts on Space only and Enter keeps the
@@ -236,6 +271,13 @@ export function SortableProjectFolder({
           <ContextMenu>
             <ContextMenuTrigger className="contents">{heading}</ContextMenuTrigger>
             <ContextMenuContent>
+              {repositoryMenu ? (
+                <RepositoryMenuItems
+                  actions={repositoryMenu}
+                  isCollapsed={isCollapsed}
+                  onToggleCollapse={onToggleCollapse}
+                />
+              ) : null}
               {onRename ? (
                 <ContextMenuItem
                   onClick={() => {
@@ -345,5 +387,57 @@ export function SortableProjectFolder({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function RepositoryMenuItems({
+  actions,
+  isCollapsed,
+  onToggleCollapse,
+}: {
+  actions: RepositoryMenuActions;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+}) {
+  return (
+    <>
+      <ContextMenuLabel className="text-xs font-normal text-muted-foreground">
+        On {actions.machineName}
+      </ContextMenuLabel>
+      {actions.openCoordinator ? (
+        <ContextMenuItem onClick={actions.openCoordinator}>
+          <MessagesSquare className="mr-2 h-4 w-4" />
+          Open Coordinator
+        </ContextMenuItem>
+      ) : null}
+      <ContextMenuItem onClick={actions.openBoard}>
+        <LayoutGrid className="mr-2 h-4 w-4" />
+        Open Board
+      </ContextMenuItem>
+      {actions.openGithub ? (
+        <ContextMenuItem onClick={actions.openGithub}>
+          <GithubIcon className="mr-2 h-4 w-4" />
+          Open Repo on GitHub
+        </ContextMenuItem>
+      ) : null}
+      <ContextMenuSeparator />
+      <ContextMenuItem disabled={!actions.writable} onClick={actions.openSettings}>
+        <Settings2 className="mr-2 h-4 w-4" />
+        Repository Settings
+      </ContextMenuItem>
+      <ContextMenuItem disabled={!actions.writable} onClick={actions.newEnvironment}>
+        <Plus className="mr-2 h-4 w-4" />
+        New Environment
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={onToggleCollapse}>
+        {isCollapsed ? (
+          <ChevronsUpDown className="mr-2 h-4 w-4" />
+        ) : (
+          <ChevronsDownUp className="mr-2 h-4 w-4" />
+        )}
+        {isCollapsed ? "Expand" : "Collapse"}
+      </ContextMenuItem>
+    </>
   );
 }

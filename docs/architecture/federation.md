@@ -540,6 +540,14 @@ with `MachinesFilter`:
 - Repository grouping uses only a sanitized `host/owner/name` hint derived
   from the project's Git URL (`repositoryHint`), or an explicit mapping
   argument. Names, paths and branches never group projects.
+- A repository heading's tile shows `repositoryIcon`: the command node's icon
+  for its copy of the repository (none means the house, even when another
+  machine has one), else, when the command node has no copy, the first icon in
+  machine order. Right-clicking the heading opens its menu, which acts on the
+  member the heading opens and names its machine: Open Coordinator (absent where
+  the coordinator is gated), Open Board, Open Repo on GitHub, Repository
+  Settings, New Environment and Expand/Collapse. Settings and New Environment
+  are disabled while that machine is not writable, as on a project header.
 - Activity order offers **Priority order** (the default for both local and
   federated lists), **Newest first**, and **Oldest first**. Every order keeps
   merged environments below unmerged ones and, within each, working environments
@@ -603,9 +611,9 @@ sidebar one large icon wide (56px), listing only top-level repositories.
   projects, folders flattened away. Every connected machine counts: the machine
   filter's control is not on screen, so it does not apply here (it is kept for
   the other modes).
-- **An icon** reuses `CommandNodeHomeIcon` (the command node's icon for the
-  project, as a repository heading has; a repository with none shows the house
-  tile) inside `CoordinatorActivityIcon`. Its outline is `repositoryTileColor`,
+- **An icon** reuses `CommandNodeHomeIcon` (`repositoryIcon`, as a repository
+  heading has; a repository with none shows the house tile) inside
+  `CoordinatorActivityIcon`. Its outline is `repositoryTileColor`,
   also as on a heading: the command node's colour while it has a copy of the
   repository, else the colour of the machine whose coordinator a click opens. The
   name is a tooltip and the accessible name, and there is no other text.

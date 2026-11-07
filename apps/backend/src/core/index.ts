@@ -1,5 +1,6 @@
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
+import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
@@ -2854,6 +2855,14 @@ export class OrkestratorBackend {
    */
   hasCommand(command: string): boolean {
     return this.commands.has(command);
+  }
+
+  /**
+   * The `access` of `command`'s definition, `undefined` without one: the
+   * workspace grant allow-list the gateway and the relay apply (plan item 7012).
+   */
+  commandAccess(command: string): CommandAccess | undefined {
+    return this.commands.contracts.get(command)?.access;
   }
 
   /** Orkestrator's own listeners can never be registered as preview targets. */

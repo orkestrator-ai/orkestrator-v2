@@ -34,7 +34,7 @@ import {
   updateProjectCommand,
 } from "./projects/index.js";
 
-/** `WORKSPACE_ADMINISTRATION_COMMANDS` (backend) in these domains; pinned there too. */
+/** The machine's settings writes a workspace grant never runs (plan items 7005, 7012). */
 const CONFIG_ADMIN = new Set([
   "save_config",
   "update_global_config",

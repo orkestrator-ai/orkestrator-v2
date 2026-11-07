@@ -87,7 +87,7 @@ const ENVIRONMENTS_COMMAND_NAMES = [
   "update_port_mappings",
 ];
 
-/** `isWorkspaceExcludedCommand` (backend `nodes/node-routing.ts`) for this domain. */
+/** What the old grant deny-lists refused in this domain (plan item 7012). */
 const ADMIN = new Set(["cleanup_logs", "set_container_resource_limits"]);
 const INTERNAL = new Set(["approve_project_setup_commands"]);
 

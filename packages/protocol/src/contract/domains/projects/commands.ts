@@ -17,7 +17,7 @@
  *
  * `access`: `internal` for `request_coordinator_agents_md_update` (the
  * coordinator's Control MCP tool; workspace-excluded), `workspace` for the
- * rest (none is in `isWorkspaceExcludedCommand`). `read` equals
+ * rest (none was on the old grant deny-lists). `read` equals
  * `isNodeReadCommand` (pinned by `projects-config.test.ts`).
  *
  * Browser-safe.

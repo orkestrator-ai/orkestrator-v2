@@ -1,5 +1,6 @@
 import type { CommandInvocation } from "./core/commands-context.js";
 import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
+import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
   type IncomingHttpHeaders,
@@ -49,6 +50,13 @@ export type BackendInvoker = {
    * such as during shutdown.
    */
   hasCommand?(command: string): boolean;
+  /**
+   * The `access` a registered command's definition declares, `undefined` for
+   * a command without one. A client grant and the relay run only `workspace`
+   * commands (plan item 7012); a backend without this refuses every command
+   * to them.
+   */
+  commandAccess?(command: string): CommandAccess | undefined;
   /** The database figures `/metrics` reports; absent from a backend with no database. */
   databaseStats?(): DatabaseStats;
   /** Lets the backend's diagnostics read the same snapshot `/metrics` answers. */

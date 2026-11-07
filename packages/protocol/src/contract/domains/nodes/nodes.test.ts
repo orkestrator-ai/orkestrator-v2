@@ -24,7 +24,7 @@ import {
   nodesDomain,
 } from "./index.js";
 
-/** Reached by a workspace grant or the relay (not in `isWorkspaceExcludedCommand`). */
+/** Reached by a workspace grant or the relay (`access: "workspace"`). */
 const WORKSPACE = new Set([
   "dismiss_node_outcome",
   "get_backend_profile",

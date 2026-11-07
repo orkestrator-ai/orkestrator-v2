@@ -19,7 +19,7 @@ import {
 } from "./coordinator-worker-mail.js";
 import { COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR } from "./coordinator-workflow-retention.js";
 import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
-import { isNodeExcludedCommand } from "./nodes/node-routing.js";
+import { isNodeRoutingExcludedCommand } from "./nodes/node-routing.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { runCommand } from "./shell.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
@@ -592,7 +592,7 @@ describe("coordinator messages to the project home", () => {
       ),
     ).rejects.toThrow("Only an approved project home message");
     expect(await mailTo(homeId)).toEqual([]);
-    expect(isNodeExcludedCommand("send_approved_project_home_message")).toBe(true);
+    expect(isNodeRoutingExcludedCommand("send_approved_project_home_message")).toBe(true);
   });
 
   test("the routing rule names both routes, isolation and the project home rule", () => {

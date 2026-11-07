@@ -23,7 +23,7 @@ import {
   backendDomainAdapterUsage,
   recordRendererDomainAdapterUsage,
 } from "./domain-adapter-usage.js";
-import { WORKSPACE_ADMINISTRATION_COMMANDS } from "./nodes/workspace-grant-scope.js";
+import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 
 const at = () => new Date("2026-11-07T10:00:00.000Z");
 
@@ -139,7 +139,7 @@ describe("the record_domain_adapter_usage command", () => {
   });
 
   test("is refused to workspace clients", () => {
-    expect(WORKSPACE_ADMINISTRATION_COMMANDS.has(RECORD_DOMAIN_ADAPTER_USAGE_COMMAND)).toBe(true);
+    expect(grantAdmits(RECORD_DOMAIN_ADAPTER_USAGE_COMMAND)).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/backend-profile";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 import type { BackendHelloIdentity } from "../src/gateway";
+import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 
 const identity: BackendHelloIdentity = {
@@ -147,7 +148,7 @@ describe("DP-02 client grants at the leaf's gateway", () => {
     const grant = "okg_abc.secret";
     const invoke = mock(async () => ({ ok: true }));
     const { info } = await startGateway({
-      backend: { invoke },
+      backend: { invoke, commandAccess: registryCommandAccess },
       backendHello: async () => identity,
       nodeHooks: grantHooks(grant),
     });

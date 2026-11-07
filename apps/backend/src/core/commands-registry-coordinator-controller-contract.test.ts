@@ -22,7 +22,7 @@ import type { RegistryDependencies } from "./commands-registry-types.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 import { registerCoordinatorForkWorker } from "./coordinator-fork-worker.js";
 import { registerCoordinatorWorkerChanges } from "./coordinator-worker-changes.js";
-import { isWorkspaceExcludedCommand } from "./nodes/node-routing.js";
+import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 
 function registered() {
   const commands = new Map<string, CommandHandler>();
@@ -66,14 +66,11 @@ describe("coordinator controller commands", () => {
     expect([...names].sort()).toEqual([...defined].sort());
   });
 
-  it("marks workspace-excluded commands admin or internal and the rest workspace", () => {
+  it("a workspace grant runs exactly the controller commands defined as workspace", () => {
     for (const def of COORDINATOR_CONTROLLER_COMMANDS) {
       expect({ name: def.name, workspace: def.access === "workspace" }).toEqual({
         name: def.name,
-        // Narrowed to `internal` by plan item 7012 (a Control MCP tool step).
-        workspace:
-          !isWorkspaceExcludedCommand(def.name) &&
-          def.name !== "get_coordinator_node_launch_environment",
+        workspace: grantAdmits(def.name),
       });
     }
   });

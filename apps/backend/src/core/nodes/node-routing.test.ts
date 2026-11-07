@@ -1,19 +1,19 @@
 import { expect, mock, test } from "bun:test";
 import {
-  isNodeExcludedCommand,
-  isWorkspaceExcludedCommand,
+  isNodeRoutingExcludedCommand,
   NodeOutcomeLedger,
   MAX_NODE_OUTCOMES,
   routeToNode,
 } from "./node-routing.js";
+import { grantAdmits } from "./workspace-grant-test-support.js";
 
 test.each([
   "create_control_mcp_credential",
   "rotate_control_mcp_credential",
   "revoke_control_mcp_credential",
 ])("%s never crosses a grant, relay or peer-node boundary", async (command) => {
-  expect(isNodeExcludedCommand(command)).toBe(true);
-  expect(isWorkspaceExcludedCommand(command)).toBe(true);
+  expect(isNodeRoutingExcludedCommand(command)).toBe(true);
+  expect(grantAdmits(command)).toBe(false);
   const invoke = mock(async <T>() => ({ token: "must-not-return" }) as T);
   await expect(
     routeToNode({
@@ -28,20 +28,20 @@ test.each([
 });
 
 test("a coordinator's mailed images are its own node's to send, and node-link only to receive", () => {
-  expect(isNodeExcludedCommand("transfer_coordinator_attachments")).toBe(true);
+  expect(isNodeRoutingExcludedCommand("transfer_coordinator_attachments")).toBe(true);
   for (const command of ["prepare_node_mail_attachments", "place_node_mail_attachments"]) {
-    expect(isNodeExcludedCommand(command)).toBe(false);
-    expect(isWorkspaceExcludedCommand(command)).toBe(true);
+    expect(isNodeRoutingExcludedCommand(command)).toBe(false);
+    expect(grantAdmits(command)).toBe(false);
   }
 });
 
 test("controller PR publication is node-link only, never workspace-grant access", () => {
-  expect(isNodeExcludedCommand("create_controller_pr")).toBe(false);
-  expect(isWorkspaceExcludedCommand("create_controller_pr")).toBe(true);
-  expect(isNodeExcludedCommand("create_coordinator_pr")).toBe(true);
-  expect(isNodeExcludedCommand("resolve_controller_conflicts")).toBe(false);
-  expect(isWorkspaceExcludedCommand("resolve_controller_conflicts")).toBe(true);
-  expect(isNodeExcludedCommand("resolve_coordinator_conflicts")).toBe(true);
+  expect(isNodeRoutingExcludedCommand("create_controller_pr")).toBe(false);
+  expect(grantAdmits("create_controller_pr")).toBe(false);
+  expect(isNodeRoutingExcludedCommand("create_coordinator_pr")).toBe(true);
+  expect(isNodeRoutingExcludedCommand("resolve_controller_conflicts")).toBe(false);
+  expect(grantAdmits("resolve_controller_conflicts")).toBe(false);
+  expect(isNodeRoutingExcludedCommand("resolve_coordinator_conflicts")).toBe(true);
 });
 
 test("controller worker surfaces are node-link only, never workspace-grant access", () => {
@@ -51,8 +51,8 @@ test("controller worker surfaces are node-link only, never workspace-grant acces
     "edit_controller_worker_tab",
     "restart_controller_build_pipeline_step",
   ]) {
-    expect(isNodeExcludedCommand(command)).toBe(false);
-    expect(isWorkspaceExcludedCommand(command)).toBe(true);
+    expect(isNodeRoutingExcludedCommand(command)).toBe(false);
+    expect(grantAdmits(command)).toBe(false);
   }
 });
 
@@ -62,29 +62,29 @@ test("worker turn controls are node-link only on the leaf and never leave the co
     "list_controller_worker_commands",
     "run_controller_worker_command",
   ]) {
-    expect(isNodeExcludedCommand(command)).toBe(false);
-    expect(isWorkspaceExcludedCommand(command)).toBe(true);
+    expect(isNodeRoutingExcludedCommand(command)).toBe(false);
+    expect(grantAdmits(command)).toBe(false);
   }
   for (const command of [
     "stop_coordinator_worker_turn",
     "list_coordinator_worker_commands",
     "run_coordinator_worker_command",
   ])
-    expect(isNodeExcludedCommand(command)).toBe(true);
+    expect(isNodeRoutingExcludedCommand(command)).toBe(true);
 });
 
 test("setup approval: the fan-out stays on the command node, each node's record is node-link only", () => {
-  expect(isNodeExcludedCommand("approve_setup_commands_on_nodes")).toBe(true);
-  expect(isWorkspaceExcludedCommand("approve_setup_commands_on_nodes")).toBe(true);
-  expect(isNodeExcludedCommand("approve_project_setup_commands")).toBe(false);
-  expect(isWorkspaceExcludedCommand("approve_project_setup_commands")).toBe(true);
+  expect(isNodeRoutingExcludedCommand("approve_setup_commands_on_nodes")).toBe(true);
+  expect(grantAdmits("approve_setup_commands_on_nodes")).toBe(false);
+  expect(isNodeRoutingExcludedCommand("approve_project_setup_commands")).toBe(false);
+  expect(grantAdmits("approve_project_setup_commands")).toBe(false);
   // The user approving in a leaf's realm acts on that leaf through their grant.
-  expect(isWorkspaceExcludedCommand("approve_environment_setup")).toBe(false);
+  expect(grantAdmits("approve_environment_setup")).toBe(true);
 });
 
 test("workspace Stop is allowed locally while peer routing and controller stop stay fenced", async () => {
-  expect(isWorkspaceExcludedCommand("stop_coordinator_worker_turn")).toBe(false);
-  expect(isWorkspaceExcludedCommand("stop_controller_worker_turn")).toBe(true);
+  expect(grantAdmits("stop_coordinator_worker_turn")).toBe(true);
+  expect(grantAdmits("stop_controller_worker_turn")).toBe(false);
   const invoke = mock(async () => ({}));
   await expect(
     routeToNode({

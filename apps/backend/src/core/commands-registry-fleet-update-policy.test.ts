@@ -3,7 +3,8 @@ import { DEFAULT_FLEET_UPDATE_POLICY } from "@orkestrator/protocol/fleet-currenc
 import { registrarFrom } from "./commands-registry-contracts.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerHostMaintenanceCommands } from "./commands-registry-host.js";
-import { isNodeExcludedCommand, isWorkspaceExcludedCommand } from "./nodes/node-routing.js";
+import { isNodeRoutingExcludedCommand } from "./nodes/node-routing.js";
+import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 
 /** Plan item 5006: the command node's update policy commands. */
 
@@ -61,7 +62,7 @@ test("a backend without the command-node portal says so", async () => {
 
 test("the update policy belongs to the command node: never routed to a node or a workspace", () => {
   for (const command of ["get_fleet_update_policy", "set_fleet_update_policy"]) {
-    expect(isNodeExcludedCommand(command)).toBe(true);
-    expect(isWorkspaceExcludedCommand(command)).toBe(true);
+    expect(isNodeRoutingExcludedCommand(command)).toBe(true);
+    expect(grantAdmits(command)).toBe(false);
   }
 });

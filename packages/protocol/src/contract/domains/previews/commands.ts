@@ -445,7 +445,7 @@ export const updatePreviewSettingsCommand = defineCommand({
   domain: previewsDomain,
   name: "update_preview_settings",
   since: 1,
-  // In WORKSPACE_ADMINISTRATION_COMMANDS: the machine's preview publication.
+  // The machine's preview publication: never through a workspace grant.
   access: "admin",
   read: false,
   args: Schema.Struct({ settings: checked }),

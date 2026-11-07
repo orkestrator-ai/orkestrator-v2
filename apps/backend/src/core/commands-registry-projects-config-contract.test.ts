@@ -1,8 +1,7 @@
 /**
  * The `projects` and `config` definitions against the backend's own
- * classifiers (plan item 7005): `access` is `admin` for exactly the settings
- * writes a workspace client never runs (`WORKSPACE_ADMINISTRATION_COMMANDS`),
- * `internal` for the other workspace-excluded command, `workspace` otherwise;
+ * classifiers (plan item 7005): a workspace grant runs exactly the commands
+ * defined as `workspace` (the protocol test pins which are `admin`);
  * the real registry registers every one of them with its definition; and a
  * converted strict handler drops an unknown key instead of refusing it.
  */
@@ -13,20 +12,17 @@ import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { CONTRACT_DOMAIN_MAP, type ContractDomainMap } from "./contract-domain-map.js";
-import { isWorkspaceExcludedCommand } from "./nodes/node-routing.js";
-import { WORKSPACE_ADMINISTRATION_COMMANDS } from "./nodes/workspace-grant-scope.js";
+import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 
 const DEFINITIONS: readonly AnyCommandDef[] = [...PROJECTS_COMMANDS, ...CONFIG_COMMANDS];
 
 describe("projects and config definitions", () => {
-  test("access matches today's workspace deny-lists exactly", () => {
+  test("a workspace grant runs exactly the commands defined as workspace", () => {
     for (const def of DEFINITIONS) {
-      const expected = WORKSPACE_ADMINISTRATION_COMMANDS.has(def.name)
-        ? "admin"
-        : isWorkspaceExcludedCommand(def.name)
-          ? "internal"
-          : "workspace";
-      expect({ name: def.name, access: def.access }).toEqual({ name: def.name, access: expected });
+      expect({ name: def.name, admitted: grantAdmits(def.name) }).toEqual({
+        name: def.name,
+        admitted: def.access === "workspace",
+      });
     }
   });
 

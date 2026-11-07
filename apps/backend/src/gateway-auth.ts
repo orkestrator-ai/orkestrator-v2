@@ -1,7 +1,7 @@
 import type { Duplex } from "node:stream";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 import {
-  isWorkspaceExcludedCommand,
+  admitsWorkspaceCommand,
   NODE_RELAY_PREFIX,
   parseRelayPath,
   relayHttp,
@@ -141,6 +141,18 @@ export class GatewayAuth {
   /** Only the durable token, sent as a bearer header, may read or rotate itself. */
   private authenticatedWithDurableBearer(request: IncomingMessage): boolean {
     return tokenMatches(this.ctx.token, getBearerToken(request.headers));
+  }
+
+  /**
+   * The workspace allow-list a client grant and the relay share: only
+   * commands this backend defines with `access: "workspace"`, failing closed.
+   */
+  private admitsWorkspaceCommand(command: string, path: "grant" | "relay"): boolean {
+    const backend = this.ctx.backend;
+    return admitsWorkspaceCommand(command, path, {
+      accessOf: backend.commandAccess?.bind(backend),
+      isRegistered: backend.hasCommand?.bind(backend),
+    });
   }
 
   private grantExpiresAt(candidate: string): number | null {
@@ -430,7 +442,9 @@ export class GatewayAuth {
       const resolve = this.ctx.nodeHooks?.relayTarget;
       if (
         !resolve ||
-        !(await relayHttp(request, response, url, resolve.bind(this.ctx.nodeHooks)))
+        !(await relayHttp(request, response, url, resolve.bind(this.ctx.nodeHooks), (command) =>
+          this.admitsWorkspaceCommand(command, "relay"),
+        ))
       ) {
         jsonResponse(response, 404, { error: "Not found" });
       }
@@ -505,7 +519,7 @@ export class GatewayAuth {
         response,
         requestMetrics,
         viaGrant
-          ? { refuseCommand: isWorkspaceExcludedCommand }
+          ? { refuseCommand: (command: string) => !this.admitsWorkspaceCommand(command, "grant") }
           : controllerId
             ? { controllerId }
             : undefined,

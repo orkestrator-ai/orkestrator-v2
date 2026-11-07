@@ -125,13 +125,13 @@ describe("database and diagnostics commands", () => {
   });
 
   test("a workspace client cannot read this machine's diagnostics", async () => {
-    const { isWorkspaceExcludedCommand } = await import("../src/core/nodes/node-routing");
+    const { grantAdmits } = await import("../src/core/nodes/workspace-grant-test-support");
     for (const command of [
       "get_database_stats",
       "plan_diagnostics_bundle",
       "read_diagnostics_bundle",
     ]) {
-      expect(isWorkspaceExcludedCommand(command)).toBe(true);
+      expect(grantAdmits(command)).toBe(false);
     }
   });
 });

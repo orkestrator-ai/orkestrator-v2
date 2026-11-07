@@ -14,8 +14,8 @@
  *
  * `access`: the machine's own administration (host updates and dependency
  * maintenance, diagnostics bundles, database figures, worktree locations,
- * renderer error and adapter counts) is `admin`, as `isWorkspaceExcludedCommand`
- * already refuses it to workspace clients; so are the machine-wide
+ * renderer error and adapter counts) is `admin`, as the old grant deny-lists
+ * refused it to workspace clients; so are the machine-wide
  * diagnostics no workspace client reads (compatibility path usage,
  * recurring-work, progressive-read and artifact metrics, the scheduling
  * reconciliation). Everything a workspace window reads or runs (usage and

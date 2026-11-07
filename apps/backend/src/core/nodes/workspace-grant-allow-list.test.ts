@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isWorkspaceExcludedCommand } from "./node-routing.js";
+import { createCommandRegistry } from "../commands-registry.js";
+import { LEGACY_ONLY_ADMITTED, legacyWorkspaceAdmitted } from "./workspace-grant-legacy-check.js";
+import { workspaceAllowList } from "./workspace-grant-scope.js";
 
 /**
- * Plan item 7012, step 1: the grant allow-list taken from the manifest
- * (`access === "workspace"`) is today's effective grant scope (every
- * registered command minus `isWorkspaceExcludedCommand`), except for the
- * commands below. Each difference is justified, command by command, in
- * `plans/unified/7012-allow-listed-grants.md` (Notes).
+ * Plan item 7012: the grant allow-list is the manifest's `access ===
+ * "workspace"` set. Before the switch, this test proved that set equal to the
+ * deny-lists' effective scope (every registered command minus
+ * `isWorkspaceExcludedCommand`) except for the commands below (commit
+ * 17577083d); each difference is justified, command by command, in
+ * `plans/unified/7012-allow-listed-grants.md` (Notes). The deny-lists are
+ * gone; their verdict survives, for one release, as the debug cross-check
+ * (`workspace-grant-legacy-check.ts`), which this test keeps in step.
  */
 
 interface ManifestEntry {
@@ -68,23 +73,24 @@ const NARROWED: Readonly<Record<string, "admin" | "internal">> = {
   start_coordinator_multi_review: "internal",
 };
 
-/** Commands the deny-lists refused that the allow-list admits. */
-const WIDENED: readonly string[] = [];
-
-describe("the manifest's workspace set against today's grant scope", () => {
+describe("the manifest's workspace set and the grant allow-list", () => {
   const commands = Object.entries(manifest.commands);
   const allowList = new Set(
     commands.filter(([, entry]) => entry.access === "workspace").map(([name]) => name),
   );
-  const effective = new Set(
-    commands.map(([name]) => name).filter((name) => !isWorkspaceExcludedCommand(name)),
-  );
 
-  test("differ only by the justified commands", () => {
-    const narrowed = [...effective].filter((name) => !allowList.has(name)).sort();
-    const widened = [...allowList].filter((name) => !effective.has(name)).sort();
+  test("the runtime allow-list is the manifest's workspace set", () => {
+    const runtime = workspaceAllowList(createCommandRegistry().contracts);
+    expect([...runtime].sort()).toEqual([...allowList].sort());
+  });
+
+  test("the old deny-lists' verdict differs only by the justified commands", () => {
+    const legacy = commands
+      .map(([name]) => name)
+      .filter((name) => legacyWorkspaceAdmitted(name, allowList.has(name), true));
+    const narrowed = legacy.filter((name) => !allowList.has(name)).sort();
     expect(narrowed).toEqual(Object.keys(NARROWED).sort());
-    expect(widened).toEqual([...WIDENED].sort());
+    expect([...LEGACY_ONLY_ADMITTED].sort()).toEqual(Object.keys(NARROWED).sort());
   });
 
   test("each narrowed command declares the access its justification names", () => {

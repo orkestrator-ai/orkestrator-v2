@@ -23,8 +23,8 @@ import {
 } from "./index.js";
 
 /**
- * `admin`: the machine's own administration, which `isWorkspaceExcludedCommand`
- * refuses to workspace clients (`WORKSPACE_ADMINISTRATION_COMMANDS` and the
+ * `admin`: the machine's own administration, which the old grant deny-lists
+ * refused to workspace clients (the machine's administration and the
  * command node's fleet policy), and machine-wide diagnostics no workspace
  * client reads. Every other command is `workspace`.
  */

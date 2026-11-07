@@ -1,7 +1,7 @@
 /**
  * The `agent-servers` commands are registered with their definitions (plan
  * item 7009): the registry holds each definition and advertises the domain,
- * no `workspace` command is one a workspace grant is refused, the keys the
+ * a workspace grant runs exactly its `workspace` commands, the keys the
  * handlers read survive decoding (a defined command drops undeclared keys),
  * and the two retired commands count their calls.
  */
@@ -9,7 +9,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { AGENT_SERVERS_COMMANDS } from "@orkestrator/protocol/contract/domains/agent-servers";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { isWorkspaceExcludedCommand } from "./nodes/node-routing.js";
+import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 
 afterEach(() => {
   mock.restore();
@@ -26,11 +26,11 @@ test("registers every agent-servers command with its definition", () => {
   expect(registry.helloDomains()["agent-servers"]).toEqual({ min: 1, max: 1 });
 });
 
-test("access agrees with the workspace grant's deny-list", () => {
+test("a workspace grant runs exactly the agent-servers commands defined as workspace", () => {
   for (const def of AGENT_SERVERS_COMMANDS) {
-    expect({ name: def.name, excluded: isWorkspaceExcludedCommand(def.name) }).toEqual({
+    expect({ name: def.name, admitted: grantAdmits(def.name) }).toEqual({
       name: def.name,
-      excluded: def.access === "admin",
+      admitted: def.access === "workspace",
     });
   }
 });

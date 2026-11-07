@@ -11,8 +11,8 @@
  * text and the order of checks are unchanged. The formerly strict handlers
  * declare exactly the keys they allowed and now drop unknown ones (§11.4).
  *
- * `access`: `admin` for exactly the settings writes in
- * `WORKSPACE_ADMINISTRATION_COMMANDS` (global settings, notification sounds,
+ * `access`: `admin` for exactly the settings writes the old grant deny-list
+ * refused (plan item 7012 replaced it with this field; global settings, notification sounds,
  * the desktop catalogue and the four credentials); `workspace` for the rest.
  * A workspace client's refused global-settings write that would change
  * nothing is still answered with the current settings (`isGlobalConfigEcho`,

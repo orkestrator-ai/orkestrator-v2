@@ -13,8 +13,8 @@
  *
  * `critical` lists the idempotency keys and safety options a receiver must
  * not ignore; the reason for each is next to it. `read` equals
- * `isNodeReadCommand(name)`. `access` follows the workspace deny-list
- * (`isWorkspaceExcludedCommand`): Settings-only commands are `admin`, the
+ * `isNodeReadCommand(name)`. `access` follows the old workspace deny-list
+ * (replaced by this field, plan item 7012): Settings-only commands are `admin`, the
  * node-link-only one `internal`.
  *
  * Browser-safe.

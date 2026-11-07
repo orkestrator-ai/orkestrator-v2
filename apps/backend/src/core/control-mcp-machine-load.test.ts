@@ -20,7 +20,7 @@ import { rpc } from "./control-mcp-test-support.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import { MachineLoadSampler } from "./machine-load.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./nodes/node-link.js";
-import { isNodeExcludedCommand, isReadCommand, routeToNode } from "./nodes/node-routing.js";
+import { isNodeRoutingExcludedCommand, isReadCommand, routeToNode } from "./nodes/node-routing.js";
 import { flushMicrotasks } from "./recurring-test-support.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
@@ -408,7 +408,7 @@ describe("routing get_machine_load", () => {
   test("is a read, and may cross the node link", () => {
     expect(isNodeReadCommand(MACHINE_LOAD_COMMAND)).toBe(true);
     expect(isReadCommand(MACHINE_LOAD_COMMAND)).toBe(true);
-    expect(isNodeExcludedCommand(MACHINE_LOAD_COMMAND)).toBe(false);
+    expect(isNodeRoutingExcludedCommand(MACHINE_LOAD_COMMAND)).toBe(false);
   });
 
   test("a read whose answer is lost is not recorded as an unknown write", async () => {

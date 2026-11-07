@@ -15,8 +15,8 @@
  * unchanged. `invoke_on_node`'s `command` and `args` are the routed call's and
  * pass through untouched.
  *
- * `access`: every command a workspace grant or the relay refuses
- * (`isWorkspaceExcludedCommand`) is `admin` when it is the node's own user's
+ * `access`: every command a workspace grant or the relay refused before plan
+ * item 7012 (the old deny-lists) is `admin` when it is the node's own user's
  * (registry, handover, portal, project copies) and `internal` when another
  * backend calls it over the link or a coordinator tool calls it in process
  * (controller attachment and settings, client grants, the leaf's file and

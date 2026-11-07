@@ -329,7 +329,7 @@ export function registerWorkerQuestionRelayCommands(
 
   /**
    * The same, for a command node's approved request: reachable only through
-   * the node link (`isWorkspaceExcludedCommand`), and the request's own
+   * the node link (`access: "internal"`), and the request's own
    * node checks the worker's project here again.
    */
   register(answerControllerWorkerQuestionCommand, (args, context) =>

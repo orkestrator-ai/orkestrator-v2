@@ -47,11 +47,11 @@ function appConfig(global: Record<string, unknown> = {}) {
       terminalScrollback: 1000,
       githubTokenConfigured: false,
       anthropicApiKeyConfigured: false,
-      anthropicApiKeySource: "none",
+      anthropicApiKeySource: "none" as const,
       cursorApiKeyConfigured: false,
-      cursorApiKeySource: "none",
+      cursorApiKeySource: "none" as const,
       openCodeZenApiKeyConfigured: false,
-      openCodeZenApiKeySource: "none",
+      openCodeZenApiKeySource: "none" as const,
       ...global,
     },
   };
@@ -73,7 +73,7 @@ describe("projects over a lib/backend client", () => {
   test("a pre-contract node gets today's calls, without arguments where there are none", async () => {
     const answer = [{ id: "p1", older: true }];
     const client = fakeClient(null, () => answer);
-    await expect(projects(client)().get_projects({})).resolves.toBe(answer);
+    await expect(projects(client)().get_projects({})).resolves.toBe(answer as never);
     expect(client.invokeRaw.mock.calls).toEqual([["get_projects"]] as never);
   });
 });

@@ -39,7 +39,9 @@ describe("native-sessions over a lib/backend client", () => {
   test("a pre-contract node gets today's calls, answered as sent", async () => {
     const answer = { anything: "as sent" };
     const client = fakeClient(null, () => answer);
-    await expect(nativeSessions(client).get_native_agent_session(identity)).resolves.toBe(answer);
+    await expect(nativeSessions(client).get_native_agent_session(identity)).resolves.toBe(
+      answer as never,
+    );
     expect(client.invokeRaw).toHaveBeenLastCalledWith("get_native_agent_session", identity);
     await nativeSessions(client).cleanup_orphaned_buffers({});
     expect(client.invokeRaw).toHaveBeenLastCalledWith("cleanup_orphaned_buffers");

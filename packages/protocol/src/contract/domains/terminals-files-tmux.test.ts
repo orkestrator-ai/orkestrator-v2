@@ -268,7 +268,7 @@ describe("terminals client", () => {
     );
     await expect(trusting.api().terminal_write({ sessionId: "s", data: "x" })).resolves.toEqual({
       delivered: "yes",
-    });
+    } as never);
     // Other commands are always decoded.
     await expect(trusting.api().get_terminal_session({ sessionId: "s" })).rejects.toThrow(
       /Invalid result from get_terminal_session/u,

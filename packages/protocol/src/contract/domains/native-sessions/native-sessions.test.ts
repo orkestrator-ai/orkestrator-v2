@@ -190,7 +190,7 @@ describe("native-sessions client", () => {
       outcome: "accepted",
       requestId: "r1",
       extra: "kept",
-    });
+    } as never);
     expect(node.sent[0]).toEqual({
       command: dispatchNativeAgentIntentCommand.name,
       args: dispatch,
@@ -229,7 +229,9 @@ describe("native-sessions client", () => {
     const node = fakeNode(undefined, () => legacyAnswer);
     const client = createDomainClient(nativeSessionsClient, node.options);
     expect(client.version()).toBe(0);
-    await expect(client.api().dispatch_native_agent_intent(dispatch)).resolves.toBe(legacyAnswer);
+    await expect(client.api().dispatch_native_agent_intent(dispatch)).resolves.toBe(
+      legacyAnswer as never,
+    );
     expect(node.invoked).toEqual([{ command: "dispatch_native_agent_intent", args: dispatch }]);
     expect(node.sent).toEqual([]);
     expect(node.usage).toEqual([["native-sessions", 0]]);

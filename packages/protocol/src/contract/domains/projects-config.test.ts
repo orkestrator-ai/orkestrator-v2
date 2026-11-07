@@ -69,12 +69,12 @@ const CONFIG = {
     terminalScrollback: 10_000,
     githubTokenConfigured: false,
     anthropicApiKeyConfigured: true,
-    anthropicApiKeySource: "config",
+    anthropicApiKeySource: "config" as const,
     cursorApiKeyConfigured: false,
-    cursorApiKeySource: "none",
+    cursorApiKeySource: "none" as const,
     openCodeZenApiKeyConfigured: false,
-    openCodeZenApiKeySource: "none",
-    agentSettings: { defaultAgent: "codex", futureTierField: { x: 1 } },
+    openCodeZenApiKeySource: "none" as const,
+    agentSettings: { defaultAgent: "codex" as const, futureTierField: { x: 1 } },
     // A setting a newer node added: it must survive the client's decode.
     futureSetting: { enabled: true },
   },
@@ -252,7 +252,7 @@ describe("projects client", () => {
     const node = fakeNode(undefined, () => older);
     const client = createDomainClient(projectsClient, node.options);
     expect(client.version()).toBe(0);
-    await expect(client.api().get_projects({})).resolves.toBe(older);
+    await expect(client.api().get_projects({})).resolves.toBe(older as never);
     expect(node.invoked).toEqual([{ command: "get_projects", args: {} }]);
     expect(node.sent).toEqual([]);
     expect(node.usage).toEqual([["projects", 0]]);
@@ -280,7 +280,7 @@ describe("config client", () => {
         : { older: true },
     );
     const api = createDomainClient(configClient, node.options).api();
-    await expect(api.get_config({})).resolves.toEqual({ older: true });
+    await expect(api.get_config({})).resolves.toEqual({ older: true } as never);
     await expect(api.clientStateCapabilities()).resolves.toEqual({
       ...NO_CLIENT_STATE_CAPABILITIES,
       coordinatorPaneLayouts: true,

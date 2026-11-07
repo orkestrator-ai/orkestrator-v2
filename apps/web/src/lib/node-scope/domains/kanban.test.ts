@@ -23,7 +23,7 @@ const task = {
   title: "Ticket",
   description: "",
   acceptanceCriteria: "",
-  status: "backlog",
+  status: "backlog" as const,
   comments: [],
   images: [],
   createdAt: "2026-11-07T00:00:00Z",

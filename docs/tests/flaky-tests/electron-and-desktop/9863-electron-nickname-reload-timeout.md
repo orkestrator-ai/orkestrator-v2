@@ -78,3 +78,13 @@ e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts`) passed
 the unchanged owner: 3 passed, 1 skipped, 40.4 s. The second full suite
 (`svc0042-suite-2`) passed 38, skipped 1, failed 0. The branch changes no
 connection or title code. Evidence: `output/agent-testing/svc0042-*/electron/results.json`.
+
+## Unified federation branch (6003) — 2026-11-07
+
+- **Branch and base:** `unified-federation-b4c9ee65814d`, base `148e9ad0a`; observed at `0c3e0a37b`. `mise run flaky:recurrence -- 9863 --base 148e9ad0a`: open, record as a recurrence.
+- **Original command:** `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` with the session's `ORKESTRATOR_*`/`CLAUDE*` variables removed, one Playwright worker, alongside other agents' work on the host (load about 9 to 10).
+- **Failure:** `Timeout 5000ms exceeded while waiting on the predicate` at the `Workstation` poll after `secondWindow.reload()` (`electron-main.spec.ts:795`), test 38.1 s. Suite: 38 passed, 6 failed, 5 skipped, 25 not run (the other five failures had other causes, see plan item 6003).
+- **Trace reading (new):** the reload itself took 0.75 s; the first `connections.list()` evaluate after it then took about 7.6 s to answer, so the poll got no value at all inside its 5 s and the late answer was `Workstation`. No stale nickname was observed: the delay is in answering a freshly reloaded renderer's first evaluate under load, not in the nickname reaching the list (main's `orkestrator:connections:list` handler is synchronous). Not established which side (renderer or main) was busy.
+- **Reruns:** the single test alone passed (11.6 s, `uf-6003-rerun`); the next full suite at `0076a68bb` passed it (8.4 s; 68 passed, 1 failed for the environmental vim case, 5 skipped; `uf-6003-full`); the complete unchanged owner alone passed (9 passed, 1 skipped, 56.8 s) with `ORKESTRATOR_AGENT_TEST_RUN_ID=uf-6003-electron-main-owner mise run test:logged -- --name uf-6003-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1`.
+- **Evidence:** `output/agent-testing/uf-6003/electron/` (results, trace), `output/agent-testing/uf-6003-rerun/`, `uf-6003-full/`, `uf-6003-electron-main-owner/`.
+- **Changes:** evidence only; no implementation, assertion, timeout or skip changed.

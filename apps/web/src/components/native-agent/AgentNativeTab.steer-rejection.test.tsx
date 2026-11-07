@@ -7,7 +7,8 @@
  * the turn finishes; nothing is queued behind the user's back.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionActionOutcome,
   NativeAgentSessionProjection,
@@ -140,7 +141,7 @@ function draftText(tabId: string) {
 
 async function steerFrom(tabId: string, text: string) {
   useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
-  render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+  renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
   await act(async () => {

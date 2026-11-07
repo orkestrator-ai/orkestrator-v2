@@ -3,7 +3,8 @@
  * shows and hides, where its icons lead, and how it is left.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { requestAppShortcut } from "@/lib/app-shortcuts";
 import { useAgentMailStore } from "@/stores/agentMailStore";
@@ -89,7 +90,7 @@ function installTwoMachines() {
 }
 
 function renderSidebar() {
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,

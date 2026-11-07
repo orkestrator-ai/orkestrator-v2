@@ -5,7 +5,8 @@
  * window's own project tree (to-do 2190, task 7).
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import type { PortalLayout } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider } from "@/components/federation/FederationProvider";
@@ -89,7 +90,7 @@ function renderMerged(
     revealedProject: null,
     recentKeys: [],
   });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,

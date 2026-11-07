@@ -1,6 +1,7 @@
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewWorkflow,
@@ -125,7 +126,7 @@ describe("conditional reviewer transcript reads", () => {
           ? transcript({ transcript: "unchanged", messages: [] })
           : transcript(),
     );
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive
@@ -143,7 +144,7 @@ describe("conditional reviewer transcript reads", () => {
   test("a workflow checkpoint refreshes the active tab without waiting for the poll", async () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow(7));
     const loadTranscript = mock(async () => transcript());
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive
@@ -162,7 +163,7 @@ describe("conditional reviewer transcript reads", () => {
   test("an inactive tab does not poll or react to checkpoints", async () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow(7));
     const loadTranscript = mock(async () => transcript());
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive={false}

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { DndContext } from "@dnd-kit/core";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { invoke } from "@/lib/native/backend";
 import { useCoordinatorLaunchOverrideStore } from "@/stores/coordinatorLaunchOverrideStore";
@@ -24,7 +25,7 @@ const agentTab = (id: string): TabInfo => ({
 
 function renderTabs(tabs: TabInfo[], environmentId = "worker") {
   const pane: PaneLeaf = { kind: "leaf", id: "pane", activeTabId: tabs[0]!.id, tabs };
-  return render(
+  return renderInAppCommandScope(
     <DndContext>
       <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
     </DndContext>,
@@ -159,7 +160,7 @@ describe("launch override marker on the tab strip", () => {
       ],
     };
     const tabs = Array.from({ length: 40 }, (_, index) => agentTab(`tab-${index}`));
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar
           pane={{ kind: "leaf", id: "left", activeTabId: "tab-0", tabs: tabs.slice(0, 20) }}

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
@@ -34,7 +35,7 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
       hasUnreadWork: true,
     } as Environment;
     useEnvironmentStore.getState().setEnvironments([home]);
-    const view = render(<ProjectHomeActivity home={home} projectName="Project" />);
+    const view = renderInAppCommandScope(<ProjectHomeActivity home={home} projectName="Project" />);
     fireEvent.click(screen.getByRole("button", { name: "Project Home needs attention" }));
     expect(useUIStore.getState().selectedEnvironmentId).toBe("home");
     const failed = { ...home, deletionRequestedAt: "2026-11-05T12:00:00Z", [field]: "failed" };
@@ -45,7 +46,7 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
     view.rerender(<ProjectHomeActivity home={failed} projectName="Project" />);
     expect(screen.queryByRole("button", { name: /Project Home/ }) === null).toBe(true);
     view.unmount();
-    render(
+    renderInAppCommandScope(
       <ProjectHomeActivity
         home={{ ...failed, agentActivityState: "working" }}
         projectName="Project"

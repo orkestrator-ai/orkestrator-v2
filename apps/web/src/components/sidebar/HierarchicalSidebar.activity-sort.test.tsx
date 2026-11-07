@@ -3,12 +3,12 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
   renderHook,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useBoundMachineView } from "@/components/federation/useMachineViews";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { activityRows } from "@/lib/federation/aggregate";
@@ -121,7 +121,7 @@ test("sidebar menu orders cross-machine activity and preserves the order under a
   useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
   useUIChromeStore.setState({ environmentSortMode: "activity", activitySortOrder: "priority" });
   useMachineViewStore.setState({ machineFilter: "all" });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,
@@ -175,7 +175,7 @@ test("the static bottom bar follows the scrolling list, outside it", async () =>
   });
   useProjectStore.setState({ projects: [], hasLoaded: true });
   useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-  const { container } = render(
+  const { container } = renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,

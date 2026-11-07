@@ -10,7 +10,8 @@ import { FakeClock } from "@/lib/testing/read-coordinator";
  * sends and when it declines to send at all.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentCommandCatalogueState,
   NativeAgentDispatchOutcome,
@@ -254,7 +255,7 @@ async function renderTab(
   platform: AgentPlatform = "codex",
   beforeSend?: () => Promise<void | boolean>,
 ) {
-  const view = render(
+  const view = renderInAppCommandScope(
     <AgentNativeTab tabId={tabId} data={identity(platform)} isActive beforeSend={beforeSend} />,
   );
   const input = await screen.findByRole("textbox");

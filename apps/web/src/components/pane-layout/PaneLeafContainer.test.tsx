@@ -1,7 +1,8 @@
 import { beginTabLaunch, resetTabLaunches } from "@/lib/tab-launch";
 import { useTabLaunchStore } from "@/stores/tabLaunchStore";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type {
@@ -540,7 +541,7 @@ describe("PaneLeafContainer", () => {
         { id: "plain-file", type: "file", fileData: { filePath: "own.txt" } },
       ],
     };
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         containerId="container-hidden"
@@ -574,7 +575,7 @@ describe("PaneLeafContainer", () => {
         activePaneId: hiddenPane.id,
       }),
     });
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -589,7 +590,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("the content is the tabpanel its selected tab labels, launching or not", () => {
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -617,7 +618,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("an empty pane has no tabpanel", () => {
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={{ ...hiddenPane, tabs: [], activeTabId: null }}
         containerId="container-hidden"
@@ -630,7 +631,7 @@ describe("PaneLeafContainer", () => {
 
   test("clicking another pane relinquishes the launch focus and scopes the update", () => {
     beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -651,7 +652,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("tab selection updates the target environment without touching the active environment", () => {
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -696,7 +697,7 @@ describe("PaneLeafContainer", () => {
       return { environments: envs };
     });
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={tmuxPane}
         containerId="container-visible"
@@ -807,7 +808,7 @@ describe("PaneLeafContainer", () => {
       refreshMailbox: mock(async () => undefined),
     });
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={chatPane}
         containerId="container-visible"
@@ -837,7 +838,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-file",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer pane={filePane} containerId={null} environmentId="env-hidden" isActive />,
     );
 
@@ -851,7 +852,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("remounts a native agent tab when its owning environment changes", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -879,7 +880,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("keeps the active tab of a pane the mobile switcher hides laid out but inactive", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -911,7 +912,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("keeps a native agent tab mounted across same-environment rerenders", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -935,7 +936,7 @@ describe("PaneLeafContainer", () => {
 
   test("does not carry a dismissed mail banner into another environment", async () => {
     installPendingMail(["env-first", "env-second"], "shared-tab-id");
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -973,7 +974,7 @@ describe("PaneLeafContainer", () => {
     console.error = mock(() => undefined) as typeof console.error;
 
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <PaneLeafContainer
           pane={nativePaneForEnvironment("env-first")}
           containerId="container-first"
@@ -1024,7 +1025,7 @@ describe("PaneLeafContainer", () => {
       return { environments };
     });
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={chatPane}
         containerId="container-visible"
@@ -1063,7 +1064,7 @@ describe("PaneLeafContainer", () => {
         containerId: "container-visible",
       }),
     }));
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         containerId="container-visible"
@@ -1144,7 +1145,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-claude",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={reviewPane}
         containerId="container-visible"
@@ -1211,7 +1212,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-cursor",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         containerId="container-visible"
@@ -1253,7 +1254,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-build",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-hidden"
@@ -1299,7 +1300,7 @@ describe("PaneLeafContainer", () => {
       return { environments };
     });
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-visible"
@@ -1344,7 +1345,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-hidden"
@@ -1391,7 +1392,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-hidden"
@@ -1449,7 +1450,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-visible"
@@ -1507,7 +1508,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-visible"
@@ -1551,7 +1552,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-multi-review",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-visible"
@@ -1604,7 +1605,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-claude",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-visible"
@@ -1657,7 +1658,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-claude",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={agentPane}
         containerId="container-visible"

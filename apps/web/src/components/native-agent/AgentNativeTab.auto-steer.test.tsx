@@ -6,7 +6,8 @@
  * queued and then steered out of the queue; with it off, it only queues.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionActionOutcome,
   NativeAgentSessionProjection,
@@ -191,7 +192,7 @@ function setAutoSteer(autoSteer: boolean) {
 
 async function sendWhileRunning(tabId: string, text: string) {
   useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
-  render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+  renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
   await act(async () => {
@@ -371,7 +372,9 @@ test.each(["$deploy now", "/review changes"])(
     useNativeComposeStore
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-command"), { text });
-    render(<AgentNativeTab tabId="tab-command" data={identity("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-command" data={identity("cursor")} isActive />,
+    );
     await screen.findByRole("textbox");
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
     await act(async () => {
@@ -401,7 +404,7 @@ test("attachments only queue", async () => {
 
 test("a prepared initial prompt waits for idle without auto-steering", async () => {
   setAutoSteer(true);
-  render(
+  renderInAppCommandScope(
     <AgentNativeTab
       tabId="tab-prepared"
       data={identity("cursor")}

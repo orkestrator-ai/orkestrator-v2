@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -74,7 +75,7 @@ test("Notes activation creates and renders a real pane tab, and reopening reuses
     hydration: new Map(),
     activeEnvironmentId: "env-1",
   });
-  render(
+  renderInAppCommandScope(
     <TerminalProvider>
       <TerminalContainer environmentId="env-1" containerId={null} isContainerRunning isActive />
     </TerminalProvider>,

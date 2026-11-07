@@ -5,7 +5,8 @@
  * snapshot, so these are also what a tab opened or reloaded mid-goal shows.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   renderGoalCarrier,
   type NativeAgentGoal,
@@ -208,7 +209,7 @@ async function renderTab(tabId: string, text?: string) {
   if (text !== undefined) {
     useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
   }
-  const view = render(<AgentNativeTab tabId={tabId} data={identity()} isActive />);
+  const view = renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity()} isActive />);
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
   await act(async () => {

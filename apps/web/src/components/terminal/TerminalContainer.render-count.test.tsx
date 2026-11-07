@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import type { ReactNode } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realDndKitCore from "@dnd-kit/core";
 import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
@@ -97,7 +98,7 @@ beforeEach(() => {
 
 /** Mounts the container and lets its hydration reads finish before counting. */
 async function renderContainer(): Promise<void> {
-  render(
+  renderInAppCommandScope(
     <TerminalProvider>
       <TerminalContainer
         environmentId="env-1"

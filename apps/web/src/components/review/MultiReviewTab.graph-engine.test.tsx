@@ -5,7 +5,8 @@
  * and the pull request step read it as the graph engine runs it.
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewWorkflow,
@@ -74,7 +75,7 @@ function commands(workflow: MultiReviewWorkflow) {
 
 function mount(workflow: MultiReviewWorkflow) {
   useMultiReviewStore.getState().replaceWorkflow(workflow);
-  return render(
+  return renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
       isActive
@@ -196,7 +197,7 @@ test("graph-engine steps: a failed Address Findings, and a pull request opened b
 
 test("a graph-engine reviewer's tab offers no Stop, Restart or Unstick", async () => {
   useMultiReviewStore.getState().replaceWorkflow(graphReviewing());
-  render(
+  renderInAppCommandScope(
     <MultiReviewReviewerTab
       data={{
         environmentId: "env-1",

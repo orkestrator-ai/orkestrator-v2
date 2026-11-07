@@ -2,7 +2,8 @@ import * as backend from "@/lib/backend";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
 import { useEffect, useState } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
   type MultiReviewModelSelection,
@@ -317,7 +318,7 @@ describe("MultiReviewTab pipeline pass routing", () => {
       const viewer = spyOn(pipelineReviewTab, "PipelineReviewTab").mockImplementation(() => <></>);
       const hydrateWorkflow = mock(async () => null);
       try {
-        render(
+        renderInAppCommandScope(
           <MultiReviewTab
             data={{
               workflowId: "build-pipeline-routing",
@@ -449,7 +450,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     });
     try {
       useMultiReviewStore.getState().replaceWorkflow(workflow);
-      render(
+      renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
           isActive
@@ -545,7 +546,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       autoPrLaunch: { state: "launched", requestId, tabId: "agent-job-pr" },
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -577,7 +578,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         autoPrLaunch: launch,
       };
       useMultiReviewStore.getState().replaceWorkflow(workflow);
-      render(
+      renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
           isActive
@@ -605,7 +606,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         },
       };
       useMultiReviewStore.getState().replaceWorkflow(workflow);
-      const view = render(
+      const view = renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
           isActive
@@ -634,7 +635,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       assertCurrentReview();
       // A fresh mount reads the same persisted snapshot, without the transition event.
       view.unmount();
-      render(
+      renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
           isActive
@@ -656,7 +657,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         autoPrLaunch: { basis: "clean-review", state: "launched", requestId: "pr" },
       };
       useMultiReviewStore.getState().replaceWorkflow(workflow);
-      render(
+      renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
           isActive
@@ -706,7 +707,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     reviewing.reviewers[0]!.tokenCount = 12_345;
     useMultiReviewStore.getState().replaceWorkflow(reviewing);
     try {
-      render(
+      renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
           isActive
@@ -733,7 +734,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ready.reviewers[0]!.tokenCount = 23_456;
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -756,7 +757,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -792,7 +793,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const reviewing = reviewingWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(reviewing);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive
@@ -813,7 +814,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     reviewing.reviewers[1]!.resultSubmission = "correcting";
     useMultiReviewStore.getState().replaceWorkflow(reviewing);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive
@@ -847,7 +848,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     reviewing.reviewers[1]!.resultSubmission = "needs-attention";
     useMultiReviewStore.getState().replaceWorkflow(reviewing);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive
@@ -890,7 +891,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ];
     useMultiReviewStore.getState().replaceWorkflow(settled);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: settled.id, isLocal: true }}
         isActive
@@ -914,7 +915,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ];
     useMultiReviewStore.getState().replaceWorkflow(settled);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: settled.id, isLocal: true }}
         isActive
@@ -947,7 +948,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const reviewing = reviewingWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(reviewing);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive={false}
@@ -1052,7 +1053,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1094,7 +1095,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const workflow = validatingWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1145,7 +1146,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           : snapshot,
     );
     useMultiReviewStore.getState().replaceWorkflow(workflow);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1189,7 +1190,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     const stopValidation = mock(async () => stopping);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1222,7 +1223,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       throw new Error("Validation cancellation failed");
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1257,7 +1258,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     const stopValidation = mock(async () => workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1288,7 +1289,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     workflow.validationRun!.completedAt = "2026-09-08T20:00:10.000Z";
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1355,7 +1356,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -1381,7 +1382,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1407,7 +1408,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ready.reviewers[1] = { ...ready.reviewers[1]!, report: undefined };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1445,7 +1446,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("navigates inspector views from the keyboard without changing the pipeline selection", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1483,7 +1484,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     ready.reviewers[0]!.lens = { label: "Security", instruction: "Trace untrusted input." };
     useMultiReviewStore.getState().replaceWorkflow(ready);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1500,7 +1501,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1531,7 +1532,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1563,7 +1564,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1598,7 +1599,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     delete ready.reviewers[1]!.providerSessionId;
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1623,7 +1624,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ready.reviewers[0] = { ...ready.reviewers[0]!, status: "failed", error: "Session failed" };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1647,7 +1648,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1683,7 +1684,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -1721,7 +1722,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
     const hydrate = mock(async () => ready);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -1841,7 +1842,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       },
     };
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab {...props} isActive />
@@ -1895,7 +1896,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       }),
     );
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -1953,7 +1954,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       throw new Error("The environment is not ready or the maximum tab count was reached.");
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -1993,7 +1994,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         }),
     );
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -2043,7 +2044,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(interactive);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive={false}
@@ -2075,7 +2076,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         }),
     );
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
-    const view = render(
+    const view = renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2114,7 +2115,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     });
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2150,7 +2151,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const address = mock(async () => pending);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2200,7 +2201,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const address = mock(async () => unavailable);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2243,7 +2244,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const address = mock(async () => pending);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => false);
 
-    const firstView = render(
+    const firstView = renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2308,7 +2309,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2337,7 +2338,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       backendRevision: 9,
     };
     act(() => useMultiReviewStore.getState().replaceWorkflow(delivered));
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2367,7 +2368,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const address = mock(async (_id: string) => pending);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    const firstView = render(
+    const firstView = renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2385,7 +2386,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     firstView.unmount();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2419,7 +2420,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(interactive);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -2455,7 +2456,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     const address = mock(async (_id: string) => pending);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -2525,7 +2526,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       useMultiReviewStore.getState().replaceWorkflow(ready);
       return ready;
     });
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive={false}
@@ -2548,7 +2549,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const cancelled = { ...ready, phase: "cancelled" as const, backendRevision: 8 };
     const cancel = mock(async () => cancelled);
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -2610,7 +2611,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     const stopReviewer = mock(async () => withoutFirst);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive
@@ -2662,7 +2663,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const restartReviewer = mock(async () => reviewing);
     const unstickReviewer = mock(async () => reviewing);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive
@@ -2702,7 +2703,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(completed);
     const restartStep = mock(async () => completed);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: completed.id, isLocal: true }}
         isActive
@@ -2741,7 +2742,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         ready,
     );
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -2808,7 +2809,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         ready,
     );
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -2849,7 +2850,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -2899,7 +2900,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const pauseStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => paused);
     const resumeStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => resumed);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: preparing.id, isLocal: true }}
         isActive
@@ -2939,7 +2940,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     workflow.stepRuntimes = { fix: { startedAt: workflow.createdAt } };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -2964,7 +2965,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const restartStep = mock(async () => ready);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -3001,7 +3002,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(stale);
     const restartReviewer = mock(async () => stale);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: stale.id, isLocal: true }}
         isActive
@@ -3052,7 +3053,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(stale);
     const restartReviewer = mock(async () => stale);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: stale.id, isLocal: true }}
         isActive
@@ -3087,7 +3088,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(reviewing);
     const unstickReviewer = mock(async () => reviewing);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive
@@ -3122,7 +3123,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const restarted = { ...reviewingWorkflow(), backendRevision: 8 };
     const restartReviewer = mock(async () => restarted);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -3154,7 +3155,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
         isActive
@@ -3260,7 +3261,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           : {}),
       };
       useMultiReviewStore.setState({ workflows: new Map([[stalled.id, stalled]]) });
-      const view = render(
+      const view = renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: stalled.id, isLocal: true }}
           isActive
@@ -3286,7 +3287,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       fixSession: { ...ready.fixSession!, stalledSince: "2026-08-14T00:20:00.000Z" },
     };
     useMultiReviewStore.getState().replaceWorkflow(settled);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
         isActive
@@ -3308,7 +3309,7 @@ test("renders backend-owned package preparation after remount with cancel availa
     providerSessionId: undefined,
   }));
   useMultiReviewStore.getState().replaceWorkflow(workflow);
-  const view = render(
+  const view = renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
       isActive={true}
@@ -3321,7 +3322,7 @@ test("renders backend-owned package preparation after remount with cancel availa
   expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null).toBe(true);
   view.unmount();
-  render(
+  renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
       isActive={true}
@@ -3366,7 +3367,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -3410,7 +3411,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       useMultiReviewStore.getState().replaceWorkflow(workflow);
       const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TabRegistrar createTab={createTab} />
           <MultiReviewTab
@@ -3438,7 +3439,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -3465,7 +3466,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -3509,7 +3510,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -3547,7 +3548,9 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(<ReviewMountDuringPointerGesture workflow={workflow} createTab={createTab} />);
+    renderInAppCommandScope(
+      <ReviewMountDuringPointerGesture workflow={workflow} createTab={createTab} />,
+    );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Launch review" }), {
       pointerType: "touch",
@@ -3596,7 +3599,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -3661,7 +3664,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -3721,7 +3724,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -3751,7 +3754,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -4081,7 +4084,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       },
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -4124,7 +4127,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -4167,7 +4170,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -4205,7 +4208,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <MultiReviewTab
@@ -4249,7 +4252,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -4284,7 +4287,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -4314,7 +4317,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -4348,7 +4351,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       },
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -4507,7 +4510,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -4612,7 +4615,7 @@ describe("PR background state and review clock", () => {
     const loadPrSessionState = mock(async () => sessionState);
     const workflow = launchedWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(workflow);
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
         isActive
@@ -4684,7 +4687,7 @@ describe("PR background state and review clock", () => {
     };
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     try {
-      render(
+      renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
           isActive
@@ -4722,7 +4725,7 @@ describe("PR background state and review clock", () => {
       hydrateWorkflow: mock(async () => workflow),
       loadPrSessionState,
     };
-    let view = render(<MultiReviewTab {...props} />);
+    let view = renderInAppCommandScope(<MultiReviewTab {...props} />);
     try {
       await waitFor(() => expect(flowNode("Pull request,").dataset.flowState).toBe("running"));
       expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
@@ -4752,7 +4755,7 @@ describe("PR background state and review clock", () => {
       expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
       view.unmount();
       now += 60_000;
-      view = render(<MultiReviewTab {...props} />);
+      view = renderInAppCommandScope(<MultiReviewTab {...props} />);
       expect(flowNode("Pull request,").dataset.flowState).toBe("complete");
       expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
     } finally {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import * as backend from "@/lib/backend";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
@@ -47,7 +48,7 @@ function hostUpdate(updateAvailable: boolean | null) {
 
 /** Let the host maintenance snapshot the bar reads arrive. */
 async function renderBar() {
-  const view = render(<SidebarBottomBar />);
+  const view = renderInAppCommandScope(<SidebarBottomBar />);
   await waitFor(() => expect(backend.getHostMaintenance).toHaveBeenCalled());
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -256,7 +257,7 @@ describe("SidebarBottomBar", () => {
 });
 
 test("stacked for the compact sidebar: every action, in a column", () => {
-  render(<SidebarBottomBar stacked />);
+  renderInAppCommandScope(<SidebarBottomBar stacked />);
   const bar = document.querySelector("[data-sidebar-bottom-bar]")!;
   expect(bar.className).toContain("flex-col");
   for (const name of [

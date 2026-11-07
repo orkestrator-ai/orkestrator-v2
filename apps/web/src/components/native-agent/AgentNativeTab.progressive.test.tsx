@@ -8,7 +8,8 @@
  * over an authoritative snapshot never withdraws either.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentDiscoveryUpdate,
   NativeAgentSessionProjection,
@@ -364,7 +365,9 @@ afterEach(() => {
 });
 
 function renderTab() {
-  return render(<AgentNativeTab tabId="tab-progressive" data={tabData()} isActive />);
+  return renderInAppCommandScope(
+    <AgentNativeTab tabId="tab-progressive" data={tabData()} isActive />,
+  );
 }
 
 function deferred<T>() {
@@ -1015,7 +1018,7 @@ describe("AgentNativeTab progressive controller", () => {
     handoffRead = () => heldHandoff.promise;
     transcriptUpdates = [async () => transcriptSnapshot("transcript-1", [])];
     stateUpdates = [() => heldState.promise];
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-progressive"
         data={tabData()}
@@ -1074,7 +1077,7 @@ describe("AgentNativeTab progressive controller", () => {
       async () => transcriptSnapshot("transcript-1", [message("m1", "Readable")]),
     ];
     stateUpdates = [() => heldState.promise];
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-progressive"
         data={{ ...tabData(), sessionId: undefined }}

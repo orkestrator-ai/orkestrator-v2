@@ -4,7 +4,8 @@
  * re-rendered the whole tab: header, graph, inspector and transcripts.
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
@@ -103,7 +104,9 @@ test("a running review's clock ticks without re-rendering the tab root", () => {
   const workflow = reviewingWorkflow();
   useMultiReviewStore.getState().replaceWorkflow(workflow);
   const { data, reads } = countedData(workflow.id);
-  render(<MultiReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+  renderInAppCommandScope(
+    <MultiReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />,
+  );
 
   const headerElapsed = () => screen.getByTestId("multi-review-elapsed").textContent;
   const reviewerRuntime = () =>

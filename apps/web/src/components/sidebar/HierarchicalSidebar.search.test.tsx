@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -103,7 +104,7 @@ for (const { mode, offline } of [
       revealedProject: null,
       recentKeys: [],
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,
@@ -225,7 +226,7 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       revealedProject: null,
       recentKeys: [],
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,

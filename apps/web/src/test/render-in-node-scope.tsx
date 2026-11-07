@@ -32,7 +32,8 @@ import type {
   Unlisten,
 } from "@orkestrator/protocol/node-client";
 import { render, type RenderOptions, type RenderResult } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ComponentType, ReactElement, ReactNode } from "react";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope, NodeScopeRole } from "@/lib/node-scope/node-scope";
 import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
 import { createSignal } from "@/lib/node-scope/signal";
@@ -237,4 +238,38 @@ export function cleanupNodeScopes(): void {
     result.unmount();
     windowScope.dispose();
   }
+}
+
+export interface RenderInAppCommandScopeOptions extends Omit<RenderOptions, "wrapper"> {
+  /** The suite's own wrapper, rendered inside the scope providers. */
+  wrapper?: ComponentType<{ children: ReactNode }>;
+}
+
+/**
+ * Renders UI under providers for the app's own window scope and command scope
+ * (plan item 3003): the same instances the deprecated statics, the
+ * `@/lib/backend` named exports and the window `listen` reach. For component
+ * suites that seed stores through the statics and mock `@/lib/backend`: the
+ * component reads its scope from a provider, as it does in the app, so its
+ * hooks no longer fall back (and can retire the shim), while the suite's seeds
+ * and mocks still apply. Nothing is disposed here; reset the app's scope with
+ * `resetWindowScopeForTests()` as the suite already does.
+ */
+export function renderInAppCommandScope(
+  ui: ReactElement,
+  { wrapper: Inner, ...renderOptions }: RenderInAppCommandScopeOptions = {},
+): RenderInNodeScopeResult {
+  const windowScope = getWindowScope();
+  const scope = windowScope.commandScope();
+  const result = render(ui, {
+    ...renderOptions,
+    wrapper: ({ children }) => (
+      <WindowScopeProvider windowScope={windowScope}>
+        <NodeScopeProvider scope={scope}>
+          {Inner ? <Inner>{children}</Inner> : children}
+        </NodeScopeProvider>
+      </WindowScopeProvider>
+    ),
+  });
+  return Object.assign(result, { scope, windowScope, client: scope.client });
 }

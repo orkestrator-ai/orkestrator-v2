@@ -3,7 +3,8 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { useEffect, useRef, type ReactNode } from "react";
 
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import {
   MAX_TABS,
@@ -504,7 +505,7 @@ describe("TerminalContainer", () => {
     }
 
     test("creates container file tabs with diff metadata and validated git status", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -549,7 +550,7 @@ describe("TerminalContainer", () => {
     });
 
     test("activates an existing matching file tab instead of duplicating it", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -583,7 +584,7 @@ describe("TerminalContainer", () => {
       };
       const historicalB: ChangeDiffTarget = { ...historicalA, diffIdentityId: "diff-b" };
       const liveKey = environmentChangeResourceKey("env-visible");
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -636,7 +637,7 @@ describe("TerminalContainer", () => {
         diffIdentityId: "diff-elsewhere",
         title: "old.ts",
       };
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -670,7 +671,7 @@ describe("TerminalContainer", () => {
     });
 
     test("stores source locations and updates an already-open tab on every navigation", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -702,7 +703,7 @@ describe("TerminalContainer", () => {
     });
 
     test("clears a stored source location when reopening the file without one", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -760,7 +761,7 @@ describe("TerminalContainer", () => {
       }));
       mockToastError.mockClear();
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -818,7 +819,7 @@ describe("TerminalContainer", () => {
         ),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer environmentId="env-visible" containerId={null} isActive />
           <CreateFileTabHarness calls={[{ filePath: "README.md", options: { gitStatus: "?" } }]} />
@@ -856,7 +857,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1182,7 +1183,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1237,7 +1238,7 @@ describe("TerminalContainer", () => {
       usePaneLayoutStore
         .getState()
         .addTab("default", { id: "second-tab", type: "plain" }, "env-visible");
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1301,7 +1302,7 @@ describe("TerminalContainer", () => {
 
     test("reports whether a multi-review tab was actually created", async () => {
       const accepted = mock((_created: boolean) => {});
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1330,7 +1331,7 @@ describe("TerminalContainer", () => {
 
     test("creates a read-only Multi Review reviewer transcript tab", async () => {
       const accepted = mock((_created: boolean) => {});
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1364,7 +1365,7 @@ describe("TerminalContainer", () => {
     });
 
     test("opens a backend workflow provider session in the created native tab", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1402,7 +1403,7 @@ describe("TerminalContainer", () => {
     });
 
     test("locks a native tab when only a resume session is supplied", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1438,7 +1439,7 @@ describe("TerminalContainer", () => {
     });
 
     test("locks a native review tab even without an opening prompt", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1473,7 +1474,7 @@ describe("TerminalContainer", () => {
     });
 
     test("applies a one-shot build mode when resuming a provider session", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1508,7 +1509,7 @@ describe("TerminalContainer", () => {
     });
 
     test("propagates provider session identity to Claude native tabs", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1539,7 +1540,7 @@ describe("TerminalContainer", () => {
     });
 
     test("propagates provider session identity to OpenCode native tabs", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1572,7 +1573,7 @@ describe("TerminalContainer", () => {
     test("rejects a multi-review tab without a workflow id", async () => {
       const refused = mock((_created: boolean) => {});
       const originalTabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1605,7 +1606,7 @@ describe("TerminalContainer", () => {
         }),
       }));
       const refused = mock((_created: boolean) => {});
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1630,7 +1631,7 @@ describe("TerminalContainer", () => {
     });
 
     test("plain terminal tabs receive displayTitle", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1652,7 +1653,7 @@ describe("TerminalContainer", () => {
     });
 
     test("creates a provider-neutral native tab from the dedicated native action", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1687,7 +1688,7 @@ describe("TerminalContainer", () => {
     test.each(["grok", "pi"] as const)(
       "creates a %s terminal tab when CLI mode is explicit",
       async (platform) => {
-        render(
+        renderInAppCommandScope(
           <TerminalProvider>
             <TerminalContainer
               environmentId="env-visible"
@@ -1717,7 +1718,7 @@ describe("TerminalContainer", () => {
     );
 
     test("keeps Cursor on the SDK bridge when a legacy CLI override is explicit", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1751,7 +1752,7 @@ describe("TerminalContainer", () => {
     });
 
     test("creates exactly one Pi native tab when native mode is explicit", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1781,7 +1782,7 @@ describe("TerminalContainer", () => {
     });
 
     test("browser tabs receive their initial backend-local address", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1805,7 +1806,7 @@ describe("TerminalContainer", () => {
     });
 
     test("normalizes a whitespace-only browser address to the empty start screen", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1827,7 +1828,7 @@ describe("TerminalContainer", () => {
     });
 
     test("does not create browser tabs for stopped environments", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1866,7 +1867,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1914,7 +1915,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -1963,7 +1964,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2043,7 +2044,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2123,7 +2124,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2168,7 +2169,7 @@ describe("TerminalContainer", () => {
         return () => undefined;
       });
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2253,7 +2254,7 @@ describe("TerminalContainer", () => {
         workflows: new Map([["workflow-1", { phase: "reviewing" } as never]]),
       });
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2315,7 +2316,7 @@ describe("TerminalContainer", () => {
         workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
       });
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2379,7 +2380,7 @@ describe("TerminalContainer", () => {
       });
       mockToastError.mockClear();
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2433,7 +2434,7 @@ describe("TerminalContainer", () => {
         workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
       });
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2477,7 +2478,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2512,7 +2513,7 @@ describe("TerminalContainer", () => {
     });
 
     test("leaves Command+W alone when it is not a bare Command chord", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2576,7 +2577,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2633,7 +2634,7 @@ describe("TerminalContainer", () => {
     });
 
     test("does not close tabs from Command+W in an inactive environment", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2671,7 +2672,7 @@ describe("TerminalContainer", () => {
         },
       } as never;
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2729,7 +2730,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2790,7 +2791,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2825,7 +2826,7 @@ describe("TerminalContainer", () => {
     });
 
     test("rejects terminal links while stopped or locally not ready without pane mutation", async () => {
-      const { unmount } = render(
+      const { unmount } = renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2887,7 +2888,7 @@ describe("TerminalContainer", () => {
           containerId: null,
         }),
       }));
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer environmentId="env-visible" containerId={null} isActive />
         </TerminalProvider>,
@@ -2917,7 +2918,7 @@ describe("TerminalContainer", () => {
         }),
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2958,7 +2959,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -2997,7 +2998,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3049,7 +3050,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3088,7 +3089,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3131,7 +3132,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3170,7 +3171,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3212,7 +3213,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3238,7 +3239,7 @@ describe("TerminalContainer", () => {
     test.each(["claude", "codex", "opencode", "cursor", "grok", "pi"] as const)(
       "seeds an unassigned native composer with the explicitly launched %s provider",
       async (platform) => {
-        render(
+        renderInAppCommandScope(
           <TerminalProvider>
             <TerminalContainer
               environmentId="env-visible"
@@ -3278,7 +3279,7 @@ describe("TerminalContainer", () => {
     );
 
     test("preselects a create-dialog model without locking the native tab", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3328,7 +3329,7 @@ describe("TerminalContainer", () => {
     });
 
     test("carries one-shot review model and effort settings into the created native tab", async () => {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3375,7 +3376,7 @@ describe("TerminalContainer", () => {
         displayTitle: "Review",
       };
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3426,7 +3427,7 @@ describe("TerminalContainer", () => {
         },
       ] as const;
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3489,7 +3490,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3531,7 +3532,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3573,7 +3574,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3616,7 +3617,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"
@@ -3661,7 +3662,7 @@ describe("TerminalContainer", () => {
         },
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-visible"

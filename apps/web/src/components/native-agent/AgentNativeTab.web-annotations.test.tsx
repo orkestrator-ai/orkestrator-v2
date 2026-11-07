@@ -11,7 +11,8 @@
  *   the projection and are rendered as frozen requests.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentDispatchOutcome,
   NativeAgentSessionProjection,
@@ -196,7 +197,9 @@ function seedDraft(tabId: string, update: Partial<NativeComposeDraft>) {
 }
 
 async function renderTab(tabId: string, platform: AgentPlatform = "codex") {
-  const view = render(<AgentNativeTab tabId={tabId} data={identity(platform)} isActive />);
+  const view = renderInAppCommandScope(
+    <AgentNativeTab tabId={tabId} data={identity(platform)} isActive />,
+  );
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
   await act(async () => {

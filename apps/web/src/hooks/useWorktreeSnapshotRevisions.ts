@@ -19,9 +19,14 @@ import {
   type HydrationFetchResult,
   type HydrationUpdate,
 } from "@/lib/bounded-hydration";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import type { UnlistenFn } from "@/lib/native/events";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { appCommandScope, listenInScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { onViewSafetyCheck } from "@/lib/resource-sync";
-import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import { useWorktreeSnapshotStore, worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 
 export interface WorktreeSnapshotRevisionsOptions {
   /** Subscribe only while something shows file lists or trees. */
@@ -37,13 +42,20 @@ function toEntries(
   return snapshot.entries.map((entry) => ({ key: entry.environmentId, value: entry }));
 }
 
-/** Reads the revision view, conditionally when a revisioned position is known. */
+/**
+ * Reads `scope`'s revision view, conditionally when a revisioned position is
+ * known. The app's command scope keeps the `@/lib/backend` read suites spy on.
+ */
 export function fetchWorktreeSnapshotRevisions(
   known: ViewRevisionStamp | null,
+  scope: NodeScope = appCommandScope(),
 ): Promise<HydrationFetchResult<WorktreeSnapshotEvent>> {
   return readViewSnapshot(
     WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
-    () => backend.getWorktreeSnapshotRevisions(known ?? undefined),
+    () =>
+      backendApiForScope(scope, createFilesSessionsApi, {
+        getWorktreeSnapshotRevisions: backend.getWorktreeSnapshotRevisions,
+      }).getWorktreeSnapshotRevisions(known ?? undefined),
     isWorktreeSnapshotRevisionsSnapshot,
     toEntries,
   );
@@ -78,6 +90,9 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
   const setSyncStatus = useWorktreeSnapshotStore((state) => state.setSyncStatus);
   const setGeneration = useWorktreeSnapshotStore((state) => state.setGeneration);
   const { enabled, clock, limits } = options;
+  // The node whose worktrees these are, read and followed through its own
+  // client (plan item 3003).
+  const scope = useShimNodeScope(worktreeSnapshotStore.name);
 
   useEffect(() => {
     if (!enabled) return;
@@ -90,7 +105,7 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
     const hydration = createBoundedHydration<WorktreeSnapshotEvent>({
       name: "worktree-snapshot-revisions",
       fetchSnapshot: async ({ known }) => {
-        const result = await fetchWorktreeSnapshotRevisions(known);
+        const result = await fetchWorktreeSnapshotRevisions(known, scope);
         if (result.kind === "snapshot") fetchedGeneration = result.stamp?.generation ?? null;
         return result;
       },
@@ -114,11 +129,15 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
 
     const subscribe = async () => {
       try {
-        const stop = await listen<unknown>(WORKTREE_SNAPSHOT_CHANGED_EVENT, (event) => {
-          // Crosses a process boundary and drives reads: validate, never trust.
-          if (!isWorktreeSnapshotEvent(event.payload)) return;
-          hydration.receive(toWorktreeSnapshotUpdate(event.payload));
-        });
+        const stop = await listenInScope<unknown>(
+          scope,
+          WORKTREE_SNAPSHOT_CHANGED_EVENT,
+          (payload) => {
+            // Crosses a process boundary and drives reads: validate, never trust.
+            if (!isWorktreeSnapshotEvent(payload)) return;
+            hydration.receive(toWorktreeSnapshotUpdate(payload));
+          },
+        );
         if (disposed) stop();
         else unlisteners.push(stop);
       } catch {
@@ -126,7 +145,7 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
       }
       if (disposed) return;
       try {
-        const stopReconnects = await listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+        const stopReconnects = await onReconnectInScope(scope, () => {
           hydration.onReconnect();
         });
         if (disposed) stopReconnects();
@@ -135,7 +154,7 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
         // Remounting retries the listener.
       }
       if (disposed) return;
-      unlisteners.push(onViewSafetyCheck(() => hydration.safetyCheck()));
+      unlisteners.push(onViewSafetyCheck(() => hydration.safetyCheck(), scope));
       hydration.request("initial");
     };
 
@@ -146,5 +165,5 @@ export function useWorktreeSnapshotRevisions(options: WorktreeSnapshotRevisionsO
       hydration.dispose();
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [enabled, applySnapshot, applyChange, setSyncStatus, setGeneration, clock, limits]);
+  }, [enabled, applySnapshot, applyChange, setSyncStatus, setGeneration, clock, limits, scope]);
 }

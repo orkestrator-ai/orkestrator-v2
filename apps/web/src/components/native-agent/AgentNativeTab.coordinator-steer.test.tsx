@@ -9,7 +9,8 @@
  * and says why.
  */
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionActionOutcome,
   NativeAgentSessionProjection,
@@ -206,7 +207,7 @@ function setAutoSteer(autoSteer: boolean) {
 /** Mount the tab the way `CoordinatorPanel` does, then send while it works. */
 async function sendToWorkingCoordinator(text: string) {
   useNativeComposeStore.getState().updateDraft(createSessionKey(ENV_ID, TAB_ID), { text });
-  render(
+  renderInAppCommandScope(
     <AgentNativeTab
       tabId={TAB_ID}
       data={{

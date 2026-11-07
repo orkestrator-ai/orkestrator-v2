@@ -13,7 +13,8 @@ import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { FloatingNoticeLayer } from "@/components/ui/floating-notice";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import { Profiler } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTabData,
@@ -353,7 +354,7 @@ async function renderTab(
     ) : (
       tree(prompt)
     );
-  const { rerender } = render(wrapped(initialPrompt));
+  const { rerender } = renderInAppCommandScope(wrapped(initialPrompt));
   await settle();
   expect(commits).toBeGreaterThan(0);
   commits = 0;

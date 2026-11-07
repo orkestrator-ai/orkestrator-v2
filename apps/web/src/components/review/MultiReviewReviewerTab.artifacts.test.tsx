@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
@@ -141,7 +142,7 @@ describe("published artifacts in a Multi Review reviewer tab", () => {
       },
     ]);
     useMultiReviewStore.getState().replaceWorkflow(workflow());
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-review",
@@ -177,7 +178,7 @@ describe("published artifacts in a Multi Review reviewer tab", () => {
     const pending = workflow();
     pending.reviewers = [{ ...pending.reviewers[0]!, sessionKey: undefined }];
     useMultiReviewStore.getState().replaceWorkflow(pending);
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-review",

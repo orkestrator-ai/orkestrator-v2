@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { COORDINATOR_ACTIVITY_COMMAND } from "@orkestrator/protocol/coordinator-activity";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
@@ -30,7 +31,7 @@ test("project header highlights Home selection, counts worker rows, and opens th
     projectBoardTab: "home",
   });
   const noop = mock(() => {});
-  const view = render(
+  const view = renderInAppCommandScope(
     <SortableProjectGroup
       project={project}
       home={home}
@@ -112,7 +113,7 @@ test.each(["This computer", "This computer · Checkout"])(
       onRestartEnvironment: noop,
       onCreateEnvironment: noop,
     };
-    const view = render(<SortableProjectGroup {...props} isCollapsed={false} />);
+    const view = renderInAppCommandScope(<SortableProjectGroup {...props} isCollapsed={false} />);
     const row = screen.getByRole("button", { name: label });
     const icon = within(row).getByTestId("machine-home-icon");
     // The home leads the row inside the coordinator's activity ring, idle here.
@@ -164,7 +165,7 @@ test("a working coordinator rings the project's icon, and shows its own icon whe
     onRestartEnvironment: noop,
     onCreateEnvironment: noop,
   };
-  const view = render(<SortableProjectGroup {...props} />);
+  const view = renderInAppCommandScope(<SortableProjectGroup {...props} />);
   // The state is a description, so the row keeps its name.
   const row = screen.getByRole("button", { name: "Checkout" });
   await waitFor(() =>
@@ -207,7 +208,7 @@ test("a waiting coordinator's halo stays on the project's icon", async () => {
     command === COORDINATOR_ACTIVITY_COMMAND ? { projects: { project: "waiting" } } : undefined,
   );
   const noop = () => {};
-  render(
+  renderInAppCommandScope(
     <SortableProjectGroup
       project={project}
       environments={[]}

@@ -1,14 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
-import {
-  act,
-  cleanup,
-  createEvent,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
@@ -1102,7 +1095,7 @@ describe("ActionBar grid presentation", () => {
   test("does not show tooltips when mobile toolbar controls receive focus", async () => {
     jest.useFakeTimers();
     try {
-      render(<ActionBar presentation="grid" />);
+      renderInAppCommandScope(<ActionBar presentation="grid" />);
 
       fireEvent.focus(screen.getByRole("button", { name: "New native agent tab" }));
       await act(async () => {
@@ -1118,7 +1111,7 @@ describe("ActionBar grid presentation", () => {
   test("does not show regular or context-menu tooltips on mobile pointer hover", async () => {
     jest.useFakeTimers();
     try {
-      render(<ActionBar presentation="grid" />);
+      renderInAppCommandScope(<ActionBar presentation="grid" />);
 
       const rootButton = screen.getByRole("button", { name: "New root terminal" });
       const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
@@ -1139,7 +1132,7 @@ describe("ActionBar grid presentation", () => {
 
   test("keeps context-menu tooltips enabled on desktop hover", async () => {
     await withTooltipClocks(async ({ open, close }) => {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
       fireEvent.mouseEnter(nativeButton);
@@ -1160,7 +1153,7 @@ describe("ActionBar grid presentation", () => {
   }, 20_000);
 
   test("keeps context-menu tooltips enabled on desktop keyboard focus", async () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
     fireEvent.focus(nativeButton);
@@ -1181,7 +1174,7 @@ describe("ActionBar grid presentation", () => {
 
   test("shows the shortcut hints that match the native, terminal, and review controls", async () => {
     await withTooltipClocks(async ({ close }) => {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       const cases = [
         ["New native agent tab", "⌘T · Right-click for options"],
@@ -1201,7 +1194,7 @@ describe("ActionBar grid presentation", () => {
   });
 
   test("renders mobile tools as two columns with labels after their icons", () => {
-    const { container } = render(<ActionBar presentation="grid" />);
+    const { container } = renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const toolbar = container.querySelector("[data-presentation='grid']");
     expect(toolbar).toBeTruthy();
@@ -1225,7 +1218,7 @@ describe("ActionBar grid presentation", () => {
   test("keeps project and environment tools visible but disabled in the empty state", () => {
     currentSelectedProjectId = null;
     currentSelectedEnvironmentId = null;
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     // Global, repository and environment settings live in the sidebar's
     // bottom bar, not in the tools.
@@ -1252,7 +1245,7 @@ describe("ActionBar grid presentation", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const createPr = screen.getByRole("button", { name: "Create PR" });
     const kanban = screen.getByRole("button", { name: "Kanban" });
@@ -1268,7 +1261,7 @@ describe("ActionBar grid presentation", () => {
       hasMergeConflicts: null,
     };
     currentChanges = [];
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
 
@@ -1285,7 +1278,7 @@ describe("ActionBar grid presentation", () => {
       prState: "open",
       status: "stopped",
     };
-    const view = render(<ActionBar presentation="grid" />);
+    const view = renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     expect(
       (screen.getByRole("button", { name: "Push Changes" }) as HTMLButtonElement).disabled,
@@ -1305,7 +1298,7 @@ describe("ActionBar grid presentation", () => {
 
   test("places the mobile file-change dot inline after the Show files label", () => {
     currentChanges = [{}];
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const showFiles = screen.getByRole("button", { name: "Show file panel" });
     const labelGroup = showFiles.querySelector("span.flex");
@@ -1319,7 +1312,7 @@ describe("ActionBar grid presentation", () => {
 
   test("dispatches mobile project-board actions", () => {
     currentSelectedEnvironmentId = null;
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Coordinator" }));
     fireEvent.click(screen.getByRole("tab", { name: "Kanban" }));
@@ -1340,7 +1333,7 @@ describe("ActionBar grid presentation", () => {
 
   test("opens project notes from an environment view", () => {
     currentProjectBoardTab = "coordinator";
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const projectNotes = screen.getByRole("button", { name: "Notes" });
     expect(projectNotes.hasAttribute("disabled")).toBe(false);
@@ -1355,7 +1348,7 @@ describe("ActionBar grid presentation", () => {
   });
 
   test("opens a project-board tab from an environment view", () => {
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Coordinator" }));
 
@@ -1364,7 +1357,7 @@ describe("ActionBar grid presentation", () => {
   });
 
   test("returns to an already-selected project-board tab from an environment view", () => {
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Kanban" }));
 
@@ -1373,7 +1366,7 @@ describe("ActionBar grid presentation", () => {
   });
 
   test("uses button-group semantics while the project panels are not rendered", () => {
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const navigation = screen.getByRole("group", { name: "Project navigation" });
     const kanban = screen.getByRole("button", { name: "Kanban" });
@@ -1391,7 +1384,7 @@ describe("ActionBar grid presentation", () => {
   test("uses an accent state for the selected mobile board control", () => {
     currentSelectedEnvironmentId = null;
     currentProjectBoardTab = "linear";
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     expect(screen.getByRole("tablist", { name: "Project navigation" })).toBeTruthy();
     const linear = screen.getByRole("tab", { name: "Linear" });
@@ -1404,7 +1397,7 @@ describe("ActionBar grid presentation", () => {
   });
 
   test("toggles the file panel from the mobile grid", () => {
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Show file panel" }));
 
@@ -1413,7 +1406,7 @@ describe("ActionBar grid presentation", () => {
 
   test("uses a neutral elevated state when the file panel is selected", () => {
     currentFilesPanelOpen = true;
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const hideFiles = screen.getByRole("button", { name: "Hide file panel" });
     expect(hideFiles.getAttribute("aria-pressed")).toBe("true");
@@ -1433,7 +1426,7 @@ describe("ActionBar coordinator tab activity", () => {
     useCoordinatorActivityStore.setState({
       projects: new Map(state ? [[selectedProject.id, state]] : []),
     });
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
     const tab = screen.getByRole("button", { name: "Coordinator" });
     return {
       outline: tab.querySelector('[data-testid="coordinator-working-outline"]'),
@@ -1484,7 +1477,7 @@ describe("ActionBar coordinator tab activity", () => {
 
 describe("ActionBar experimental graphs", () => {
   test("hides the graph buttons while graphs are off", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(screen.getByRole("button", { name: "Multi Review" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Graphs" }) === null).toBe(true);
@@ -1493,7 +1486,7 @@ describe("ActionBar experimental graphs", () => {
 
   test("shows Graphs and Run graph… after Multi Review once graphs are on", () => {
     currentExperimentalGraphs = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const labels = screen
       .getAllByRole("button")
@@ -1513,7 +1506,7 @@ describe("ActionBar copy URL", () => {
       hostEntryPort: 49152,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy URL" }));
 
@@ -1533,7 +1526,7 @@ describe("ActionBar copy URL", () => {
     };
 
     await withTooltipClocks(async ({ open }) => {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.mouseEnter(screen.getByRole("button", { name: "Copy URL" }).parentElement!);
       await fireTooltipTimer(open);
@@ -1552,7 +1545,7 @@ describe("ActionBar copy URL", () => {
       hostEntryPort: 49152,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
 
@@ -1566,7 +1559,7 @@ describe("ActionBar copy URL", () => {
       hostEntryPort: 49152,
     };
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <>
         <input aria-label="Message" />
         <textarea aria-label="Description" />
@@ -1635,7 +1628,7 @@ describe("ActionBar copy URL", () => {
       hostEntryPort: 49152,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, {
       key: "C",
@@ -1665,7 +1658,7 @@ describe("ActionBar copy URL", () => {
       hostEntryPort: 49152,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy URL" }));
 
@@ -1684,7 +1677,7 @@ describe("ActionBar copy URL", () => {
     };
 
     await withTooltipClocks(async ({ open }) => {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       const copyButton = screen.getByRole("button", { name: "No mapped URL" }) as HTMLButtonElement;
       expect(copyButton.disabled).toBe(true);
@@ -1740,7 +1733,7 @@ describe("ActionBar browser tabs", () => {
     };
     const restore = installBrowserTabs();
     try {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
 
       // Opened in the press itself, before any lookup has answered.
@@ -1757,7 +1750,7 @@ describe("ActionBar browser tabs", () => {
   test("leaves the browser tab empty when the environment has no mapped port", async () => {
     const restore = installBrowserTabs();
     try {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
 
       expect(createTabMock).toHaveBeenCalledTimes(1);
@@ -1772,7 +1765,7 @@ describe("ActionBar browser tabs", () => {
 
   test("keeps the browser tab button visible but disabled without an environment", () => {
     currentSelectedEnvironmentId = null;
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const button = screen.getByRole("button", { name: "New browser tab" });
     expect(button.hasAttribute("disabled")).toBe(true);
@@ -1783,7 +1776,7 @@ describe("ActionBar browser tabs", () => {
   test("disables browser previews in the non-desktop web client", () => {
     window.orkestratorGateway = { enabled: true };
     try {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       const button = screen.getByRole("button", { name: "New browser tab" });
       expect(button.hasAttribute("disabled")).toBe(true);
       fireEvent.click(button);
@@ -1796,7 +1789,7 @@ describe("ActionBar browser tabs", () => {
 
 describe("ActionBar editor and run commands", () => {
   test("opens container and local environments in the configured editor", async () => {
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
     await waitFor(() => {
@@ -1819,7 +1812,7 @@ describe("ActionBar editor and run commands", () => {
 
   test("reports editor launch failures and clears the dialog", async () => {
     openInEditorMock.mockRejectedValueOnce(new Error("editor unavailable"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
 
@@ -1831,7 +1824,7 @@ describe("ActionBar editor and run commands", () => {
 
   test("reports non-Error editor launch rejections", async () => {
     openInEditorMock.mockRejectedValueOnce("editor backend unavailable");
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
 
@@ -1844,7 +1837,7 @@ describe("ActionBar editor and run commands", () => {
     readContainerFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test", "bun run build"] }),
     }));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => {
       expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "orkestrator-ai.json");
@@ -1940,7 +1933,7 @@ describe("ActionBar editor and run commands", () => {
     });
 
     try {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       const runButton = await screen.findByRole("button", { name: "Run commands" });
       await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
 
@@ -1993,7 +1986,7 @@ describe("ActionBar editor and run commands", () => {
     readLocalFileMock.mockImplementationOnce(async () => ({
       content: JSON.stringify({ run: ["bun test"] }),
     }));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => {
       expect(readLocalFileMock).toHaveBeenCalledWith("/tmp/feature-env", "orkestrator-ai.json");
@@ -2006,7 +1999,7 @@ describe("ActionBar editor and run commands", () => {
   test("keeps run commands disabled for malformed configuration and read failures", async () => {
     currentWorkspaceReady = true;
     readContainerFileMock.mockImplementationOnce(async () => ({ content: "not json" }));
-    const { unmount } = render(<ActionBar />);
+    const { unmount } = renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => {
       expect(readContainerFileMock).toHaveBeenCalledTimes(1);
@@ -2016,7 +2009,7 @@ describe("ActionBar editor and run commands", () => {
     unmount();
 
     readContainerFileMock.mockRejectedValueOnce(new Error("read failed"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     await waitFor(() => {
       expect(logs.records()).toContainEqual(
         expect.objectContaining({
@@ -2036,7 +2029,7 @@ describe("ActionBar editor and run commands", () => {
     readContainerFileMock.mockImplementationOnce(async () => ({
       content: JSON.stringify({ run: [] }),
     }));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => {
       expect(readContainerFileMock).toHaveBeenCalledTimes(1);
@@ -2051,7 +2044,7 @@ describe("ActionBar editor and run commands", () => {
     currentActionDefaults = {
       createScript: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const runButton = screen.getByRole("button", { name: "Run commands" });
     fireEvent.contextMenu(runButton);
@@ -2079,7 +2072,7 @@ describe("ActionBar editor and run commands", () => {
 
   test("opens script configuration with an explanation when launch eligibility is blocked", () => {
     currentEnvironment = { ...currentEnvironment, status: "stopped" };
-    const stopped = render(<ActionBar />);
+    const stopped = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
     expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
@@ -2091,7 +2084,7 @@ describe("ActionBar editor and run commands", () => {
 
     currentEnvironment = { ...selectedEnvironment };
     currentTabCount = 10;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
 
     expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
@@ -2099,7 +2092,7 @@ describe("ActionBar editor and run commands", () => {
   });
 
   test("revalidates every script launch prerequisite while the dialog is open", () => {
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
 
     currentEnvironment = { ...currentEnvironment, status: "stopped" };
@@ -2121,7 +2114,7 @@ describe("ActionBar editor and run commands", () => {
   });
 
   test("disables a script launch when the selected environment changes", () => {
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
 
     currentSelectedEnvironmentId = "env-2";
@@ -2145,7 +2138,7 @@ describe("ActionBar editor and run commands", () => {
       status: "rejected",
       error: "script rejected",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
     fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
@@ -2184,7 +2177,7 @@ describe("ActionBar editor and run commands", () => {
             });
         }),
     );
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
     const submit = screen.getByRole("button", { name: "Create run script" });
     fireEvent.click(submit);
@@ -2209,7 +2202,7 @@ describe("ActionBar editor and run commands", () => {
         status: "unknown",
       })
       .mockRejectedValueOnce(new Error("script backend offline"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
     fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
@@ -2245,7 +2238,7 @@ describe("ActionBar editor and run commands", () => {
     readContainerFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test"] }),
     }));
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const runButton = screen.getByRole("button", { name: "Run commands" });
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
@@ -2281,7 +2274,7 @@ describe("ActionBar editor and run commands", () => {
 
 describe("ActionBar toolbar interactions", () => {
   test("leaves global, repository and environment settings to the sidebar", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     // All three open from the sidebar's bottom bar (`SidebarBottomBar.test.tsx`)
     // and render in `GlobalSettingsHost` and `AppDialogHost`, not here.
@@ -2298,7 +2291,7 @@ describe("ActionBar toolbar interactions", () => {
         <ActionBar />
       </DockerAvailabilityProvider>
     );
-    const view = render(renderActionBar(true));
+    const view = renderInAppCommandScope(renderActionBar(true));
 
     expect(
       (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement).disabled,
@@ -2328,7 +2321,7 @@ describe("ActionBar toolbar interactions", () => {
   });
 
   test("supports drag scrolling and ends dragging on mouse up or leave", () => {
-    const { container } = render(<ActionBar />);
+    const { container } = renderInAppCommandScope(<ActionBar />);
     const toolbar = container.querySelector("[data-presentation='bar']")!;
     const scroller = toolbar.firstElementChild as HTMLDivElement;
     Object.defineProperty(scroller, "offsetLeft", { configurable: true, value: 10 });
@@ -2353,7 +2346,7 @@ describe("ActionBar toolbar interactions", () => {
   });
 
   test("suppresses native menus while preserving custom menus and non-HTML targets", () => {
-    const { container } = render(<ActionBar presentation="grid" />);
+    const { container } = renderInAppCommandScope(<ActionBar presentation="grid" />);
     const rootTerminal = screen.getByRole("button", { name: "New root terminal" });
     const rootTerminalIcon = rootTerminal.querySelector("svg")!;
     const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
@@ -2371,7 +2364,7 @@ describe("ActionBar toolbar interactions", () => {
 
   test("handles numeric, tab creation, and file-panel shortcuts", () => {
     currentTabCount = 1;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "3", code: "Digit3", ctrlKey: true });
     fireEvent.keyDown(window, { key: "4", code: "", ctrlKey: true });
@@ -2388,7 +2381,7 @@ describe("ActionBar toolbar interactions", () => {
   });
 
   test("toggles the left panel from the first toolbar control", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const panelToggle = screen.getByRole("button", { name: "Hide left panel" });
     const native = screen.getByRole("button", { name: "New native agent tab" });
@@ -2403,20 +2396,20 @@ describe("ActionBar toolbar interactions", () => {
 
   test("reflects the left panel state on the toolbar toggle", () => {
     currentSidebarOpen = false;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const panelToggle = screen.getByRole("button", { name: "Show left panel" });
     expect(panelToggle.getAttribute("aria-pressed")).toBe("false");
   });
 
   test("hides the left panel toggle in grid presentation", () => {
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
     expect(screen.queryByRole("button", { name: "Hide left panel" }) === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Show left panel" }) === null).toBe(true);
   });
 
   test("leaves Command+N unhandled for the desktop or browser new-window accelerator", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const event = createEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
     fireEvent(window, event);
@@ -2426,7 +2419,7 @@ describe("ActionBar toolbar interactions", () => {
   });
 
   test("maps Command+R exclusively to a plain terminal tab", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const event = createEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
     fireEvent(window, event);
@@ -2441,7 +2434,7 @@ describe("ActionBar toolbar interactions", () => {
     currentSelectedEnvironmentId = null;
     currentSelectedProjectId = null;
     currentTabCount = 0;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "0", code: "Digit0", ctrlKey: true });
     fireEvent.keyDown(window, { key: "9", code: "Digit9", ctrlKey: true, shiftKey: true });
@@ -2455,7 +2448,7 @@ describe("ActionBar toolbar interactions", () => {
 
   test("shows the project checkout's files from the project board, starting on all files", () => {
     currentSelectedEnvironmentId = null;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const showFiles = screen.getByRole("button", { name: "Show file panel" });
     expect(showFiles.hasAttribute("disabled")).toBe(false);
@@ -2470,7 +2463,7 @@ describe("ActionBar toolbar interactions", () => {
     currentSelectedEnvironmentId = null;
     currentOtherProjects = [{ ...selectedProject, id: "project-remote", localPath: null }];
     currentSelectedProjectId = "project-remote";
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(screen.queryByRole("button", { name: "Show file panel" }) === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "Home" }) === null).toBe(true);
@@ -2481,7 +2474,7 @@ describe("ActionBar toolbar interactions", () => {
   test("closes an open files panel from the project board", () => {
     currentSelectedEnvironmentId = null;
     currentFilesPanelOpen = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Hide file panel" }));
 
@@ -2492,7 +2485,7 @@ describe("ActionBar toolbar interactions", () => {
   test("runs the environment controls on the project home above the project tabs", () => {
     currentEnvironment = projectHomeEnvironment;
     currentSelectedEnvironmentId = projectHomeEnvironment.id;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const toolbar = document.querySelector("[data-mobile-toolbar]")!;
     const projectRow = screen.getByTestId("project-navigation-bar");
@@ -2519,7 +2512,7 @@ describe("ActionBar toolbar interactions", () => {
     currentEnvironment = projectHomeEnvironment;
     currentSelectedEnvironmentId = projectHomeEnvironment.id;
     currentDeletingEnvironments.add(projectHomeEnvironment.id);
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("tab", { name: "Home" }));
     expect(selectEnvironmentMock).toHaveBeenLastCalledWith(null);
     currentDeletingEnvironments.clear();
@@ -2533,7 +2526,7 @@ describe("ActionBar toolbar interactions", () => {
   test("keeps the project home selected when switching board tabs", () => {
     currentEnvironment = projectHomeEnvironment;
     currentSelectedEnvironmentId = projectHomeEnvironment.id;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Coordinator" }));
     fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
@@ -2554,7 +2547,7 @@ describe("ActionBar toolbar interactions", () => {
     readLocalFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test"] }),
     }));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => {
       expect(
@@ -2575,7 +2568,7 @@ describe("ActionBar toolbar interactions", () => {
     readContainerFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test"] }),
     }));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => {
       expect(
@@ -2591,7 +2584,7 @@ describe("ActionBar toolbar interactions", () => {
 
   test("opens a neutral native tab without routing removed provider shortcuts", () => {
     currentEnabledAgentPlatforms = ["codex"];
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
 
@@ -2605,7 +2598,7 @@ describe("ActionBar toolbar interactions", () => {
     readContainerFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test"] }),
     }));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     await waitFor(() => {
       expect(
         screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
@@ -2638,7 +2631,7 @@ describe("ActionBar toolbar interactions", () => {
 
 describe("ActionBar workflow tabs", () => {
   test("does not repeat the selected project name in the environment toolbar", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(screen.queryByText("repo") === null).toBe(true);
     expect(screen.queryByText("Select an environment to get started") === null).toBe(true);
@@ -2648,7 +2641,7 @@ describe("ActionBar workflow tabs", () => {
     currentSelectedProjectId = null;
     currentSelectedEnvironmentId = null;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(screen.getByText("Select an environment to get started")).toBeTruthy();
   });
@@ -2656,7 +2649,7 @@ describe("ActionBar workflow tabs", () => {
   test("shows project board tabs in their own row when no environment is selected", () => {
     currentSelectedEnvironmentId = null;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(
       screen
@@ -2684,7 +2677,7 @@ describe("ActionBar workflow tabs", () => {
   test("selecting a board tab updates the project board tab", () => {
     currentSelectedEnvironmentId = null;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Features" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("features");
@@ -2693,7 +2686,7 @@ describe("ActionBar workflow tabs", () => {
   test("selecting the Linear board tab updates the project board tab", () => {
     currentSelectedEnvironmentId = null;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Linear" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("linear");
@@ -2702,7 +2695,7 @@ describe("ActionBar workflow tabs", () => {
   test("selecting the GitHub board tab updates the project board tab", () => {
     currentSelectedEnvironmentId = null;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("tab", { name: "GitHub" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("github");
@@ -2712,7 +2705,7 @@ describe("ActionBar workflow tabs", () => {
     currentSelectedEnvironmentId = null;
     currentProjectBoardTab = "features";
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Kanban" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("kanban");
@@ -2722,7 +2715,7 @@ describe("ActionBar workflow tabs", () => {
     currentSelectedEnvironmentId = null;
     currentProjectBoardTab = "linear";
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const linearTab = screen.getByRole("tab", { name: "Linear" });
     expect(linearTab.getAttribute("aria-selected")).toBe("true");
@@ -2741,7 +2734,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(screen.queryByRole("button", { name: "Claude Tmux Tab" }) === null).toBe(true);
 
@@ -2760,7 +2753,7 @@ describe("ActionBar workflow tabs", () => {
 
   test("shows enabled CLI providers on the terminal control and removes legacy provider buttons", () => {
     currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "grok", "opencode"];
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "New native agent tab" }));
     expect(createTabMock).toHaveBeenLastCalledWith("agent-native");
@@ -2787,7 +2780,7 @@ describe("ActionBar workflow tabs", () => {
 
   test("filters terminal CLI and Claude Tmux options using enabled providers", () => {
     currentEnabledAgentPlatforms = ["codex"];
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "New native agent tab" }));
     expect(screen.getByRole("button", { name: "Native Tab" })).toBeTruthy();
@@ -2808,7 +2801,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
@@ -2833,7 +2826,7 @@ describe("ActionBar workflow tabs", () => {
     currentCodexReasoningEffort = "xhigh";
     currentCodexFastMode = false;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
@@ -2874,7 +2867,7 @@ describe("ActionBar workflow tabs", () => {
     currentClaudeModel = "claude-sonnet-5";
     currentClaudeFastMode = true;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     expect(createTabMock.mock.calls.at(-1)?.[1]).toMatchObject({ initialFastMode: true });
@@ -2902,7 +2895,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentOpenCodeModel = "openai/review-default";
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
     const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
@@ -2955,7 +2948,7 @@ describe("ActionBar workflow tabs", () => {
             });
         }),
     );
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
     await waitFor(() =>
@@ -2995,7 +2988,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
@@ -3024,7 +3017,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     chooseReviewProvider("claude");
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
@@ -3053,7 +3046,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     chooseReviewProvider("codex");
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
@@ -3086,7 +3079,7 @@ describe("ActionBar workflow tabs", () => {
     };
     currentCodexFastMode = false;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
     await waitFor(() =>
@@ -3111,7 +3104,7 @@ describe("ActionBar workflow tabs", () => {
     };
     launchNativeAgentJobMock.mockRejectedValueOnce(new Error("backend unavailable"));
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
     await waitFor(() =>
@@ -3133,7 +3126,7 @@ describe("ActionBar workflow tabs", () => {
     };
     enqueuePromptQueueMessageMock.mockRejectedValueOnce(new Error("backend unavailable"));
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     expect(createTabMock).toHaveBeenCalledWith(
@@ -3183,7 +3176,7 @@ describe("ActionBar workflow tabs", () => {
         logicalSessionKey: "env-env-1:agent-job-push",
         status: "accepted",
       });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
@@ -3242,7 +3235,7 @@ describe("ActionBar workflow tabs", () => {
     currentWorkspaceReady = true;
     currentChanges = [{ path: "src/example.ts" }];
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const runButton = await screen.findByRole("button", { name: "Run commands" });
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
 
@@ -3278,7 +3271,7 @@ describe("ActionBar workflow tabs", () => {
             });
         }),
     );
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
 
@@ -3318,7 +3311,7 @@ describe("ActionBar workflow tabs", () => {
         status: "unknown",
       })
       .mockRejectedValueOnce(new Error("push backend offline"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const pushButton = screen.getByRole("button", { name: "Push Changes" });
     fireEvent.click(pushButton);
@@ -3375,7 +3368,7 @@ describe("ActionBar workflow tabs", () => {
           });
       });
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
     fireEvent.click(resolveButton);
@@ -3411,7 +3404,7 @@ describe("ActionBar workflow tabs", () => {
             });
         }),
     );
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
     fireEvent.contextMenu(resolveButton);
@@ -3458,7 +3451,7 @@ describe("ActionBar workflow tabs", () => {
             });
         }),
     );
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
@@ -3498,7 +3491,7 @@ describe("ActionBar workflow tabs", () => {
       status: "rejected",
       error: "The maximum tab count was reached.",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
@@ -3529,7 +3522,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: true,
     };
     launchNativeAgentJobMock.mockRejectedValueOnce(new Error("backend offline"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
     fireEvent.click(resolveButton);
@@ -3558,7 +3551,7 @@ describe("ActionBar workflow tabs", () => {
       status: "unknown",
       error: "Dispatch is being reconciled.",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
@@ -3588,7 +3581,7 @@ describe("ActionBar workflow tabs", () => {
       completionActionArmed: false,
       warning: "PR status may need a manual refresh.",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
@@ -3655,7 +3648,7 @@ describe("ActionBar workflow tabs", () => {
     test("a plain press asks the backend to reuse the tab and focuses it", async () => {
       openResolveTab();
       launchNativeAgentJobMock.mockResolvedValueOnce(launched());
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
@@ -3674,7 +3667,7 @@ describe("ActionBar workflow tabs", () => {
     test("says when the prompt is waiting behind the tab's current work", async () => {
       openResolveTab();
       launchNativeAgentJobMock.mockResolvedValueOnce(launched(true));
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
@@ -3691,7 +3684,7 @@ describe("ActionBar workflow tabs", () => {
       openResolveTab();
       currentTabCount = 10;
       launchNativeAgentJobMock.mockResolvedValueOnce(launched());
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       const button = screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement;
       expect(button.disabled).toBe(false);
@@ -3702,7 +3695,7 @@ describe("ActionBar workflow tabs", () => {
 
     test("a full tab bar with no Resolve tab still stops the button", () => {
       currentTabCount = 10;
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
         true,
@@ -3712,7 +3705,7 @@ describe("ActionBar workflow tabs", () => {
     test("a tab that only carries the Resolve title does not lift the tab limit", () => {
       openResolveTab({ displayTitle: "Resolve" });
       currentTabCount = 10;
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
         true,
@@ -3723,7 +3716,7 @@ describe("ActionBar workflow tabs", () => {
       openResolveTab();
       currentTabCount = 10;
       launchNativeAgentJobMock.mockResolvedValueOnce(launched());
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
       expect(screen.queryByRole("alert") === null).toBe(true);
@@ -3739,7 +3732,7 @@ describe("ActionBar workflow tabs", () => {
     test("the keyboard shortcut opens the same dialog on a full tab bar", () => {
       openResolveTab();
       currentTabCount = 10;
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.keyDown(window, { key: "u", metaKey: true, shiftKey: true });
 
@@ -3752,7 +3745,7 @@ describe("ActionBar workflow tabs", () => {
       launchNativeAgentJobMock.mockRejectedValueOnce(
         new Error("Environment already has the maximum of 10 tabs"),
       );
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
@@ -3784,7 +3777,7 @@ describe("ActionBar workflow tabs", () => {
           });
       });
     });
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
     currentSelectedEnvironmentId = "env-2";
@@ -3820,7 +3813,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentDefaultAgent = "claude";
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
     await waitFor(() => expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1));
@@ -3905,7 +3898,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
 
@@ -3928,7 +3921,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const { container } = render(<ActionBar />);
+    const { container } = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     const field = screen.getByLabelText("Target branch") as HTMLInputElement;
@@ -3962,7 +3955,7 @@ describe("ActionBar workflow tabs", () => {
         prState: null,
         hasMergeConflicts: null,
       };
-      let view = render(<ActionBar />);
+      let view = renderInAppCommandScope(<ActionBar />);
       fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
       fireEvent.change(screen.getByLabelText("Target branch"), {
         target: { value: "release/2.0" },
@@ -3984,7 +3977,7 @@ describe("ActionBar workflow tabs", () => {
         hasMergeConflicts: true,
         prBaseBranch: "release/2.0",
       };
-      view = render(<ActionBar />);
+      view = renderInAppCommandScope(<ActionBar />);
       const resolve = screen.getByRole("button", { name: "Resolve" });
       if (configured) {
         fireEvent.contextMenu(resolve);
@@ -4014,7 +4007,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     getProjectGitStatusMock.mockRejectedValueOnce(new Error("Checkout unavailable"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     await waitFor(() => expect(getProjectGitStatusMock).toHaveBeenCalledWith("project-1"));
     await act(async () => {});
@@ -4063,7 +4056,7 @@ describe("ActionBar workflow tabs", () => {
             resolveNew = resolve;
           }),
       );
-      const view = render(<ActionBar />);
+      const view = renderInAppCommandScope(<ActionBar />);
       fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
       await waitFor(() => expect(getProjectGitStatusMock).toHaveBeenCalledTimes(1));
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -4134,7 +4127,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
@@ -4163,7 +4156,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     currentEnvironment = {
@@ -4197,7 +4190,7 @@ describe("ActionBar workflow tabs", () => {
       status: "rejected",
       error: "PR launch rejected",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
@@ -4231,7 +4224,7 @@ describe("ActionBar workflow tabs", () => {
       logicalSessionKey: "env-env-1:agent-job-pr",
       status: "rejected",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
@@ -4252,7 +4245,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
@@ -4271,7 +4264,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     expect(screen.getByText(/into release/)).toBeTruthy();
@@ -4297,7 +4290,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     currentEnvironment = { ...currentEnvironment, status: "stopped" };
@@ -4318,7 +4311,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     currentTabCount = 10;
@@ -4338,7 +4331,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     currentCreateTabRegistered = false;
@@ -4358,7 +4351,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const createPrButton = screen.getByRole("button", { name: "Create PR" });
     fireEvent.pointerDown(createPrButton, {
@@ -4402,7 +4395,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
@@ -4419,7 +4412,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
     fireEvent.pointerDown(resolveButton, {
@@ -4460,7 +4453,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     expect(screen.getByText(/against release/)).toBeTruthy();
@@ -4485,7 +4478,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     // Another agent, or a push, can clear the conflicts while the modal is open.
@@ -4505,7 +4498,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     currentEnvironment = { ...currentEnvironment, status: "stopped" };
@@ -4524,7 +4517,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     currentTabCount = 10;
@@ -4543,7 +4536,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     // The backend owns the job, so a missing renderer tab factory is irrelevant.
@@ -4564,7 +4557,7 @@ describe("ActionBar workflow tabs", () => {
       prState: "open",
       hasMergeConflicts: true,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     currentSelectedEnvironmentId = "env-2";
@@ -4593,7 +4586,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: false,
     };
     currentChanges = [{ path: "src/example.ts" }];
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
     expectProviderMenuOrder("Push with");
@@ -4619,7 +4612,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const reviewButton = screen.getByRole("button", { name: "Code review" });
     fireEvent.pointerDown(reviewButton, {
@@ -4669,7 +4662,7 @@ describe("ActionBar workflow tabs", () => {
     };
     jest.useFakeTimers();
     try {
-      render(<ActionBar presentation="grid" />);
+      renderInAppCommandScope(<ActionBar presentation="grid" />);
 
       const reviewButton = screen.getByRole("button", { name: "Code review" });
       fireEvent.pointerDown(reviewButton, {
@@ -4701,7 +4694,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar presentation="grid" />);
+    const view = renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const reviewButton = screen.getByRole("button", { name: "Code review" });
     fireEvent.pointerDown(reviewButton, {
@@ -4730,7 +4723,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const reviewButton = screen.getByRole("button", { name: "Code review" });
     fireEvent.pointerDown(reviewButton, {
@@ -4768,7 +4761,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const reviewButton = screen.getByRole("button", { name: "Code review" });
 
     fireEvent.contextMenu(reviewButton);
@@ -4803,7 +4796,7 @@ describe("ActionBar workflow tabs", () => {
     };
     currentWorkspaceReady = true;
     currentMultiReviewSettings = { autoFix: true };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const toolbarButtons = screen.getAllByRole("button");
     expect(toolbarButtons.indexOf(screen.getByRole("button", { name: "Multi Review" }))).toBe(
@@ -4869,7 +4862,7 @@ describe("ActionBar workflow tabs", () => {
 
     test("leaves the branch, instruction and tab to the backend", async () => {
       launchMultiReviewMock.mockImplementation(async () => launched());
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
@@ -4892,7 +4885,7 @@ describe("ActionBar workflow tabs", () => {
 
     test("says so when the backend reattached to a running review", async () => {
       launchMultiReviewMock.mockImplementation(async () => launched({ reused: true }));
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
@@ -4912,7 +4905,7 @@ describe("ActionBar workflow tabs", () => {
           recovery: "The review is saved but its tab could not be opened.",
         }),
       );
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
@@ -4929,7 +4922,7 @@ describe("ActionBar workflow tabs", () => {
       launchMultiReviewMock.mockImplementation(async () => {
         throw new Error("Start the environment and finish setup before opening Multi Review");
       });
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
@@ -4951,7 +4944,7 @@ describe("ActionBar workflow tabs", () => {
     };
     currentWorkspaceReady = true;
     currentMultiReviewSettings = { autoFix: true };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Auto-address findings after consolidation" }),
@@ -4974,7 +4967,7 @@ describe("ActionBar workflow tabs", () => {
     };
     currentWorkspaceReady = true;
     currentMultiReviewSettings = { autoPr: true };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
     const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix or clean review" });
     expect(checkbox.getAttribute("aria-checked")).toBe("true");
@@ -4994,7 +4987,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const multiReviewButton = screen.getByRole("button", { name: "Multi Review" });
     fireEvent.pointerDown(multiReviewButton, {
@@ -5039,7 +5032,7 @@ describe("ActionBar workflow tabs", () => {
           resolveStart = resolve;
         }),
     );
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const multiReviewButton = screen.getByRole("button", { name: "Multi Review" });
     fireEvent.click(multiReviewButton);
@@ -5073,7 +5066,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
@@ -5107,7 +5100,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
@@ -5142,7 +5135,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
@@ -5176,7 +5169,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
@@ -5206,7 +5199,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
@@ -5229,7 +5222,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentDefaultAgent = undefined;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
@@ -5263,7 +5256,7 @@ describe("ActionBar configured action defaults", () => {
       },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     expect(createTabMock).toHaveBeenLastCalledWith(
@@ -5289,7 +5282,7 @@ describe("ActionBar configured action defaults", () => {
       review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     // The tab owns the model for every follow-up turn, so passing it only to
@@ -5325,7 +5318,7 @@ describe("ActionBar configured action defaults", () => {
       review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const reviewButton = screen.getByRole("button", { name: "Code review" });
     fireEvent.contextMenu(reviewButton);
 
@@ -5363,7 +5356,7 @@ describe("ActionBar configured action defaults", () => {
       pr: { platform: "claude", model: "haiku", reasoningEffort: "low" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
     // Same platform, so nothing is being retargeted and the configured model
@@ -5392,7 +5385,7 @@ describe("ActionBar configured action defaults", () => {
       review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     expect(createTabMock).toHaveBeenLastCalledWith(
@@ -5428,7 +5421,7 @@ describe("ActionBar configured action defaults", () => {
       review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const reviewButton = screen.getByRole("button", { name: "Code review" });
     fireEvent.contextMenu(reviewButton);
 
@@ -5463,7 +5456,7 @@ describe("ActionBar configured action defaults", () => {
       pr: { platform: "claude", model: "haiku", reasoningEffort: "low" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
     await waitFor(() =>
@@ -5490,7 +5483,7 @@ describe("ActionBar configured action defaults", () => {
       push: { platform: "opencode", model: "openai/gpt-push", reasoningEffort: "high" },
     };
     currentClaudeFastMode = false;
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
@@ -5540,7 +5533,7 @@ describe("ActionBar configured action defaults", () => {
     };
     currentClaudeFastMode = true;
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
     fireEvent.click(screen.getByText("Push with Claude"));
 
@@ -5566,7 +5559,7 @@ describe("ActionBar configured action defaults", () => {
       pr: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const createPrButton = screen.getByRole("button", { name: "Create PR" });
     fireEvent.contextMenu(createPrButton);
 
@@ -5603,7 +5596,7 @@ describe("ActionBar configured action defaults", () => {
       review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
 
     await waitFor(() =>
@@ -5625,7 +5618,7 @@ describe("ActionBar configured action defaults", () => {
       resolve: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
     fireEvent.contextMenu(resolveButton);
 
@@ -5679,7 +5672,7 @@ describe("ActionBar configured action defaults", () => {
       ],
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
     // Each role keeps its own provider/model/effort decision all the way to the
@@ -5735,7 +5728,7 @@ describe("ActionBar configured action defaults", () => {
       additionalReviewers: [{ platform: "claude", model: "opus" }],
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
@@ -5773,7 +5766,7 @@ describe("ActionBar configured action defaults", () => {
       },
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
@@ -5807,7 +5800,7 @@ describe("ActionBar configured action defaults", () => {
     };
     currentMultiReviewSettings = { reviewerCount: 3 };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
@@ -5844,7 +5837,7 @@ describe("ActionBar configured action defaults", () => {
       additionalReviewers: [{ platform: "claude", model: "sonnet" }],
     };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
@@ -5872,7 +5865,7 @@ describe("ActionBar configured action defaults", () => {
     };
     currentMultiReviewSettings = { reviewerCount: 1 };
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
 
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
@@ -5901,7 +5894,7 @@ describe("ActionBar configured action defaults", () => {
     };
     currentActionDefaults = {};
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
 
     await waitFor(() =>
@@ -5944,7 +5937,7 @@ describe("ActionBar pull request actions", () => {
   ])("shows $name CI checks inside the View PR action", ({ summary, label, colorClass, state }) => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = summary;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const status = screen.getByRole("status");
     const viewPrButton = screen.getByRole("button", { name: "View PR" });
@@ -5962,7 +5955,7 @@ describe("ActionBar pull request actions", () => {
   test("announces when the final pending check completes unsuccessfully", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = { passed: 3, total: 4, pending: 1 };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
     const runningText = screen.getByRole("status").textContent;
 
     currentCheckSummary = { passed: 3, total: 4, pending: 0 };
@@ -5976,7 +5969,7 @@ describe("ActionBar pull request actions", () => {
   test("keeps the running state while a known failure and other checks remain", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = { passed: 1, total: 4, pending: 2 };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const status = screen.getByRole("status");
     expect(status.textContent).toBe("1 of 4 CI checks passed; 1 failed; 2 still running");
@@ -5989,7 +5982,7 @@ describe("ActionBar pull request actions", () => {
   test("uses compact CI indicator styling in grid presentation", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = { passed: 2, total: 4, pending: 2 };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const viewPrButton = screen.getByRole("button", { name: "View PR" });
     const visualStatus = viewPrButton.querySelector<HTMLElement>('[data-pr-check-status="visual"]');
@@ -6023,7 +6016,7 @@ describe("ActionBar pull request actions", () => {
       ]),
     });
     currentUseRealPullRequest = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(screen.getByRole("status").textContent).toBe("2 of 4 CI checks passed; 2 still running");
 
@@ -6083,7 +6076,7 @@ describe("ActionBar pull request actions", () => {
     });
     currentUseRealPullRequest = true;
     try {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       const viewPrButton = screen.getByRole("button", { name: "View PR" });
       expect(viewPrButton.querySelector("[data-freshness]") === null).toBe(true);
 
@@ -6145,7 +6138,7 @@ describe("ActionBar pull request actions", () => {
       currentUseRealPullRequest = true;
       try {
         await withTooltipClocks(async ({ open }) => {
-          render(<ActionBar />);
+          renderInAppCommandScope(<ActionBar />);
           fireEvent.mouseEnter(screen.getByRole("button", { name: "View PR" }));
           await fireTooltipTimer(open);
           const formatted = new Date(observedAt).toLocaleString([], {
@@ -6169,7 +6162,7 @@ describe("ActionBar pull request actions", () => {
   test("does not show a CI indicator before GitHub reports checks", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = { passed: 0, total: 0, pending: 0 };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     expect(screen.queryByRole("status") === null).toBe(true);
   });
@@ -6179,7 +6172,7 @@ describe("ActionBar pull request actions", () => {
     (prState) => {
       currentEnvironment = { ...selectedEnvironment, prState };
       currentCheckSummary = { passed: 4, total: 4, pending: 0 };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       expect(screen.queryByRole("status") === null).toBe(true);
     },
@@ -6187,7 +6180,7 @@ describe("ActionBar pull request actions", () => {
 
   test("hides Push Changes for every terminal pull request state", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "merged" };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     expect(screen.queryByRole("button", { name: "Push Changes" }) === null).toBe(true);
 
@@ -6203,7 +6196,7 @@ describe("ActionBar pull request actions", () => {
       prState: "open",
       lifecycleOperation: "merging",
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const mergeButton = screen.getByRole("button", { name: "Merging..." });
     expect((mergeButton as HTMLButtonElement).disabled).toBe(true);
@@ -6217,7 +6210,7 @@ describe("ActionBar pull request actions", () => {
       lifecycleOperation: "deleting",
       deletionRequestedAt: "2026-01-02T00:00:00.000Z",
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const cleanupButton = screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement;
     expect(cleanupButton.disabled).toBe(true);
@@ -6228,7 +6221,7 @@ describe("ActionBar pull request actions", () => {
   test("opens an active pull request in the browser", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = { passed: 3, total: 4, pending: 1 };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "View PR" }));
 
@@ -6241,7 +6234,7 @@ describe("ActionBar pull request actions", () => {
       prState: "open",
       hasMergeConflicts: null,
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const checking = screen.getByRole("button", { name: "Checking mergeability…" });
     expect(checking.getAttribute("aria-disabled")).toBe("true");
@@ -6270,7 +6263,7 @@ describe("ActionBar pull request actions", () => {
       status: "accepted",
       completionActionArmed: true,
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Checking mergeability…" }));
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
@@ -6296,7 +6289,7 @@ describe("ActionBar pull request actions", () => {
       prState: "open",
       hasMergeConflicts: null,
     };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const checking = screen.getByRole("button", { name: "Checking mergeability…" });
     fireEvent.pointerDown(checking, {
@@ -6326,7 +6319,7 @@ describe("ActionBar pull request actions", () => {
       prState: "open",
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar presentation="grid" />);
+    const view = renderInAppCommandScope(<ActionBar presentation="grid" />);
 
     const checking = screen.getByRole("button", { name: "Checking mergeability…" });
     fireEvent.pointerDown(checking, {
@@ -6364,7 +6357,7 @@ describe("ActionBar pull request actions", () => {
       prState: "open",
       hasMergeConflicts: null,
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Checking mergeability…" }));
     currentEnvironment = { ...currentEnvironment, hasMergeConflicts: false };
@@ -6378,7 +6371,7 @@ describe("ActionBar pull request actions", () => {
 
   test("presents a closed pull request and cleanup explanation without merged-branch wording", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "closed" };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "PR Closed" }));
     expect(viewPRMock).toHaveBeenCalledTimes(1);
@@ -6397,7 +6390,7 @@ describe("ActionBar run commands", () => {
       content: JSON.stringify({ run: ["bun run dev", 42, " ", "bun test"] }),
     });
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() =>
       expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "orkestrator-ai.json"),
@@ -6422,7 +6415,7 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     currentEnvironment = { ...selectedEnvironment, agentActivityState: "idle" };
     readContainerFileMock.mockResolvedValue({ content: "{}" });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
     const runButton = screen.getByRole("button", { name: "Run commands" });
@@ -6454,7 +6447,7 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
     readContainerFileMock.mockResolvedValue({ content: "{}" });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
 
     // Leaving "working" re-reads once; later non-working changes do not.
@@ -6474,7 +6467,7 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
     readContainerFileMock.mockResolvedValue({ content: "{}" });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
@@ -6513,7 +6506,7 @@ describe("ActionBar run commands", () => {
       agentActivityState: "working",
     };
     readLocalFileMock.mockResolvedValue({ content: "{}" });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     await waitFor(() => expect(readLocalFileMock).toHaveBeenCalledTimes(1));
 
     readLocalFileMock.mockResolvedValue({ content: '{"run":["bun run dev"]}' });
@@ -6536,7 +6529,7 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
     readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     const runButton = screen.getByRole("button", { name: "Run commands" });
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
 
@@ -6564,7 +6557,7 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
     readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     const runButton = screen.getByRole("button", { name: "Run commands" });
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
 
@@ -6609,7 +6602,7 @@ describe("ActionBar run commands", () => {
   test("does not rescan the new environment for the previous environment's completion", async () => {
     currentWorkspaceReady = true;
     currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
 
     currentSelectedEnvironmentId = "env-2";
@@ -6634,7 +6627,7 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
     readContainerFileMock.mockResolvedValue({ content: "{}" });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
 
     const firstEnvironment = currentEnvironment;
@@ -6681,7 +6674,7 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     readLocalFileMock.mockResolvedValueOnce({ content: '{"run":["bun run dev"]}' });
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     await waitFor(() =>
       expect(readLocalFileMock).toHaveBeenCalledWith("/tmp/repo-worktree", "orkestrator-ai.json"),
     );
@@ -6708,7 +6701,7 @@ describe("ActionBar run commands", () => {
     // whichever effect happens to arrive first.
     readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
     launchTerminalJobMock.mockRejectedValueOnce(new Error("PTY unavailable"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const runButton = screen.getByRole("button", { name: "Run commands" });
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
@@ -6724,7 +6717,7 @@ describe("ActionBar run commands", () => {
   test("keeps run disabled for malformed files, read failures, and setup scripts", async () => {
     currentWorkspaceReady = true;
     readContainerFileMock.mockResolvedValueOnce({ content: "{not-json" });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe(
@@ -6758,7 +6751,7 @@ describe("ActionBar run commands", () => {
   test("keeps run disabled when a backend read unexpectedly returns no request", async () => {
     currentWorkspaceReady = true;
     readContainerFileMock.mockImplementationOnce(() => null as never);
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     await waitFor(() =>
       expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "orkestrator-ai.json"),
@@ -6781,7 +6774,7 @@ describe("ActionBar run commands", () => {
       )
       .mockResolvedValueOnce({ content: '{"run":[]}' });
 
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
 
     currentEnvironment = {
@@ -6806,7 +6799,7 @@ describe("ActionBar run commands", () => {
 
 describe("ActionBar editor actions", () => {
   test("opens container and local environments in the preferred editor", async () => {
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
     await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode"));
 
@@ -6826,7 +6819,7 @@ describe("ActionBar editor actions", () => {
 
   test("shows and dismisses editor launch failures", async () => {
     openInEditorMock.mockRejectedValueOnce(new Error("editor CLI unavailable"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
     expect(await screen.findByText("Failed to Open Editor")).toBeTruthy();
@@ -6839,7 +6832,7 @@ describe("ActionBar editor actions", () => {
   test("uses the Cursor preference in the action and failure guidance", async () => {
     currentPreferredEditor = "cursor";
     openInEditorMock.mockRejectedValueOnce(new Error("cursor CLI unavailable"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Open in Cursor" }));
 
@@ -6855,7 +6848,7 @@ describe("ActionBar editor actions", () => {
     };
     try {
       await withTooltipClocks(async ({ open }) => {
-        const { rerender } = render(<ActionBar />);
+        const { rerender } = renderInAppCommandScope(<ActionBar />);
         const containerEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
         expect((containerEditorButton as HTMLButtonElement).disabled).toBe(true);
 
@@ -6891,7 +6884,7 @@ describe("ActionBar editor actions", () => {
 
   test("shows the editor shortcut tooltip for local connections", async () => {
     await withTooltipClocks(async ({ open }) => {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       const editorButton = screen.getByRole("button", { name: "Open in VS Code" });
       fireEvent.mouseEnter(editorButton.parentElement!);
@@ -6919,7 +6912,7 @@ describe("ActionBar editor actions", () => {
     };
     try {
       await withTooltipClocks(async ({ open }) => {
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         const editorButton = screen.getByRole("button", { name: "Open in VS Code" });
         expect((editorButton as HTMLButtonElement).disabled).toBe(false);
 
@@ -6946,7 +6939,7 @@ describe("ActionBar editor actions", () => {
 
 describe("ActionBar successful cleanup and merge actions", () => {
   test("deletes a finished environment and closes the cleanup dialog", async () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
 
@@ -6955,7 +6948,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
   });
 
   test("activates the project as soon as cleanup is confirmed", async () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
 
@@ -6965,7 +6958,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
   });
 
   test("does not leave a different selected environment when retrying a pinned cleanup", async () => {
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
 
     currentEnvironment = {
@@ -6992,7 +6985,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("sits to the right of Create PR, before the file panel toggle", () => {
       withoutPr();
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       const button = trashButton();
       expect(button.getAttribute("data-variant")).toBe("destructive");
@@ -7008,7 +7001,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("asks with the row's confirmation before deleting", async () => {
       withoutPr();
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(trashButton());
 
@@ -7025,7 +7018,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("cancelling keeps the environment", () => {
       withoutPr();
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(trashButton());
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -7037,7 +7030,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("keeps the confirmation on the environment it was opened for", async () => {
       withoutPr();
       currentOtherEnvironments = [{ ...selectedEnvironment, id: "env-2", name: "second-env" }];
-      const { rerender } = render(<ActionBar />);
+      const { rerender } = renderInAppCommandScope(<ActionBar />);
       fireEvent.click(trashButton());
 
       currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
@@ -7054,7 +7047,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("dismisses confirmation when its target disappears from the store", () => {
       withoutPr();
-      const { rerender } = render(<ActionBar />);
+      const { rerender } = renderInAppCommandScope(<ActionBar />);
       fireEvent.click(trashButton());
       expect(screen.getByTestId("alert-dialog-content")).toBeTruthy();
 
@@ -7076,7 +7069,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
         lifecycleOperation: "merging",
       };
       await withTooltipClocks(async ({ open }) => {
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         const button = trashButton() as HTMLButtonElement;
         expect(button.disabled).toBe(true);
         fireEvent.click(button);
@@ -7092,13 +7085,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("stays available beside an open PR", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       expect((trashButton() as HTMLButtonElement).disabled).toBe(false);
     });
 
     test("gives way to Clean Up once the PR is finished", () => {
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       expect(screen.getByRole("button", { name: "Clean Up" })).toBeTruthy();
       expect(queryTrashButton() === null).toBe(true);
@@ -7107,7 +7100,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("is not offered on the project home", () => {
       withoutPr();
       currentEnvironment = { ...currentEnvironment, projectHome: true };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       expect(queryTrashButton() === null).toBe(true);
     });
@@ -7115,14 +7108,14 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("is disabled while this window is already deleting the environment", () => {
       withoutPr();
       currentDeletingEnvironments.add("env-1");
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       expect((trashButton() as HTMLButtonElement).disabled).toBe(true);
     });
 
     test("is a labelled tile in the mobile toolbar", async () => {
       withoutPr();
-      render(<ActionBar presentation="grid" />);
+      renderInAppCommandScope(<ActionBar presentation="grid" />);
 
       const button = trashButton();
       expect(button.textContent).toContain("Delete environment");
@@ -7135,7 +7128,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("swallows a failed deletion, which deleteEnvironment already reported", async () => {
       withoutPr();
       deleteEnvironmentMock.mockRejectedValueOnce(new Error("delete failed"));
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(trashButton());
       fireEvent.click(screen.getByRole("button", { name: "Delete" }));
@@ -7152,7 +7145,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("opens the same merge dialog and merges through it", async () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
 
       act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
@@ -7180,7 +7173,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       });
       useRealSelection = true;
       try {
-        render(
+        renderInAppCommandScope(
           <>
             <EnvironmentItem
               environment={target}
@@ -7212,7 +7205,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("keeps an admitted dialog open when readiness and conflict data change", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
-      const { rerender } = render(<ActionBar />);
+      const { rerender } = renderInAppCommandScope(<ActionBar />);
       act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
       currentEnvironment = { ...currentEnvironment, status: "stopped", hasMergeConflicts: true };
       rerender(<ActionBar />);
@@ -7224,7 +7217,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("reopens a menu-originated confirmation with the merge error", async () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("Merge refused"));
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
       fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
       await waitFor(() =>
@@ -7235,7 +7228,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("cancelling closes the dialog for good", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
-      const { rerender } = render(<ActionBar />);
+      const { rerender } = renderInAppCommandScope(<ActionBar />);
       act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
 
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -7248,7 +7241,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("drops a request it cannot honour instead of opening the dialog later", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open", status: "stopped" };
-      const { rerender } = render(<ActionBar />);
+      const { rerender } = renderInAppCommandScope(<ActionBar />);
 
       act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-1"));
       expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
@@ -7262,7 +7255,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("ignores a request for an environment that is not selected", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       act(() => useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "env-other"));
 
@@ -7272,7 +7265,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     test("ignores a request for the same environment id on another node", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       act(() =>
         useMergePrRequestStore.getState().requestMergePr("bk_other-node" as never, "env-1"),
@@ -7285,7 +7278,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
   test("discloses that draft pull requests are marked ready before merging", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
 
@@ -7296,7 +7289,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
   test("offers cleanup after a confirmed successful merge", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
 
@@ -7315,7 +7308,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
           resolveMerge = resolve;
         }),
     );
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -7345,7 +7338,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       outcome: "merged",
       cleanupOutcome: "pending",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -7362,7 +7355,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     mergeEnvironmentPrMock.mockResolvedValueOnce({
       outcome: "merged",
     } as MergeOutcome);
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -7380,7 +7373,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       outcome: "pending",
       cleanupOutcome: "pending",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -7393,7 +7386,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
   test("does not clean up when the merge fails", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("merge failed"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -7409,7 +7402,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       cleanupOutcome: "failed",
       cleanupError: "delete failed",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -7426,7 +7419,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       outcome: "merged",
       cleanupOutcome: "failed",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -7444,7 +7437,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
           resolveMerge = resolve;
         }),
     );
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     confirmMergeAndCleanup();
     await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledTimes(1));
 
@@ -7478,7 +7471,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
   test("uses one environment-scoped command for container and local environments", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
@@ -7509,7 +7502,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
   });
 
   test("pins ordinary cleanup to the environment whose dialog was opened", async () => {
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
 
     currentEnvironment = {
@@ -7533,7 +7526,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     deleteEnvironmentMock
       .mockRejectedValueOnce(new Error("first failure"))
       .mockRejectedValueOnce(new Error("second failure"));
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
@@ -7576,7 +7569,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
           resolveDelete = resolve;
         }),
     );
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
@@ -7608,7 +7601,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
           resolveDelete = resolve;
         }),
     );
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
     await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
@@ -7651,7 +7644,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
           resolveDelete = resolve;
         }),
     );
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
     expect(errorAlert.textContent).toContain("persisted cleanup failure");
@@ -7681,7 +7674,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     currentWorkspaceReady = true;
     currentTabCount = 1;
     readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
@@ -7720,7 +7713,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
   });
 
   test("opens the code review configuration with Cmd+Shift+R", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true, shiftKey: true });
 
@@ -7730,7 +7723,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
   test("opens Multi Review configuration with Cmd+Shift+M", () => {
     currentWorkspaceReady = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true, shiftKey: true });
 
@@ -7739,7 +7732,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
   });
 
   test("opens run-script configuration with Cmd+Shift+G", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "g", code: "KeyG", metaKey: true, shiftKey: true });
 
@@ -7749,7 +7742,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
   test("opens pull-request configuration with Cmd+Shift+U", () => {
     currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "u", code: "KeyU", metaKey: true, shiftKey: true });
 
@@ -7765,7 +7758,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         prState: "open",
         hasMergeConflicts,
       };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.keyDown(window, { key: "u", code: "KeyU", metaKey: true, shiftKey: true });
 
@@ -7776,7 +7769,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
   test("keeps Cmd+Shift+P exclusively owned by Open File", async () => {
     currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
-    render(
+    renderInAppCommandScope(
       <>
         <OpenFileDialog />
         <ActionBar />
@@ -7809,7 +7802,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
             });
         }),
     );
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
     fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true, repeat: true });
@@ -7873,7 +7866,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     const paneEnvironments = usePaneLayoutStore.getState().environments;
     try {
       act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
       await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
@@ -7968,7 +7961,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       jest.useFakeTimers();
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         expect(createPrButton().disabled).toBe(true);
 
@@ -7999,7 +7992,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       jest.useFakeTimers();
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await act(async () => {
           await Promise.resolve();
@@ -8023,7 +8016,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       jest.useFakeTimers();
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await act(async () => {
           await Promise.resolve();
@@ -8050,7 +8043,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
           usePaneLayoutStore.getState().initialize(null, "env-1");
           usePaneLayoutStore.getState().initialize(null, "env-2");
         });
-        const view = render(<ActionBar />);
+        const view = renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         expect(createPrButton().disabled).toBe(true);
 
@@ -8101,7 +8094,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       const paneEnvironments = usePaneLayoutStore.getState().environments;
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         act(() => addPrTab("agent-job-pr", "env-1"));
         launch.resolve(acceptedPrJob("agent-job-pr"));
@@ -8121,7 +8114,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       const paneEnvironments = usePaneLayoutStore.getState().environments;
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         expect(createPrButton().disabled).toBe(true);
 
@@ -8142,7 +8135,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
           usePaneLayoutStore.getState().initialize(null, "env-1");
           usePaneLayoutStore.getState().initialize(null, "env-2");
         });
-        const view = render(<ActionBar />);
+        const view = renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
         act(() => addPrTab("agent-job-resolve", "env-1"));
@@ -8171,7 +8164,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
           usePaneLayoutStore.getState().initialize(null, "env-1");
           usePaneLayoutStore.getState().initialize(null, "env-2");
         });
-        const view = render(<ActionBar />);
+        const view = renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
         act(() => addPrTab("agent-job-resolve", "env-1"));
@@ -8209,7 +8202,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       const paneEnvironments = usePaneLayoutStore.getState().environments;
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
         act(() => {
@@ -8248,7 +8241,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     test("hasPR release does not leave a stale tabSeen claim after the tab closes", async () => {
       currentEnvironment = envWithoutPr();
       const paneEnvironments = usePaneLayoutStore.getState().environments;
-      const view = render(<ActionBar />);
+      const view = renderInAppCommandScope(<ActionBar />);
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
         view.rerender(<ActionBar />);
@@ -8284,7 +8277,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       const paneEnvironments = usePaneLayoutStore.getState().environments;
       try {
         act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
-        render(<ActionBar />);
+        renderInAppCommandScope(<ActionBar />);
         fireEvent.click(createPrButton());
         await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
         await act(async () => {
@@ -8310,7 +8303,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
   test("does not create a PR from Cmd+P when one already exists", () => {
     currentEnvironment = { ...currentEnvironment, prState: "open" };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const event = createEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
     fireEvent(window, event);
@@ -8320,7 +8313,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
   });
 
   test("⌘T opens a tab wherever focus is", () => {
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const input = document.createElement("input");
     const terminal = document.createElement("div");
     terminal.className = "xterm";
@@ -8338,7 +8331,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
   test("⌘T waits while environment setup runs", () => {
     currentSetupScriptsRunning = true;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(document.body, { key: "t", code: "KeyT", metaKey: true });
 
@@ -8349,7 +8342,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
     currentWorkspaceReady = true;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     await waitFor(() =>
       expect(
         (screen.getByRole("button", { name: "Run commands" }) as HTMLButtonElement).disabled,
@@ -8412,7 +8405,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     }) as typeof window.addEventListener;
 
     try {
-      const view = render(<ActionBar />);
+      const view = renderInAppCommandScope(<ActionBar />);
       expect(registrations).toBe(1);
       view.rerender(<ActionBar presentation="grid" />);
       view.rerender(<ActionBar presentation="bar" />);
@@ -8454,7 +8447,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       currentSetupScriptsRunning = false;
       currentCreateTabRegistered = true;
       configure();
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
 
       fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
       await Promise.resolve();
@@ -8473,7 +8466,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
           finishLaunch = reject;
         }),
     );
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
@@ -8489,7 +8482,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     currentTabCount = 9;
     currentWorkspaceReady = true;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
@@ -8536,7 +8529,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
   test("falls back to the built-in review prompt for malformed config state", async () => {
     currentReviewPrompt = 123 as never;
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
@@ -8562,7 +8555,7 @@ describe("ActionBar merge completion", () => {
       task: { prMergeCommented: false },
       taskId: "task-1",
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
@@ -8590,7 +8583,7 @@ describe("ActionBar merge completion", () => {
       outcome: "pending",
       cleanupOutcome: "not-requested",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMerge();
 
@@ -8616,7 +8609,7 @@ describe("ActionBar merge completion", () => {
       outcome: "unknown",
       cleanupOutcome: "not-requested",
     });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMerge();
 
@@ -8641,7 +8634,7 @@ describe("ActionBar merge completion", () => {
           resolveMerge = resolve;
         }),
     );
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
     confirmMerge();
     await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledTimes(1));
 
@@ -8674,7 +8667,7 @@ describe("ActionBar merge completion", () => {
           resolveMerge = resolve;
         }),
     );
-    const { unmount } = render(<ActionBar />);
+    const { unmount } = renderInAppCommandScope(<ActionBar />);
     confirmMergeAndCleanup();
     await waitFor(() =>
       expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
@@ -8694,7 +8687,7 @@ describe("ActionBar merge completion", () => {
       deletionRequestedAt: "2026-11-05T12:00:00Z",
       lifecycleOperation: "deleting",
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     const button = screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     fireEvent.click(button);
@@ -8709,7 +8702,7 @@ describe("ActionBar merge completion", () => {
       prState: "merged",
       lifecycleOperation: "merging",
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     const cleanupButton = screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement;
     expect(cleanupButton.disabled).toBe(true);
@@ -8727,7 +8720,7 @@ describe("ActionBar error dialogs", () => {
       cleanupError: longError("delete failed"),
     });
 
-    const { rerender } = render(<ActionBar />);
+    const { rerender } = renderInAppCommandScope(<ActionBar />);
 
     confirmMergeAndCleanup();
 
@@ -8763,7 +8756,7 @@ describe("ActionBar error dialogs", () => {
     };
     mergeEnvironmentPrMock.mockRejectedValueOnce(longError("merge failed"));
 
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
@@ -8800,7 +8793,7 @@ describe("ActionBar error dialogs", () => {
       prState: "open",
     };
     mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("local merge failed"));
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMerge();
 
@@ -8816,7 +8809,7 @@ describe("ActionBar error dialogs", () => {
   test("uses generic merge guidance for unknown rejection values", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     mergeEnvironmentPrMock.mockRejectedValueOnce({ reason: "unknown backend failure" });
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
 
     confirmMerge();
 
@@ -8834,7 +8827,7 @@ describe("ActionBar auto-merge", () => {
     setEnvironmentAutoMergeMock.mockImplementationOnce(
       () => new Promise((resolve) => (finish = resolve)),
     );
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
     const toggle = screen.getByRole("button", { name: "Auto-merge" }) as HTMLButtonElement;
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(toggle);
@@ -8866,7 +8859,7 @@ describe("ActionBar auto-merge", () => {
   for (const state of ["merged", "closed"] as const) {
     test(`hides auto-merge after the PR is ${state}`, () => {
       currentEnvironment = { ...selectedEnvironment, prState: state, autoMerge: false };
-      render(<ActionBar />);
+      renderInAppCommandScope(<ActionBar />);
       expect(screen.queryByRole("button", { name: "Auto-merge" }) === null).toBe(true);
     });
   }
@@ -8878,7 +8871,7 @@ describe("ActionBar auto-merge", () => {
       autoMerge: true,
       autoMergeError: "GitHub refused the merge",
     };
-    const view = render(<ActionBar />);
+    const view = renderInAppCommandScope(<ActionBar />);
     expect(screen.getByText("Auto-merge: GitHub refused the merge")).toBeTruthy();
     currentEnvironment = { ...currentEnvironment, autoMergeError: null };
     view.rerender(<ActionBar />);
@@ -8892,7 +8885,7 @@ describe("ActionBar auto-merge", () => {
       autoMerge: true,
       autoMergeError: "GitHub refused the merge",
     };
-    render(<ActionBar />);
+    renderInAppCommandScope(<ActionBar />);
     fireEvent.focus(screen.getByText("Auto-merge: GitHub refused the merge"));
     await waitFor(() =>
       expect(screen.getAllByText("Auto-merge: GitHub refused the merge")).toHaveLength(2),
@@ -8906,7 +8899,7 @@ describe("ActionBar auto-merge", () => {
       autoMerge: true,
       autoMergeError: "GitHub refused the merge",
     };
-    render(<ActionBar presentation="grid" />);
+    renderInAppCommandScope(<ActionBar presentation="grid" />);
     const label = screen.getByText("Auto-merge: GitHub refused the merge");
     expect(label.className).toContain("col-span-2");
     expect(label.className).not.toContain("line-clamp");

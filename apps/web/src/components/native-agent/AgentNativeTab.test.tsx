@@ -8,7 +8,8 @@ import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-a
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { isValidElement, memo, StrictMode, useEffect, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { NativeMessage as NativeMessageCard } from "@/components/chat/NativeMessage";
 import type { NativeMessageProps } from "@/components/chat/NativeMessage.shared";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -1018,7 +1019,7 @@ describe("AgentNativeTab", () => {
             </div>
           </>
         );
-        const view = render(tab(true));
+        const view = renderInAppCommandScope(tab(true));
         const input = await screen.findByRole("textbox");
         expect(input.getAttribute("contenteditable")).toBe("true");
         const action = screen.getByRole("button", { name: "Pane action" });
@@ -1072,7 +1073,9 @@ describe("AgentNativeTab", () => {
     const { TERMINAL_BROWSER_TAB_REQUEST_EVENT } = await import("@/lib/terminal-links");
     window.addEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, record);
     try {
-      render(<AgentNativeTab tabId="seeded-agent-tab" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="seeded-agent-tab" data={identity("cursor")} isActive />,
+      );
       const link = await screen.findByRole("link", { name: "seeded app" });
       fireEvent.click(link, { metaKey: true, shiftKey: true });
       expect(requests).toEqual([
@@ -1104,7 +1107,7 @@ describe("AgentNativeTab", () => {
       requireExistingResumeSession: options.requireExistingResumeSession,
     };
     seedEnvTab({ id: tabId, type: "agent-native", nativeAgentData: data, ...options });
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     await screen.findByTestId("shared-native-compose-bar");
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
     expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -1153,7 +1156,7 @@ describe("AgentNativeTab", () => {
     }));
 
     const tabId = "multi-review-review:workflow-1";
-    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
 
     expect(await screen.findByText(commentary)).toBeTruthy();
     expect(screen.getByTestId("native-agent-transcript-test-list").textContent).not.toContain(
@@ -1202,7 +1205,9 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId="ordinary-tab" data={identity("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="ordinary-tab" data={identity("cursor")} isActive />,
+    );
 
     expect(await screen.findByText(combined)).toBeTruthy();
     expect(screen.getByTestId("native-agent-transcript-test-list").textContent).toContain(
@@ -1221,7 +1226,9 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId="tab-question-routing" data={identity("claude")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-question-routing" data={identity("claude")} isActive />,
+    );
 
     const question = await screen.findByTestId("agent-question-card");
     const transcript = screen.getByTestId("native-agent-transcript-test-list");
@@ -1286,7 +1293,7 @@ describe("AgentNativeTab", () => {
       interactions: [unavailable],
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <AgentNativeTab tabId="tab-plan-fallback" data={identity("claude")} isActive />
       </TerminalProvider>,
@@ -1332,7 +1339,7 @@ describe("AgentNativeTab", () => {
         ],
       }));
 
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalTabHarness createTab={createTab}>
             <AgentNativeTab tabId="tab-auth-recovery" data={identity("claude")} isActive />
@@ -1377,7 +1384,7 @@ describe("AgentNativeTab", () => {
       "authentication_error: Invalid authentication credentials",
     );
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab
@@ -1410,7 +1417,7 @@ describe("AgentNativeTab", () => {
       "authentication_error: Invalid authentication credentials",
     );
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab
@@ -1440,7 +1447,7 @@ describe("AgentNativeTab", () => {
       "API Error: 401 unauthorized",
     );
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab tabId="tab-auth-recovery-shared" data={identity("claude")} isActive />
@@ -1482,7 +1489,7 @@ describe("AgentNativeTab", () => {
       messages: [prompt, reply],
     }));
 
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-not-logged-in" data={identity("claude")} isActive />,
     );
     expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
@@ -1492,7 +1499,9 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input as never)),
       messages: [prompt, reply, { ...prompt, id: "user-2", createdAt: "2026-09-03T14:46:00.000Z" }],
     }));
-    render(<AgentNativeTab tabId="tab-not-logged-in-later" data={identity("claude")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-not-logged-in-later" data={identity("claude")} isActive />,
+    );
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
   });
@@ -1526,7 +1535,7 @@ describe("AgentNativeTab", () => {
       answerWithRefusal();
       getNativeAgentSignInResendMock.mockResolvedValue({ pending: true });
       const tabId = "tab-backend-holds-prompt";
-      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
 
       expect(await screen.findByText(/Your message is sent again once you sign in\./)).toBeTruthy();
       expect(getNativeAgentSignInResendMock).toHaveBeenCalledWith({
@@ -1563,7 +1572,7 @@ describe("AgentNativeTab", () => {
     ] as const)("asks the user to resend when the backend %s", async (label, answer) => {
       answerWithRefusal();
       getNativeAgentSignInResendMock.mockImplementation(answer);
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={`tab-resend-by-hand-${label.length}`}
           data={identity("claude")}
@@ -1592,7 +1601,9 @@ describe("AgentNativeTab", () => {
         },
       ],
     }));
-    render(<AgentNativeTab tabId="tab-not-logged-in-codex" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-not-logged-in-codex" data={identity("codex")} isActive />,
+    );
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
   });
@@ -1619,7 +1630,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab tabId="tab-auth-recovery-refused" data={identity("claude")} isActive />
@@ -1652,7 +1663,7 @@ describe("AgentNativeTab", () => {
     };
     window.addEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
     try {
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab tabId="tab-cursor-auth-required" data={identity("cursor")} isActive />,
       );
 
@@ -1698,7 +1709,7 @@ describe("AgentNativeTab", () => {
     installFakeReadCoordinator();
     const reread = installControlledTimeout(10_000, { label: "Codex sign-out reread" });
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-codex-reread"
           data={identity("codex")}
@@ -1768,7 +1779,7 @@ describe("AgentNativeTab", () => {
     installFakeReadCoordinator();
     const reread = installControlledTimeout(10_000, { label: "Codex sign-out reread" });
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab tabId="tab-codex-hidden" data={identity("codex")} isActive />,
       );
       await waitFor(() => expect(reread.pendingCount()).toBe(1));
@@ -1804,7 +1815,9 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
     }));
-    render(<AgentNativeTab tabId="tab-auth-pending" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-auth-pending" data={identity("codex")} isActive />,
+    );
     await screen.findByText("Account needs sign-in");
     expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
     expect(
@@ -1838,7 +1851,9 @@ describe("AgentNativeTab", () => {
       const authRetry = installControlledTimeout(1_000, { label: "native auth re-read" });
       const query = { timeout: 2_000 };
       try {
-        render(<AgentNativeTab tabId="tab-auth-retry" data={identity("codex")} isActive />);
+        renderInAppCommandScope(
+          <AgentNativeTab tabId="tab-auth-retry" data={identity("codex")} isActive />,
+        );
         await screen.findByRole("button", { name: "Retry sign-in options" }, query);
         expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
         expect(reads).toBe(1);
@@ -1867,7 +1882,9 @@ describe("AgentNativeTab", () => {
         ...(await defaultProjection(input as never)),
         readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
       }));
-      render(<AgentNativeTab tabId="tab-auth-settings" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-auth-settings" data={identity("codex")} isActive />,
+      );
       expect(await screen.findByRole("button", { name: "Open Codex settings" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Sign in to Codex" }) === null).toBe(true);
     },
@@ -1882,7 +1899,9 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
     }));
-    render(<AgentNativeTab tabId="tab-auth-manual-retry" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-auth-manual-retry" data={identity("codex")} isActive />,
+    );
     const retry = await screen.findByRole("button", { name: "Retry sign-in options" });
     available = true;
     fireEvent.click(retry);
@@ -1901,7 +1920,9 @@ describe("AgentNativeTab", () => {
       state: "needs-auth" as const,
       signIn: { kind: "browser-url" as const },
     }));
-    render(<AgentNativeTab tabId="tab-codex-signed-out" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-codex-signed-out" data={identity("codex")} isActive />,
+    );
 
     expect(await screen.findByText(/signed out of Codex/)).toBeTruthy();
     // Asked only because sign-in is required; the projection no longer carries it.
@@ -1948,7 +1969,9 @@ describe("AgentNativeTab", () => {
       state: "needs-auth" as const,
       signIn: { kind: "browser-url" as const },
     }));
-    render(<AgentNativeTab tabId="tab-codex-cancel" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-codex-cancel" data={identity("codex")} isActive />,
+    );
 
     expect(screen.queryByRole("button", { name: "Cancel sign-in" }) === null).toBe(true);
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
@@ -1978,7 +2001,9 @@ describe("AgentNativeTab", () => {
         signIn: { kind: "device-code" as const },
       }));
       beginNativeAgentSignInMock.mockImplementation(async () => ({ url, code: "SAFE-CODE" }));
-      render(<AgentNativeTab tabId="invalid-sign-in" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="invalid-sign-in" data={identity("codex")} isActive />,
+      );
       fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
       await waitFor(() => expect(cancelNativeAgentSignInMock).toHaveBeenCalledTimes(1));
       expect(await screen.findByText("SAFE-CODE")).toBeTruthy();
@@ -2006,7 +2031,9 @@ describe("AgentNativeTab", () => {
       state: "needs-auth",
       signIn: { kind: "browser-url" },
     });
-    render(<AgentNativeTab tabId="notice-sign-in" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="notice-sign-in" data={identity("codex")} isActive />,
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
     await waitFor(() => expect(beginNativeAgentSignInMock).toHaveBeenCalledTimes(1));
   });
@@ -2023,7 +2050,9 @@ describe("AgentNativeTab", () => {
     openInBrowserMock.mockImplementation(async () => {
       throw new Error("browser unavailable");
     });
-    render(<AgentNativeTab tabId="tab-codex-open-failure" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-codex-open-failure" data={identity("codex")} isActive />,
+    );
 
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
 
@@ -2049,7 +2078,9 @@ describe("AgentNativeTab", () => {
     beginNativeAgentSignInMock.mockImplementation(
       () => new Promise((resolve) => (resolveSignIn = resolve)),
     );
-    render(<AgentNativeTab tabId="tab-codex-delayed" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-codex-delayed" data={identity("codex")} isActive />,
+    );
     const button = await screen.findByRole("button", { name: "Sign in to Codex" });
     fireEvent.click(button);
     expect((button as HTMLButtonElement).disabled).toBe(true);
@@ -2084,7 +2115,9 @@ describe("AgentNativeTab", () => {
       pendingSignIn = undefined;
       throw new Error("login unavailable");
     });
-    render(<AgentNativeTab tabId="tab-codex-device" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-codex-device" data={identity("codex")} isActive />,
+    );
     const button = await screen.findByRole("button", { name: "Sign in to Codex" });
     fireEvent.click(button);
     await waitFor(() =>
@@ -2135,7 +2168,9 @@ describe("AgentNativeTab", () => {
       return { url: pendingSignIn.url, code: pendingSignIn.code };
     });
     const mount = () =>
-      render(<AgentNativeTab tabId="pending-device-login" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="pending-device-login" data={identity("codex")} isActive />,
+      );
     let view = mount();
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
     await screen.findByText("SAME-CODE");
@@ -2152,7 +2187,7 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    const away = render(
+    const away = renderInAppCommandScope(
       <AgentNativeTab
         tabId="other-environment"
         data={{ ...identity("codex"), environmentId: "other-environment" }}
@@ -2192,7 +2227,9 @@ describe("AgentNativeTab", () => {
     // The Electron preload publishes `desktop` only for a remote connection.
     window.orkestratorGateway = { enabled: true, desktop: true };
     try {
-      render(<AgentNativeTab tabId="tab-codex-remote" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-codex-remote" data={identity("codex")} isActive />,
+      );
       fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
       await waitFor(() => expect(beginNativeAgentSignInMock).toHaveBeenCalled());
       expect(beginNativeAgentSignInMock.mock.calls[0]?.[0]).toMatchObject({
@@ -2214,7 +2251,7 @@ describe("AgentNativeTab", () => {
       },
     }));
     const createTab = mock(() => true);
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab tabId="tab-grok-auth-required" data={identity("grok")} isActive />
@@ -2253,7 +2290,7 @@ describe("AgentNativeTab", () => {
       },
     }));
     const createTab = mock(() => true);
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab
@@ -2281,7 +2318,7 @@ describe("AgentNativeTab", () => {
       },
     }));
     const createTab = mock(() => true);
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab
@@ -2318,7 +2355,7 @@ describe("AgentNativeTab", () => {
     }));
     const createTab = mock(() => true);
     const mount = (environmentId: string) =>
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalTabHarness createTab={createTab}>
             <AgentNativeTab
@@ -2383,7 +2420,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("Enter in an empty composer does nothing", async () => {
-    render(<AgentNativeTab tabId="tab-empty-send" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-empty-send" data={identity("codex")} isActive />,
+    );
     await screen.findByTitle("Send");
     const input = screen.getByRole("textbox");
 
@@ -2409,7 +2448,7 @@ describe("AgentNativeTab", () => {
       },
     }));
     const createTab = mock(() => true);
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalTabHarness createTab={createTab}>
           <AgentNativeTab
@@ -2440,7 +2479,9 @@ describe("AgentNativeTab", () => {
         signIn: { kind: "browser-url" as const },
       },
     }));
-    render(<AgentNativeTab tabId="tab-codex-route" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-codex-route" data={identity("codex")} isActive />,
+    );
 
     expect(await screen.findByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Checking sign-in options…" }) === null).toBe(true);
@@ -2464,7 +2505,9 @@ describe("AgentNativeTab", () => {
         message: "Claude isn't signed in. Sign in to Claude to keep working.",
       },
     }));
-    render(<AgentNativeTab tabId="tab-claude-stale-renewal" data={identity("claude")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-claude-stale-renewal" data={identity("claude")} isActive />,
+    );
 
     expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
     await waitFor(() => expect(getAgentAccountLoginMock).toHaveBeenCalled());
@@ -2487,7 +2530,7 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input as never)),
       readiness,
     }));
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-claude-readiness" data={identity("claude")} isActive />,
     );
 
@@ -2517,7 +2560,7 @@ describe("AgentNativeTab", () => {
         },
       ],
     }));
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-claude-readiness-reply" data={identity("claude")} isActive />,
     );
     await screen.findByRole("region", { name: "Sign in to Claude" });
@@ -2553,7 +2596,9 @@ describe("AgentNativeTab", () => {
       });
     };
     try {
-      const first = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+      const first = renderInAppCommandScope(
+        <AgentNativeTab tabId={tabId} data={identity("grok")} isActive />,
+      );
       expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
       await flushSave();
       await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
@@ -2561,7 +2606,9 @@ describe("AgentNativeTab", () => {
       first.unmount();
       useNativeComposeStore.setState({ drafts: new Map() });
 
-      const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+      const remounted = renderInAppCommandScope(
+        <AgentNativeTab tabId={tabId} data={identity("grok")} isActive />,
+      );
       expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
       expect((await screen.findByRole("textbox")).textContent).toBe("Review the layout");
       await flushSave();
@@ -2587,7 +2634,9 @@ describe("AgentNativeTab", () => {
           }
         : { state: "ready" as const },
     }));
-    render(<AgentNativeTab tabId="tab-cursor-auth-recovery" data={identity("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-cursor-auth-recovery" data={identity("cursor")} isActive />,
+    );
 
     expect(await screen.findByText("Cursor authentication is required.")).toBeTruthy();
     const input = screen.getByRole("textbox");
@@ -2621,7 +2670,9 @@ describe("AgentNativeTab", () => {
           rejectPrompt = resolve;
         }),
     );
-    render(<AgentNativeTab tabId="tab-stable-rejection" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-stable-rejection" data={identity("codex")} isActive />,
+    );
 
     const input = await screen.findByRole("textbox");
     const dock = screen.getByTestId("compose-dock");
@@ -2638,7 +2689,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-unassigned" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -2668,7 +2719,7 @@ describe("AgentNativeTab", () => {
         },
       ],
     });
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     const start = await screen.findByRole("button", { name: "Start agent" });
     expect(start.hasAttribute("disabled")).toBe(false);
     fireEvent.click(start);
@@ -2701,7 +2752,7 @@ describe("AgentNativeTab", () => {
         { ...unrelated, id: "linked", annotationId: "design-context" },
       ],
     });
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove design context" }));
     expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).annotations).toEqual(
       [],
@@ -2727,7 +2778,7 @@ describe("AgentNativeTab", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-local-unassigned" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -2740,7 +2791,7 @@ describe("AgentNativeTab", () => {
     test(`a ${assigned ? "assigned" : "unassigned"} bug-report composer stages pasted images by report ID`, async () => {
       seedUnassignedDefaultCatalog();
       useEnvironmentStore.setState({ environments: [] });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={`bug-report-paste-${assigned}`}
           data={{
@@ -2779,7 +2830,7 @@ describe("AgentNativeTab", () => {
       (platform: AgentPlatform, prompt: string, options: unknown) => Promise<void>
     >(async () => undefined);
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab"
         data={{ environmentId: "coordinator:workspace-1:conversation-1", isLocal: true }}
@@ -2844,7 +2895,7 @@ describe("AgentNativeTab", () => {
       global: { ...useConfigStore.getState().config.global, ...patch },
     }));
     try {
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId="locked-favourites"
           data={{ environmentId: "env-1", platform: "claude" }}
@@ -2898,7 +2949,7 @@ describe("AgentNativeTab", () => {
     } as never);
     useEnvironmentStore.setState({ environments: [] });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab-favorites"
         data={{ environmentId: "coordinator:workspace-1:conversation-6", isLocal: true }}
@@ -2934,7 +2985,7 @@ describe("AgentNativeTab", () => {
     });
     useEnvironmentStore.setState({ environments: [] });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab-attachments"
         data={{ environmentId: "coordinator:workspace-1:conversation-5", isLocal: true }}
@@ -2971,7 +3022,7 @@ describe("AgentNativeTab", () => {
       throw new Error("Coordinator provider is unavailable");
     });
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab-failure"
         data={{ environmentId: "coordinator:workspace-1:conversation-2", isLocal: true }}
@@ -2997,7 +3048,7 @@ describe("AgentNativeTab", () => {
     });
     useEnvironmentStore.setState({ environments: [] });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab-empty"
         data={{ environmentId: "coordinator:workspace-1:conversation-3", isLocal: true }}
@@ -3025,7 +3076,7 @@ describe("AgentNativeTab", () => {
     });
     useEnvironmentStore.setState({ environments: [] });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab-note"
         data={{ environmentId: "coordinator:workspace-1:conversation-4", isLocal: true }}
@@ -3077,7 +3128,7 @@ describe("AgentNativeTab", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-unassigned-env" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -3112,7 +3163,7 @@ describe("AgentNativeTab", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-create-dialog-preselect"
         data={{ environmentId: "env-1" }}
@@ -3159,7 +3210,7 @@ describe("AgentNativeTab", () => {
       ],
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-create-dialog-provider"
         data={{ environmentId: "env-1" }}
@@ -3229,7 +3280,7 @@ describe("AgentNativeTab", () => {
       };
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     await expectUnassignedPicker("codex", "GPT-5.4");
 
     fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
@@ -3296,7 +3347,7 @@ describe("AgentNativeTab", () => {
     const tabId = "tab-one-shot-preselect";
     const sessionKey = createSessionKey("env-1", tabId);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <AgentNativeTab
         tabId={tabId}
         data={{ environmentId: "env-1" }}
@@ -3364,7 +3415,7 @@ describe("AgentNativeTab", () => {
       reasoningId: "medium",
     });
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <AgentNativeTab tabId={tabId} data={{ environmentId: "env-1" }} isActive />,
     );
     await expectUnassignedPicker("codex", "GPT-5.4");
@@ -3411,7 +3462,7 @@ describe("AgentNativeTab", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-unassigned-repo" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -3429,7 +3480,7 @@ describe("AgentNativeTab", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-unassigned-app" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -3518,7 +3569,7 @@ describe("AgentNativeTab", () => {
       };
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     expect(screen.queryByTestId("launch-mode-picker") === null).toBe(true);
     const profileButton = await screen.findByTestId("launch-execution-profile-picker");
@@ -3591,7 +3642,7 @@ describe("AgentNativeTab", () => {
       modelId: "codex-m",
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     const trigger = await screen.findByTestId("launch-approval-mode-picker");
     expect(trigger.getAttribute("aria-label")).toBe("Approvals: Full access");
@@ -3645,7 +3696,7 @@ describe("AgentNativeTab", () => {
       modelId: "codex-m",
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     fireEvent.pointerDown(await screen.findByTestId("launch-approval-mode-picker"));
     const onRequest = await screen.findByRole("menuitemradio", { name: "On request" });
@@ -3693,7 +3744,7 @@ describe("AgentNativeTab", () => {
       ],
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     const pill = await screen.findByTestId("compose-annotation-count");
     expect(pill.textContent).toContain("Design context");
@@ -3716,7 +3767,7 @@ describe("AgentNativeTab", () => {
       annotations: [{ id: "design-1", source: "design", text: "Design context", comment: "" }],
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Remove design context" }));
     expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).annotations).toEqual(
@@ -3764,7 +3815,7 @@ describe("AgentNativeTab", () => {
       modelId: "opencode/sonnet",
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     const profileButton = await screen.findByTestId("launch-execution-profile-picker");
     expect(profileButton.getAttribute("aria-label")).toBe("Mode: Build");
@@ -3854,7 +3905,7 @@ describe("AgentNativeTab", () => {
       reasoningId: "xhigh",
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-effort-platform-switch"
         data={{ environmentId: "env-1" }}
@@ -3924,7 +3975,7 @@ describe("AgentNativeTab", () => {
       reasoningId: "xhigh",
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-same-platform-switch"
         data={{ environmentId: "env-1" }}
@@ -3974,7 +4025,7 @@ describe("AgentNativeTab", () => {
       activeEnvironmentId: "env-1",
     });
 
-    render(<PaneBackedAgentNativeTab />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab />);
     fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
 
     const dialog = screen.getByRole("dialog");
@@ -4026,7 +4077,7 @@ describe("AgentNativeTab", () => {
   }
 
   async function openGrokResumePicker(tabId: string) {
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Grok Build/ }));
     return await screen.findByRole("dialog", { name: "Resume Session" });
@@ -4049,7 +4100,7 @@ describe("AgentNativeTab", () => {
           ] as never,
       );
       seedUnassignedResumeTab("tab-lineage");
-      render(<PaneBackedAgentNativeTab tabId="tab-lineage" />);
+      renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-lineage" />);
       fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
       fireEvent.click(
         within(screen.getByRole("dialog")).getByRole("button", {
@@ -4190,7 +4241,9 @@ describe("AgentNativeTab", () => {
       },
     ]);
 
-    render(<AgentNativeTab tabId="tab-cached-models" data={{ environmentId: "env-1" }} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-cached-models" data={{ environmentId: "env-1" }} isActive />,
+    );
 
     await waitFor(() =>
       expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "opencode"),
@@ -4239,7 +4292,9 @@ describe("AgentNativeTab", () => {
       },
     ]);
 
-    render(<AgentNativeTab tabId="tab-cursor-models" data={{ environmentId: "env-1" }} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-cursor-models" data={{ environmentId: "env-1" }} isActive />,
+    );
 
     await waitFor(() =>
       expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "cursor"),
@@ -4284,7 +4339,9 @@ describe("AgentNativeTab", () => {
       },
     ]);
 
-    render(<AgentNativeTab tabId="tab-pi-models" data={{ environmentId: "env-1" }} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-pi-models" data={{ environmentId: "env-1" }} isActive />,
+    );
 
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi"));
     expect((await screen.findByTitle(/Choose model/)).textContent).toContain("GPT-5.4");
@@ -4300,7 +4357,7 @@ describe("AgentNativeTab", () => {
       .updateDraft(createSessionKey("env-1", "tab-pi-strict"), { platform: "pi" });
     getNativeAgentModelCatalogMock.mockImplementation(async () => []);
 
-    render(
+    renderInAppCommandScope(
       <StrictMode>
         <AgentNativeTab tabId="tab-pi-strict" data={{ environmentId: "env-1" }} isActive />
       </StrictMode>,
@@ -4333,7 +4390,9 @@ describe("AgentNativeTab", () => {
     });
 
     try {
-      render(<AgentNativeTab tabId="tab-pi-retry" data={{ environmentId: "env-1" }} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-pi-retry" data={{ environmentId: "env-1" }} isActive />,
+      );
 
       await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(2));
       await waitFor(() =>
@@ -4389,7 +4448,7 @@ describe("AgentNativeTab", () => {
       },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-platform-switch" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -4450,7 +4509,7 @@ describe("AgentNativeTab", () => {
       ensureAgent === "pi" ? [piModel] : [cursorModel],
     );
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-first-use-merge" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -4489,7 +4548,7 @@ describe("AgentNativeTab", () => {
       .updateDraft(createSessionKey("env-1", "tab-first-use-empty"), { platform: "pi" });
     getNativeAgentModelCatalogMock.mockImplementation(async () => []);
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-first-use-empty" data={{ environmentId: "env-1" }} isActive />,
     );
 
@@ -4507,7 +4566,9 @@ describe("AgentNativeTab", () => {
       .updateDraft(createSessionKey("env-1", "tab-grok-focus"), { platform: "grok" });
     getNativeAgentModelCatalogMock.mockImplementation(async () => []);
 
-    render(<AgentNativeTab tabId="tab-grok-focus" data={{ environmentId: "env-1" }} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-grok-focus" data={{ environmentId: "env-1" }} isActive />,
+    );
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -4537,7 +4598,7 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-opencode-in-flight" data={{ environmentId: "env-1" }} isActive />,
     );
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
@@ -4573,7 +4634,7 @@ describe("AgentNativeTab", () => {
           ];
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-opencode-refresh" data={{ environmentId: "env-1" }} isActive />,
     );
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
@@ -4622,7 +4683,7 @@ describe("AgentNativeTab", () => {
       attachments: [file, image],
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-attachment-switch" data={{ environmentId: "env-1" }} isActive />,
     );
     // Claude takes both, so nothing is reconciled away.
@@ -4727,7 +4788,7 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      const view = render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
+      const view = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
       if (trigger === "button")
         fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
       else fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
@@ -4770,14 +4831,16 @@ describe("AgentNativeTab", () => {
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(true);
       // Return while dispatch is pending, then leave again. Rehydration must not
       // send it twice or enable another send before the first acknowledgement.
-      const returned = render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
+      const returned = renderInAppCommandScope(
+        <PaneBackedAgentNativeTab tabId="tab-first-prompt" />,
+      );
       expect(screen.queryByTitle("Send") === null).toBe(true);
       returned.unmount();
       releaseDispatch();
       await waitFor(() =>
         expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
       );
-      render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
+      renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
       expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
     },
@@ -4799,12 +4862,12 @@ describe("AgentNativeTab", () => {
       platform: "claude",
     });
 
-    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     first.unmount();
 
-    const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const remounted = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     // A content write that drops requestId is the settlement-mismatch case:
     // submissionPending must still clear or the remounted controller stays locked.
     useNativeComposeStore.setState((state) => {
@@ -4876,12 +4939,12 @@ describe("AgentNativeTab", () => {
         platform: "claude",
       });
 
-      const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
       fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
       await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
       first.unmount();
 
-      const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      const remounted = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(true);
       releaseDispatch();
 
@@ -4922,7 +4985,7 @@ describe("AgentNativeTab", () => {
       requestId: "first-prompt-request-1",
     });
 
-    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
@@ -4937,7 +5000,7 @@ describe("AgentNativeTab", () => {
     first.unmount();
     useNativeComposeStore.setState({ drafts: new Map() });
 
-    const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const remounted = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() =>
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
         text: "Survive a renderer restart",
@@ -4973,7 +5036,7 @@ describe("AgentNativeTab", () => {
       platform: "claude",
     });
 
-    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     releaseDispatch();
@@ -4999,7 +5062,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() =>
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
     );
@@ -5022,7 +5085,7 @@ describe("AgentNativeTab", () => {
       initialPrompt: "Create a design matching this screenshot",
       isActive: true,
     };
-    const view = render(<AgentNativeTab {...props} />);
+    const view = renderInAppCommandScope(<AgentNativeTab {...props} />);
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     expect(dispatchNativeAgentIntentMock.mock.calls[0]![0]).toMatchObject({
       agent: "claude",
@@ -5035,7 +5098,7 @@ describe("AgentNativeTab", () => {
       ),
     );
     view.unmount();
-    render(<AgentNativeTab {...props} initialPrompt={undefined} />);
+    renderInAppCommandScope(<AgentNativeTab {...props} initialPrompt={undefined} />);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -5079,7 +5142,7 @@ describe("AgentNativeTab", () => {
         },
       ) => Promise<void>
     >(async () => undefined);
-    const view = render(
+    const view = renderInAppCommandScope(
       <AgentNativeTab
         tabId={tabId}
         data={{ environmentId, isLocal: true }}
@@ -5132,7 +5195,7 @@ describe("AgentNativeTab", () => {
       throw new Error("temporary save failure");
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(
@@ -5176,7 +5239,9 @@ describe("AgentNativeTab", () => {
     });
     const tabId = "tab-rename-durable";
     const sessionKey = createSessionKey("env-1", tabId);
-    const view = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const view = renderInAppCommandScope(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Keep this first prompt" } });
     const sendButton = await screen.findByTitle("Send");
@@ -5196,7 +5261,9 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
       "Keep this first prompt",
     );
-    const remounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const remounted = renderInAppCommandScope(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
     expect((await screen.findByRole("textbox")).textContent).toBe("Keep this first prompt");
     remounted.unmount();
 
@@ -5223,7 +5290,7 @@ describe("AgentNativeTab", () => {
       return { outcome: "accepted", requestId: input.requestId };
     });
 
-    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Move the dashboard pages" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -5268,7 +5335,7 @@ describe("AgentNativeTab", () => {
     // The projection poll is scheduled by the read coordinator; a fake clock
     // drives one tick of the active (500 ms) cadence instead of waiting for it.
     const { clock } = fakeReadCoordinator();
-    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Move the dashboard pages" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -5305,7 +5372,7 @@ describe("AgentNativeTab", () => {
       throw new Error("The connection dropped");
     });
 
-    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -5340,7 +5407,7 @@ describe("AgentNativeTab", () => {
     // The projection poll is scheduled by the read coordinator; a fake clock
     // drives one tick of the active (500 ms) cadence instead of waiting for it.
     const { clock } = fakeReadCoordinator();
-    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
 
     // The record exists and locks the composer the moment it is persisted, but
     // the backend may still confirm it against the provider, so no decision is
@@ -5411,7 +5478,9 @@ describe("AgentNativeTab", () => {
       return { outcome: "rejected" as const, error: lost, requestIdRetired: true as const };
     });
 
-    const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const mounted = renderInAppCommandScope(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Retry send" }));
     await waitFor(() => expect(retryNativeAgentDispatchMock).toHaveBeenCalledTimes(1));
     mounted.unmount();
@@ -5419,7 +5488,7 @@ describe("AgentNativeTab", () => {
     await waitFor(() =>
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionError).toBe(lost),
     );
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
 
     // Told plainly, never shown as delivered, and the text is kept to resend.
     expect(await screen.findByText(lost)).toBeTruthy();
@@ -5482,7 +5551,9 @@ describe("AgentNativeTab", () => {
       retired = true;
       return { outcome: "rejected", error: warning, requestIdRetired: true };
     });
-    const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const mounted = renderInAppCommandScope(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
     fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
     await screen.findByText(warning);
     await waitFor(() =>
@@ -5495,7 +5566,7 @@ describe("AgentNativeTab", () => {
       useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation,
     ).toBeUndefined();
     mounted.unmount();
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     expect(await screen.findByText(warning)).toBeTruthy();
     await waitFor(() =>
       expect(
@@ -5544,7 +5615,9 @@ describe("AgentNativeTab", () => {
     }));
 
     // The tab was not mounted when it happened; it learns from the snapshot.
-    const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const mounted = renderInAppCommandScope(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
     expect(await screen.findByText(lost)).toBeTruthy();
     await waitFor(() =>
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toBeUndefined(),
@@ -5560,7 +5633,7 @@ describe("AgentNativeTab", () => {
 
     // Idempotent across a remount: still shown, still no toast, still no id.
     mounted.unmount();
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     expect(await screen.findByText(lost)).toBeTruthy();
     expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(false);
 
@@ -5597,7 +5670,7 @@ describe("AgentNativeTab", () => {
       },
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     // The notice still tells the user; the unrelated draft keeps its id.
     await waitFor(() =>
       expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(true),
@@ -5624,7 +5697,9 @@ describe("AgentNativeTab", () => {
       return { outcome: "accepted" as const, requestId: "recoverable-slow-retry" };
     });
 
-    render(<AgentNativeTab tabId="tab-slow-retry" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-slow-retry" data={identity("codex")} isActive />,
+    );
     const retry = await screen.findByRole("button", { name: "Retry send" });
     fireEvent.click(retry);
 
@@ -5675,7 +5750,7 @@ describe("AgentNativeTab", () => {
       };
     });
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -5714,7 +5789,7 @@ describe("AgentNativeTab", () => {
       };
     });
 
-    render(<AgentNativeTab tabId={tabId} data={identity("opencode")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("opencode")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Make it narrower" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -5776,7 +5851,7 @@ describe("AgentNativeTab", () => {
       };
     });
 
-    render(<AgentNativeTab tabId={tabId} data={identity("opencode")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("opencode")} isActive />);
     await screen.findByText("An earlier answer");
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Make it narrower" } });
@@ -5806,7 +5881,7 @@ describe("AgentNativeTab", () => {
       error: "The response was lost",
     }));
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId={tabId}
         data={{ ...identity("claude"), sessionId: undefined }}
@@ -5862,7 +5937,9 @@ describe("AgentNativeTab", () => {
       error: "The response was lost",
     }));
 
-    const first = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const first = renderInAppCommandScope(
+      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    );
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -5889,7 +5966,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
 
     await waitFor(() =>
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
@@ -5918,7 +5995,7 @@ describe("AgentNativeTab", () => {
       error: "The response was lost",
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -5960,7 +6037,7 @@ describe("AgentNativeTab", () => {
       error: "The response was lost",
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -6014,7 +6091,7 @@ describe("AgentNativeTab", () => {
       error: "The response was lost",
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -6054,7 +6131,7 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -6131,7 +6208,7 @@ describe("AgentNativeTab", () => {
           }),
       );
 
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={tabId}
           data={{ ...identity("claude"), sessionId: undefined }}
@@ -6224,7 +6301,7 @@ describe("AgentNativeTab", () => {
             releaseDispatch = () => resolve({ outcome: "accepted", requestId: input.requestId });
           }),
       );
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={tabId}
           data={{ ...identity("claude"), sessionId: undefined }}
@@ -6307,7 +6384,7 @@ describe("AgentNativeTab", () => {
       origin: "provider",
     }));
     const props = { tabId, data: { ...identity("claude"), sessionId: undefined }, isActive: true };
-    const view = render(<AgentNativeTab {...props} />);
+    const view = renderInAppCommandScope(<AgentNativeTab {...props} />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Free up some disk space" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -6324,7 +6401,7 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input)),
       sessionId: "new-claude-session",
     }));
-    const remounted = render(<AgentNativeTab {...props} />);
+    const remounted = renderInAppCommandScope(<AgentNativeTab {...props} />);
     await waitFor(() =>
       expect(
         useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation,
@@ -6334,7 +6411,7 @@ describe("AgentNativeTab", () => {
     expect(latestRenderedMessageActions.size).toBe(0);
     // A second remount proves adoption lives in the draft, beyond local state.
     remounted.unmount();
-    render(<AgentNativeTab {...props} />);
+    renderInAppCommandScope(<AgentNativeTab {...props} />);
     await screen.findByRole("textbox");
     const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
     act(() =>
@@ -6371,7 +6448,7 @@ describe("AgentNativeTab", () => {
         requestId: input.requestId,
         origin: "provider",
       }));
-      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
       fireEvent.keyDown(input, { key: "Enter" });
@@ -6431,7 +6508,7 @@ describe("AgentNativeTab", () => {
       error: "The response was lost",
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -6482,7 +6559,7 @@ describe("AgentNativeTab", () => {
       error: "The response was lost",
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -6528,7 +6605,7 @@ describe("AgentNativeTab", () => {
       throw new Error("temporary save failure");
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Codex/ }));
 
@@ -6562,7 +6639,9 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId="tab-mail-carrier" data={identity("claude")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-mail-carrier" data={identity("claude")} isActive />,
+    );
     expect(await screen.findByText("Visible response")).toBeTruthy();
     const tile = screen.getByRole("button", { name: /Sender agent/ });
     expect(tile.getAttribute("aria-expanded")).toBe("false");
@@ -6592,7 +6671,7 @@ describe("AgentNativeTab", () => {
         },
       ],
     }));
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <AgentNativeTab tabId="unreadable-mail" data={identity("claude")} isActive />,
     );
     expect(await screen.findByText(/could not be read for display here/)).toBeTruthy();
@@ -6614,7 +6693,9 @@ describe("AgentNativeTab", () => {
         },
       ],
     }));
-    render(<AgentNativeTab tabId="tag-mention" data={identity("claude")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tag-mention" data={identity("claude")} isActive />,
+    );
     expect(await screen.findByText(/is what I see. Why/)).toBeTruthy();
   });
 
@@ -6645,7 +6726,7 @@ describe("AgentNativeTab", () => {
         ],
       }));
 
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <AgentNativeTab tabId={`tab-mail-${platform}`} data={identity(platform)} isActive />,
       );
       expect(await screen.findByText("Worker report body")).toBeTruthy();
@@ -6661,7 +6742,9 @@ describe("AgentNativeTab", () => {
 
   for (const platform of AGENT_PLATFORMS) {
     test(`routes ${platform} through the shared authoritative projection`, async () => {
-      render(<AgentNativeTab tabId={`tab-${platform}`} data={identity(platform)} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId={`tab-${platform}`} data={identity(platform)} isActive />,
+      );
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
       expect(adoptNativeAgentSessionMock).toHaveBeenCalledWith(
@@ -6685,7 +6768,7 @@ describe("AgentNativeTab", () => {
     // Multi Review hands its consolidation session over as a Build-mode tab, so
     // the mode has to reach adoption; adopting without it would leave the fix
     // agent in whatever mode consolidation left behind (plan).
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-resume-controls"
         data={identity("claude")}
@@ -6712,7 +6795,7 @@ describe("AgentNativeTab", () => {
       agentSettings: { platforms: { claude: { model: "configured-default" } } },
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-resume-preserve-controls" data={identity("claude")} isActive />,
     );
 
@@ -6734,7 +6817,7 @@ describe("AgentNativeTab", () => {
       agentSettings: { platforms: { cursor: { fastMode: true } } },
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-cursor-fast-default"
         data={{
@@ -6772,7 +6855,7 @@ describe("AgentNativeTab", () => {
       platform: "claude",
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
@@ -6787,7 +6870,7 @@ describe("AgentNativeTab", () => {
       enabledAgentPlatforms: ["opencode"],
       agentSettings: { platforms: { opencode: { model: "opencode-go/gpt-5.6-luna" } } },
     });
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-opencode-explicit"
         data={freshTab("opencode")}
@@ -6818,7 +6901,7 @@ describe("AgentNativeTab", () => {
       },
     }));
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-opencode-substituted" data={freshTab("opencode")} isActive />,
     );
 
@@ -6848,7 +6931,9 @@ describe("AgentNativeTab", () => {
       };
     });
 
-    render(<AgentNativeTab tabId="tab-cursor-pricing" data={identity("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-cursor-pricing" data={identity("cursor")} isActive />,
+    );
 
     const badge = await screen.findByTestId("composer-selection-pricing");
     expect(badge.textContent).toBe("Max mode");
@@ -6864,7 +6949,9 @@ describe("AgentNativeTab", () => {
       },
     });
 
-    render(<AgentNativeTab tabId="tab-claude-sdk-defaults" data={freshTab("claude")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-claude-sdk-defaults" data={freshTab("claude")} isActive />,
+    );
 
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
     expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -6891,7 +6978,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-claude-chrome-inactive" data={freshTab("claude")} isActive />,
     );
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
@@ -6923,7 +7010,7 @@ describe("AgentNativeTab", () => {
     useNativeAgentProjectionStore.getState().reset();
     getNativeAgentProjectionMock.mockClear();
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-claude-chrome-inactive" data={identity("claude")} isActive />,
     );
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
@@ -6948,7 +7035,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-claude-hidden-parameters" data={freshTab("claude")} isActive />,
     );
 
@@ -7012,7 +7099,7 @@ describe("AgentNativeTab", () => {
       composerControls: claudeSessionControls,
     }));
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId={`tab-claude-${kind}-parameters`}
         data={identity("claude")}
@@ -7035,7 +7122,7 @@ describe("AgentNativeTab", () => {
       composerControls: codexParameterControls,
     }));
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId={`tab-codex-${kind}-parameters`}
         data={identity("codex")}
@@ -7071,7 +7158,9 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId="tab-cursor-parameters" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-cursor-parameters" data={freshTab("cursor")} isActive />,
+    );
 
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
     expect(screen.getByText(/Thinking: Adaptive/)).toBeTruthy();
@@ -7098,7 +7187,7 @@ describe("AgentNativeTab", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-cursor-unsupported-fast-default"
         data={{
@@ -7119,7 +7208,7 @@ describe("AgentNativeTab", () => {
   test("consumes a mode-only launch option before a resumed tab remounts", async () => {
     const tabId = "tab-mode-only";
     seedAssignedPane(tabId, { initialConversationMode: "build" });
-    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
       const tab = usePaneLayoutStore
@@ -7134,7 +7223,7 @@ describe("AgentNativeTab", () => {
 
     first.unmount();
     adoptNativeAgentSessionMock.mockClear();
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
     expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("sessionMode");
   });
@@ -7146,7 +7235,7 @@ describe("AgentNativeTab", () => {
     // for, so the second mount must adopt without it.
     const tabId = "tab-profile-only";
     seedAssignedPane(tabId, { initialExecutionProfileId: "plan" });
-    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
       const tab = usePaneLayoutStore
@@ -7161,7 +7250,7 @@ describe("AgentNativeTab", () => {
 
     first.unmount();
     adoptNativeAgentSessionMock.mockClear();
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
     expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).not.toHaveProperty(
       "executionProfileId",
@@ -7171,7 +7260,7 @@ describe("AgentNativeTab", () => {
   test("consumes an explicit false fast-mode option", async () => {
     const tabId = "tab-fast-only";
     seedAssignedPane(tabId, { initialFastMode: false });
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
       const tab = usePaneLayoutStore
@@ -7186,7 +7275,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("sends a resumed tab's opening prompt once it is in the session it asked for", async () => {
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-resume-prompt"
         data={identity("claude")}
@@ -7233,7 +7322,7 @@ describe("AgentNativeTab", () => {
               finish = resolve;
             }),
         );
-        const view = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+        const view = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
         await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
         expect(dispatchNativeAgentIntentMock.mock.calls[0]![0]).toMatchObject({
           requestId: `initial-prompt:env-1:${tabId}`,
@@ -7291,7 +7380,7 @@ describe("AgentNativeTab", () => {
         turn: { phase },
       };
     });
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-opening-running"
         data={identity("codex")}
@@ -7334,7 +7423,7 @@ describe("AgentNativeTab", () => {
       sessionId: "a-replacement-session",
     }));
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-resume-substituted"
         data={identity("claude")}
@@ -7359,7 +7448,9 @@ describe("AgentNativeTab", () => {
         } as never,
       ],
     });
-    render(<AgentNativeTab tabId="tab-setup" data={identity("claude")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-setup" data={identity("claude")} isActive />,
+    );
     expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
 
@@ -7375,7 +7466,7 @@ describe("AgentNativeTab", () => {
 
   test("does not apply worker setup gating to a coordinator runtime", async () => {
     useEnvironmentStore.setState({ environments: [] });
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-tab"
         data={{
@@ -7411,7 +7502,7 @@ describe("AgentNativeTab", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="coordinator-defaults-tab"
         data={{
@@ -7440,7 +7531,7 @@ describe("AgentNativeTab", () => {
       // The destination side used to gate on the three legacy providers, so a
       // Cursor or Grok tab silently dropped the transfer it was opened to carry
       // and never even asked for it.
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={`tab-handoff-${platform}`}
           data={identity(platform)}
@@ -7535,7 +7626,7 @@ describe("AgentNativeTab", () => {
       activeEnvironmentId: "env-1",
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     expect(await screen.findByText("Investigate the layout")).toBeTruthy();
     expect(screen.getByText("I found three concrete gaps")).toBeTruthy();
@@ -7607,7 +7698,7 @@ describe("AgentNativeTab", () => {
       nativeAgentData: identity("cursor"),
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     expect(await screen.findByText("Investigate the layout")).toBeTruthy();
     const input = await screen.findByRole("textbox");
@@ -7659,7 +7750,7 @@ describe("AgentNativeTab", () => {
       nativeAgentData: identity("cursor"),
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     expect(await screen.findByText("Investigate the layout")).toBeTruthy();
     const input = await screen.findByRole("textbox");
@@ -7713,7 +7804,7 @@ describe("AgentNativeTab", () => {
       nativeAgentData: { ...identity("cursor"), sessionId: "cursor-missing" },
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
@@ -7803,7 +7894,7 @@ describe("AgentNativeTab", () => {
       nativeAgentData: identity("cursor"),
     });
 
-    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const first = renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     expect(await screen.findByText("Investigate the layout")).toBeTruthy();
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Keep going in Cursor" } });
@@ -7816,7 +7907,7 @@ describe("AgentNativeTab", () => {
     );
     first.unmount();
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
     expect(await screen.findByText("Investigate the layout")).toBeTruthy();
     expect(screen.getByText("I found three concrete gaps")).toBeTruthy();
     expect(screen.queryByText((text) => text.includes("orkestrator-handoff")) === null).toBe(true);
@@ -7863,7 +7954,7 @@ describe("AgentNativeTab", () => {
       nativeAgentData: identity("cursor"),
     });
 
-    render(
+    renderInAppCommandScope(
       <SharedNativeAgentController
         tabId={tabId}
         data={identity("cursor")}
@@ -7880,7 +7971,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("renders the coordinator hint through the real assigned controller", async () => {
-    render(
+    renderInAppCommandScope(
       <SharedNativeAgentController
         tabId="assigned-hint"
         data={identity("codex")}
@@ -7897,7 +7988,7 @@ describe("AgentNativeTab", () => {
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
     // A persisted record can name a platform this build does not ship. Failing
     // here would throw out of the pane and take its sibling tabs down with it.
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-unknown"
         data={{
@@ -7912,7 +8003,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not resolve a platform through the prototype chain", async () => {
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-proto"
         data={{
@@ -7927,7 +8018,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("reconnects the shared controller when a tab's platform changes", async () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-swap" data={identity("codex")} isActive />,
     );
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
@@ -7942,7 +8033,9 @@ describe("AgentNativeTab", () => {
   });
 
   test("does not read or touch a provider projection while its tab is inactive", async () => {
-    render(<AgentNativeTab tabId="tab-inactive" data={identity("codex")} isActive={false} />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-inactive" data={identity("codex")} isActive={false} />,
+    );
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
@@ -7977,7 +8070,7 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
 
     // The pending read is only verifying an already-authoritative empty
@@ -8022,7 +8115,7 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
 
     expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
@@ -8039,7 +8132,7 @@ describe("AgentNativeTab", () => {
   test.each(["codex", "cursor"] as const)(
     "does not report an inactive %s tab as failed or refreshing before reading",
     async (platform) => {
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={`tab-inactive-${platform}`}
           data={identity(platform)}
@@ -8060,7 +8153,9 @@ describe("AgentNativeTab", () => {
   test("reports a settled read that found no session as a failed connection", async () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
 
-    render(<AgentNativeTab tabId="tab-empty-read" data={identity("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-empty-read" data={identity("cursor")} isActive />,
+    );
 
     // The backend answered, and answered with nothing. That is recoverable
     // state the user has to be able to see and retry, not a pending connection.
@@ -8076,7 +8171,9 @@ describe("AgentNativeTab", () => {
       turn: { phase: "recovering" as const },
     }));
 
-    render(<AgentNativeTab tabId="tab-pi-recovering" data={identity("pi")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-pi-recovering" data={identity("pi")} isActive />,
+    );
 
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
     // The joined read already supplied the authoritative empty transcript.
@@ -8112,7 +8209,9 @@ describe("AgentNativeTab", () => {
     // The projection poll is scheduled by the read coordinator; a fake clock
     // drives one tick of the active (500 ms) cadence instead of waiting for it.
     const { clock } = fakeReadCoordinator();
-    render(<AgentNativeTab tabId="tab-pi-given-up" data={identity("pi")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-pi-given-up" data={identity("pi")} isActive />,
+    );
 
     await waitFor(() => expect(reads).toBe(1));
     await act(() => clock.advance(500));
@@ -8142,7 +8241,9 @@ describe("AgentNativeTab", () => {
     // The projection poll is scheduled by the read coordinator; a fake clock
     // drives one tick of the active (500 ms) cadence instead of waiting for it.
     const { clock } = fakeReadCoordinator();
-    render(<AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />,
+    );
 
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(1));
     await act(() => clock.advance(500));
@@ -8185,7 +8286,7 @@ describe("AgentNativeTab", () => {
       expect(prompt.closest(".opacity-0") === null).toBe(true);
       expect(screen.getAllByText("Review the current changes")).toHaveLength(1);
     };
-    const { container, rerender } = render(
+    const { container, rerender } = renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-new-cursor"
         data={freshTab("cursor")}
@@ -8284,7 +8385,7 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
     ensureNativeAgentSessionMock.mockImplementation(() => new Promise(() => {}));
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-new-cursor-no-prompt" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
@@ -8333,7 +8434,9 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />,
+    );
 
     expect(await screen.findByText("Add a dark mode toggle")).toBeTruthy();
     expect(screen.getByText("Starting Cursor Agent…")).toBeTruthy();
@@ -8414,7 +8517,7 @@ describe("AgentNativeTab", () => {
         return { outcome: "rejected", error: "Opening dispatch rejected" };
       });
       const tabId = `startup-failure-${failure}`;
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <AgentNativeTab
           tabId={tabId}
           data={freshTab("cursor")}
@@ -8454,7 +8557,9 @@ describe("AgentNativeTab", () => {
       ],
     });
 
-    render(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />,
+    );
 
     expect(await screen.findByText("Waiting for setup scripts to complete...")).toBeTruthy();
     expect(screen.getByTestId("setup-pending-prompt").textContent).toContain(
@@ -8468,7 +8573,7 @@ describe("AgentNativeTab", () => {
     // transcript the tab has nothing to protect: shimmering over a composer
     // that invites a message the session cannot accept is the wrong answer, so
     // it waits on the pulsing logo instead.
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-new-cursor-empty-reconnect" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
@@ -8497,7 +8602,7 @@ describe("AgentNativeTab", () => {
     // accessory row, so a background refresh over an empty transcript must not
     // swallow the one control that recovers the tab. The banner has no message
     // to protect, but it is actionable content and so counts as establishment.
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-new-cursor-auth-reconnect" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
@@ -8527,7 +8632,7 @@ describe("AgentNativeTab", () => {
     // behind the connecting logo would make the turn unreachable while the
     // background refresh completes.
     renderVirtualizedMessages = true;
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-new-cursor-question-reconnect"
         data={freshTab("cursor")}
@@ -8555,7 +8660,7 @@ describe("AgentNativeTab", () => {
     // Establishment is derived from live content, not a latch, so the wait it
     // shows must be escapable: a connect that settles has to hand the composer
     // back rather than leaving the tab stuck on the logo.
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-new-cursor-empty-recover" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
@@ -8590,7 +8695,9 @@ describe("AgentNativeTab", () => {
     // refresh layout here would shimmer over an empty pane that has no session
     // behind it yet.
     renderVirtualizedMessages = true;
-    render(<AgentNativeTab tabId="tab-new-cursor-cleared" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-new-cursor-cleared" data={freshTab("cursor")} isActive />,
+    );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
     const existingRow = {
@@ -8635,7 +8742,7 @@ describe("AgentNativeTab", () => {
     // establishment logo.
     renderVirtualizedMessages = true;
     const tabId = "tab-new-cursor-synthetic";
-    render(<AgentNativeTab tabId={tabId} data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={freshTab("cursor")} isActive />);
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
     act(() => {
@@ -8662,7 +8769,9 @@ describe("AgentNativeTab", () => {
     // establishment rather than refresh. It must not fall back to session
     // refresh copy that names a session which does not exist yet.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
-    render(<AgentNativeTab tabId="tab-new-cursor-retry" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-new-cursor-retry" data={freshTab("cursor")} isActive />,
+    );
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
 
     let settleRead: ((value: unknown) => void) | undefined;
@@ -8690,7 +8799,9 @@ describe("AgentNativeTab", () => {
     // Nothing in the props tells this reconnect apart from the first one, which
     // is why the loaded transcript is what carries the distinction.
     renderVirtualizedMessages = true;
-    render(<AgentNativeTab tabId="tab-new-cursor-reconnect" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-new-cursor-reconnect" data={freshTab("cursor")} isActive />,
+    );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
     const existingRow = {
@@ -8738,7 +8849,9 @@ describe("AgentNativeTab", () => {
     // drives the registered production poll deterministically.
     const { clock } = installFakeReadCoordinator();
     try {
-      render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />,
+      );
       await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
 
       await deliverResourceChange({
@@ -8780,7 +8893,7 @@ describe("AgentNativeTab", () => {
     // drives it instead of waiting out its 500/1,500 ms cadence.
     const { clock } = installFakeReadCoordinator();
     try {
-      render(<NativeSessionIdentityHarness platform="cursor" />);
+      renderInAppCommandScope(<NativeSessionIdentityHarness platform="cursor" />);
       await waitFor(() =>
         expect(screen.getByTestId("runtime-error").textContent).toBe("bridge refused the session"),
       );
@@ -8822,7 +8935,9 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId="tab-new-cursor-reconcile" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-new-cursor-reconcile" data={freshTab("cursor")} isActive />,
+    );
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
     getNativeAgentProjectionMock.mockClear();
 
@@ -8874,7 +8989,7 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-overlap" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(settles.length).toBe(1));
@@ -8932,7 +9047,7 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />,
     );
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
@@ -8963,7 +9078,9 @@ describe("AgentNativeTab", () => {
   test("reports a created session that still reads empty as a failed connection", async () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
 
-    render(<AgentNativeTab tabId="tab-new-cursor-empty" data={freshTab("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-new-cursor-empty" data={freshTab("cursor")} isActive />,
+    );
 
     // Holding the empty read back is scoped to session creation alone. Once
     // `ensure` has returned there is a session to resolve, so an empty read is
@@ -8977,7 +9094,9 @@ describe("AgentNativeTab", () => {
       throw new Error("bridge refused the session");
     });
 
-    render(<AgentNativeTab tabId="tab-connect-error" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-connect-error" data={identity("codex")} isActive />,
+    );
 
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
     expect(screen.getByText("bridge refused the session")).toBeTruthy();
@@ -8989,7 +9108,7 @@ describe("AgentNativeTab", () => {
       throw new Error("provider session was not found");
     });
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-strict-resume"
         data={{ ...identity("codex"), requireExistingResumeSession: true }}
@@ -9007,7 +9126,9 @@ describe("AgentNativeTab", () => {
       throw new Error("provider session was not found");
     });
 
-    render(<AgentNativeTab tabId="tab-fallback-resume" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-fallback-resume" data={identity("codex")} isActive />,
+    );
 
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
@@ -9037,7 +9158,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
 
     const report = await screen.findByText("Structured review report");
     const prompt = screen.getByText(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
@@ -9083,7 +9204,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
 
     const reports = await screen.findAllByText("Structured review report");
     expect(reports).toHaveLength(1);
@@ -9135,7 +9256,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
 
     const reports = await screen.findAllByText("Structured review report");
     expect(reports).toHaveLength(1);
@@ -9177,7 +9298,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
 
     expect(await screen.findByText("Please also fix the tests.")).toBeTruthy();
     expect(screen.queryByText("Structured review report") === null).toBe(true);
@@ -9225,7 +9346,7 @@ describe("AgentNativeTab", () => {
       activeEnvironmentId: "env-1",
     });
 
-    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() =>
       expect(recoverMultiReviewAddressFindingsSessionMock).toHaveBeenCalledTimes(1),
@@ -9249,7 +9370,9 @@ describe("AgentNativeTab", () => {
 
   test("returns to connecting after Retry on an empty session read", async () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
-    render(<AgentNativeTab tabId="tab-retry-empty" data={identity("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-retry-empty" data={identity("cursor")} isActive />,
+    );
     await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy());
 
     let settleRetry: (() => void) | undefined;
@@ -9284,7 +9407,9 @@ describe("AgentNativeTab", () => {
     adoptNativeAgentSessionMock.mockImplementation(async () => {
       throw new Error("bridge refused the session");
     });
-    render(<AgentNativeTab tabId="tab-retry-connect" data={identity("codex")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-retry-connect" data={identity("codex")} isActive />,
+    );
     await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy());
 
     let settleRetry: (() => void) | undefined;
@@ -9316,7 +9441,7 @@ describe("AgentNativeTab", () => {
 
   test("does not keep a failed connection after the tab identity changes", async () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <AgentNativeTab tabId="tab-identity-swap" data={identity("cursor")} isActive />,
     );
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
@@ -9353,7 +9478,9 @@ describe("AgentNativeTab", () => {
       return null as never;
     });
 
-    const { rerender } = render(<NativeSessionIdentityHarness platform="cursor" />);
+    const { rerender } = renderInAppCommandScope(
+      <NativeSessionIdentityHarness platform="cursor" />,
+    );
     await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"));
 
     rerender(<NativeSessionIdentityHarness platform="opencode" />);
@@ -9367,7 +9494,9 @@ describe("AgentNativeTab", () => {
   test("forgets a completed read when the hook is no longer allowed to read", async () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
 
-    const { rerender } = render(<NativeSessionIdentityHarness platform="cursor" />);
+    const { rerender } = renderInAppCommandScope(
+      <NativeSessionIdentityHarness platform="cursor" />,
+    );
     await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"));
 
     rerender(<NativeSessionIdentityHarness platform="cursor" enabled={false} />);
@@ -9384,7 +9513,7 @@ describe("AgentNativeTab", () => {
       .mockImplementationOnce(async () => staleProjection)
       .mockImplementation(defaultProjection);
 
-    render(<NativeSessionHarness />);
+    renderInAppCommandScope(<NativeSessionHarness />);
     await waitFor(() =>
       expect(screen.getByTestId("hook-session-id").textContent).toBe("claude-session"),
     );
@@ -9448,7 +9577,7 @@ describe("AgentNativeTab", () => {
       revision: 2,
     }));
 
-    render(<NativeSessionHarness />);
+    renderInAppCommandScope(<NativeSessionHarness />);
     expect(screen.getByTestId("hook-message").textContent).toBe("stale transcript");
     await waitFor(() =>
       expect(screen.getByTestId("hook-message").textContent).toBe("latest transcript"),
@@ -9506,7 +9635,7 @@ describe("AgentNativeTab", () => {
 
   test("coalesces a resource invalidation into one trailing projection read", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
-    render(<NativeSessionHarness />);
+    renderInAppCommandScope(<NativeSessionHarness />);
     await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
@@ -9535,7 +9664,7 @@ describe("AgentNativeTab", () => {
 
   test("drops the queued reconciliation read when the tab stops being active", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
-    const { rerender } = render(<NativeSessionHarness />);
+    const { rerender } = renderInAppCommandScope(<NativeSessionHarness />);
     await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
@@ -9563,7 +9692,7 @@ describe("AgentNativeTab", () => {
 
   test("drops the queued reconciliation read when the tab unmounts", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
-    const { unmount } = render(<NativeSessionHarness />);
+    const { unmount } = renderInAppCommandScope(<NativeSessionHarness />);
     await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
@@ -9597,7 +9726,7 @@ describe("AgentNativeTab", () => {
         .entries.filter((entry) => entry.id.includes("native-agent-session") && entry.subscribers)
         .map((entry) => entry.cadenceMs);
     try {
-      const view = render(<NativeSessionHarness />);
+      const view = renderInAppCommandScope(<NativeSessionHarness />);
       await waitFor(() =>
         expect(screen.getByTestId("hook-session-id").textContent).toBe("claude-session"),
       );
@@ -9679,7 +9808,7 @@ describe("AgentNativeTab", () => {
       generation: "test-generation",
     }));
 
-    render(
+    renderInAppCommandScope(
       <AgentNativeTab tabId="tab-elapsed" data={identity("claude")} isActive ownsGlobalShortcuts />,
     );
 
@@ -9728,7 +9857,7 @@ describe("AgentNativeTab", () => {
       revision: 1,
       generation: "test-generation",
     }));
-    const view = render(
+    const view = renderInAppCommandScope(
       <AgentNativeTab
         tabId="tab-review"
         data={identity("claude")}
@@ -9825,7 +9954,7 @@ describe("AgentNativeTab", () => {
         },
       ],
     }));
-    render(
+    renderInAppCommandScope(
       <>
         <div data-pane-leaf="">
           <AgentNativeTab
@@ -9852,7 +9981,7 @@ describe("AgentNativeTab", () => {
       seedProjection();
       const tabId = "tab-annotation-send";
       const sessionKey = createSessionKey("env-1", tabId);
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
 
       await screen.findByTestId("shared-native-compose-bar");
       act(() => {
@@ -9887,7 +10016,7 @@ describe("AgentNativeTab", () => {
       seedProjection();
       const tabId = "tab-annotation-only-send";
       const sessionKey = createSessionKey("env-1", tabId);
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
       await screen.findByTestId("shared-native-compose-bar");
       act(() => {
         useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -9933,7 +10062,7 @@ describe("AgentNativeTab", () => {
         previewUrl: "blob:preview",
         name: "screenshot.png",
       };
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
       await screen.findByTestId("shared-native-compose-bar");
       act(() => {
         useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -9978,7 +10107,7 @@ describe("AgentNativeTab", () => {
         ],
         attachments: [screenshot],
       });
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
       await screen.findByTestId("shared-native-compose-bar");
       act(() => {
         useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -10003,7 +10132,7 @@ describe("AgentNativeTab", () => {
       seedProjection();
       const tabId = "tab-annotation-cap";
       const sessionKey = createSessionKey("env-1", tabId);
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
       await screen.findByTestId("shared-native-compose-bar");
       act(() => {
         useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -10032,7 +10161,7 @@ describe("AgentNativeTab", () => {
       }));
       const tabId = "tab-annotation-rejected";
       const sessionKey = createSessionKey("env-1", tabId);
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
       await screen.findByTestId("shared-native-compose-bar");
       const annotations = [
         { id: "annotation-1", text: "The referenced answer", comment: "Keep this" },
@@ -10068,7 +10197,7 @@ describe("AgentNativeTab", () => {
         });
         const tabId = `tab-annotation-pending-${outcome}`;
         const sessionKey = createSessionKey("env-1", tabId);
-        render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+        renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
         const input = await screen.findByRole("textbox");
         const submittedAnnotations = [
           { id: "annotation-1", text: "Submitted reference", comment: "Original comment" },
@@ -10232,7 +10361,7 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
 
       await waitFor(() => expect(latestRenderedMessageActions.get("user-1")).toBeTruthy());
       const firstAction = latestRenderedMessageActions.get("user-1");
@@ -10288,7 +10417,7 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
 
       await waitFor(() => expect(latestRenderedMessageActions.get("user-1")).toBeTruthy());
       await waitFor(() => expect(latestRenderedMessageActions.get("assistant-1")).toBeTruthy());
@@ -10351,7 +10480,9 @@ describe("AgentNativeTab", () => {
       seedProjection({
         composer: { selectedModelId: controls.modelId, selectedReasoningId: controls.reasoningId },
       });
-      render(<AgentNativeTab tabId="opencode-source" data={identity("opencode")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="opencode-source" data={identity("opencode")} isActive />,
+      );
       const forkButton = await screen.findByRole("button", { name: /Fork.*response/i });
       fireEvent.click(forkButton);
       await waitFor(() =>
@@ -10384,7 +10515,9 @@ describe("AgentNativeTab", () => {
           selectedReasoningId: "default",
         },
       });
-      render(<AgentNativeTab tabId="tab-pi-omitted-model" data={identity("pi")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-pi-omitted-model" data={identity("pi")} isActive />,
+      );
 
       const trigger = await screen.findByTitle(/Choose model/);
       expect(trigger.getAttribute("aria-label")).toContain("claude-opus-4-5");
@@ -10430,7 +10563,7 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-claude-background-agent"
           data={identity("claude")}
@@ -10455,7 +10588,7 @@ describe("AgentNativeTab", () => {
       view.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab tabId="tab-claude-background-agent" data={identity("claude")} isActive />,
       );
       expect(
@@ -10484,7 +10617,9 @@ describe("AgentNativeTab", () => {
         messages: [],
       });
 
-      render(<AgentNativeTab tabId="tab-claude-orphan-task" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-claude-orphan-task" data={identity("claude")} isActive />,
+      );
 
       expect(
         await screen.findByRole("status", {
@@ -10541,7 +10676,7 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
 
       expect(
         await screen.findAllByRole("button", { name: /Task Run the tests Running/ }),
@@ -10614,7 +10749,9 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      render(<AgentNativeTab tabId="tab-claude-settled-task" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-claude-settled-task" data={identity("claude")} isActive />,
+      );
 
       expect(
         await screen.findByRole("button", {
@@ -10686,7 +10823,7 @@ describe("AgentNativeTab", () => {
         });
 
       seed([]);
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-claude-fallback-retire"
           data={identity("claude")}
@@ -10756,7 +10893,7 @@ describe("AgentNativeTab", () => {
         });
 
       seedBackgroundStatus("running");
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-claude-task-announcement"
           data={identity("claude")}
@@ -10825,7 +10962,9 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      render(<AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />,
+      );
 
       await screen.findByRole("textbox");
       expect(
@@ -10866,7 +11005,7 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive={false} />,
       );
       await act(async () => {
@@ -10897,7 +11036,9 @@ describe("AgentNativeTab", () => {
       view.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
-      render(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />,
+      );
 
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
       expect(
@@ -10943,7 +11084,7 @@ describe("AgentNativeTab", () => {
           ],
         });
 
-        const view = render(
+        const view = renderInAppCommandScope(
           <AgentNativeTab tabId={tabId} data={identity("cursor")} isActive refreshRequestId={0} />,
         );
         await screen.findByRole("textbox");
@@ -11026,7 +11167,7 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab tabId={tabId} data={identity("cursor")} isActive refreshRequestId={0} />,
       );
       await screen.findByRole("textbox");
@@ -11101,7 +11242,7 @@ describe("AgentNativeTab", () => {
         messages: [subagentMessage(2, () => "active")],
       });
 
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-plural-subagents"
           data={identity("cursor")}
@@ -11142,7 +11283,7 @@ describe("AgentNativeTab", () => {
       // byte-identical to the first. It still has to reach the live region.
       seedProjection({ messages: [subagentMessage(2, () => "active")] });
 
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-repeat-announcement"
           data={identity("cursor")}
@@ -11193,7 +11334,7 @@ describe("AgentNativeTab", () => {
         notices: [{ kind: "warning", message: "Recovered provider notice" }],
       });
 
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-pinned-notice"
           data={identity("cursor")}
@@ -11216,7 +11357,7 @@ describe("AgentNativeTab", () => {
       seedProjection({
         notices: [{ kind: "warning", message: "Recovered provider notice" }],
       });
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-active-notice"
           data={identity("cursor")}
@@ -11252,7 +11393,7 @@ describe("AgentNativeTab", () => {
       seedProjection({
         notices: [{ kind: "warning", message: "Recovered provider notice" }],
       });
-      const view = render(
+      const view = renderInAppCommandScope(
         <StrictMode>
           <AgentNativeTab
             tabId="tab-unmount-notice"
@@ -11273,7 +11414,7 @@ describe("AgentNativeTab", () => {
 
     test("refines the running indicator with the provider's reported activity", async () => {
       seedProjection({ phase: "running", turnActivity: { thinkingTokens: 1_200 } });
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-turn-activity"
           data={identity("claude")}
@@ -11307,7 +11448,7 @@ describe("AgentNativeTab", () => {
         phase: "recovering",
         notices: [{ kind: "recovery", message: "Reconnecting to the native agent runtime…" }],
       });
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-recovery-toast"
           data={identity("codex")}
@@ -11345,7 +11486,7 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-dismissible-notices"
           data={identity("codex")}
@@ -11381,7 +11522,7 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-auth-notice"
           data={identity("claude")}
@@ -11434,7 +11575,7 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-auth-notice-card"
           data={identity("claude")}
@@ -11478,7 +11619,7 @@ describe("AgentNativeTab", () => {
       });
       try {
         seedProjection({ notices: [notice("failure-1")] });
-        const view = render(
+        const view = renderInAppCommandScope(
           <AgentNativeTab
             tabId="tab-claude-new-failure"
             data={identity("claude")}
@@ -11548,7 +11689,7 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-auth-notice-row"
           data={identity("claude")}
@@ -11574,7 +11715,7 @@ describe("AgentNativeTab", () => {
       ];
       seedProjection({ sessionId: "session-a", notices: notice("occurrence-1") });
 
-      let view = render(
+      let view = renderInAppCommandScope(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
@@ -11586,7 +11727,7 @@ describe("AgentNativeTab", () => {
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
       mockToastWarning.mockClear();
-      view = render(
+      view = renderInAppCommandScope(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
@@ -11618,7 +11759,7 @@ describe("AgentNativeTab", () => {
       };
       seedProjection({ sessionId: "session-a", notices: [notice] });
 
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
@@ -11665,7 +11806,7 @@ describe("AgentNativeTab", () => {
         notices: [notice],
         runtimeHealthAuthoritative: true,
       });
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
@@ -11703,7 +11844,9 @@ describe("AgentNativeTab", () => {
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });
-      render(<AgentNativeTab tabId="tab-steer" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-steer" data={identity("codex")} isActive />,
+      );
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "/steer keep the diff small" } });
@@ -11727,7 +11870,9 @@ describe("AgentNativeTab", () => {
     test("steers a queued prompt through one backend handoff", async () => {
       const queued = { id: "queued-1", text: "also update the README", mode: "build" };
       seedProjection({ phase: "running", actions: { steer: true }, queue: { items: [queued] } });
-      render(<AgentNativeTab tabId="tab-queue-steer" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-queue-steer" data={identity("codex")} isActive />,
+      );
       fireEvent.click(await screen.findByTitle("View queued prompts"));
       fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
       await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1));
@@ -11770,7 +11915,9 @@ describe("AgentNativeTab", () => {
                   }
                 : { outcome: outcome as "idle" | "mismatch" | "unknown", requestId: "queued-1" },
           );
-        render(<AgentNativeTab tabId={`tab-queue-${outcome}`} data={identity("codex")} isActive />);
+        renderInAppCommandScope(
+          <AgentNativeTab tabId={`tab-queue-${outcome}`} data={identity("codex")} isActive />,
+        );
         fireEvent.click(await screen.findByTitle("View queued prompts"));
         fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
         if (outcome === "unknown") {
@@ -11807,7 +11954,7 @@ describe("AgentNativeTab", () => {
           ],
         },
       });
-      const view = render(
+      const view = renderInAppCommandScope(
         <AgentNativeTab tabId="tab-queue-steer-gate" data={identity("codex")} isActive />,
       );
       fireEvent.click(await screen.findByTitle("View queued prompts"));
@@ -11820,7 +11967,7 @@ describe("AgentNativeTab", () => {
         actions: { steer: true },
         queue: { items: [{ id: "queued-2", text: "plain text" }] },
       });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab tabId="tab-queue-steer-idle-gate" data={identity("codex")} isActive />,
       );
       fireEvent.click(await screen.findByTitle("View queued prompts"));
@@ -11853,7 +12000,7 @@ describe("AgentNativeTab", () => {
               }
             : {}),
         });
-        render(
+        renderInAppCommandScope(
           <AgentNativeTab tabId={`tab-steer-gate-${gate}`} data={identity("codex")} isActive />,
         );
         fireEvent.click(await screen.findByTitle("View queued prompts"));
@@ -11900,7 +12047,7 @@ describe("AgentNativeTab", () => {
         ],
       });
       const tabId = "tab-async-question";
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
 
       fireEvent.click(await screen.findByRole("button", { name: "Send answer" }));
 
@@ -11940,7 +12087,7 @@ describe("AgentNativeTab", () => {
       seedProjection({ phase: "running", actions: { steer: true } });
       const tabId = `tab-steer-annotation-${text.length}`;
       const sessionKey = createSessionKey("env-1", tabId);
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
       await screen.findByRole("textbox");
       act(() => {
         useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -11964,7 +12111,9 @@ describe("AgentNativeTab", () => {
       performNativeAgentSessionActionMock.mockImplementation(
         async () => ({ outcome: "unknown" as const }) as never,
       );
-      render(<AgentNativeTab tabId="tab-steer-retry" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-steer-retry" data={identity("codex")} isActive />,
+      );
 
       const input = await screen.findByRole("textbox");
       const steer = async () => {
@@ -12011,7 +12160,7 @@ describe("AgentNativeTab", () => {
         return { outcome: "unknown" as const };
       }) as never);
 
-      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "/steer narrow the scope" } });
       await waitFor(() =>
@@ -12056,7 +12205,9 @@ describe("AgentNativeTab", () => {
 
     test("keeps /steer an ordinary prompt for a provider that cannot steer", async () => {
       seedProjection({ phase: "running" });
-      render(<AgentNativeTab tabId="tab-no-steer" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-no-steer" data={identity("claude")} isActive />,
+      );
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "/steer nope" } });
@@ -12086,7 +12237,9 @@ describe("AgentNativeTab", () => {
           },
         });
         const tabId = `tab-${platform}-queue`;
-        render(<AgentNativeTab tabId={tabId} data={identity(platform)} isActive />);
+        renderInAppCommandScope(
+          <AgentNativeTab tabId={tabId} data={identity(platform)} isActive />,
+        );
 
         const input = await screen.findByRole("textbox");
         fireEvent.input(input, { target: { textContent: "Follow up after this turn" } });
@@ -12111,7 +12264,9 @@ describe("AgentNativeTab", () => {
 
     test("offers both attach and mention for a provider that accepts files", async () => {
       seedProjection();
-      render(<AgentNativeTab tabId="tab-attach" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-attach" data={identity("claude")} isActive />,
+      );
 
       fireEvent.pointerDown(await screen.findByRole("button", { name: "Add attachment" }));
       expect(
@@ -12122,7 +12277,9 @@ describe("AgentNativeTab", () => {
 
     test("cycles conversation mode with Shift+Tab", async () => {
       seedProjection();
-      render(<AgentNativeTab tabId="tab-mode" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-mode" data={identity("codex")} isActive />,
+      );
 
       const input = await screen.findByRole("textbox");
       fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
@@ -12152,7 +12309,9 @@ describe("AgentNativeTab", () => {
           executionProfile: true,
         },
       });
-      render(<AgentNativeTab tabId="tab-opencode-mode" data={identity("opencode")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-opencode-mode" data={identity("opencode")} isActive />,
+      );
 
       const trigger = await screen.findByTestId("native-execution-profile-picker");
       expect(trigger.getAttribute("aria-label")).toContain("Build");
@@ -12189,7 +12348,7 @@ describe("AgentNativeTab", () => {
           executionProfile: true,
         },
       });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab tabId="tab-opencode-fallback-mode" data={identity("opencode")} isActive />,
       );
 
@@ -12223,7 +12382,7 @@ describe("AgentNativeTab", () => {
         },
         composerCapabilities: { speed: false, mode: false, executionProfile: true },
       });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-opencode-default-profile"
           data={identity("opencode")}
@@ -12261,7 +12420,9 @@ describe("AgentNativeTab", () => {
         },
         composerCapabilities: { speed: false, mode: false, executionProfile: true },
       });
-      render(<AgentNativeTab tabId="tab-opencode-no-build" data={identity("opencode")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-opencode-no-build" data={identity("opencode")} isActive />,
+      );
 
       const trigger = await screen.findByTestId("native-execution-profile-picker");
       expect(trigger.getAttribute("aria-label")).toContain("Reviewer");
@@ -12290,7 +12451,9 @@ describe("AgentNativeTab", () => {
         },
         composerCapabilities: { executionProfile: true },
       });
-      render(<AgentNativeTab tabId="tab-claude-no-subagent" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-claude-no-subagent" data={identity("claude")} isActive />,
+      );
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "Do the thing" } });
@@ -12316,7 +12479,7 @@ describe("AgentNativeTab", () => {
         },
         composerCapabilities: { speed: false, mode: false, executionProfile: true },
       });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab tabId="tab-opencode-locked-profile" data={identity("opencode")} isActive />,
       );
 
@@ -12348,7 +12511,9 @@ describe("AgentNativeTab", () => {
           selectedApprovalModeId: "bypassPermissions",
         },
       });
-      render(<AgentNativeTab tabId="tab-approvals" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-approvals" data={identity("claude")} isActive />,
+      );
 
       const trigger = await screen.findByRole("button", { name: "Approvals: Bypass" });
       expect(trigger.textContent).toBe("");
@@ -12368,7 +12533,9 @@ describe("AgentNativeTab", () => {
           promptSuggestionsEnabled: true,
         },
       });
-      render(<AgentNativeTab tabId="tab-settings" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-settings" data={identity("claude")} isActive />,
+      );
 
       await screen.findByRole("textbox");
       expect(screen.queryByTestId("native-execution-profile-picker") === null).toBe(true);
@@ -12387,7 +12554,7 @@ describe("AgentNativeTab", () => {
       });
       const tabId = "tab-external-settings";
       const sessionKey = createSessionKey("env-1", tabId);
-      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
       const input = await screen.findByRole("textbox");
       const initial = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
 
@@ -12448,7 +12615,7 @@ describe("AgentNativeTab", () => {
             messages:
               (input.messageLimit ?? 0) > 512 ? [row("earlier"), row("held")] : [row("held")],
           }));
-          render(
+          renderInAppCommandScope(
             <AgentNativeTab tabId={`tab-held-page-${merged}`} data={identity("claude")} isActive />,
           );
           fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
@@ -12461,7 +12628,9 @@ describe("AgentNativeTab", () => {
 
     test("offers to load earlier messages when the transcript is windowed", async () => {
       seedProjection({ messageWindow: { limit: 512, truncated: true } });
-      render(<AgentNativeTab tabId="tab-window" data={identity("opencode")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-window" data={identity("opencode")} isActive />,
+      );
 
       const loadEarlierButton = await screen.findByRole("button", {
         name: "Load earlier messages",
@@ -12496,7 +12665,9 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: true,
         },
       });
-      render(<AgentNativeTab tabId="tab-byte-window" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-byte-window" data={identity("cursor")} isActive />,
+      );
 
       const loadEarlierButton = await screen.findByRole("button", {
         name: "Load earlier messages",
@@ -12524,7 +12695,9 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: false,
         },
       });
-      render(<AgentNativeTab tabId="tab-byte-cap" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-byte-cap" data={identity("cursor")} isActive />,
+      );
 
       expect(
         await screen.findByText(
@@ -12544,7 +12717,9 @@ describe("AgentNativeTab", () => {
           truncationReason: "bytes",
         },
       });
-      render(<AgentNativeTab tabId="tab-byte-legacy" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-byte-legacy" data={identity("cursor")} isActive />,
+      );
 
       expect(
         await screen.findByText(
@@ -12563,7 +12738,9 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: false,
         },
       });
-      render(<AgentNativeTab tabId="tab-count-capped" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-count-capped" data={identity("cursor")} isActive />,
+      );
 
       // No page can bring the start back, so the cut is said out loud rather
       // than the remainder reading as the whole conversation.
@@ -12588,7 +12765,9 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: false,
         },
       });
-      render(<AgentNativeTab tabId="tab-reasonless-cap" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-reasonless-cap" data={identity("cursor")} isActive />,
+      );
 
       // No page can bring the start back, so the cut is said out loud rather
       // than the remainder reading as the whole conversation.
@@ -12615,7 +12794,9 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: false,
         },
       });
-      render(<AgentNativeTab tabId="tab-part-cap" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-part-cap" data={identity("cursor")} isActive />,
+      );
 
       expect(
         await screen.findByText(
@@ -12633,7 +12814,9 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: true,
         },
       });
-      render(<AgentNativeTab tabId="tab-max-window" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-max-window" data={identity("cursor")} isActive />,
+      );
 
       const sessionKey = createSessionKey("env-1", "tab-max-window");
       await waitFor(() => {
@@ -12658,7 +12841,9 @@ describe("AgentNativeTab", () => {
           canLoadEarlier: true,
         },
       });
-      render(<AgentNativeTab tabId="tab-byte-no-progress" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-byte-no-progress" data={identity("cursor")} isActive />,
+      );
 
       fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
       await waitFor(() =>
@@ -12709,7 +12894,7 @@ describe("AgentNativeTab", () => {
             });
           }
         });
-        render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+        renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
         const input = await screen.findByRole("textbox");
         fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
         await waitFor(() => expect(removePromptQueueMessageMock).toHaveBeenCalledTimes(1));
@@ -12773,7 +12958,7 @@ describe("AgentNativeTab", () => {
             ],
           },
         });
-        render(
+        renderInAppCommandScope(
           <AgentNativeTab
             tabId={`tab-inline-settings-${phase}`}
             data={identity("codex")}
@@ -12856,7 +13041,7 @@ describe("AgentNativeTab", () => {
 
     test("inline edit failure preserves the queued item and releases the composer", async () => {
       seedProjection({ queue: { items: [{ id: "queued-1", text: "Queued task", mode: "plan" }] } });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab tabId="tab-inline-settings-error" data={identity("codex")} isActive />,
       );
       const input = await screen.findByRole("textbox");
@@ -12900,7 +13085,9 @@ describe("AgentNativeTab", () => {
           ],
         },
       });
-      render(<AgentNativeTab tabId="tab-inline-edit-running" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-inline-edit-running" data={identity("claude")} isActive />,
+      );
       const input = await screen.findByRole("textbox");
       updateNativeAgentControlsMock.mockClear();
       mockToastError.mockClear();
@@ -12916,7 +13103,7 @@ describe("AgentNativeTab", () => {
         phase: "running",
         queue: { items: [{ id: "queued-1", text: "Queued task", mode: "plan" }] },
       });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId="tab-inline-edit-running-refused"
           data={identity("claude")}
@@ -12966,7 +13153,9 @@ describe("AgentNativeTab", () => {
           phase,
           queue: { items: [{ id: "queued-1", text: "Queued task", mode: "plan" }] },
         });
-        render(<AgentNativeTab tabId={tabId} data={identity(platform)} isActive />);
+        renderInAppCommandScope(
+          <AgentNativeTab tabId={tabId} data={identity(platform)} isActive />,
+        );
         const input = await screen.findByRole("textbox");
         updateNativeAgentControlsMock.mockRejectedValueOnce(new Error(errorMessage));
         mockToastError.mockClear();
@@ -12996,7 +13185,7 @@ describe("AgentNativeTab", () => {
           actions: { steer: true },
           queue: { items: [{ id: "queued-1", text: "Queued task" }] },
         });
-        render(
+        renderInAppCommandScope(
           <AgentNativeTab tabId={`tab-inline-error-${action}`} data={identity("codex")} isActive />,
         );
         const name =
@@ -13040,7 +13229,7 @@ describe("AgentNativeTab", () => {
             ],
           },
         });
-        render(
+        renderInAppCommandScope(
           <AgentNativeTab tabId={`tab-inline-${action}-${id}`} data={identity("codex")} isActive />,
         );
         fireEvent.click(
@@ -13082,7 +13271,9 @@ describe("AgentNativeTab", () => {
           ],
         },
       });
-      render(<AgentNativeTab tabId="tab-inline-arrows" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-inline-arrows" data={identity("codex")} isActive />,
+      );
       const input = await screen.findByRole("textbox");
       const head = await screen.findByRole("button", { name: "Steer queued prompt 1 of 3: First" });
       expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ }) === null).toBe(
@@ -13108,7 +13299,9 @@ describe("AgentNativeTab", () => {
     test("keyboard Edit loads a queued prompt with the caret at its end", async () => {
       const text = "Queued task to revise";
       seedProjection({ queue: { items: [{ id: "queued-1", text }] } });
-      render(<AgentNativeTab tabId="tab-keyboard-edit-caret" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-keyboard-edit-caret" data={identity("codex")} isActive />,
+      );
       const input = await screen.findByRole("textbox");
       const edit = await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" });
       act(() => {
@@ -13164,7 +13357,7 @@ describe("AgentNativeTab", () => {
           ],
         },
       });
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab tabId={`tab-inline-gate-${gate}`} data={identity("codex")} isActive />,
       );
       const strip = within(await screen.findByTestId("compose-queue-strip"));
@@ -13176,7 +13369,9 @@ describe("AgentNativeTab", () => {
 
     test("inline edit refuses an occupied composer without moving its caret", async () => {
       seedProjection({ queue: { items: [{ id: "queued-1", text: "Queued task" }] } });
-      render(<AgentNativeTab tabId="tab-inline-occupied" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-inline-occupied" data={identity("codex")} isActive />,
+      );
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "Unsent draft" } });
       act(() => input.focus());
@@ -13198,7 +13393,9 @@ describe("AgentNativeTab", () => {
       seedProjection({
         queue: { items: [{ id: "queued-1", text: "second prompt" }] },
       });
-      render(<AgentNativeTab tabId="tab-queue" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-queue" data={identity("claude")} isActive />,
+      );
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "half-written message" } });
@@ -13233,7 +13430,9 @@ describe("AgentNativeTab", () => {
             },
           ] as never,
       );
-      render(<AgentNativeTab tabId="tab-resume-detail" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-resume-detail" data={identity("claude")} isActive />,
+      );
 
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
       const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
@@ -13265,7 +13464,9 @@ describe("AgentNativeTab", () => {
             },
           ] as never,
       );
-      render(<AgentNativeTab tabId="tab-resume-controls" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-resume-controls" data={identity("claude")} isActive />,
+      );
 
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
       const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
@@ -13316,7 +13517,7 @@ describe("AgentNativeTab", () => {
         nativeAgentData: identity("claude"),
       });
 
-      render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
       const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
@@ -13364,7 +13565,7 @@ describe("AgentNativeTab", () => {
         nativeAgentData: identity("claude"),
       });
 
-      render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
       const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
       expect(within(dialog).queryByRole("button", { name: /Current destination/ }) === null).toBe(
@@ -13406,7 +13607,7 @@ describe("AgentNativeTab", () => {
         nativeAgentData: identity("claude"),
       });
 
-      render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      renderInAppCommandScope(<PaneBackedAgentNativeTab tabId={tabId} />);
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
       const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
@@ -13420,7 +13621,9 @@ describe("AgentNativeTab", () => {
 
     test("dismisses an accepted suggestion for any provider that tracks them", async () => {
       seedProjection({ suggestedPrompt: "Run the tests", promptSuggestions: true });
-      render(<AgentNativeTab tabId="tab-suggest" data={identity("claude")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-suggest" data={identity("claude")} isActive />,
+      );
 
       fireEvent.click(await screen.findByRole("button", { name: /Suggested: Run the tests/ }));
       await waitFor(() => expect(dismissNativeAgentSuggestedPromptMock).toHaveBeenCalledTimes(1));
@@ -13441,7 +13644,9 @@ describe("AgentNativeTab", () => {
         text: "Retry this prompt",
         requestId: "recoverable-1",
       });
-      render(<AgentNativeTab tabId="tab-recoverable" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-recoverable" data={identity("codex")} isActive />,
+      );
 
       fireEvent.click(await screen.findByRole("button", { name: "Retry send" }));
       await waitFor(() =>
@@ -13462,7 +13667,7 @@ describe("AgentNativeTab", () => {
           createdAt: "2026-08-14T10:00:00.000Z",
         },
       });
-      const first = render(
+      const first = renderInAppCommandScope(
         <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
       );
       expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
@@ -13474,7 +13679,9 @@ describe("AgentNativeTab", () => {
       first.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
-      render(<AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
+      );
 
       expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
@@ -13491,7 +13698,9 @@ describe("AgentNativeTab", () => {
           createdAt: "2026-08-14T10:00:00.000Z",
         },
       });
-      render(<AgentNativeTab tabId="tab-discard" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-discard" data={identity("codex")} isActive />,
+      );
 
       fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
       await waitFor(() =>
@@ -13512,7 +13721,9 @@ describe("AgentNativeTab", () => {
           createdAt: "2026-08-14T10:00:00.000Z",
         },
       });
-      render(<AgentNativeTab tabId="tab-parked" data={identity("codex")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-parked" data={identity("codex")} isActive />,
+      );
 
       const composer = await screen.findByRole("textbox");
       fireEvent.input(composer, { target: { textContent: "Something else" } });
@@ -13541,7 +13752,7 @@ describe("AgentNativeTab", () => {
             },
           ],
         });
-        render(
+        renderInAppCommandScope(
           <AgentNativeTab tabId={`tab-plan-${platform}`} data={identity(platform)} isActive />,
         );
 
@@ -13573,7 +13784,9 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      render(<AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />,
+      );
 
       expect(await screen.findByRole("button", { name: "Approve Plan" })).toBeTruthy();
       expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
@@ -13600,7 +13813,9 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      render(<AgentNativeTab tabId="tab-cursor-approve" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-cursor-approve" data={identity("cursor")} isActive />,
+      );
 
       fireEvent.click(await screen.findByRole("button", { name: "Approve Plan" }));
 
@@ -13635,7 +13850,9 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
-      render(<AgentNativeTab tabId="tab-cursor-rejected" data={identity("cursor")} isActive />);
+      renderInAppCommandScope(
+        <AgentNativeTab tabId="tab-cursor-rejected" data={identity("cursor")} isActive />,
+      );
 
       fireEvent.click(await screen.findByRole("button", { name: "Approve Plan" }));
 

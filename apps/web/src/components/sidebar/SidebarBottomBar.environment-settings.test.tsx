@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { AppDialogHost } from "@/components/layout/AppDialogHost";
 import { MobileAppShellLayout } from "@/components/layout/MobileAppShellLayout";
@@ -57,7 +58,7 @@ test("the drawer's bottom bar and AppDialogHost open interactive settings and re
     ],
   });
   useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
-  render(
+  renderInAppCommandScope(
     <>
       <AppDialogHost />
       <MobileAppShellLayout

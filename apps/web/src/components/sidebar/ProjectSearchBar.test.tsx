@@ -1,6 +1,7 @@
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { Environment, Project } from "@/types";
 import { useConfigStore } from "@/stores/configStore";
@@ -73,7 +74,7 @@ function renderSearchBar(
     onSelectProject,
     onSelectEnvironment,
   };
-  const view = render(<ProjectSearchBar {...props} />);
+  const view = renderInAppCommandScope(<ProjectSearchBar {...props} />);
   return {
     onSelectProject,
     onSelectEnvironment,

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
 import { FederationProvider } from "@/components/federation/FederationProvider";
@@ -109,7 +110,7 @@ test("a project row stays highlighted while its home is shown, on the command no
   });
   const stopSync = startRemoteWorkspaceSelectionSync();
   try {
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,
@@ -183,7 +184,7 @@ for (const grouping of ["machine", "repository"] as const) {
       revealedProject: null,
       recentKeys: [],
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,
@@ -228,7 +229,7 @@ for (const delayed of [false, true]) {
       useProjectHomeActivation();
       return null;
     }
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <FederationEffects />
         <HierarchicalSidebar />

@@ -4,7 +4,8 @@
  * follows the list as drawn, and bulk actions reach each row's own machine.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { environmentKey, environmentRef, type BackendId } from "@orkestrator/protocol/federation";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -119,7 +120,7 @@ function setup({
     recentKeys: [],
   });
   useUIChromeStore.setState({ environmentSortMode: sortMode });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,

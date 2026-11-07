@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { publishConnections } from "@/lib/connections";
 import { PROBE_SUPERSEDE_AFTER_MS, ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
@@ -85,7 +86,7 @@ describe("server connection switcher", () => {
         },
       ],
     });
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     const trigger = await screen.findByRole("button", { name: "Connected server: Local" });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
@@ -129,7 +130,7 @@ describe("server connection switcher", () => {
     };
     const probe = mock(async (connectionId: string) => connectionId !== "offline");
     installConnections(list, { probe });
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     await waitFor(() => expect(probe).toHaveBeenCalledWith("local"));
     expect(probe.mock.calls.every(([connectionId]) => connectionId === "local")).toBe(true);
@@ -183,7 +184,7 @@ describe("server connection switcher", () => {
         },
       ],
     });
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
     await waitFor(() => expect(probe).toHaveBeenCalledWith("active"));
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Active" }), {
       button: 0,
@@ -222,7 +223,7 @@ describe("server connection switcher", () => {
         throw new Error("probe failed");
       }),
     });
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), {
       button: 0,
@@ -258,7 +259,7 @@ describe("server connection switcher", () => {
       ],
     };
     const { probe } = installConnections(list);
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
     fireEvent.pointerDown(
       await screen.findByRole("button", { name: "Connected server: Current" }),
       { button: 0, ctrlKey: false, pointerType: "mouse" },
@@ -299,7 +300,7 @@ describe("server connection switcher", () => {
     let now = Date.now();
     const nowSpy = spyOn(Date, "now").mockImplementation(() => now);
     try {
-      render(<ServerConnectionSwitcher />);
+      renderInAppCommandScope(<ServerConnectionSwitcher />);
       const trigger = await screen.findByRole("button", { name: "Connected server: Active" });
       await waitFor(() => expect(trigger.querySelector('[data-status="checking"]')).toBeTruthy());
 
@@ -344,7 +345,7 @@ describe("server connection switcher", () => {
       },
       { probe: mock(() => pending.promise) },
     );
-    const rendered = render(<ServerConnectionSwitcher />);
+    const rendered = renderInAppCommandScope(<ServerConnectionSwitcher />);
     await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
     rendered.unmount();
     await act(async () => pending.resolve(true));
@@ -373,7 +374,7 @@ describe("server connection switcher", () => {
         },
       ],
     });
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     fireEvent.pointerDown(
       await screen.findByRole("button", { name: "Connected server: current.example" }),
@@ -406,7 +407,7 @@ describe("server connection switcher", () => {
       },
       { connect },
     );
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), {
       button: 0,
@@ -432,7 +433,7 @@ describe("server connection switcher", () => {
   });
 
   test("falls back to the Projects label without a connections API", () => {
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
     expect(screen.getByText("Projects")).toBeTruthy();
   });
 
@@ -452,7 +453,7 @@ describe("server connection switcher", () => {
       ],
     };
     installConnections(initial);
-    const view = render(<ServerConnectionSwitcher />);
+    const view = renderInAppCommandScope(<ServerConnectionSwitcher />);
     await screen.findByRole("button", { name: "Connected server: Local" });
 
     const remoteList: ConnectionList = {
@@ -504,7 +505,7 @@ describe("server connection switcher", () => {
     const { use } = installConnections(list);
     const reload = mock(() => undefined);
     window.location.reload = reload as unknown as typeof window.location.reload;
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), {
       button: 0,
@@ -544,7 +545,7 @@ describe("server connection switcher", () => {
       const reload = mock(() => undefined);
       window.__orkestratorClientPlatform = platform;
       window.location.reload = reload as unknown as typeof window.location.reload;
-      render(<ServerConnectionSwitcher />);
+      renderInAppCommandScope(<ServerConnectionSwitcher />);
 
       fireEvent.pointerDown(
         await screen.findByRole("button", { name: "Connected server: Current" }),
@@ -593,7 +594,7 @@ describe("server connection switcher", () => {
     installConnections(list, { use });
     const reload = mock(() => undefined);
     window.location.reload = reload as unknown as typeof window.location.reload;
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), {
       button: 0,
@@ -622,7 +623,7 @@ describe("server connection switcher", () => {
     const { connect } = installConnections(list);
     const reload = mock(() => undefined);
     window.location.reload = reload as unknown as typeof window.location.reload;
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
 
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), {
       button: 0,
@@ -662,7 +663,7 @@ describe("server connection switcher", () => {
       const reload = mock(() => undefined);
       window.__orkestratorClientPlatform = platform;
       window.location.reload = reload as unknown as typeof window.location.reload;
-      render(<ServerConnectionSwitcher />);
+      renderInAppCommandScope(<ServerConnectionSwitcher />);
 
       fireEvent.pointerDown(
         await screen.findByRole("button", { name: "Connected server: Local" }),
@@ -695,7 +696,7 @@ describe("server connection switcher", () => {
       throw new Error("storage unavailable");
     });
     installConnections(list, { list: listConnections });
-    render(<ServerConnectionSwitcher />);
+    renderInAppCommandScope(<ServerConnectionSwitcher />);
     await waitFor(() => expect(listConnections).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("button", { name: "Connected server: Loading" })).toBeTruthy();
   });

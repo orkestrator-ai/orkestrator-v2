@@ -35,8 +35,7 @@ import {
   type PrMonitorSnapshot,
 } from "@orkestrator/protocol/pr-monitor";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
-import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { prMonitorStore, usePrMonitorStore } from "@/stores/prMonitorStore";
 import { environmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import {
@@ -48,7 +47,12 @@ import {
   type HydrationEntry,
   type HydrationUpdate,
 } from "@/lib/bounded-hydration";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import type { UnlistenFn } from "@/lib/native/events";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { appCommandScope, listenInScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { onViewSafetyCheck } from "@/lib/resource-sync";
 import { playConfiguredNotificationSound } from "@/lib/notification-sounds";
 
@@ -65,11 +69,20 @@ function toEntries(snapshot: PrMonitorSnapshot): HydrationEntry<PrMonitorEnviron
   return snapshot.entries.map((entry) => ({ key: entry.environmentId, value: entry }));
 }
 
-/** Reads the PR monitor view, conditionally when a revisioned position is known. */
-export function fetchPrMonitorView(known: ViewRevisionStamp | null) {
+/**
+ * Reads `scope`'s PR monitor view, conditionally when a revisioned position is
+ * known. The app's command scope keeps the `@/lib/backend` read suites spy on.
+ */
+export function fetchPrMonitorView(
+  known: ViewRevisionStamp | null,
+  scope: NodeScope = appCommandScope(),
+) {
   return readViewSnapshot(
     "get_pr_monitor_state",
-    () => backend.getPrMonitorState(known ?? undefined),
+    () =>
+      backendApiForScope(scope, createFilesSessionsApi, {
+        getPrMonitorState: backend.getPrMonitorState,
+      }).getPrMonitorState(known ?? undefined),
     isPrMonitorSnapshot,
     toEntries,
   );
@@ -92,8 +105,9 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
   const applyEvent = usePrMonitorStore((s) => s.applyEvent);
   const setSyncStatus = usePrMonitorStore((s) => s.setSyncStatus);
   const { clock, limits } = options;
-  // The node whose environments name the merged branches.
-  const scope = useShimNodeScope("environment");
+  // The node whose monitor this mirrors, read and followed through its own
+  // client, and whose environments name the merged branches (plan item 3003).
+  const scope = useShimNodeScope(prMonitorStore.name);
 
   useEffect(() => {
     let disposed = false;
@@ -108,7 +122,7 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
 
     const hydration = createBoundedHydration<PrMonitorEnvironmentState>({
       name: "pr-monitor",
-      fetchSnapshot: ({ known }) => fetchPrMonitorView(known),
+      fetchSnapshot: ({ known }) => fetchPrMonitorView(known, scope),
       replaceAll: (entries) => applySnapshot(entries.map((entry) => entry.value)),
       applyUpdate: (environmentId, state) =>
         applyEvent(state ? { environmentId, state } : { environmentId, removed: true }),
@@ -138,10 +152,10 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
       if (disposed || stopChanges || changeSubscriptionPending) return;
       changeSubscriptionPending = true;
       try {
-        const stop = await listen<unknown>(PR_MONITOR_CHANGED_EVENT, (event) => {
+        const stop = await listenInScope<unknown>(scope, PR_MONITOR_CHANGED_EVENT, (event) => {
           // The payload crosses a process boundary; validate rather than trust.
-          if (!isPrMonitorEvent(event.payload)) return;
-          const payload = event.payload;
+          if (!isPrMonitorEvent(event)) return;
+          const payload = event;
           const hasMerge = !("removed" in payload) && payload.transition?.state === "merged";
           hydration.receive(
             toPrMonitorUpdate(payload),
@@ -166,7 +180,7 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
       if (disposed) return;
 
       try {
-        const stopReconnects = await listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+        const stopReconnects = await onReconnectInScope(scope, () => {
           void ensureChangeSubscription();
           hydration.onReconnect();
         });
@@ -177,7 +191,7 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
       }
 
       if (disposed) return;
-      unlisteners.push(onViewSafetyCheck(() => hydration.safetyCheck()));
+      unlisteners.push(onViewSafetyCheck(() => hydration.safetyCheck(), scope));
       hydration.request("initial");
     };
 

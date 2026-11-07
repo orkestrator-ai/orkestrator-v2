@@ -2,7 +2,8 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { type ReactNode } from "react";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { TerminalProvider } from "@/contexts";
 
@@ -470,7 +471,7 @@ describe("TerminalContainer", () => {
       return { environments };
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -497,7 +498,7 @@ describe("TerminalContainer", () => {
     const onStartContainer = mock(() => {});
     const onCreateScript = mock((_prompt: string) => {});
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -523,7 +524,7 @@ describe("TerminalContainer", () => {
   });
 
   test("renders the no-environment and container-creation overlay variants", () => {
-    const noEnvironment = render(
+    const noEnvironment = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="missing-environment"
@@ -535,7 +536,7 @@ describe("TerminalContainer", () => {
     expect(screen.getByText("Select an environment from the sidebar to get started.")).toBeTruthy();
     noEnvironment.unmount();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -564,7 +565,7 @@ describe("TerminalContainer", () => {
           : environment,
       ),
     }));
-    const creating = render(
+    const creating = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isContainerCreating />
       </TerminalProvider>,
@@ -572,7 +573,7 @@ describe("TerminalContainer", () => {
     expect(screen.getByText("Creating worktree...")).toBeTruthy();
     creating.unmount();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"

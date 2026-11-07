@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInAppCommandScope,
+  renderInNodeScope,
+} from "@/test/render-in-node-scope";
 import { getWindowScope, resetWindowScopeForTests } from "./app-window-scope";
 import { defineScopedStore } from "./scoped-store";
 import {
@@ -150,6 +155,17 @@ describe("scopedStoreHook as a hook", () => {
     act(() => useCounterStore.getState().increment());
     expect(screen.getByTestId("count").textContent).toBe(`counter of ${COMMAND_NODE}:1`);
     expect(uses).toContainEqual({ store: "test-shim-counter", via: "hook-without-provider" });
+  });
+
+  test("under the app's command scope provider it reads what the statics seed, with no fallback", () => {
+    resetWindowScopeForTests(new FakeNodeClient({ nodeId: COMMAND_NODE }));
+    const uses = observeShimUses();
+    const { scope } = renderInAppCommandScope(<Count />);
+    expect(scope).toBe(getWindowScope().commandScope());
+    act(() => scope.store(counterStore).getState().increment());
+    expect(screen.getByTestId("count").textContent).toBe(`counter of ${COMMAND_NODE}:1`);
+    expect(uses.filter(({ via }) => via === "hook-without-provider")).toEqual([]);
+    expect(useCounterStore.getState().count).toBe(1);
   });
 
   test("with no selector it returns the whole state", () => {

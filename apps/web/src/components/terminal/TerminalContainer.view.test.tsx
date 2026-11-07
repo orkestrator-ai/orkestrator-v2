@@ -5,7 +5,8 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { useEffect, useRef, type ReactNode } from "react";
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { MAX_TABS, TerminalProvider, useTerminalContext } from "@/contexts";
 
@@ -686,7 +687,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    return render(
+    return renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -770,7 +771,7 @@ describe("TerminalContainer", () => {
   }
 
   const renderHiddenTerminal = () =>
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1013,7 +1014,7 @@ describe("TerminalContainer", () => {
   );
 
   test("initializes a hidden environment without changing the active pane-layout environment", async () => {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1054,7 +1055,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1129,7 +1130,7 @@ describe("TerminalContainer", () => {
           ],
         },
       });
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -1181,7 +1182,7 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>
     );
-    const view = render(renderTerminal(true));
+    const view = renderInAppCommandScope(renderTerminal(true));
 
     await waitFor(() => {
       const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
@@ -1230,7 +1231,7 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>
     );
-    const view = render(renderTerminal(true));
+    const view = renderInAppCommandScope(renderTerminal(true));
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
         { id: "agent-tab" },
@@ -1293,7 +1294,7 @@ describe("TerminalContainer", () => {
           />
         </TerminalProvider>
       );
-      const view = render(renderTerminal(true));
+      const view = renderInAppCommandScope(renderTerminal(true));
       await waitFor(() =>
         expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
           { id: "native-tab" },
@@ -1356,7 +1357,7 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>
     );
-    const view = render(renderTerminal(true));
+    const view = renderInAppCommandScope(renderTerminal(true));
     await waitFor(() => expect(getPaneLayoutMock).toHaveBeenCalledTimes(1));
     view.rerender(renderTerminal(false));
     expect(usePaneLayoutStore.getState().hydration.has("env-hidden")).toBe(false);
@@ -1417,7 +1418,7 @@ describe("TerminalContainer", () => {
       revision: 7,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1473,7 +1474,7 @@ describe("TerminalContainer", () => {
       revision: 9,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1503,7 +1504,7 @@ describe("TerminalContainer", () => {
       setupPhase: "failed",
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1530,7 +1531,7 @@ describe("TerminalContainer", () => {
       setupPhase: "failed",
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1594,7 +1595,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1659,7 +1660,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1716,7 +1717,7 @@ describe("TerminalContainer", () => {
     // A brand new environment has no persisted layout to restore.
     getPaneLayoutMock.mockResolvedValue(null);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1819,7 +1820,7 @@ describe("TerminalContainer", () => {
       activeTabIds: { left: "left-a", right: "right-a" },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1896,7 +1897,7 @@ describe("TerminalContainer", () => {
     });
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -1966,7 +1967,7 @@ describe("TerminalContainer", () => {
     });
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -2011,7 +2012,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2073,7 +2074,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -2582,7 +2583,7 @@ describe("TerminalContainer", () => {
       revision: 3,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2645,7 +2646,7 @@ describe("TerminalContainer", () => {
       revision: 3,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2699,7 +2700,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2754,7 +2755,7 @@ describe("TerminalContainer", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
         revision: 1,
       });
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -2814,7 +2815,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2841,7 +2842,7 @@ describe("TerminalContainer", () => {
   test("completes hydration with a default layout when restore rejects", async () => {
     getPaneLayoutMock.mockRejectedValue(new Error("backend unavailable"));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2871,7 +2872,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2904,7 +2905,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2938,7 +2939,7 @@ describe("TerminalContainer", () => {
       hydration: new Map(state.hydration).set("env-hidden", "pending"),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2963,7 +2964,7 @@ describe("TerminalContainer", () => {
         }),
     );
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -3014,7 +3015,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -3068,7 +3069,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -3099,7 +3100,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -3156,7 +3157,7 @@ describe("TerminalContainer", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -3229,7 +3230,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3281,7 +3282,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3348,7 +3349,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3437,7 +3438,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3465,7 +3466,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3569,7 +3570,7 @@ describe("TerminalContainer", () => {
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
     useClaudeOptionsStore.setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3639,7 +3640,7 @@ describe("TerminalContainer", () => {
     });
     useClaudeOptionsStore.setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3697,7 +3698,7 @@ describe("TerminalContainer", () => {
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
     useClaudeOptionsStore.setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3749,7 +3750,7 @@ describe("TerminalContainer", () => {
     armWindowStartupAgentActivation("env-hidden");
     useClaudeOptionsStore.setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3825,7 +3826,7 @@ describe("TerminalContainer", () => {
     });
     useClaudeOptionsStore.setState({ options: {} });
 
-    const firstMount = render(
+    const firstMount = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3856,7 +3857,7 @@ describe("TerminalContainer", () => {
       useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
     ).toBeFalsy();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3898,7 +3899,7 @@ describe("TerminalContainer", () => {
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: true });
     useClaudeOptionsStore.setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3999,7 +4000,7 @@ describe("TerminalContainer", () => {
     }));
     useClaudeOptionsStore.setState({ options: {} });
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -4414,7 +4415,7 @@ describe("TerminalContainer", () => {
       agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4557,7 +4558,7 @@ describe("TerminalContainer", () => {
         }),
     }));
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4611,7 +4612,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4661,7 +4662,7 @@ describe("TerminalContainer", () => {
       options: {},
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4693,7 +4694,7 @@ describe("TerminalContainer", () => {
   test("waits for the backend to publish the setup tab rather than adding one", async () => {
     useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4730,7 +4731,7 @@ describe("TerminalContainer", () => {
       options: {},
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4777,7 +4778,7 @@ describe("TerminalContainer", () => {
       ...state,
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4816,7 +4817,7 @@ describe("TerminalContainer", () => {
       });
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4847,7 +4848,7 @@ describe("TerminalContainer", () => {
       .mockRejectedValueOnce(new Error("bridge unavailable 3"));
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4881,7 +4882,7 @@ describe("TerminalContainer", () => {
     // lifecycle cleanup cancelled it. Assert on the scheduled handle instead.
     const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
     try {
-      const rendered = render(
+      const rendered = renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -4929,7 +4930,7 @@ describe("TerminalContainer", () => {
     // even with the whole reconnect listener deleted.
     const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -4986,7 +4987,7 @@ describe("TerminalContainer", () => {
       });
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5044,7 +5045,7 @@ describe("TerminalContainer", () => {
     });
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5078,7 +5079,7 @@ describe("TerminalContainer", () => {
         }),
     );
 
-    const rendered = render(
+    const rendered = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5119,7 +5120,7 @@ describe("TerminalContainer", () => {
 
     const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
     try {
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -5181,7 +5182,7 @@ describe("TerminalContainer", () => {
     );
     seedUnboundSetupTab();
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5239,7 +5240,7 @@ describe("TerminalContainer", () => {
     );
     seedUnboundSetupTab();
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5307,7 +5308,7 @@ describe("TerminalContainer", () => {
     seedUnboundSetupTab();
     seedUnboundSetupTabFor("env-visible", "container-visible");
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5382,7 +5383,7 @@ describe("TerminalContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -5455,7 +5456,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -5499,7 +5500,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -5554,7 +5555,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -5592,7 +5593,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -5659,7 +5660,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5732,7 +5733,7 @@ describe("TerminalContainer", () => {
         </>
       );
     }
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5791,7 +5792,7 @@ describe("TerminalContainer", () => {
       );
     }
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5832,7 +5833,7 @@ describe("TerminalContainer", () => {
       );
     }
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5881,7 +5882,7 @@ describe("TerminalContainer", () => {
   });
 
   test("normalizes an absolute container path before creating a file tab", async () => {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5929,7 +5930,7 @@ describe("TerminalContainer", () => {
       return null;
     }
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-visible" containerId={null} isActive />
         <OpenFileHarness />
@@ -5965,7 +5966,7 @@ describe("TerminalContainer", () => {
     useFilesPanelStore
       .getState()
       .requestFileOpen({ environmentId: "env-visible", filePath: "README.md" });
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-visible" containerId={null} isActive />
       </TerminalProvider>,
@@ -6000,7 +6001,7 @@ describe("TerminalContainer", () => {
     const request = { environmentId: "env-other", filePath: "README.md" };
     useFilesPanelStore.getState().requestFileOpen(request);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-visible" containerId={null} isActive />
       </TerminalProvider>,
@@ -6033,7 +6034,7 @@ describe("TerminalContainer", () => {
     }
 
     mockToastError.mockClear();
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6114,7 +6115,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6194,7 +6195,7 @@ describe("TerminalContainer", () => {
     }));
     mockToastError.mockClear();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-full"
@@ -6249,7 +6250,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6306,7 +6307,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6370,7 +6371,7 @@ describe("TerminalContainer", () => {
     }));
     mockToastError.mockClear();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-full"

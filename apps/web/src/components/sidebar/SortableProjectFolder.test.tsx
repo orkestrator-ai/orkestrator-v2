@@ -2,7 +2,8 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import * as sortable from "@dnd-kit/sortable";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { DndContext, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 
@@ -25,7 +26,7 @@ function KeyboardDragContext({
 
 function renderRepositoryHeading(onOpen: () => void, onDragStart: () => void) {
   const onToggleCollapse = mock(() => {});
-  render(
+  renderInAppCommandScope(
     <KeyboardDragContext onDragStart={onDragStart}>
       <SortableProjectFolder
         name="github.com/acme/app"
@@ -77,7 +78,7 @@ test("Space starts dragging the repository from its heading", () => {
 test.each([false, true])(
   "right-click is captured only when folder actions exist (actions: %s)",
   async (hasActions) => {
-    render(
+    renderInAppCommandScope(
       <SortableProjectFolder
         name="acme/app"
         repository
@@ -125,7 +126,7 @@ test("a completed drag suppresses its click until the next task and then permits
     </DndContext>
   );
   try {
-    const view = render(content());
+    const view = renderInAppCommandScope(content());
     const heading = screen.getByRole("button", { name: "Open acme/app" });
     fireEvent.click(heading);
     expect(onOpen).not.toHaveBeenCalled();
@@ -153,7 +154,7 @@ test("a completed drag suppresses its click until the next task and then permits
 test.each([false, true])(
   "selected=%s controls repository currentness and background",
   (selected) => {
-    render(
+    renderInAppCommandScope(
       <SortableProjectFolder
         name="acme/app"
         repository

@@ -4,11 +4,11 @@ import {
   cleanup,
   createEvent,
   fireEvent,
-  render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { useConfigStore } from "@/stores/configStore";
@@ -75,7 +75,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     });
     const onCreate = mock(async (_options: ClaudeOptions) => true);
 
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog
           open
@@ -128,7 +128,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog
           open
@@ -170,7 +170,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
   });
 
   test("uses the compact themed layout with equally sized name and agent controls", () => {
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog
           open
@@ -250,7 +250,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 
   test("creates a local environment in a folder picked next to its name", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => true);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog
           open
@@ -279,7 +279,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
   test("Cmd+Enter or Ctrl+Enter anywhere in the dialog creates the environment", async () => {
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
       const onCreate = mock(async (_options: ClaudeOptions) => true);
-      render(
+      renderInAppCommandScope(
         <DockerAvailabilityProvider available>
           <CreateEnvironmentDialog
             open
@@ -303,7 +303,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 
   test("plain Enter never creates the environment", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => true);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog
           open
@@ -333,7 +333,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 
   test("ignores repeated, composing, prevented, Shift and Alt chords", async () => {
     const onCreate = mock(async () => true);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog open onOpenChange={() => undefined} onCreate={onCreate} />
       </DockerAvailabilityProvider>,
@@ -359,7 +359,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     test(`shortcut respects disabled submission: ${reason}`, () => {
       const onCreate = mock(async () => true);
       const onCreateFeatureBuild = mock(async () => undefined);
-      render(
+      renderInAppCommandScope(
         <DockerAvailabilityProvider available>
           <CreateEnvironmentDialog
             open
@@ -396,7 +396,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 
   test("Cmd+Enter does nothing while Create Environment is disabled", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => true);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentDialog
           open
@@ -417,7 +417,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
   });
 
   test("keeps disabled environment-type explanations visible and associated", () => {
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentDialog
           open
@@ -438,7 +438,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
   });
 
   test("themes customized build model selectors like the dialog agent selector", () => {
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog
           open
@@ -481,7 +481,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 
   test("attaches a dropped markdown file and includes it in the create request", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => true);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentDialog
           open
@@ -529,7 +529,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
 });
 
 test("local feature builds hide and clear a previously picked worktree folder", async () => {
-  render(
+  renderInAppCommandScope(
     <DockerAvailabilityProvider available>
       <CreateEnvironmentDialog
         open

@@ -451,6 +451,13 @@ expect(client.calls("list_environments")).toHaveLength(2);
   deprecated `useXStore.setState`, which reaches the app's command scope. The
   per-store recipe, including the tests, is
   [node-scopes.md](node-scopes.md#tests).
+- A component suite that seeds stores through the statics and mocks
+  `@/lib/backend` renders with `renderInAppCommandScope(ui, options)` from the
+  same module: the providers are the app's own window and command scope, so
+  the component's hooks read a provider (no shim fallback, and the store's hook
+  can retire its shim) while the suite's seeds and mocks still apply. It
+  disposes nothing; the suite resets the app's scope with
+  `resetWindowScopeForTests()` as before.
 
 ### Agent CLIs on `PATH`
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ReactNode } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { DndContext, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type { PaneLeaf } from "@/types/paneLayout";
@@ -38,7 +39,7 @@ afterEach(() => {
 describe("DraggableTabBar", () => {
   test("renders nothing for an empty pane", () => {
     const pane: PaneLeaf = { kind: "leaf", id: "pane", tabs: [], activeTabId: null };
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DraggableTabBar pane={pane} environmentId="environment" onTabSelect={() => undefined} />,
     );
     expect(container.firstChild).toBeNull();
@@ -52,7 +53,7 @@ describe("DraggableTabBar", () => {
       activeTabId: "terminal",
       tabs: [{ id: "terminal", type: "plain" }],
     };
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId="environment" onTabSelect={onTabSelect} />
       </DndContext>,
@@ -105,7 +106,7 @@ describe("DraggableTabBar", () => {
           </DndContext>
         );
       }
-      return render(
+      return renderInAppCommandScope(
         <Sensors>
           <Strip />
         </Sensors>,
@@ -195,7 +196,7 @@ describe("DraggableTabBar", () => {
       );
       useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
       const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
-      render(
+      renderInAppCommandScope(
         <DndContext>
           <DraggableTabBar
             pane={pane}
@@ -336,7 +337,7 @@ describe("DraggableTabBar", () => {
           { id: "two", type: "plain" },
         ],
       };
-      render(
+      renderInAppCommandScope(
         <DndContext>
           <DraggableTabBar
             pane={pane}
@@ -385,7 +386,7 @@ describe("DraggableTabBar", () => {
     });
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
     try {
-      render(
+      renderInAppCommandScope(
         <DndContext>
           <DraggableTabBar
             pane={pane}
@@ -458,7 +459,7 @@ describe("DraggableTabBar", () => {
       ],
     };
 
-    render(
+    renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar
           pane={pane}
@@ -502,7 +503,7 @@ describe("DraggableTabBar", () => {
     useFileDirtyStore.getState().setOriginalContent("file", "disk");
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -537,7 +538,7 @@ describe("DraggableTabBar", () => {
     });
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -573,7 +574,7 @@ describe("DraggableTabBar", () => {
       });
       const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <DndContext>
           <DraggableTabBar
             pane={pane}
@@ -614,7 +615,7 @@ describe("DraggableTabBar", () => {
     });
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -644,7 +645,7 @@ describe("DraggableTabBar", () => {
     useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -676,7 +677,7 @@ describe("DraggableTabBar", () => {
     );
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -709,7 +710,7 @@ describe("DraggableTabBar", () => {
     );
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -750,7 +751,7 @@ describe("DraggableTabBar", () => {
     useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    render(
+    renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -807,7 +808,7 @@ describe("DraggableTabBar", () => {
     });
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    render(
+    renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -839,7 +840,7 @@ describe("DraggableTabBar", () => {
     }
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    render(
+    renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,
@@ -891,7 +892,7 @@ describe("DraggableTabBar", () => {
     useFileDirtyStore.getState().setOriginalContent("file", "disk");
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
 
-    render(
+    renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
       </DndContext>,

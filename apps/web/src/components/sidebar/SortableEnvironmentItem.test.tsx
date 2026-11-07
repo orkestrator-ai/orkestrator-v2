@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
 import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
@@ -22,7 +23,7 @@ const environment = (id: string, projectHome = false) =>
   }) as Environment;
 
 const renderItem = (env: Environment) =>
-  render(
+  renderInAppCommandScope(
     <DndContext>
       <SortableContext items={[env.id]}>
         <SortableEnvironmentItem

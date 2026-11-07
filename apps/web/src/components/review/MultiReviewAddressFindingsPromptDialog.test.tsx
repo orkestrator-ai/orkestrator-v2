@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
@@ -71,7 +72,11 @@ function renderDialog(
     onSubmit,
     ...overrides,
   };
-  return { onSubmit, props, view: render(<MultiReviewAddressFindingsPromptDialog {...props} />) };
+  return {
+    onSubmit,
+    props,
+    view: renderInAppCommandScope(<MultiReviewAddressFindingsPromptDialog {...props} />),
+  };
 }
 
 afterEach(cleanup);

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef, type BackendId } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { FederationProvider } from "@/components/federation/FederationProvider";
@@ -103,7 +104,7 @@ function renderSearch(projects = [localProject], environments = [localEnvironmen
   const onSelectProject = mock((_projectId: string) => undefined);
   const onSelectEnvironment = mock((_environmentId: string) => undefined);
   const onSelectMachineProject = mock((_machine: MachineView, _projectId: string) => undefined);
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <ProjectSearchBar
         projects={projects}

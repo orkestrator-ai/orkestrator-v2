@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewStepKind,
@@ -91,7 +92,7 @@ describe("ReviewerTranscriptTail", () => {
           ? transcript({ transcript: "unchanged", messages: [] })
           : transcript(),
     );
-    render(
+    renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -134,7 +135,7 @@ describe("ReviewerTranscriptTail", () => {
         ],
       }),
     );
-    render(
+    renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -154,7 +155,7 @@ describe("ReviewerTranscriptTail", () => {
 
   test("does not read a reviewer that has no session yet, or while the tab is hidden", () => {
     const loadTranscript = mock(async () => transcript());
-    const view = render(
+    const view = renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -179,7 +180,7 @@ describe("ReviewerTranscriptTail", () => {
   });
 
   test("shows a read failure in place of the tail", async () => {
-    render(
+    renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -246,7 +247,7 @@ function renderStepTail(
   ) => Promise<MultiReviewStepTranscript>,
   props: Partial<Parameters<typeof StepTranscriptTail>[0]> = {},
 ) {
-  return render(
+  return renderInAppCommandScope(
     <StepTranscriptTail
       workflowId="multi-1"
       step="consolidate"
@@ -469,7 +470,7 @@ describe("transcript tail display bounds and activity", () => {
       ]).flat();
       if (kind === "step") renderStepTail(mock(async () => stepTranscript({ messages: rows })));
       else
-        render(
+        renderInAppCommandScope(
           <ReviewerTranscriptTail
             workflowId="multi-1"
             reviewerId="reviewer-1"
@@ -535,7 +536,7 @@ describe("deferred tail tool bodies", () => {
           return { detailRef: ref, toolOutput: "Deferred Bash output" };
         });
         if (kind === "reviewer")
-          render(
+          renderInAppCommandScope(
             <ReviewerTranscriptTail
               workflowId="workflow-tools"
               reviewerId="reviewer-tools"
@@ -606,7 +607,7 @@ describe("deferred tail tool bodies", () => {
 
 describe("MultiReviewFindingsBadge", () => {
   test("lists each finding with its severity, location and the reviewers that raised it", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewFindingsBadge
         reviewerCount={2}
         findings={[
@@ -674,7 +675,7 @@ describe("MultiReviewFindingsBadge", () => {
   });
 
   test("marks rows no accepted report confirms yet", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewFindingsBadge
         reviewerCount={1}
         provisionalCount={2}
@@ -726,7 +727,9 @@ describe("MultiReviewFindingsBadge", () => {
   });
 
   test("explains an empty list", () => {
-    const view = render(<MultiReviewFindingsBadge findings={[]} reviewerCount={0} />);
+    const view = renderInAppCommandScope(
+      <MultiReviewFindingsBadge findings={[]} reviewerCount={0} />,
+    );
     fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByText("Issues appear here as reviewers report them.")).toBeTruthy();
     view.rerender(<MultiReviewFindingsBadge findings={[]} reviewerCount={1} />);
@@ -737,7 +740,7 @@ describe("MultiReviewFindingsBadge", () => {
   });
 
   test("closes on a click outside or Escape, but not on a click inside", () => {
-    render(
+    renderInAppCommandScope(
       <div>
         <button type="button">Elsewhere</button>
         <MultiReviewFindingsBadge findings={[]} reviewerCount={1} />
@@ -759,7 +762,7 @@ describe("MultiReviewFindingsBadge", () => {
 });
 
 test("badge Escape is local to an active tab and respects another pane's fullscreen", () => {
-  const view = render(
+  const view = renderInAppCommandScope(
     <div>
       <button data-flow-fullscreen>Other fullscreen pane</button>
       <MultiReviewFindingsBadge findings={[]} reviewerCount={0} isActive />

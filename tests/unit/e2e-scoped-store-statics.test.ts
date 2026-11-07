@@ -4,7 +4,8 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
 const storesDir = path.join(root, "apps/web/src/stores");
-const agentTestingDir = path.join(root, "e2e/agent-testing");
+/** Untyped renderer access: `page.evaluate` imports in every e2e suite, and the scripts. */
+const scannedDirs = [path.join(root, "e2e"), path.join(root, "scripts")];
 
 /** Every per-node store hook (`export const useX = scopedStoreHook(def)`). */
 function scopedStoreHooks(): string[] {
@@ -26,14 +27,14 @@ function sourceFiles(dir: string): string[] {
 }
 
 /**
- * The agent-testing specs reach the renderer's stores through dynamic imports
+ * The e2e specs (and some scripts) reach the renderer's stores through dynamic imports
  * inside `page.evaluate`, which the type checker cannot see. Since 3018 a
  * per-node store's hook has no `getState`/`setState`/`subscribe` statics, so
  * such a call fails only at run time ("getState is not a function"). The
  * command scope's instance is `getWindowScope().commandScope().store(hook.def)`.
  */
-describe("agent-testing specs and per-node store statics", () => {
-  test("no spec calls a removed static on a per-node store hook", () => {
+describe("e2e suites, scripts and per-node store statics", () => {
+  test("none calls a removed static on a per-node store hook", () => {
     const hooks = scopedStoreHooks();
     expect(hooks.length).toBeGreaterThan(30);
     const statics = new RegExp(
@@ -41,7 +42,7 @@ describe("agent-testing specs and per-node store statics", () => {
       "g",
     );
     const findings: string[] = [];
-    for (const file of sourceFiles(agentTestingDir)) {
+    for (const file of scannedDirs.flatMap(sourceFiles)) {
       const lines = readFileSync(file, "utf8").split("\n");
       lines.forEach((line, index) => {
         for (const match of line.matchAll(statics)) {

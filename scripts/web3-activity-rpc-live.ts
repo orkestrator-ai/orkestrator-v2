@@ -145,9 +145,15 @@ async function run(profile: string, checkout: string, out: string) {
           // Observe the actual renderer projection, without changing store state.
           const modulePath = "/src/stores/environmentStore.ts";
           const { useEnvironmentStore } = await import(/* @vite-ignore */ modulePath);
+          // A per-node store has no statics since 3018: read the command scope's instance.
+          const scopeModulePath = "/src/lib/node-scope/app-window-scope.ts";
+          const { getWindowScope } = await import(/* @vite-ignore */ scopeModulePath);
           return (
-            useEnvironmentStore.getState().environments.find((e: { id: string }) => e.id === id)
-              ?.agentActivityState === wanted
+            getWindowScope()
+              .commandScope()
+              .store(useEnvironmentStore.def)
+              .getState()
+              .environments.find((e: { id: string }) => e.id === id)?.agentActivityState === wanted
           );
         },
         { id: environment.id, wanted },

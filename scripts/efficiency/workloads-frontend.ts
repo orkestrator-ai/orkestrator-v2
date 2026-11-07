@@ -14,14 +14,21 @@ import type { CaseDefinition, WorkloadContext, WorkloadDefinition } from "./harn
 
 type Json = Record<string, unknown>;
 
-interface StoreModule {
-  useNativeAgentProjectionStore: {
-    getState(): {
-      setProjection(key: string, projection: Json | null, sync?: Json | null): void;
-      reset(): void;
-      projectionBytes: ReadonlyMap<string, number>;
-    };
+interface ProjectionStore {
+  getState(): {
+    setProjection(key: string, projection: Json | null, sync?: Json | null): void;
+    reset(): void;
+    projectionBytes: ReadonlyMap<string, number>;
   };
+}
+
+interface StoreModule {
+  /** A zustand hook with statics before 3018; a scoped hook carrying its `def` after. */
+  useNativeAgentProjectionStore: Partial<ProjectionStore> & { def?: unknown };
+}
+
+interface WindowScopeModule {
+  getWindowScope(): { commandScope(): { store(def: unknown): ProjectionStore } };
 }
 
 const HISTORY_MESSAGE_BYTES = 4 * 1024;
@@ -32,9 +39,17 @@ const SESSION_KEY = "env-1\0codex\0efficiency";
 export async function frontendAccountingWorkload(
   context: WorkloadContext,
 ): Promise<WorkloadDefinition> {
-  const store = await context.load<StoreModule>(
+  const { useNativeAgentProjectionStore: hook } = await context.load<StoreModule>(
     "apps/web/src/stores/nativeAgentProjectionStore.ts",
   );
+  // Since 3018 a per-node store's hook has no statics; the app's command
+  // scope holds the instance they reached. Older roots still have the statics.
+  const store: ProjectionStore = hook.getState
+    ? (hook as ProjectionStore)
+    : (await context.load<WindowScopeModule>("apps/web/src/lib/node-scope/app-window-scope.ts"))
+        .getWindowScope()
+        .commandScope()
+        .store(hook.def);
   const accounting = await context.loadOptional<{
     retainedHistoryBytes: (messages: readonly unknown[]) => number;
   }>("apps/web/src/lib/native-history-accounting.ts");
@@ -52,7 +67,7 @@ export async function frontendAccountingWorkload(
       messages: live,
       revision: 1,
     };
-    store.useNativeAgentProjectionStore.getState().setProjection(
+    store.getState().setProjection(
       SESSION_KEY,
       { ...liveProjection, messages: [...history, ...live] },
       {
@@ -68,7 +83,7 @@ export async function frontendAccountingWorkload(
     id: `history-${mebibytes}MiB`,
     description: `${mebibytes} MiB retained history + ${LIVE_MESSAGES}-message live tail; one tail message changes`,
     run: async () => {
-      store.useNativeAgentProjectionStore.getState().reset();
+      store.getState().reset();
       const tally = newTally();
       const historyCount = Math.round((mebibytes * 1024 * 1024) / HISTORY_MESSAGE_BYTES);
       const history = countingMessages(
@@ -91,11 +106,9 @@ export async function frontendAccountingWorkload(
       install(history, changed);
       const measuredMs = performance.now() - started;
       const updateVisits = tally.messages;
-      const accounted = store.useNativeAgentProjectionStore
-        .getState()
-        .projectionBytes.get(SESSION_KEY);
+      const accounted = store.getState().projectionBytes.get(SESSION_KEY);
       const exact = Buffer.byteLength(JSON.stringify([...history, ...changed]));
-      store.useNativeAgentProjectionStore.getState().reset();
+      store.getState().reset();
       return {
         counters: {
           historyMessages: historyCount,

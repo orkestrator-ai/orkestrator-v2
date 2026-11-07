@@ -206,6 +206,31 @@
       }
     },
     {
+      "files": ["packages/protocol/src/contract/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "Contract definitions are shared with the browser renderer. Put Node- or Bun-dependent code in src/node/."
+              },
+              {
+                "group": ["../node/*", "../../node/*"],
+                "allowTypeImports": true,
+                "message": "Contract definitions are shared with the browser renderer and may import only types from src/node/."
+              },
+              {
+                "group": ["../testing/*", "../../testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["packages/protocol/src/log-vocabulary/**/*.ts"],
       "rules": {
         "no-restricted-imports": [

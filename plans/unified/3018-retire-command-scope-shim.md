@@ -127,3 +127,24 @@ Found while doing [6004](6004-documentation.md):
     - `service-preview-seeded` case 4 rendered `MessageMarkdown` in its own React root without a provider, so its `useNodeScope()` threw. The root now gets the app's window and command scope providers (`56488fccc`).
   - After the fixes: browser smoke 53 passed, 1 failed (the base vim case), 124 skipped; `test:agent:electron` 68 passed, 1 failed (vim), 5 skipped.
   - **Open, for the orchestrator (found by reading and type-checking, not run):** the component fixture app `e2e/fixture` still uses the removed statics. `bun check -p e2e/tsconfig.json`, which is part of `mise run typecheck` and `test:e2e`, reports 98 errors at HEAD in 28 fixture files, all from this change. `e2e/fixture/main.tsx` also renders with no `WindowScopeProvider`/`CommandNodeScopeProvider`, so its Vite development renderer throws on the first store hook. The fixture root needs the providers, and the fixtures need `appCommandStore`-style access. `scripts/efficiency/workloads-frontend.ts` and `scripts/web3-activity-rpc-live.ts` use statics too.
+- 2026-11-07 (claude-worker, fallout fixes; closes the open point above):
+  - Fixed:
+    - `tests/unit/hooks/useEnvironmentListSync.test.ts`: since `cd7225142` the hook listens in its own node scope, so every test threw on the provider-less `renderHook`. It now renders with `renderHookInAppCommandScope`, and its `onResourceResync` spy passes the scope through (`08f6f34d7`).
+    - `e2e/fixture`: `main.tsx` mounts `WindowScopeProvider` and `CommandNodeScopeProvider` at the root, as `App.tsx` does. The 25 fixture files that called removed statics now use `appCommandStore(hook.def)`. `bun check -p e2e/tsconfig.json` went from 98 errors to 0 (`824458ea7`).
+    - Scripts (`d4badfb31`):
+      - `scripts/efficiency/workloads-frontend.ts` uses `getWindowScope().commandScope().store(hook.def)` when the hook has no statics. Roots before 3018 still have them, and the harness also loads those.
+      - `scripts/web3-activity-rpc-live.ts`'s `page.evaluate` uses the same access.
+      - `tests/unit/e2e-scoped-store-statics.test.ts` now scans all of `e2e/` and `scripts/`, not only `e2e/agent-testing`.
+    - `tests/unit/lib/terminal-paste.test.ts`: one call lacked the `writer` that 4007 made required (the TS2741 noted above), so `mise run typecheck` failed (`f8f3aa728`).
+  - Results:
+    - Root group (`bun test ./tests --parallel=4`): 4308 pass, 11 skip, 3 fail, 2 errors. Every failure and error is the same on base `148e9ad0a`:
+      - The 3 fails: `dom-absence-scan` (`NativeChart.test.tsx` and `RichBlockFrame.test.tsx`) and the two `test-suite-ownership` checks (`session-history-environment.test.ts` and `tmux-mail-benchmark.test.ts`).
+      - The 2 errors: `goals-plan.test.ts` and `graphs-plan.test.ts` scan `plans/goals` and `plans/graphs`, which `148e9ad0a` deleted. The test files are unchanged since base.
+    - `test:browser`, component suite: 1549 passed, 151 skipped, 4 failed.
+      - `SidebarCrossMachineSelect` "remote row arming…" fails in both projects, and fails the same way in a scratch worktree at `148e9ad0a`. On macOS, Ctrl+Backspace deletes one character, not a word.
+      - `StreamingTranscript` "scrollbar departure after find…" (mobile) is a load-sensitive flake that predates this work. It failed 2 of 16 runs at base, 2 of 16 at `dfec5911a^`, and 1 of 12 with only the root providers added.
+      - `StreamingTranscript` "a detached reader…" (mobile) failed once under full-suite load and passed 16 of 16 alone.
+    - `test:browser`, public-site suite: pass.
+    - `mise run typecheck`: pass. `bun check -p e2e/agent-testing/tsconfig.json`: clean.
+    - `mise run format:check`: clean. `bunx oxlint .`: 0 errors, and no findings in the touched files.
+    - `mise run efficiency:baseline -- --workloads g`: runs.

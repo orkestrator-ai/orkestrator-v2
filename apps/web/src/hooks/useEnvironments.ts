@@ -102,7 +102,6 @@ function describeForToast(context: ErrorContext, message: string): string {
   return `${formatErrorContext(context)}: ${truncateForToast(message)}`;
 }
 
-/** Payload emitted when an environment is renamed in the background */
 interface EnvironmentSetupStartedPayload {
   environment_id: string;
   session_id: string;

@@ -46,14 +46,14 @@ flowchart LR
   end
   subgraph C["Track C: contract"]
     P1["Phase 1<br/>contract foundation<br/>1001–1012"]
-    P7["Phase 7<br/>domain conversion<br/>7001–7013"]
+    P7["Phase 7<br/>domain conversion<br/>7001–7014"]
     P1 --> P7
   end
   subgraph S["Track S: scopes"]
     P2["Phase 2<br/>NodeScope + transport<br/>2001–2013"]
-    P3["Phase 3<br/>store + service factories<br/>3001–3017"]
-    P4["Phase 4<br/>in-tree workspace<br/>4001–4006"]
-    P5["Phase 5<br/>cross-node services<br/>5001–5006"]
+    P3["Phase 3<br/>store + service factories<br/>3001–3018"]
+    P4["Phase 4<br/>in-tree workspace<br/>4001–4007"]
+    P5["Phase 5<br/>cross-node services<br/>5001–5007"]
     P6["Phase 6<br/>retire realms<br/>6001–6004"]
     P2 --> P3 --> P4 --> P5 --> P6
   end
@@ -105,7 +105,7 @@ fields change.
 | 7 | 3013, 7010, 7012, 7013 (7013 is also date-gated), 7014 |
 | 8 | 4001 |
 | 9 | 4002, 4003, 4004, 4005, 4007, 5001, 5002, 5003, 5004 |
-| 10 | 4006, 5005 (optional) |
+| 10 | 3018, 4006, 5005 (optional), 5007 |
 | 11 | 6001 |
 | 12 | 6002, 6003 (after one release with in-tree as default) |
 | 13 | 6004 |
@@ -125,8 +125,8 @@ fields change.
   - [3015](3015-persistence-keys-per-node.md), [3016](3016-rich-content-and-caches.md) and [3017](3017-window-stores-node-qualified.md) are groundwork and can start in Phase 2.
   - After [3001](3001-scoped-store-shim-and-ratchet.md) and [3002](3002-lib-backend-client-parameter.md), these are independent and can run side by side: [3003](3003-stores-batch-a-leaf-light.md), [3004](3004-project-and-environment-stores.md), [3005](3005-config-layering.md), [3007](3007-files-panel-split.md), [3008](3008-terminal-portal-and-artifact-hosts.md) and [3014](3014-scoped-services-and-startup.md).
   - Then [3006](3006-ui-store-split.md), [3009](3009-agent-and-transcript-stores.md), [3011](3011-workflow-stores-a.md) and [3012](3012-workflow-stores-b.md) run side by side.
-  - [3010](3010-sessions-terminals-tmux-mail.md) and [3013](3013-pane-layout-store.md) come last.
-- **Phase 4:** after [4001](4001-in-tree-workspace-seam.md), [4002](4002-hydration-tiers-and-budgets.md), [4003](4003-snapshot-first-rehydration.md), [4004](4004-runtime-shim-guard.md) and [4005](4005-direct-navigation.md) are independent. Phase 5's [5001](5001-attention-per-scope.md)–[5004](5004-coordinator-and-portal-through-command-scope.md) can run at the same time.
+  - [3010](3010-sessions-terminals-tmux-mail.md) and [3013](3013-pane-layout-store.md) come last, then [3018](3018-retire-command-scope-shim.md) (added 2026-11-07), which also waits for [4004](4004-runtime-shim-guard.md).
+- **Phase 4:** after [4001](4001-in-tree-workspace-seam.md), [4002](4002-hydration-tiers-and-budgets.md), [4003](4003-snapshot-first-rehydration.md), [4004](4004-runtime-shim-guard.md), [4005](4005-direct-navigation.md) and [4007](4007-workspace-calls-its-node.md) are independent. [5007](5007-summary-overlay.md) follows [4002](4002-hydration-tiers-and-budgets.md). Phase 5's [5001](5001-attention-per-scope.md)–[5004](5004-coordinator-and-portal-through-command-scope.md) can run at the same time.
 - **Phase 6:** [6002](6002-delete-web-realm-code.md) (web) and [6003](6003-delete-desktop-realm-code.md) (desktop) are independent.
 - **Phase 7:** after the pilot, the nine domain items [7001](7001-domain-native-sessions.md)–[7009](7009-domain-coordinator-servers-system.md) are independent of each other. [7011](7011-typed-events.md) can start as early as wave 4. Suggested order when there is only one worker: 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, which is the report's order, with the most client-facing first.
 
@@ -231,6 +231,7 @@ flowchart TB
     n3012[3012 workflow B]:::s
     n3013[3013 paneLayout]:::s
     n3014[3014 services]:::s
+    n3018[3018 retire shim]:::s
     n2001 --> n3001
     n2010 --> n3001
     n2010 --> n3002
@@ -265,6 +266,7 @@ flowchart TB
     n3009 --> n3013
     n3010 --> n3013
     n3001 --> n3014
+    n3013 --> n3018
   end
 
   subgraph Phase4["Phase 4: in-tree workspace"]
@@ -274,6 +276,7 @@ flowchart TB
     n4004[4004 shim guard]:::s
     n4005[4005 direct navigation]:::s
     n4006[4006 qualification]:::s
+    n4007[4007 workspace calls its node]:::s
     n2013 --> n4001
     n3013 --> n4001
     n3014 --> n4001
@@ -288,6 +291,9 @@ flowchart TB
     n4004 --> n4006
     n4005 --> n4006
     n2009 --> n4006
+    n4001 --> n4007
+    n4007 --> n4006
+    n4004 --> n3018
   end
 
   subgraph Phase5["Phase 5: cross-node services"]
@@ -297,6 +303,7 @@ flowchart TB
     n5004[5004 coordinator + portal]:::s
     n5005[5005 multiplexed relay, optional]:::s
     n5006[5006 fleet currency]:::c
+    n5007[5007 summary overlay]:::s
     n4001 --> n5001
     n0002 --> n5001
     n4001 --> n5002
@@ -308,6 +315,7 @@ flowchart TB
     n4002 --> n5005
     n1004 --> n5006
     n1005 --> n5006
+    n4002 --> n5007
   end
 
   subgraph Phase6["Phase 6: retire realms"]
@@ -333,6 +341,7 @@ flowchart TB
     n7011[7011 typed events]:::c
     n7012[7012 allow-listed grants]:::c
     n7013[7013 retire legacy adapters]:::c
+    n7014[7014 Zod to Effect Schema]:::c
     n1008 --> n70xx
     n1010 --> n70xx
     n1011 --> n70xx
@@ -342,6 +351,7 @@ flowchart TB
     n70xx --> n7012
     n0006 --> n7012
     n70xx --> n7013
+    n70xx --> n7014
   end
 ```
 
@@ -361,10 +371,10 @@ All independent; start now. Report: [§12 Phase 0](../../docs/reports/unified-fe
 
 Exit criteria:
 
-- [ ] The realm request bug is fixed with a test and checked live.
-- [ ] Machines without a realm alert.
-- [ ] The measurements report exists, and §8.2's budgets are measured or explicitly kept as placeholders.
-- [ ] Todo 5740 is closed or its findings are fixed.
+- [x] The realm request bug is fixed with a test and checked live. *(Completeness check 2026-11-07: [0001](0001-realm-request-drift.md), live on a real Electron command node with a leaf: `home`, a work target, `bugReport` and `environment-rebuild` each applied on first open.)*
+- [x] Machines without a realm alert. *(Completeness check 2026-11-07: [0002](0002-attention-without-realm.md) live: 0 cues with the fix reverted, 1 with it.)*
+- [x] The measurements report exists, and §8.2's budgets are measured or explicitly kept as placeholders. *(Completeness check 2026-11-07: `docs/reports/unified-federation-measurements.md`; §8.2 marked kept as placeholder in the report, [0004](0004-measurement-report.md).)*
+- [x] Todo 5740 is closed or its findings are fixed. *(Completeness check 2026-11-07: [0006](0006-grant-scope-live-evidence.md) ran both tasks live; 5740 closed.)*
 
 ## Phase 1: contract foundation
 
@@ -372,9 +382,9 @@ Report: [§11](../../docs/reports/unified-federation.md#11-versioned-interfaces)
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 1001 | [1001-schema-library-spike.md](1001-schema-library-spike.md) | 1 | done | — | Measure the renderer bundle cost of Effect Schema against Zod 4, `zod/mini` and hand-written guards, record Decision 13.8 (Effect, the user's choice), and add `effect` to protocol. |
+| 1001 | [1001-schema-library-spike.md](1001-schema-library-spike.md) | 1 | in-progress | — | Measure the renderer bundle cost of Effect Schema against Zod 4, `zod/mini` and hand-written guards, record Decision 13.8 (Effect, the user's choice), and add `effect` to protocol. |
 | 1002 | [1002-contract-primitives.md](1002-contract-primitives.md) | 1 | done | 1001 | `defineDomain`, `defineCommand`, `defineEvent`, the invoke envelope, typed error codes and `domainClient` types in `packages/protocol/src/contract/`. |
-| 1003 | [1003-backend-register-overload.md](1003-backend-register-overload.md) | 1 | done | 1002 | `register(def, handler)` with tolerant parsing and critical fields, through every wrapping registrar; the envelope on HTTP, IPC and the relay. |
+| 1003 | [1003-backend-register-overload.md](1003-backend-register-overload.md) | 1 | in-progress | 1002 | `register(def, handler)` with tolerant parsing and critical fields, through every wrapping registrar; the envelope on HTTP, IPC and the relay. |
 | 1004 | [1004-hello-domains.md](1004-hello-domains.md) | 1 | done | 1002, 1003 | A new top-level hello field, `domains: {min, max}` per domain, parsed explicitly with bounds. Pre-contract nodes are detected. |
 | 1005 | [1005-typed-incompatibility-errors.md](1005-typed-incompatibility-errors.md) | 1 | done | 1002, 0007 | `unknown-command` / `unsupported-version` / `unsupported-field` codes survive web HTTP and Electron IPC (both drop `code` today). All text matchers are replaced. |
 | 1006 | [1006-contract-manifest-generator.md](1006-contract-manifest-generator.md) | 1 | done | 1003 | `contracts/manifest.json` from the live registry, with `--check` in CI. Every string-registered command must be assigned a domain. |
@@ -387,9 +397,9 @@ Report: [§11](../../docs/reports/unified-federation.md#11-versioned-interfaces)
 
 Exit criteria:
 
-- [ ] The pilot domains are negotiated, adapted and CI-checked, and their register rows are retired or made mechanical.
-- [ ] A new string-registered command fails CI.
-- [ ] Typed errors survive every transport.
+- [x] The pilot domains are negotiated, adapted and CI-checked, and their register rows are retired or made mechanical. *(Completeness check 2026-11-07: [1010](1010-pilot-node-mail-and-ticket-sync.md), with 1008's contract CI and 1009's adapters.)*
+- [x] A new string-registered command fails CI. *(Completeness check 2026-11-07: 1006's domain map check and 1011's shrink-only untyped ratchet in `contract:check`; the baseline is now 0.)*
+- [x] Typed errors survive every transport. *(Completeness check 2026-11-07: [1005](1005-typed-incompatibility-errors.md): codes kept over web HTTP, Electron IPC and the node link.)*
 
 ## Phase 2: NodeScope and transport (behaviour-neutral)
 
@@ -397,7 +407,7 @@ Report: [§5](../../docs/reports/unified-federation.md#5-target-architecture), [
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | done | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
+| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | in-progress | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
 | 2002 | [2002-browser-transport-split.md](2002-browser-transport-split.md) | 2 | done | 2001 | Move `createNodeTransport` out of `web-gateway.ts` (1,743 lines) and cut its couplings to the window shell. Two transports coexist. |
 | 2003 | [2003-browser-credentials-and-auth-transport.md](2003-browser-credentials-and-auth-transport.md) | 2 | done | 2002 | `setCredential` on reopen, rich-content cleared per node, no global `fetch`/`EventSource` patch for node clients, and an `acp-client.ts` fix. |
 | 2004 | [2004-browser-node-clients-registry.md](2004-browser-node-clients-registry.md) | 2 | done | 2002, 2003 | `node-clients.ts`: in-memory grants, direct then relay, reopen without reload, a `pagehide` close, per-node URLs, WebSocket terminals for leaves. |
@@ -406,15 +416,15 @@ Report: [§5](../../docs/reports/unified-federation.md#5-target-architecture), [
 | 2007 | [2007-desktop-node-ipc-and-events.md](2007-desktop-node-ipc-and-events.md) | 2 | done | 2006 | `orkestrator:invoke(..., { nodeId })`, admin refusal by node, `orkestrator:node-event`, and a preload `node(nodeId)` API. |
 | 2008 | [2008-desktop-request-auth.md](2008-desktop-request-auth.md) | 2 | done | 2006 | One longest-prefix request-auth resolver over the command scope and every node scope of a window. |
 | 2009 | [2009-desktop-previews-and-gateway-snapshot.md](2009-desktop-previews-and-gateway-snapshot.md) | 2 | done | 2007 | A preview runtime per node scope (`orkestrator:browser-preview:*` resolved by tab); `localInstallationId` and `backendOnThisDevice(nodeId)`. |
-| 2010 | [2010-command-scope-wiring.md](2010-command-scope-wiring.md) | 2 | in-progress | 2001, 2002, 2007 | Browser and desktop `NodeClient`s; `invoke`/`listen` become command-scope wrappers; the 52 direct `window.orkestrator` users are baselined. |
+| 2010 | [2010-command-scope-wiring.md](2010-command-scope-wiring.md) | 2 | done | 2001, 2002, 2007 | Browser and desktop `NodeClient`s; `invoke`/`listen` become command-scope wrappers; the 52 direct `window.orkestrator` users are baselined. |
 | 2011 | [2011-scope-domain-negotiation.md](2011-scope-domain-negotiation.md) | 2 | done | 2010, 1009 | **Track join.** Negotiated `domains` per connection generation; typed `invoke(def)`; `scope.domain(def)`. |
 | 2012 | [2012-transport-lint-boundary.md](2012-transport-lint-boundary.md) | 2 | done | 2010 | A source guard: transports are reached only through a scope, and existing imports may only fall. |
 | 2013 | [2013-second-scope-proof.md](2013-second-scope-proof.md) | 2 | done | 2004, 2005, 2008, 2009, 2010 | Exit: a live harness holds the command scope and a leaf scope in one renderer, on desktop and browser, over direct and relay routes. |
 
 Exit criteria:
 
-- [ ] The app runs entirely through the command scope with no visible change.
-- [ ] One renderer can hold a second, leaf, scope on both host families ([2013](2013-second-scope-proof.md)).
+- [x] The app runs entirely through the command scope with no visible change. *(Completeness check 2026-11-07: [2010](2010-command-scope-wiring.md): during the browser smoke run at `9d061d7aa` the opt-in observer saw all 14,535 invokes and 12,540 listens go through the command-scope client.)*
+- [x] One renderer can hold a second, leaf, scope on both host families ([2013](2013-second-scope-proof.md)). *(Completeness check 2026-11-07: 2013's harness passed live on desktop and browser, direct and relay, plus the two-leaf case.)*
 
 ## Phase 3: store and service factories
 
@@ -434,7 +444,7 @@ Report: [§7](../../docs/reports/unified-federation.md#7-store-and-service-scopi
 | 3010 | [3010-sessions-terminals-tmux-mail.md](3010-sessions-terminals-tmux-mail.md) | 3 | done | 3008, 3009 | `session`, `terminalSession` (a hot spot the report missed), `claudeTmux` and `agentMail` stores. |
 | 3011 | [3011-workflow-stores-a.md](3011-workflow-stores-a.md) | 3 | done | 3004 | Pipeline, Kanban, feature plan, coordinator and graph stores, plus their persistence services. |
 | 3012 | [3012-workflow-stores-b.md](3012-workflow-stores-b.md) | 3 | done | 3004, 3016 | Design, web annotations, GitHub issues, PRs, change projection, file dirty and preview service stores. |
-| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | done | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
+| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | in-progress | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
 | 3014 | [3014-scoped-services-and-startup.md](3014-scoped-services-and-startup.md) | 3 | done | 3001 | `App.tsx:355-369`'s six `start*` services become per-scope services; the read coordinator is split into window and node parts. |
 | 3015 | [3015-persistence-keys-per-node.md](3015-persistence-keys-per-node.md) | 3 | done | 2001 | `desktopConnectionStorageKey(base, nodeId)`; the local-drafts key is namespaced; the command node's keys do not move. |
 | 3016 | [3016-rich-content-and-caches.md](3016-rich-content-and-caches.md) | 3 | done | 2001, 2003 | Rich-content identity per node, byte-bounded caches under window budgets, and capability caches per scope. |
@@ -443,8 +453,8 @@ Report: [§7](../../docs/reports/unified-federation.md#7-store-and-service-scopi
 
 Exit criteria:
 
-- [ ] The shim baseline is zero for every store the workspace subtree touches.
-- [ ] `mise run test` and the browser suites pass with only the command scope.
+- [x] The shim baseline is zero for every store the workspace subtree touches. *(Completeness check 2026-11-07: the `scoped-store-shim` entry of `tests/source-guards/baseline.json` is empty for every store.)*
+- [ ] `mise run test` and the browser suites pass with only the command scope. *(Open 2026-11-07: the browser smoke passed at `ee73894da` and `9d061d7aa` apart from the base-failing vim case; the aggregate `mise run test` is not recorded yet; the orchestrator runs it at the end.)*
 
 ## Phase 4: in-tree workspace behind a per-node setting
 
@@ -462,8 +472,8 @@ Report: [§8](../../docs/reports/unified-federation.md#8-data-lifecycle-hydratio
 
 Exit criteria:
 
-- [ ] A leaf renders in-tree with feature parity on desktop, browser and iOS.
-- [ ] Measured memory with six warm nodes is within budget on the iPad.
+- [ ] A leaf renders in-tree with feature parity on desktop, browser and iOS. *(Open 2026-11-07: desktop and browser pass [4006](4006-multi-node-qualification.md)'s multi-node e2e (8/8 and 7 passed, 1 skipped at `9d061d7aa`); iOS parity is not checked, because no iPad or usable simulator is reachable from this host.)*
+- [ ] Measured memory with six warm nodes is within budget on the iPad. *(Open 2026-11-07: no iPad reachable from this host; [4006](4006-multi-node-qualification.md) keeps its iPad box open.)*
 
 ## Phase 5: cross-node services
 
@@ -477,12 +487,12 @@ Report: [§9](../../docs/reports/unified-federation.md#9-cross-node-features), [
 | 5004 | [5004-coordinator-and-portal-through-command-scope.md](5004-coordinator-and-portal-through-command-scope.md) | 5 | done | 4001 | Portal APIs, the leaf coordinator gate and `machineInvoke` go through the command scope. |
 | 5005 | [5005-multiplexed-relay-stream.md](5005-multiplexed-relay-stream.md) | 5 | done | 0004, 4002 | Optional: one relay request carries N leaves' event streams. Only if measurements show pressure; otherwise drop it. |
 | 5006 | [5006-fleet-currency.md](5006-fleet-currency.md) | 5 | done | 1004, 1005 | Node version skew and missing domains in the sidebar; typed errors link to the update; an optional update policy. |
-| 5007 | [5007-summary-overlay.md](5007-summary-overlay.md) | 5 | not-started | 4002 | Added 2026-11-07: warm and live scopes overlay their sidebar, ⌘K and title-bar summary rows (§9 Sidebar). |
+| 5007 | [5007-summary-overlay.md](5007-summary-overlay.md) | 5 | done | 4002 | Added 2026-11-07: warm and live scopes overlay their sidebar, ⌘K and title-bar summary rows (§9 Sidebar). |
 
 Exit criteria:
 
-- [ ] No realm protocol message is used for an in-tree node.
-- [ ] Every node alerts once, from any tier.
+- [x] No realm protocol message is used for an in-tree node. *(Completeness check 2026-11-07: the realm protocol is deleted ([6002](6002-delete-web-realm-code.md) `4312188ab`, [6003](6003-delete-desktop-realm-code.md) `0c3e0a37b`); before that 4005 and 5003 asserted it with the loopback observer.)*
+- [x] Every node alerts once, from any tier. *(Completeness check 2026-11-07: [5001](5001-attention-per-scope.md) live, and [4006](4006-multi-node-qualification.md)'s attention flow: 1 cue from the warm hidden leaf on desktop and browser.)*
 
 ## Phase 6: retire realms
 
@@ -491,14 +501,14 @@ Report: [§12 Phase 6](../../docs/reports/unified-federation.md#12-migration-pla
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
 | 6001 | [6001-in-tree-by-default.md](6001-in-tree-by-default.md) | 6 | done | 4006, 5001, 5002, 5003, 5004, 0006 | In-tree by default for every node, with realms as a one-release rollback setting. |
-| 6002 | [6002-delete-web-realm-code.md](6002-delete-web-realm-code.md) | 6 | in-progress | 6001 | Delete the web realm code, including the boot-timing files the report missed; `MAX_OPEN_REALMS` goes. |
+| 6002 | [6002-delete-web-realm-code.md](6002-delete-web-realm-code.md) | 6 | done | 6001 | Delete the web realm code, including the boot-timing files the report missed; `MAX_OPEN_REALMS` goes. |
 | 6003 | [6003-delete-desktop-realm-code.md](6003-delete-desktop-realm-code.md) | 6 | done | 6001 | Delete realm views, portal and realm IPC, preload APIs and `DEFAULT_MAX_VIEWS`; clean up `persist:orkestrator-realm-*` partitions a release later. |
 | 6004 | [6004-documentation.md](6004-documentation.md) | 6 | in-progress | 6002, 6003 | Living docs: command nodes, federation, renderer security, the node-scopes guide, the `AGENTS.md` row. |
 
 Exit criteria:
 
-- [ ] No realm code, IPC, preload API or partition remains.
-- [ ] The docs describe node scopes as current.
+- [x] No realm code, IPC, preload API or partition remains. *(Completeness check 2026-11-07: 6002 and 6003 deleted the web and desktop realm code, IPC and preload APIs; 6003 removes the `persist:orkestrator-realm-*` partitions at startup.)*
+- [x] The docs describe node scopes as current. *(Completeness check 2026-11-07: [6004](6004-documentation.md) `b4b6e3ff8`; realms appear only as retired history.)*
 
 ## Phase 7: domain conversion and allow-listed grants (rolling)
 
@@ -523,8 +533,8 @@ Report: [§10.2](../../docs/reports/unified-federation.md#102-tighten-the-grant-
 
 Exit criteria:
 
-- [ ] Every grant-reachable command is defined, and grants fail closed.
-- [ ] The untyped baseline is zero, or what remains is listed with a reason.
+- [x] Every grant-reachable command is defined, and grants fail closed. *(Completeness check 2026-11-07: the manifest has 999 commands, 999 defined; [7012](7012-allow-listed-grants.md) derives the grant scope from `access: "workspace"` and fails closed.)*
+- [x] The untyped baseline is zero, or what remains is listed with a reason. *(Completeness check 2026-11-07: `untyped-baseline.json` total 0; the manifest has 0 untyped.)*
 
 ## Corrections to the report
 
@@ -556,7 +566,7 @@ the user's approval and an entry in the report.
 
 | Decision | Adopted | Where it is settled or checked |
 |---|---|---|
-| 13.1 Architecture | C: one tree, per-node store instances | Whole plan. **This is the go/no-go decision for Tracks S and the realm deletion; confirm before starting Phase 3.** |
+| 13.1 Architecture | C: one tree, per-node store instances | Whole plan. **This is the go/no-go decision for Tracks S and the realm deletion; confirm before starting Phase 3.** Confirmed by the user on 2026-11-07, in one combined PR. |
 | 13.2 Scoping | B: explicit scope plus context, with a ratcheted shim | [3001](3001-scoped-store-shim-and-ratchet.md), [4004](4004-runtime-shim-guard.md) |
 | 13.3 Hydration limit | B: byte budgets with tiers | [4002](4002-hydration-tiers-and-budgets.md), using [0004](0004-measurement-report.md)'s numbers |
 | 13.4 Browser path | A: direct first, relay fallback; C (multiplexed) only if measured | [2004](2004-browser-node-clients-registry.md), [5005](5005-multiplexed-relay-stream.md) |
@@ -568,14 +578,12 @@ the user's approval and an entry in the report.
 
 ## Needs live evidence or user approval
 
-- **Live evidence:** the items that need two attached `dev:test` profiles, an iPad or an older release:
-  - [0001](0001-realm-request-drift.md), [0002](0002-attention-without-realm.md), [0004](0004-measurement-report.md), [0006](0006-grant-scope-live-evidence.md);
-  - [1010](1010-pilot-node-mail-and-ticket-sync.md), [1012](1012-mixed-version-qualification.md);
-  - [2013](2013-second-scope-proof.md), [4006](4006-multi-node-qualification.md), [5001](5001-attention-per-scope.md).
+- **Live evidence still missing** (completeness check, 2026-11-07; the two-profile checks of 0001, 0002, 0006, 1010, 1012, 2013, 4006 and 5001 have run):
+  - an iPad: [1001](1001-schema-library-spike.md)'s parse time, [0004](0004-measurement-report.md)'s WebContent memory and jetsam point, [4006](4006-multi-node-qualification.md)'s six-warm-node memory (Phase 4's exit criteria), and iOS parity;
+  - [0004](0004-measurement-report.md)'s other hosts: a packaged desktop build and a non-empty transcript, Safari itself, `nextHopProtocol` on LAN and Tailscale Serve, and cold open on Linux and over real LAN or tailnet latency.
   - No billed provider turns unless the user authorises them.
 - **User approval needed:**
-  - enabling the scheduled workflow in [1012](1012-mixed-version-qualification.md), because it is a repository workflow change;
-  - the default of the optional update policy in [5006](5006-fleet-currency.md);
-  - proceeding from [6001](6001-in-tree-by-default.md) to deletion;
+  - the concrete default of the optional update policy in [5006](5006-fleet-currency.md) (all channels off): the user approved using the report's recommended default, and this reading of it still needs the user's confirmation;
   - any change to a §13 decision.
+- **Resolved (2026-11-07, approved by the user, in one combined PR):** proceeding from [6001](6001-in-tree-by-default.md) to deletion (6002, 6003 done); enabling the scheduled workflow in [1012](1012-mixed-version-qualification.md); confirming Decision 13.1 before Phase 3.
 - **Effort sizes** in item files (S < 1 week, M 1–3 weeks, L 3–6 weeks of one engineer-equivalent) are estimates carried over from the report, not measurements.

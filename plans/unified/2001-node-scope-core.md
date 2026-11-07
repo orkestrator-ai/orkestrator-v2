@@ -3,7 +3,7 @@ id: 2001
 title: "NodeScope, WindowScope and the scoped store and service primitives"
 phase: 2
 plan: "§5.1, §6.1, §7.2 and §12 Phase 2.1"
-status: done
+status: in-progress
 depends_on: []
 blocked_by: ""
 owner: claude-worker
@@ -65,7 +65,8 @@ The primitives every later item uses exist and are tested. Only the command scop
 
 ## Done when
 
-- [x] Primitives are merged and mounted, and `mise run test` and the browser smoke test pass with no visible change. Committed on this branch (stands in for main); browser smoke 2026-11-07 at `ee73894da`: 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log); `mise run test`: aggregate suite left to review preparation.
+- [x] Primitives are merged and mounted, and the browser smoke test passes with no visible change. Committed on this branch (stands in for main); browser smoke 2026-11-07 at `ee73894da`: 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log). *(Split 2026-11-07 from "…, and `mise run test` and the browser smoke test pass …".)*
+- [ ] `mise run test` passes (the orchestrator runs it at the end).
 
 ## Notes
 
@@ -77,7 +78,8 @@ The primitives every later item uses exist and are tested. Only the command scop
 - **Decision: byte budget at its limit.** If evicting every eligible entry (other nodes first, oldest first; then the reserving node's own older entries unless it is shown; never the shown node) still cannot make room, the reservation is refused and nothing is evicted. The budget is therefore a hard bound (invariant 11). Default totals (transcripts 64 MiB, artifacts 16 MiB, images 32 MiB) are placeholders until [0004](0004-measurement-report.md) and [4002](4002-hydration-tiers-and-budgets.md) set real ones; nothing reserves from them yet.
 - **Decision: providers never open or dispose scopes** (invariant 2). `useNodeScope()` and `useWindowScope()` throw outside a provider when `import.meta.env` reports DEV, MODE `test` or NODE_ENV `test`. In production they fall back to the app's command scope. `NodeScopeProvider` throws when the window has no scope open for its `nodeId`.
 - **Behaviour neutrality.** `App()` wraps `ConnectedApp` in `WindowScopeProvider` and `CommandNodeScopeProvider`. Nothing reads the scope yet. The command client reads `window.orkestrator` on every call and does not consult the prefetched-response cache, which moves onto the scope in [2010](2010-command-scope-wiring.md). Its `suspend` and `resume` do nothing; `dispose` drops only listeners registered through it.
-- **Open: Done when.** This is not merged yet, and neither the aggregate `mise run test` nor the browser smoke test was run here. Focused guards run alongside (`tests/unit` test-suite-ownership, source-guards) fail on files this item does not touch (`e2e/agent-testing/session-history-environment.test.ts`, `tests/unit/tmux-mail-benchmark.test.ts`, backend and bridge source-guard baselines). They need separate triage.
+- *(2026-11-07, orchestrator, completeness check: stale; the browser smoke suite was run later: `mise run test:agent:browser` at `ee73894da` and again at `9d061d7aa` (after the realm deletion), 53 passed, 1 failed, 124 skipped each time, the one failure the vim case that also fails at base `148e9ad0a` on this host ([4006](4006-multi-node-qualification.md) Notes); the aggregate `mise run test` is now its own open Done-when box.)* **Open: Done when.** This is not merged yet, and neither the aggregate `mise run test` nor the browser smoke test was run here. Focused guards run alongside (`tests/unit` test-suite-ownership, source-guards) fail on files this item does not touch (`e2e/agent-testing/session-history-environment.test.ts`, `tests/unit/tmux-mail-benchmark.test.ts`, backend and bridge source-guard baselines). They need separate triage.
+- **Status (2026-11-07, orchestrator, completeness check).** Open only for the aggregate `mise run test` box, which the orchestrator runs at the end of the branch; everything else is done.
 
 ## Work log
 
@@ -85,3 +87,5 @@ The primitives every later item uses exist and are tested. Only the command scop
 - 2026-11-07 (claude-worker, 2013 live pass): ran the browser smoke suite (`mise run test:agent:browser`) against a running `dev:test` profile `uf-2013-smoke` (started like the isolated runner: `--fixture --no-agent-credentials --agent-platforms codex`) at commit `6860254e8`: 51 passed, 3 failed, 124 skipped. The failures are all `e2e/agent-testing/terminal-input-resume.spec.ts`: one fails at base `148e9ad0a` on this host too (vim ruler), two are spec drift after 3008 made `terminalPortalStore.getTerminal` take a `nodeId` (the spec still calls `getTerminal(environmentId, tabId)`). The smoke run did not pass, so the smoke box stays open; it can be ticked after `terminal-input-resume.spec.ts` is updated for 3008 and a smoke run passes (the vim case excepted or fixed). Details and result files: [2013](2013-second-scope-proof.md) Notes, `output/agent-testing/uf-2013/`.
 - 2026-11-07 (claude-worker, 4006): browser smoke `mise run test:agent:browser` at `4ece07c9a` against `uf-4006-smoke` (started as the isolated runner starts its own, flags and environment): 52 passed, 2 failed, 124 skipped. Failures: `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental) and `browser-gateway.spec.ts` "capped file tree … across inactive views and reload" (390 px after a reload the projects drawer stays open after selecting the environment; passed at `6860254e8`, so a branch regression since; details in [4006](4006-multi-node-qualification.md) Notes). The smoke box stays open.
 - 2026-11-07 (claude-worker, 4006 fixes): browser smoke `mise run test:agent:browser` at `ee73894da` against `uf-fix-smoke` (started as the isolated runner starts its own, flags and environment): 53 passed, 1 failed, 124 skipped. The one failure is `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental); the capped-file-tree regression is fixed (`e46872643`). Results: `output/agent-testing/uf-fix/evidence/smoke/results.json`; details in [4006](4006-multi-node-qualification.md) Notes.
+- 2026-11-07 (orchestrator, completeness check): the ticked Done-when box claimed `mise run test` passes, but no aggregate run is recorded. Split it: the proven part stays ticked, "`mise run test` passes" is its own open box (the orchestrator runs it at the end). `status: in-progress` until then.
+- 2026-11-07 (orchestrator, completeness check): marked the "smoke not run" note stale (run at `ee73894da` and `9d061d7aa`).

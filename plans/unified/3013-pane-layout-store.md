@@ -3,7 +3,7 @@ id: 3013
 title: "Convert paneLayoutStore and its persistence services (last)"
 phase: 3
 plan: "§12 Phase 3.6"
-status: done
+status: in-progress
 depends_on: [3006, 3007, 3008, 3009, 3010]
 blocked_by: ""
 owner: claude-worker
@@ -49,7 +49,8 @@ The largest and most connected store is per node. After this item, the workspace
 ## Done when
 
 - [x] The shim baseline is zero for the workspace subtree.
-- [x] `mise run test` and `test:agent:browser` pass with only the command scope. `test:agent:browser`: 2026-11-07 at `ee73894da`, 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log). `mise run test`: aggregate suite left to review preparation.
+- [x] `test:agent:browser` passes with only the command scope: 2026-11-07 at `ee73894da`, 53 passed, the only failure the vim case that fails at base `148e9ad0a` on this host (see Work log). *(Split 2026-11-07 from "`mise run test` and `test:agent:browser` pass with only the command scope".)*
+- [ ] `mise run test` passes with only the command scope (the orchestrator runs it at the end).
 
 ## Notes
 
@@ -77,9 +78,11 @@ The largest and most connected store is per node. After this item, the workspace
 - **Outside the file set (minimal).** `lib/scope-services.ts` (the two service lists) and its test, `stores/terminalPortalStore.ts` (the link source's `nodeId`), `components/layout/ActionBar.test.tsx` (the activation mock records the environment and tab only), `docs/development/node-scopes.md` (the warm set). Store-call sites in components, hooks and libs listed above.
 - **For the orchestrator/report.** §7.4 can say the pane-layout persistence and completion notes are warm-scope services. 4004: the workspace-subtree store set is above (every shimmed store). 4001: key the native browser preview by node.
 - Aggregate suite (`mise run test`) and `test:agent:browser` left to review preparation.
+- **Status (2026-11-07, orchestrator, completeness check).** Open only for the aggregate `mise run test` box, which the orchestrator runs at the end of the branch; everything else is done.
 
 ## Work log
 
 - 2026-11-07 (claude-worker): converted `paneLayoutStore` to a scoped def with the shim hook (barrel, `SHIMMED_STORES`), its tab teardown onto the scope's stores, portals, handoffs and node; pane-layout persistence, the authoritative reconcile and activations, the `pane-layout` change handler, completion notes, coordinator navigation, tab launches and every other caller per scope; persistence and completion notes in `WARM_SCOPE_SERVICES`; pane selection storage keyed by the scope's node; the remaining shim uses of other stores in the workspace subtree (terminal links, external links, PR opener, notifications, `CoordinatorPanel`, `tab-initial-prompt`). Shim baseline: `pane-layout` 98 → 0 and every other store of the subtree to 0; only `[ui] WorkspaceRealmHost.tsx` 2 (realm-only) remains anywhere. Tests: new `stores/paneLayoutStore.scopes.test.tsx` (6: two nodes' "default" panes and identical tab ids independent, teardown and sessions on the own node; the hook reads the rendered scope, barrel and statics; a pending activation is the node's own; persistence round-trips per node with per-node window selection; a leaf adopts its own node's authoritative layout after a reload without echoing it; a leaf's completion notes open in its own layout); updated `scope-services.test.ts` (persistence and notes run on the leaf; the failure-isolation case uses the data-saving service), `store-resource-sync.test.ts`, `ActionBar.test.tsx` and the three open-tab suites. Whole web suite (`bun --cwd=apps/web test src --parallel=4`): pass. `tests/unit` suites touching the changed modules pass alone, except pre-existing failures (`HierarchicalSidebar` uses `useUIStore.getState().setEnvironmentSortMode`, moved to `uiChromeStore` by 3006; `uncovered-stores` and `useEnvironments` as recorded by 3010). Web typecheck: no errors in touched files (other agents' in-flight files have some). fmt and oxlint clean on touched files.
 - 2026-11-07 (claude-worker, 4006): browser smoke `mise run test:agent:browser` at `4ece07c9a` against `uf-4006-smoke` (started as the isolated runner starts its own, flags and environment): 52 passed, 2 failed, 124 skipped. Failures: `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental) and `browser-gateway.spec.ts` "capped file tree … across inactive views and reload" (390 px after a reload the projects drawer stays open after selecting the environment; passed at `6860254e8`, so a branch regression since; details in [4006](4006-multi-node-qualification.md) Notes). The smoke box stays open.
 - 2026-11-07 (claude-worker, 4006 fixes): browser smoke `mise run test:agent:browser` at `ee73894da` against `uf-fix-smoke` (started as the isolated runner starts its own, flags and environment): 53 passed, 1 failed, 124 skipped. The one failure is `terminal-input-resume.spec.ts` "a lost terminal write stays fenced …" (the vim status-line pattern that fails at base `148e9ad0a` on this host: pre-existing, environmental); the capped-file-tree regression is fixed (`e46872643`). Results: `output/agent-testing/uf-fix/evidence/smoke/results.json`; details in [4006](4006-multi-node-qualification.md) Notes.
+- 2026-11-07 (orchestrator, completeness check): the ticked Done-when box claimed `mise run test` passes, but no aggregate run is recorded. Split it: the proven part stays ticked, "`mise run test` passes" is its own open box (the orchestrator runs it at the end). `status: in-progress` until then.

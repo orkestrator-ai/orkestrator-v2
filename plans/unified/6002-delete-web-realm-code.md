@@ -3,7 +3,7 @@ id: 6002
 title: "Delete the web realm code"
 phase: 6
 plan: "§5.3, §12 Phase 6.2 and Appendix D"
-status: in-progress
+status: done
 depends_on: [6001]
 blocked_by: ""
 owner: claude-worker
@@ -57,7 +57,7 @@ Remove the realm branches in:
 ## Work
 
 - [x] Delete the web code and tests above (commits 4312188ab and df3b6fe4c; list and corrections in Notes).
-- [ ] Delete `packages/protocol/src/realm-boot-timing.ts` and `realm-request.ts` once the desktop no longer imports them. *(Left to [6003](6003-delete-desktop-realm-code.md): `apps/desktop/electron/federation-ipc.ts`, `realm-boot-timing-log.ts` and `tests/federation-ipc.test.ts` still import them; the web client imports neither any more.)*
+- [x] Delete `packages/protocol/src/realm-boot-timing.ts` and `realm-request.ts` once the desktop no longer imports them. *(Done by [6003](6003-delete-desktop-realm-code.md) in `0c3e0a37b`: both modules, their tests and their two `packages/protocol/package.json` exports are deleted. Earlier: left to [6003](6003-delete-desktop-realm-code.md): `apps/desktop/electron/federation-ipc.ts`, `realm-boot-timing-log.ts` and `tests/federation-ipc.test.ts` still import them; the web client imports neither any more.)*
 - [x] Replace `lib/portal/workspaces.test.ts`, `gateway-auth-transport.test.ts` (if the module was deleted in [2003](2003-browser-credentials-and-auth-transport.md)), `uiStore.persistence.test.ts` realm cases and `scripts/qa-leaf-workspace-browser.ts` with in-tree equivalents, or point to [4006](4006-multi-node-qualification.md)'s spec.
 - [x] The parity tests keep only the in-tree path.
 - [x] Record the gross and net line counts in Notes (the report estimates ~7.4k gross, 1.5-2.5k added back).
@@ -93,3 +93,4 @@ Remove the realm branches in:
 ## Work log
 
 - 2026-11-07 (claude-worker): deleted the web realm code (iframe and native realms, the shell-realm protocol and the in-tree loopback, realm documents, boot timing, the realm title bar and overlay avoidance, `MAX_OPEN_REALMS`, 6001's rollback) and its tests; renamed the survivors out of the realm vocabulary; replaced the realm suites with in-tree equivalents; removed 4006's realm-path mode; updated the guard and docs. Commits 4312188ab (205 files) and df3b6fe4c (`WorkspaceRealmHost.tsx` and its suite, which a rename-detected status line had left out of the first commit, so 4312188ab alone does not typecheck; df3b6fe4c restores it): +2,187 −10,234 in all. Tests: full web suite `bun --cwd=apps/web test --parallel=4` pass (14,149 pass, 0 fail; final rerun after the last test fixes green); web `bun check --all`, `packages/protocol` typecheck, `e2e/tsconfig.json` and `e2e/agent-testing/tsconfig.json` clean; root `bun test ./tests --parallel=4`: 4,310 pass, 5 fail, all pre-existing (Notes); `tests/unit/components/HierarchicalSidebar.test.tsx` 104 pass; `window-orkestrator-portal-guard.test.ts` pass; e2e fixture specs `SettingsMachineRouting`, `KeyboardShortcuts`, `PipelineFlow` (filtered): 75 pass, 1 known flake. fmt and oxlint clean on touched files. Box left open: the protocol modules wait for 6003.
+- 2026-11-07 (orchestrator, completeness check): ticked the protocol-modules box, which 6003 met in `0c3e0a37b` (`packages/protocol/src/realm-request.ts`, `realm-boot-timing.ts`, their tests and exports deleted). Done-when unchanged (ticked, aggregate suite left to review preparation). No box open: `status: done`.

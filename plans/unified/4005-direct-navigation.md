@@ -42,7 +42,8 @@ The remaining messages (`panel`, `settings`, `bugReport`, `shortcut`, `panelDism
 
 ## Work
 
-- [x] Replace each message for in-tree nodes, one per commit. Keep realm behaviour for realm nodes.
+- [x] Replace each message for in-tree nodes, one per commit. *(The first part is met: one commit per message, Work log.)*
+- [x] Superseded 2026-11-07: 6002/6003 (`4312188ab`, `0c3e0a37b`) deleted the realm nodes, so there is no realm behaviour to keep. Keep realm behaviour for realm nodes.
 - [x] `WorkspaceRealmHost` dialog gating becomes hydration checks on the scope (a project dialog waits for the project list to be live, not for `ready`).
 - [x] Coordinator work targets and the bug report flag from [0001](0001-realm-request-drift.md) work in-tree.
 
@@ -52,7 +53,7 @@ The remaining messages (`panel`, `settings`, `bugReport`, `shortcut`, `panelDism
 
 ## Done when
 
-- [x] An in-tree node exchanges none of these messages (asserted by the loopback in tests).
+- [x] An in-tree node exchanges none of these messages (asserted by the loopback in tests). *(2026-11-07, orchestrator, completeness check: the loopback-assertion seam, `observeRealmLoopbacks` in `realm-channel.ts`, went with 6002 (`4312188ab`) together with the loopback; the realm protocol itself no longer exists, and `rg` finds no realm message or loopback in `apps/web/src`, so the condition holds by construction.)*
 
 ## Notes
 
@@ -79,4 +80,4 @@ The remaining messages (`panel`, `settings`, `bugReport`, `shortcut`, `panelDism
 ## Work log
 
 - 2026-11-07 (claude-worker): replaced the eight navigation messages for in-tree nodes with direct reads and writes, one commit each (d54c3e5b5 sidebar + loopback observer, 9c3f581db filesPanel, d6fbf1eb3 grouping, 5df864ec4 visibility, 862b5606f select + `dialogHydrated`, d0d1b9311 selection, 6086e3bb0 open, a061b3a66 ready + done-when test), then tests 2efbd3851 and bab997752 and docs cfbf7500c. Tests: `InTreeWorkspace.direct.test.tsx` 17 pass (new), `WorkspaceRealmHost.paths.test.tsx` 10 pass (loopback path now asks through the window's store; remount resume), `leaf-mode-coordinator-gate.test.tsx` 24 pass (1 new). Focused web suites (`components/federation`, `components/projects`, `lib/federation`, `stores`, `components/layout`, `components/sidebar`, `coordinator-work-navigation`): 2563 pass, 0 fail. Web typecheck clean; fmt and oxlint clean on touched files. `tests/unit/source-guards.test.ts`: only the known baseline findings in backend, bridge, e2e and one hook test, none in touched files.
-
+- 2026-11-07 (orchestrator, completeness check): split Work box 1; "keep realm behaviour for realm nodes" marked superseded (no realm nodes since 6002/6003). Noted on the Done-when box that the loopback-assertion seam went with 6002 and the realm protocol no longer exists.

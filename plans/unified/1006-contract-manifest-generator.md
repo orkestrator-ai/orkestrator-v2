@@ -57,7 +57,7 @@ A committed `packages/protocol/contracts/manifest.json` describes every register
 
 ### Runtime command count (2026-11-07)
 
-The generator counts **996 registered commands** (0 defined, 996 untyped) on this branch, against the report's estimate of 995 (Appendix E) and the 904 unique literal names grep finds. The registry is the same under `NODE_ENV=production` and `test` and has no platform-conditional registration, so the manifest does not differ between CI and macOS.
+The generator counts **996 registered commands** (0 defined, 996 untyped) on this branch, *(2026-11-07, orchestrator, completeness check: these are the counts when this item ran. At `0134c2671` the committed manifest has 999 commands, 999 defined and 0 untyped, after Phase 7.)* against the report's estimate of 995 (Appendix E) and the 904 unique literal names grep finds. The registry is the same under `NODE_ENV=production` and `test` and has no platform-conditional registration, so the manifest does not differ between CI and macOS.
 
 ### Decisions (2026-11-07)
 
@@ -84,3 +84,4 @@ The generator counts **996 registered commands** (0 defined, 996 untyped) on thi
 ## Work log
 
 - 2026-11-07 (claude-worker): added `scripts/generate-contract-manifest.ts`, `apps/backend/src/core/contract-domain-map.ts` (996 commands over 29 domains), `packages/protocol/src/contract/json-schema.ts` (+ `./contract/json-schema` export and index re-export), `public-api` in `DOMAIN_NAMES`, the `contract:manifest` and `contract:check` mise tasks, the CI step, and the generated `packages/protocol/contracts/manifest.json`. `apps/backend/src/core/contract-manifest.test.ts` passes 13 tests (33 with `commands-registry-contracts.test.ts`); protocol contract tests pass 46; `domain-import-boundaries.test.ts` passes. `mise run contract:check` passes, and fails as expected with an entry removed from the map. Backend and protocol typecheck clean; `tests/tsconfig.json` reports only 3 errors in web component tests owned by another item (`appDialogStore` `nodeId`). `bun fmt`, `oxlint` and `mise tasks validate` clean.
+- 2026-11-07 (orchestrator, completeness check): noted the current manifest counts (999 defined, 0 untyped) beside the 996/0/996 recorded when the generator was built.

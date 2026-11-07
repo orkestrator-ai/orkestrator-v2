@@ -3,7 +3,7 @@ id: 1001
 title: "Schema library in packages/protocol: measure and decide"
 phase: 1
 plan: "§13.8 and §12 Phase 1.1"
-status: done
+status: in-progress
 depends_on: []
 blocked_by: ""
 owner: claude-worker
@@ -76,6 +76,8 @@ Bytes. The total-JS delta matches the entry delta to within about 100 bytes, so 
 
 **iPad Safari parse time:** not done, because no iPad is reachable from this host.
 
+**Status (2026-11-07, orchestrator, completeness check).** The item is open only for the iPad measurement (no iPad reachable from this host). Every other box, including Done when, is met; `status` is `in-progress` because one box is open, not `done`.
+
 ### JSON Schema stability
 
 `Schema.toJsonSchemaDocument(schema, options?)` returns `{ dialect: "draft-2020-12", schema, definitions }`, and `$ref`s point at `#/$defs/<identifier>`. `packages/protocol/src/effect-json-schema.test.ts` pins that:
@@ -102,3 +104,4 @@ Rules for contract schemas that follow from the export:
 ## Work log
 
 - 2026-11-07 (claude-worker): checked the `effect` 4.1.2 dependency from `846b4aee7` (frozen root and bridge installs report no changes; `tests/unit/version-drift.test.ts` passes). Measured seven `apps/web` production builds (baseline, four schema variants, Effect runtime alone and with Effect Schema) with throwaway modules that were deleted afterwards. Added `packages/protocol/src/effect-json-schema.test.ts` (5 pass); protocol typecheck, oxlint and format are clean. Recorded the decision here and in report §13.8, and moved the report's design text from Zod to Effect Schema. The iPad Safari parse time stays open: no iPad is reachable from this host.
+- 2026-11-07 (orchestrator, completeness check): `status: done` contradicted the open "Parse time on the iPad Safari profile" box; set `status: in-progress`, open only for the iPad measurement (no iPad reachable from this host). Note added.

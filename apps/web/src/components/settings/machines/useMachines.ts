@@ -14,7 +14,8 @@ import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { getNodeStatus, listNodes, nodeErrorText } from "@/lib/backend/command-nodes";
 import { subscribeToConnections } from "@/lib/connections";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
-import { portalInvoke, portalListen, workspaceTarget } from "@/lib/portal/portal-transport";
+import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
+import { portalListen, workspaceTarget } from "@/lib/portal/portal-transport";
 import { buildMachineList, type MachineEntry } from "./machine-list";
 
 export type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -66,7 +67,7 @@ export function useMachines() {
       Promise.allSettled([
         getNodeStatus(),
         listNodes(),
-        portalInvoke<unknown>("get_backend_profile"),
+        portalNodesApi().get_backend_profile(NO_ARGS),
       ]).then(([nextStatus, nextNodes, profile]) => {
         if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
         if (nextNodes.status === "fulfilled") setNodes(nextNodes.value);

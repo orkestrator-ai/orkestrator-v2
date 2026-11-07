@@ -238,6 +238,9 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
     if (wasReady && panel) state.requestRealmPanel(nodeId, panel, false, 0);
     const titleBar = state.titleBars[nodeId];
     if (titleBar) state.noteRealmTitleBar(nodeId, { ...titleBar, panel: null });
+    // The new document's URL carries the whole request (every field crosses
+    // both encoders; `@orkestrator/protocol/realm-request`), so it counts as
+    // delivered and is not sent again on `ready`.
     const request = latest.current.request;
     if (request && request.seq > delivered.current) {
       delivered.current = request.seq;

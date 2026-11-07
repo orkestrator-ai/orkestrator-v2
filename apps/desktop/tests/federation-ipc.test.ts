@@ -1,5 +1,14 @@
 import { describe, expect, mock, test } from "bun:test";
-import { registerFederationIpc, withErrorCode } from "../electron/federation-ipc";
+import {
+  REALM_BOARD_TABS,
+  REALM_DIALOGS,
+  REALM_WORK_TYPES,
+} from "@orkestrator/protocol/realm-request";
+import {
+  REALM_SEARCH_ACCEPTS,
+  registerFederationIpc,
+  withErrorCode,
+} from "../electron/federation-ipc";
 import { SSH_PROMPT_EVENT, SshPromptBroker } from "../electron/ssh-prompt-broker";
 
 const trustedRendererUrl = "http://127.0.0.1:1420";
@@ -56,7 +65,15 @@ function harness() {
 describe("federation IPC", () => {
   test("explicit board intent survives initial realm creation and rejects unknown tabs", async () => {
     const { call, deps } = harness();
-    for (const boardTab of ["coordinator", "kanban", "github", "linear", "features", "invalid"]) {
+    for (const boardTab of [
+      "home",
+      "coordinator",
+      "kanban",
+      "github",
+      "linear",
+      "features",
+      "invalid",
+    ]) {
       await call("orkestrator:workspace-views:open", {
         nodeId: "bk_leaf",
         request: { projectId: "p", boardTab },
@@ -143,6 +160,79 @@ describe("federation IPC", () => {
       search: { project: "p" },
     });
     expect(() => call("orkestrator:workspace-views:open", { nodeId: 3 })).toThrow("node ID");
+  });
+
+  test("a cold realm's URL carries work targets, the bug report and every dialog", async () => {
+    const { call, deps } = harness();
+    const open = async (request: Record<string, unknown>) => {
+      await call("orkestrator:workspace-views:open", { nodeId: "bk_leaf", request });
+      return (deps.openWorkspaceView.mock.lastCall as unknown as [unknown, { search: unknown }])[1]
+        .search;
+    };
+    const ids = { projectId: "p", environmentId: "e" };
+    const search = { project: "p", environment: "e" };
+    const targets = {
+      "worker-tab": [{ tabId: "t" }, "t"],
+      build: [{ pipelineId: "pl" }, "pl"],
+      review: [{ workflowId: "wf" }, "wf"],
+      "graph-run": [{ runId: "r" }, "r"],
+    } as const;
+    for (const [type, [fields, workId]] of Object.entries(targets)) {
+      expect(await open({ ...ids, workTarget: { type, ...ids, ...fields } })).toEqual({
+        ...search,
+        workType: type,
+        workId,
+      });
+    }
+    // A worker tab without a delegated tab still opens its environment.
+    expect(await open({ ...ids, workTarget: { type: "worker-tab", ...ids } })).toEqual({
+      ...search,
+      workType: "worker-tab",
+    });
+    // Work on another project or environment than the request's is refused.
+    expect(
+      await open({
+        ...ids,
+        workTarget: { type: "review", ...ids, projectId: "q", workflowId: "wf" },
+      }),
+    ).toEqual(search);
+    expect(
+      await open({
+        ...ids,
+        workTarget: { type: "review", ...ids, environmentId: "f", workflowId: "wf" },
+      }),
+    ).toEqual(search);
+    expect(await open({ ...ids, workTarget: { type: "pull-request", ...ids } })).toEqual(search);
+    expect(await open({ bugReport: true })).toEqual({ bugReport: "1" });
+    expect(await open({ bugReport: "yes" })).toEqual({});
+    expect(await open({ ...ids, dialog: "environment-rebuild" })).toEqual({
+      ...search,
+      dialog: "environment-rebuild",
+    });
+    expect(await open({ projectId: "p", dialog: "environment-rebuild" })).toEqual({ project: "p" });
+  });
+
+  test("main accepts exactly the protocol's realm request lists", async () => {
+    expect(REALM_SEARCH_ACCEPTS.boardTabs).toBe(REALM_BOARD_TABS);
+    expect(REALM_SEARCH_ACCEPTS.dialogs).toBe(REALM_DIALOGS);
+    expect(REALM_SEARCH_ACCEPTS.workTypes).toBe(REALM_WORK_TYPES);
+    const { call, deps } = harness();
+    const lastSearch = () =>
+      (deps.openWorkspaceView.mock.lastCall as unknown as [unknown, { search: unknown }])[1].search;
+    for (const boardTab of REALM_BOARD_TABS) {
+      await call("orkestrator:workspace-views:open", {
+        nodeId: "bk_leaf",
+        request: { projectId: "p", boardTab },
+      });
+      expect(lastSearch()).toEqual({ project: "p", boardTab });
+    }
+    for (const dialog of REALM_DIALOGS) {
+      await call("orkestrator:workspace-views:open", {
+        nodeId: "bk_leaf",
+        request: { projectId: "p", environmentId: "e", dialog },
+      });
+      expect(lastSearch()).toEqual({ project: "p", environment: "e", dialog });
+    }
   });
 
   test("a workspace realm is placed with finite bounds and small messages", () => {

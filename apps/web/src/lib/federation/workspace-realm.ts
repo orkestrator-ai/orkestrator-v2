@@ -14,12 +14,29 @@
  */
 
 import { isAppShortcutId, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
+import {
+  isRealmBoardTab,
+  parseRealmRequest,
+  parseRealmRequestSearch,
+  parseRealmWorkTarget,
+  realmId,
+  realmRequestToSearch,
+  type RealmBoardTab,
+  type RealmOpenRequest,
+} from "@orkestrator/protocol/realm-request";
 
 import type { LocalWorkTarget } from "@/lib/coordinator-work-items";
 
+// The open request is shared with the desktop main process, which writes a
+// desktop realm's first URL; see `@orkestrator/protocol/realm-request`.
+export {
+  isEnvironmentDialog,
+  type RealmBoardTab,
+  type RealmDialog,
+} from "@orkestrator/protocol/realm-request";
+
 const REALM_PARAM = "realm";
 const REALM_VALUE = "workspace";
-const MAX_ID_LENGTH = 256;
 const MAX_PANEL_INSET = 4096;
 
 /**
@@ -53,20 +70,6 @@ export interface RealmPanelControl {
   onOpenChange: (open: boolean) => void;
   /** User dismissal, rather than a replacement or shell-driven close. */
   onDismiss?: () => void;
-}
-
-/** Explicit board navigation overrides a node's default project landing tab. */
-export type RealmBoardTab = "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
-
-function boardTab(value: unknown): RealmBoardTab | undefined {
-  return value === "home" ||
-    value === "coordinator" ||
-    value === "kanban" ||
-    value === "github" ||
-    value === "linear" ||
-    value === "features"
-    ? value
-    : undefined;
 }
 
 /** How the window's sidebar groups machines' projects. */
@@ -129,65 +132,9 @@ export function projectLandingBoardTab(
   return projectLandingTab(grouping, onCommandNode) === "coordinator" ? "coordinator" : undefined;
 }
 
-/**
- * A dialog of the realm's node, opened over what the request selects: the
- * project's for the project dialogs, the environment's for its settings.
- * `environment-rebuild` is the environment's settings on its Container
- * section, where Rebuild (keep work) is; a node that predates it drops the
- * dialog and only selects the environment.
- */
-export type RealmDialog =
-  "repository-settings" | "delete-project" | "environment-settings" | "environment-rebuild";
-
-function realmDialog(value: unknown): RealmDialog | undefined {
-  return value === "repository-settings" ||
-    value === "delete-project" ||
-    value === "environment-settings" ||
-    value === "environment-rebuild"
-    ? value
-    : undefined;
-}
-
-/** Whether the dialog is one of an environment's rather than a project's. */
-export function isEnvironmentDialog(dialog: RealmDialog): boolean {
-  return dialog === "environment-settings" || dialog === "environment-rebuild";
-}
-
-function workTarget(
-  value: unknown,
-  projectId?: string,
-  environmentId?: string,
-): LocalWorkTarget | undefined {
-  if (!value || typeof value !== "object" || !projectId || !environmentId) return undefined;
-  const v = value as Record<string, unknown>;
-  if (v.projectId !== projectId || v.environmentId !== environmentId) return undefined;
-  const base = { projectId, environmentId };
-  if (v.type === "worker-tab")
-    return { ...base, type: v.type, ...(boundedId(v.tabId) ? { tabId: boundedId(v.tabId) } : {}) };
-  if (v.type === "build" && boundedId(v.pipelineId))
-    return { ...base, type: v.type, pipelineId: boundedId(v.pipelineId)! };
-  if (v.type === "review" && boundedId(v.workflowId))
-    return { ...base, type: v.type, workflowId: boundedId(v.workflowId)! };
-  if (v.type === "graph-run" && boundedId(v.runId))
-    return { ...base, type: v.type, runId: boundedId(v.runId)! };
-  return undefined;
-}
-
 /** What the window asks its realm to show. */
-export interface RealmSelectRequest {
+export interface RealmSelectRequest extends RealmOpenRequest {
   type: "select";
-  projectId?: string;
-  environmentId?: string;
-  boardTab?: RealmBoardTab;
-  workTarget?: LocalWorkTarget;
-  /** Open the node's Add Project dialog. */
-  addProject?: true;
-  /** Open the node's New Environment dialog for this project. */
-  createEnvironmentProjectId?: string;
-  /** Open one of the node's dialogs for the selected project or environment. */
-  dialog?: RealmDialog;
-  /** Open the node's Report a bug sheet, which runs its agent on that node. */
-  bugReport?: true;
 }
 
 export type ShellToRealmMessage =
@@ -294,12 +241,6 @@ function parseUsageReading(value: unknown): RealmUsageReading | null {
   };
 }
 
-function boundedId(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH
-    ? value
-    : undefined;
-}
-
 /** Whether this renderer is a realm inside a command node's window. */
 export function isWorkspaceRealm(): boolean {
   return params()?.get(REALM_PARAM) === REALM_VALUE;
@@ -309,34 +250,14 @@ export function isWorkspaceRealm(): boolean {
 export function realmWorkspaceId(): string | null {
   const search = params();
   if (search?.get(REALM_PARAM) !== REALM_VALUE) return null;
-  return boundedId(search.get("workspace")) ?? null;
+  return realmId(search.get("workspace")) ?? null;
 }
 
 /** Query parameters that open a realm on `request`. */
 export function realmSearchParams(request: Omit<RealmSelectRequest, "type">): URLSearchParams {
   const search = new URLSearchParams();
   search.set(REALM_PARAM, REALM_VALUE);
-  if (request.projectId) search.set("project", request.projectId);
-  if (request.environmentId) search.set("environment", request.environmentId);
-  if (request.boardTab) search.set("boardTab", request.boardTab);
-  if (request.workTarget) {
-    search.set("workType", request.workTarget.type);
-    const target = request.workTarget;
-    const id =
-      target.type === "worker-tab"
-        ? target.tabId
-        : target.type === "build"
-          ? target.pipelineId
-          : target.type === "review"
-            ? target.workflowId
-            : target.runId;
-    if (id) search.set("workId", id);
-  }
-  if (request.addProject) search.set("addProject", "1");
-  if (request.createEnvironmentProjectId)
-    search.set("createEnvironment", request.createEnvironmentProjectId);
-  if (request.dialog) search.set("dialog", request.dialog);
-  if (request.bugReport) search.set("bugReport", "1");
+  for (const [name, value] of realmRequestToSearch(request)) search.set(name, value);
   return search;
 }
 
@@ -344,26 +265,7 @@ export function realmSearchParams(request: Omit<RealmSelectRequest, "type">): UR
 export function realmInitialRequest(): RealmSelectRequest | null {
   const search = params();
   if (search?.get(REALM_PARAM) !== REALM_VALUE) return null;
-  const request = parseShellMessage({
-    type: "select",
-    projectId: search.get("project") ?? undefined,
-    environmentId: search.get("environment") ?? undefined,
-    boardTab: search.get("boardTab") ?? undefined,
-    workTarget: {
-      type: search.get("workType"),
-      projectId: search.get("project"),
-      environmentId: search.get("environment"),
-      tabId: search.get("workId"),
-      pipelineId: search.get("workId"),
-      workflowId: search.get("workId"),
-      runId: search.get("workId"),
-    },
-    addProject: search.get("addProject") === "1" ? true : undefined,
-    createEnvironmentProjectId: search.get("createEnvironment") ?? undefined,
-    dialog: search.get("dialog") ?? undefined,
-    bugReport: search.get("bugReport") === "1" ? true : undefined,
-  });
-  return request?.type === "select" ? request : null;
+  return { type: "select", ...parseRealmRequestSearch(search) };
 }
 
 export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
@@ -393,40 +295,19 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
     };
   }
   if (message.type !== "select") return null;
-  const projectId = boundedId(message.projectId);
-  const environmentId = boundedId(message.environmentId);
-  const tab = boardTab(message.boardTab);
-  const createEnvironmentProjectId = boundedId(message.createEnvironmentProjectId);
-  const dialog = realmDialog(message.dialog);
-  // A dialog needs what it is for: a project, or an environment for its settings.
-  const dialogTarget =
-    dialog && isEnvironmentDialog(dialog)
-      ? Boolean(projectId && environmentId)
-      : Boolean(projectId);
-  return {
-    type: "select",
-    ...(projectId ? { projectId } : {}),
-    ...(projectId && environmentId ? { environmentId } : {}),
-    ...(projectId && tab ? { boardTab: tab } : {}),
-    ...(workTarget(message.workTarget, projectId, environmentId)
-      ? { workTarget: workTarget(message.workTarget, projectId, environmentId) }
-      : {}),
-    ...(message.addProject === true ? { addProject: true as const } : {}),
-    ...(createEnvironmentProjectId ? { createEnvironmentProjectId } : {}),
-    ...(dialog && dialogTarget ? { dialog } : {}),
-    ...(message.bugReport === true ? { bugReport: true as const } : {}),
-  };
+  return { type: "select", ...parseRealmRequest(message) };
 }
 
 export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
   if (!value || typeof value !== "object") return null;
   const message = value as Record<string, unknown>;
   if (message.type === "open") {
-    const nodeId = boundedId(message.nodeId);
-    const projectId = boundedId(message.projectId);
+    const nodeId = realmId(message.nodeId);
+    const projectId = realmId(message.projectId);
     if (!nodeId || !projectId) return null;
-    const environmentId = boundedId(message.environmentId);
-    const tab = boardTab(message.boardTab);
+    const environmentId = realmId(message.environmentId);
+    const tab = isRealmBoardTab(message.boardTab) ? message.boardTab : undefined;
+    const workTarget = parseRealmWorkTarget(message.workTarget, projectId, environmentId);
     const title = typeof message.title === "string" ? message.title.slice(0, 200) : "";
     return {
       type: "open",
@@ -434,16 +315,14 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
       projectId,
       ...(environmentId ? { environmentId } : {}),
       ...(tab ? { boardTab: tab } : {}),
-      ...(workTarget(message.workTarget, projectId, environmentId)
-        ? { workTarget: workTarget(message.workTarget, projectId, environmentId) }
-        : {}),
+      ...(workTarget ? { workTarget } : {}),
       title,
     };
   }
   if (message.type === "ready") return { type: "ready" };
   if (message.type === "bugReport") {
     if (message.nodeId === null) return { type: "bugReport", nodeId: null };
-    const nodeId = boundedId(message.nodeId);
+    const nodeId = realmId(message.nodeId);
     return nodeId ? { type: "bugReport", nodeId } : null;
   }
   if (message.type === "sidebar") {
@@ -480,8 +359,8 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
     };
   }
   if (message.type !== "selection") return null;
-  const projectId = boundedId(message.projectId) ?? null;
-  const environmentId = projectId ? (boundedId(message.environmentId) ?? null) : null;
+  const projectId = realmId(message.projectId) ?? null;
+  const environmentId = projectId ? (realmId(message.environmentId) ?? null) : null;
   return {
     type: "selection",
     projectId,
@@ -504,7 +383,7 @@ export function readFrameEnvelope(
 ): { workspaceId: string; message: unknown } | null {
   if (!value || typeof value !== "object") return null;
   const envelope = value as Partial<FrameEnvelope>;
-  const workspaceId = boundedId(envelope.workspaceId);
+  const workspaceId = realmId(envelope.workspaceId);
   if (envelope.kind !== FRAME_ENVELOPE || !workspaceId) return null;
   return { workspaceId, message: envelope.message };
 }

@@ -1,5 +1,12 @@
 import type { ConnectSshRouteInput, ConnectionList } from "@orkestrator/protocol/connections";
 import type { FederationFeatureFlags } from "@orkestrator/protocol/device-catalogue";
+import {
+  parseRealmRequest,
+  REALM_BOARD_TABS,
+  REALM_DIALOGS,
+  REALM_WORK_TYPES,
+  realmRequestToSearch,
+} from "@orkestrator/protocol/realm-request";
 import { isTrustedRendererUrl } from "./window.js";
 import type { WorkspaceViewBounds, WorkspaceViewOpenInput } from "./workspace-views.js";
 
@@ -137,35 +144,31 @@ export function withErrorCode<T>(operation: () => Promise<T>): Promise<T> {
   });
 }
 
-/** What a realm opens on: only known selection fields ever reach its URL. */
+/**
+ * What `realmSearch` accepts: the protocol's own lists, not copies, so main
+ * cannot fall behind what the window writes.
+ */
+export const REALM_SEARCH_ACCEPTS = {
+  boardTabs: REALM_BOARD_TABS,
+  dialogs: REALM_DIALOGS,
+  workTypes: REALM_WORK_TYPES,
+} as const;
+
+/**
+ * What a realm opens on: only known selection fields ever reach its URL,
+ * written by the same encoder the web side uses. A malformed ID is refused;
+ * an unknown value, or a work target off the request's own environment, is
+ * dropped as the realm itself would drop it.
+ */
 function realmSearch(request: Record<string, unknown>): Record<string, string> {
-  const search: Record<string, string> = {};
-  const optionalId = (value: unknown, label: string) =>
-    value === undefined ? undefined : id(value, label);
-  const projectId = optionalId(request.projectId, "a project ID");
-  const environmentId = optionalId(request.environmentId, "an environment ID");
-  const createEnvironment = optionalId(request.createEnvironmentProjectId, "a project ID");
-  if (projectId) search.project = projectId;
-  if (projectId && environmentId) search.environment = environmentId;
-  if (
-    projectId &&
-    (request.boardTab === "coordinator" ||
-      request.boardTab === "kanban" ||
-      request.boardTab === "github" ||
-      request.boardTab === "linear" ||
-      request.boardTab === "features")
-  )
-    search.boardTab = request.boardTab;
-  if (request.addProject === true) search.addProject = "1";
-  if (createEnvironment) search.createEnvironment = createEnvironment;
-  if (
-    projectId &&
-    (request.dialog === "repository-settings" ||
-      request.dialog === "delete-project" ||
-      (request.dialog === "environment-settings" && environmentId))
-  )
-    search.dialog = request.dialog;
-  return search;
+  for (const [field, label] of [
+    ["projectId", "a project ID"],
+    ["environmentId", "an environment ID"],
+    ["createEnvironmentProjectId", "a project ID"],
+  ] as const) {
+    if (request[field] !== undefined) id(request[field], label);
+  }
+  return Object.fromEntries(realmRequestToSearch(parseRealmRequest(request)));
 }
 
 function viewBounds(value: unknown): WorkspaceViewBounds {

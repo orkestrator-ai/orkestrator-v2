@@ -7,19 +7,16 @@
  * remote target as its `workTarget`.
  */
 import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
+import type { RealmWorkTarget } from "@orkestrator/protocol/realm-request";
 
-export type LocalWorkTarget = Exclude<
-  CoordinatorWorkTarget,
-  { type: "remote" } | { type: "pull-request" }
->;
+/**
+ * Work on this machine: a worker's tab, a build, a Multi Review or a graph run.
+ * Shared with a realm's open request (`@orkestrator/protocol/realm-request`).
+ */
+export type LocalWorkTarget = RealmWorkTarget;
 
 export type CoordinatorWorkTarget =
-  /** A worker environment on this machine, at the delegated tab when known. */
-  | { type: "worker-tab"; projectId: string; environmentId: string; tabId?: string }
-  /** A build pipeline's tab; the environment may not exist yet. */
-  | { type: "build"; projectId: string; pipelineId: string; environmentId?: string }
-  | { type: "review"; projectId: string; environmentId: string; workflowId: string }
-  | { type: "graph-run"; projectId: string; environmentId: string; runId: string; title?: string }
+  | LocalWorkTarget
   | { type: "pull-request"; url: string }
   /** Work on another node: its environment, through that node's workspace. */
   | {

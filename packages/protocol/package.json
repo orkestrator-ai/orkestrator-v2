@@ -36,6 +36,7 @@
     "./environment-hydration": "./src/environment-hydration.ts",
     "./logger": "./src/logger.ts",
     "./realm-boot-timing": "./src/realm-boot-timing.ts",
+    "./realm-request": "./src/realm-request.ts",
     "./log-vocabulary": "./src/log-vocabulary/index.ts",
     "./node/logger-environment": "./src/node/logger-environment.ts",
     "./node/command-capture": "./src/node/command-capture.ts",
